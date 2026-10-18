@@ -1,0 +1,83 @@
+--- pre/backend/tests/fixtures/task111/control.py
++++ post/backend/tests/fixtures/task111/control.py
+@@ -23,7 +23,14 @@
+ C03_ROOT=EVIDENCE/"continuation-03"
+ C04_ROOT=EVIDENCE/"continuation-04"
+ C05_ROOT=EVIDENCE/"continuation-05"
+-if (C05_ROOT/"timing.json").is_file():
++C06_ROOT=EVIDENCE/"continuation-06"
++if (C06_ROOT/"timing.json").is_file():
++    CONTINUATION="TASK-111-G11-C06-20261011";CONTINUE_ROOT=C06_ROOT
++    _continuation=json.loads((CONTINUE_ROOT/"timing.json").read_text(encoding="utf-8"))
++    if _continuation["permit"]!=CONTINUATION:raise RuntimeError("C06 identity")
++    CAPS.update(_continuation["hard_count_caps"])
++    CAPS["offline_related_batches"]=None;CAPS["preview_reaper_validation_batches"]=None
++elif (C05_ROOT/"timing.json").is_file():
+     CONTINUATION="TASK-111-G11-C05-20261011";CONTINUE_ROOT=C05_ROOT
+     _continuation=json.loads((CONTINUE_ROOT/"timing.json").read_text(encoding="utf-8"))
+     if _continuation["permit"]!=CONTINUATION:raise RuntimeError("C05 identity")
+@@ -102,7 +109,7 @@
+     with (CONTINUE_ROOT/"phase-events.jsonl").open("a",encoding="utf-8") as stream:
+         stream.write(json.dumps({"phase":previous,"start_ns":value["phase_start_ns"],"end_ns":now,"seconds":elapsed,"next":kind})+"\n")
+     value["phase"]=kind;value["phase_start_ns"]=now;atomic(path,value)
+-    if CONTINUATION.endswith(("C02-20261010","C03-20261011","C04-20261011","C05-20261011")):
++    if CONTINUATION.endswith(("C02-20261010","C03-20261011","C04-20261011","C05-20261011","C06-20261011")):
+         if kind not in ("cleanup","complete") and now>=value["business_deadline_ns"]:raise RuntimeError("continuation business timing exhausted")
+     elif now>=value["original_deadline_ns"] or any(value["used_seconds"][key]>limit for key,limit in value["caps_seconds"].items()):raise RuntimeError("continuation timing exhausted")
+     return value
+@@ -137,7 +144,7 @@
+     with locked():
+         if not plan.exists():raise RuntimeError("fixed preview name allocation missing")
+         names=json.loads(plan.read_text(encoding="utf-8"))
+-        allowed=range(40,54) if CONTINUATION.endswith("C05-20261011") else range(26,45) if CONTINUATION.endswith("C04-20261011") else range(15,45) if CONTINUATION.endswith("C03-20261011") else range(2,15)
++        allowed=range(50,58) if CONTINUATION.endswith("C06-20261011") else range(40,54) if CONTINUATION.endswith("C05-20261011") else range(26,45) if CONTINUATION.endswith("C04-20261011") else range(15,45) if CONTINUATION.endswith("C03-20261011") else range(2,15)
+         if not names or names[0] not in [str(n).zfill(2) for n in allowed]:raise RuntimeError("fixed preview name allocation")
+         chosen=names.pop(0);atomic(plan,names)
+     result="retrolume-task-111-g11-preview-"+chosen
+@@ -146,16 +153,16 @@
+ 
+ 
+ def synthetic_root():
+-    return CONTINUE_ROOT/"synthetic" if CONTINUATION.endswith(("C03-20261011","C04-20261011","C05-20261011")) else EVIDENCE/"synthetic"
++    return CONTINUE_ROOT/"synthetic" if CONTINUATION.endswith(("C03-20261011","C04-20261011","C05-20261011","C06-20261011")) else EVIDENCE/"synthetic"
+ 
+ 
+ def registry_root():
+-    return C04_ROOT/"synthetic/control" if CONTINUATION.endswith("C05-20261011") else synthetic_root()/"control" if CONTINUATION.endswith("C04-20261011") else synthetic_root()/"http-control"
++    return C04_ROOT/"synthetic/control" if CONTINUATION.endswith(("C05-20261011","C06-20261011")) else synthetic_root()/"control" if CONTINUATION.endswith("C04-20261011") else synthetic_root()/"http-control"
+ 
+ 
+ @contextmanager
+ def batch(kind,name,maximum=3600):
+-    limits={"real":14400,"offline":7200,"cleanup":1800}
++    limits={"real":16200 if CONTINUATION.endswith("C06-20261011") else 14400,"offline":7200,"cleanup":1800}
+     if kind not in limits:raise RuntimeError("TASK111 unknown batch category")
+     if kind=="cleanup":
+         # 清场独立预留，不能继承已经到期的真实验证批，也不恢复真实批计数。
+@@ -167,13 +174,16 @@
+     with locked():
+         budget=read_state() if kind=="cleanup" else state()
+         if budget["active_batch"] is not None:raise RuntimeError("TASK111 overlapping root batch")
+-        remaining=float("inf") if kind=="offline" and CONTINUATION.endswith(("C02-20261010","C03-20261011","C04-20261011","C05-20261011")) else limits[kind]-budget["time_seconds"][kind]
+-        if kind=="real" and CONTINUATION.endswith(("C03-20261011","C04-20261011","C05-20261011")):
++        remaining=float("inf") if kind=="offline" and CONTINUATION.endswith(("C02-20261010","C03-20261011","C04-20261011","C05-20261011","C06-20261011")) else limits[kind]-budget["time_seconds"][kind]
++        if kind=="real" and CONTINUATION.endswith(("C03-20261011","C04-20261011","C05-20261011","C06-20261011")):
+             remaining=min(remaining,_continuation["new_real_limit_seconds"]-(budget["time_seconds"]["real"]-_continuation["prior_time_seconds"]["real"]))
+         if remaining<=0:raise RuntimeError("TASK111 category time exhausted: "+kind)
+         per_root=1800 if kind=="cleanup" or (kind=="real" and CONTINUATION.endswith(("C03-20261011","C04-20261011"))) else 3500 if (CONTINUE_ROOT/"timing.json").is_file() and kind=="real" else float("inf") if kind=="offline" and CONTINUATION.endswith(("C03-20261011","C04-20261011")) else 3600
+         if CONTINUATION.endswith("C05-20261011"):
+             if kind=="real":per_root=1500
++            elif kind=="offline":per_root=float("inf")
++        if CONTINUATION.endswith("C06-20261011"):
++            if kind=="real":per_root=1800
+             elif kind=="offline":per_root=float("inf")
+         maximum=min(maximum,remaining,per_root)
+         limit_deadline=start+int(maximum*1000000000)
+@@ -219,6 +229,7 @@
+     paths+=list((ROOT/"backend/tests/fixtures/task111").glob("c03*.cjs"))
+     paths+=list((ROOT/"backend/tests/fixtures/task111").glob("c04*.py"))+list((ROOT/"frontend/tests/task111").glob("c04*.cjs"))
+     paths+=list((ROOT/"backend/tests/fixtures/task111").glob("c05*.py"))+list((ROOT/"frontend/tests/task111").glob("c05*.cjs"))
++    paths+=list((ROOT/"backend/tests/fixtures/task111").glob("c06*.py"))+list((ROOT/"frontend/tests/task111").glob("c06*.cjs"))
+     for path in paths:
+         if path.is_file():files.append({"path":str(path.relative_to(ROOT)).replace("\\","/"),"sha256":hashlib.sha256(path.read_bytes()).hexdigest(),"bytes":path.stat().st_size})
+     atomic(Path(folder)/"source-identity.json",files);return files

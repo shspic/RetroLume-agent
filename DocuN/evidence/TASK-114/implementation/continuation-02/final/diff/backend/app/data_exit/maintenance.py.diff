@@ -1,0 +1,80 @@
+--- pre/backend/app/data_exit/maintenance.py
++++ final/backend/app/data_exit/maintenance.py
+@@ -55,8 +55,10 @@
+     lease: object
+     owned_id: str | None = None
+     live: bool = True
++    operation: object | None = None
+ 
+     def check(self, *, outgoing=False):
++        if self.operation is not None:self.operation.check()
+         if not self.live: raise DataError("mutation_permit_closed", 503)
+         self.lease.check()
+         state = self.gate.hub.assert_writable()
+@@ -70,7 +72,9 @@
+             if outgoing or owner is None or owner.get("state") != "registered" or owner.get("origin") != self.context.public():
+                 raise DataError("maintenance_unconfirmed", 503)
+         validate=getattr(self.gate,'validate_source',None)
+-        if validate is not None:validate(self.context)
++        if validate is not None:
++            if self.operation is not None:validate(self.context,operation=self.operation)
++            else:validate(self.context)
+ 
+ 
+ class MutationGate:
+@@ -85,15 +89,16 @@
+             with self.acquire(outgoing=True) as permit:yield permit
+ 
+     @contextmanager
+-    def acquire(self, *, outgoing=False, expected=None):
++    def acquire(self, *, outgoing=False, expected=None, operation=None):
++        if operation is not None:operation.check()
+         inherited = CURRENT_PERMIT.get()
+         if inherited is not None and inherited.gate is self:
+             inherited.check(outgoing=outgoing)
+             if expected is not None and inherited.context != expected: raise DataError("selection_changed")
+             yield inherited
+             return
+-        with self.lock.acquire() as lease:
+-            permit = MutationPermit(self, self.context(), lease)
++        with self.lock.acquire(timeout=operation.remaining(30) if operation else 30) as lease:
++            permit = MutationPermit(self, self.context(), lease,operation=operation)
+             if expected is not None and permit.context != expected: raise DataError("selection_changed")
+             permit.check(outgoing=outgoing)
+             token = CURRENT_PERMIT.set(permit)
+@@ -184,15 +189,18 @@
+     def __init__(self, gate, source, maintenance_key, close_owned=None):
+         self.gate, self.source, self.maintenance_key, self.close_owned = gate, source, maintenance_key, close_owned
+ 
+-    async def drain_for_readonly_switch(self, expected_generation, deadline):
++    async def drain_for_readonly_switch(self, expected_generation, deadline, operation=None):
++        if operation is not None: operation.check()
+         context = self.gate.context()
+         state=self.gate.hub.state()
+         confirmed_frozen=context.mode=='frozen' and state['fence'] is not None and state['fence']['state']=='frozen'
+         if context.generation != expected_generation or (context.mode != "normal" and not confirmed_frozen): raise DataError("selection_changed")
+-        with self.gate.admission_lock.acquire(True):
++        with self.gate.admission_lock.acquire(True, timeout=min(30, max(0, deadline-time.monotonic()))):
++            if operation is not None: operation.check()
+             self.gate.hub.commit("maintenance.fence", {"origin": context.public(), "state": "draining"})
+         if self.close_owned is not None:
+-            await self.close_owned()
++            import asyncio
++            await asyncio.wait_for(self.close_owned(), timeout=max(0, deadline-time.monotonic()))
+         # 原监督链负责具体停止，未知自有树阻止切换；旧历史未知不登记为本次 owner。
+         while any(v.get("state") != "ended" for v in self.gate.hub.state()["owned"].values()):
+             if time.monotonic() >= deadline: raise DataError("maintenance_unconfirmed", 503)
+@@ -201,10 +209,12 @@
+         remaining = max(0, deadline - time.monotonic())
+         lease = self.gate.lock.acquire(True, timeout=remaining)
+         try:
+-            with self.source.connection() as connection:
++            if operation is not None: operation.check()
++            with self.source.connection(operation=operation) as connection:
+                 connection.execute("SELECT public.data_control_frozen(%s,%s,%s)",
+                                    (context.dataset_id, context.instance_id, self.maintenance_key))
+             self.gate.hub.commit("maintenance.fence", {"origin": context.public(), "state": "frozen"})
++            if operation is not None: operation.check()
+             return lease
+         except BaseException:
+             lease.close()

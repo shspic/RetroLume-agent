@@ -1,0 +1,507 @@
+--- C02-saved-pre/backend/app/preview/host_job.py
++++ post/backend/app/preview/host_job.py
+@@ -14,6 +14,37 @@
+ from .process import OwnershipUnknown,birth
+ 
+ _local=threading.local()
++
++
++def child_lineage(pid,expected_birth,launcher_pid,launcher_birth):
++    """读取真实Windows父子快照与两端出生，允许既有venv launcher转发。"""
++    actual=birth(pid);primary=birth(launcher_pid)
++    if actual.get("state")!="running" or actual.get("birth")!=expected_birth or primary.get("state")!="running" or primary.get("birth")!=launcher_birth:
++        raise OwnershipUnknown("child_lineage_birth")
++    class Entry(ctypes.Structure):
++        _fields_=[("size",wintypes.DWORD),("usage",wintypes.DWORD),("pid",wintypes.DWORD),("heap",ctypes.c_size_t),
++          ("module",wintypes.DWORD),("threads",wintypes.DWORD),("parent",wintypes.DWORD),("priority",wintypes.LONG),("flags",wintypes.DWORD),("exe",wintypes.WCHAR*260)]
++    api=ctypes.WinDLL("kernel32",use_last_error=True)
++    api.CreateToolhelp32Snapshot.argtypes=(wintypes.DWORD,wintypes.DWORD);api.CreateToolhelp32Snapshot.restype=wintypes.HANDLE
++    api.Process32FirstW.argtypes=(wintypes.HANDLE,ctypes.POINTER(Entry));api.Process32FirstW.restype=wintypes.BOOL
++    api.Process32NextW.argtypes=api.Process32FirstW.argtypes;api.Process32NextW.restype=wintypes.BOOL;api.CloseHandle.argtypes=(wintypes.HANDLE,)
++    handle=api.CreateToolhelp32Snapshot(2,0)
++    if handle in (None,ctypes.c_void_p(-1).value):raise OwnershipUnknown("child_lineage_snapshot")
++    parents={};entry=Entry();entry.size=ctypes.sizeof(entry)
++    try:
++        ok=api.Process32FirstW(handle,ctypes.byref(entry))
++        while ok:
++            parents[int(entry.pid)]=int(entry.parent);ok=api.Process32NextW(handle,ctypes.byref(entry))
++    finally:api.CloseHandle(handle)
++    chain=[pid]
++    for _ in range(4):
++        if chain[-1]==launcher_pid:
++            if birth(pid)!=actual or birth(launcher_pid)!=primary:raise OwnershipUnknown("child_lineage_changed")
++            return {"actual_pid":pid,"actual_birth":expected_birth,"launcher_pid":launcher_pid,"launcher_birth":launcher_birth,"parent_chain":chain}
++        parent=parents.get(chain[-1])
++        if not parent or parent in chain:break
++        chain.append(parent)
++    raise OwnershipUnknown("child_lineage_unconfirmed")
+ 
+ 
+ class HostJob:
+--- C02-saved-pre/backend/app/preview/production_supervisor.py
++++ post/backend/app/preview/production_supervisor.py
+@@ -22,7 +22,7 @@
+ from .host_policy import policy_config_sha256
+ from .pipe import send_packet,read_packet
+ from .process import atomic_json,birth,GlobalOwner,OwnershipUnknown,protect_control_key,unprotect_control_key,terminate_owned
+-from .host_job import HostJob,JobChild,scope,job_name
++from .host_job import HostJob,JobChild,scope,job_name,child_lineage
+ 
+ BACKEND=Path(__file__).resolve().parents[2]
+ PREVIEW_ROOT=BACKEND.parent/"deploy"/"preview"
+@@ -60,8 +60,14 @@
+             facts=json.loads((folder/"kernel-premises.json").read_text(encoding="utf-8")) if (folder/"kernel-premises.json").is_file() else None
+             state=None;created=None
+             if cid is None:
+-                created=json.loads((folder/"create.json").read_text(encoding="utf-8"))
+-                if (registry.get("start_requested_ns") or registry.get("attach_pid") or not local_create_rejection(created,intent,PREVIEW_ROOT/"seccomp.json")
++                if not registry.get("create_requested_ns"):
++                    failure=json.loads((folder/"failure.json").read_text(encoding="utf-8"))
++                    if failure.get("type")!="OwnershipUnknown" or failure.get("code")!="reaper_job_identity" or registry.get("start_requested_ns") or registry.get("attach_pid"):
++                        raise OwnershipUnknown("recovery_precreate_unknown")
++                    created={"precreate_failure":failure,"create_never_requested":True}
++                else:
++                    created=json.loads((folder/"create.json").read_text(encoding="utf-8"))
++                if not created.get("create_never_requested") and (registry.get("start_requested_ns") or registry.get("attach_pid") or not local_create_rejection(created,intent,PREVIEW_ROOT/"seccomp.json")
+                     or created["start_ns"]<registry["create_requested_ns"] or created["end_ns"]>registry["deadline_ns"]
+                     or find_intent(self.policy.docker,intent) is not None):
+                     raise OwnershipUnknown("recovery_create_unknown")
+@@ -78,7 +84,7 @@
+             else:raise OwnershipUnknown("recovery_reaper_identity_missing")
+             if cid is None:
+                 proof={"tree_confirmation":"never_started","cid":None,"image_id":intent["image_id"],"nonce":intent["nonce"],
+-                    "name":intent["name"],"recovery":True,"cause":"exact_cli_pid_parse_rejection","create_receipt_sha256":digest(created),
++                    "name":intent["name"],"recovery":True,"cause":"known_failure_before_create" if created.get("create_never_requested") else "exact_cli_pid_parse_rejection","create_receipt_sha256":digest(created),
+                     "lookup":"exact_name_and_nonce_absent","parent_lifetime_ended":True,"owned_reaper_ended":True,"attach_never_started":True}
+             else:
+                 proof=stop_owned(self.policy.docker,cid,intent,facts,attach_ended=attach_ended)
+@@ -146,7 +152,7 @@
+            "folder":folder,"stop":threading.Event(),"ready":threading.Event(),"ack":threading.Event(),"frame":None,
+            "frame_seq":0,"input_seq":0,"last_ack":None,"last_payload_sha256":None,"state":"reserved","cid":None,
+            "identity":identity,"name":name,"attach":None,"reader":None,"stderr_reader":None,"reaper":None,
+-           "kernel_ready":None,"received_ready":None,"pipe_eof":False,"error_code":None,"last_contact_ns":now}
++           "kernel_ready":None,"received_ready":None,"pipe_eof":False,"error_code":None,"last_contact_ns":now,"reaper_owner":None}
+         current["input_times"]=deque();current["rate_exceeded_since"]=None
+         current["intent"]={"name":name,"image_id":self.policy.image_id,"nonce":identity["nonce"],"docker":self.policy.docker,
+           "kernel_release":self.policy.kernel_release,"created_unix":str(int(time.time())-1),
+@@ -213,12 +219,18 @@
+             reaper=subprocess.Popen([str(BACKEND/".venv"/"Scripts"/"python.exe"),"-B","-m","app.preview.production_reaper",str(registry)],
+                 cwd=BACKEND,env=clean_env(),stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,creationflags=subprocess.CREATE_NO_WINDOW)
+             c["reaper"]=reaper
++            launcher=birth(reaper.pid)
++            if launcher["state"]!="running":raise OwnershipUnknown("reaper_launcher_birth")
++            c["registry"]["reaper_launcher"]={"pid":reaper.pid,"birth":launcher["birth"]};self._registry(c)
+             while not (c["folder"]/"reaper-ready.json").exists():
+                 if reaper.poll() is not None or time.monotonic_ns()>c["t0_ns"]+1000000000:raise OwnershipUnknown("reaper_not_ready")
+                 time.sleep(.02)
+             ready_owner=json.loads((c["folder"]/"reaper-ready.json").read_text(encoding="utf-8"))
+             expected_job=job_name(c["preview_id"],c["nonce"],"REAP")
+-            if ready_owner["pid"]!=reaper.pid or ready_owner.get("job_name")!=expected_job:raise OwnershipUnknown("reaper_job_identity")
++            if ready_owner.get("job_name")!=expected_job:raise OwnershipUnknown("reaper_job_identity")
++            lineage=child_lineage(ready_owner["pid"],ready_owner["birth"],reaper.pid,launcher["birth"])
++            c["reaper_owner"]={"pid":ready_owner["pid"],"birth":ready_owner["birth"]};c["registry"]["reaper_owner"]=c["reaper_owner"]
++            self._registry(c);atomic_json(c["folder"]/"reaper-lineage.json",lineage)
+             c["reaper_job"]=HostJob(expected_job,existing=True)
+             c["registry"]["create_requested_ns"]=time.monotonic_ns();self._registry(c)
+             existing=find_intent(self.policy.docker,c["intent"])
+@@ -295,8 +307,9 @@
+                 try:
+                     # 已确认工作对象结束后，结束拥有的救援进程，再允许结算。
+                     if c["reaper"] and c["reaper"].poll() is None:
+-                        c["reaper"].terminate();c["reaper"].wait(timeout=2)
+-                    proof["owned_reaper_ended"]=c["reaper"] is not None and c["reaper"].poll() is not None
++                        if c["reaper_owner"] is None:raise OwnershipUnknown("reaper_owner_unknown")
++                        terminate_owned(c["reaper_owner"]["pid"],c["reaper_owner"]["birth"]);c["reaper"].wait(timeout=2)
++                    proof["owned_reaper_ended"]=c["reaper"] is not None and c["reaper"].poll() is not None and c["reaper_owner"] is not None and birth(c["reaper_owner"]["pid"])["state"]=="exited"
+                     if c["reaper_job"] is None:raise OwnershipUnknown("reaper_job_unknown")
+                     proof["reaper_windows_job"]=c["reaper_job"].finish()
+                     proof["supervisor_cli_windows_job"]=c["host_job"].finish()
+@@ -314,6 +327,7 @@
+                 except Exception:pass
+             c["registry"]["complete"]=confirmed;self._registry(c)
+             if c["reaper"]:
++                if c["reaper_owner"]:terminate_owned(c["reaper_owner"]["pid"],c["reaper_owner"]["birth"])
+                 try:c["reaper"].wait(timeout=2)
+                 except subprocess.TimeoutExpired:c["reaper"].terminate();c["reaper"].wait(timeout=2)
+             if c["reaper_job"]:
+--- C02-saved-pre/backend/app/preview/repository.py
++++ post/backend/app/preview/repository.py
+@@ -102,7 +102,7 @@
+              UNION ALL SELECT r.*,d.path||r.record_id FROM d JOIN public.teaching_records r ON r.activity_id=d.activity_id
+                AND r.record_id IN (d.parent_record_id,d.goal_record_id,d.exercise_record_id,d.answer_record_id)
+                WHERE NOT r.record_id=ANY(d.path) AND cardinality(d.path)<13)
+-             SELECT DISTINCT ON (d.record_id) d.*,d.business_key AS command_key,p.payload,p.payload_format,p.payload_sha256 AS operation_payload_sha256
++             SELECT DISTINCT ON (d.record_id) d.*,d.activity_id::text AS activity_id,d.business_key::text AS command_key,p.payload,p.payload_format,p.payload_sha256 AS operation_payload_sha256
+               FROM d LEFT JOIN public.activity_operation_results p ON p.activity_id=d.activity_id AND p.operation_id=d.operation_id
+              ORDER BY d.record_id""", (aid, parent["record_id"]))
+             rows = list(await cursor.fetchall())
+@@ -115,6 +115,11 @@
+             source_map = {(s["source_id"], s["version_id"]): s for s in sources}
+             for dependency in rows:
+                 references = bound_references(dependency)
++                # 既有本地goal/answer等没有派生来源，仍严格验正文hash与版本；
++                # 其派生exercise/feedback闭包及当前活动来源分别继续核验。
++                if (dependency["kind"] in ("goal","answer","correction","exposure")
++                    and dependency.get("body") is not None and dependency.get("source_refs")=="[]"):
++                    references=[]
+                 if references is None or any((s := source_map.get((r["source_id"],r["version_id"]))) is None
+                     or s["source_revision"] != r["source_revision"] or s["original_sha256"] != r["original_sha256"] for r in references):
+                     raise HtmlRefusal("source_invalid")
+--- C02-saved-pre/backend/tests/fixtures/task111/c01_faults.py
++++ post/backend/tests/fixtures/task111/c01_faults.py
+@@ -12,10 +12,11 @@
+     # 计划与运行方法ID显式分离，缺独立触发/原件不把计划签成通过。
+     result=[]
+     for number,name in enumerate(PLAN):
++        root=CONTINUE_ROOT/("fault-"+name);root.mkdir(exist_ok=False)
+         item=diagnostic[number//3];aid=item["activity_id"];artifact=matrix.request("GET",f"/api/activities/{aid}/html/artifacts/"+item["receipt"]["artifact_id"])
+         owner=secrets.token_hex(32)
+         opened=matrix.request("POST",f"/api/activities/{aid}/html/artifacts/{artifact['artifact_id']}/previews",{"start_key":str(uuid4()),"expected_artifact_sha256":artifact["artifact_sha256"],"input_owner_key":owner,"confirmed":True})
+-        pid=opened["preview_id"];root=CONTINUE_ROOT/"fault-"+name;root.mkdir(exist_ok=False)
++        pid=opened["preview_id"]
+         # 仅已冻结有限名字通过继承匿名控制管道交本卡API夹具执行；没有URL、代码或任意命令。
+         command={"scenario":name,"activity_id":aid,"preview_id":pid,"generation":opened["generation"]}
+         matrix.fixture_command(command)
+--- C02-saved-pre/backend/tests/fixtures/task111/c01_seeds.py
++++ post/backend/tests/fixtures/task111/c01_seeds.py
+@@ -19,7 +19,7 @@
+     original=h.originals.put(io.BytesIO(source.encode()),max_bytes=5242880)
+     material=h.materials.save(source_id=None,expected_version=None,filename="c01-"+kind+".md",format="md",sha256=original.sha256,size=original.size)
+     aid=str(uuid4());await h.ledger.create_activity(ActivitySpec(activity_id=aid,sources=(SourceSnapshot(material["id"],material["version_id"],material["revision"]),),
+-        deadline_at=datetime(2026,10,10,11,20,tzinfo=timezone.utc),max_requests=8,max_cost_microunits=10000,reserve_cost_microunits=100,
++        deadline_at=datetime(2026,10,10,14,35,tzinfo=timezone.utc),max_requests=8,max_cost_microunits=10000,reserve_cost_microunits=100,
+         max_request_bytes=65536,max_output_tokens=4096,max_running_seconds=1800,allowed_models=(("deepseek_chat_completions","task111-synthetic"),),max_tool_calls=0))
+     config=replace(h.config,teaching_layer=LayerState(True),teaching_output_tokens=2048)
+     service=TeachingService(h.ledger,h.materials,h.originals)
+@@ -31,7 +31,7 @@
+         cmd=await command(action,body);frozen,identity=await service._freeze_model_context(aid,cmd,config);profile=service._build_profile(aid,cmd,frozen,identity)
+         cid=frozen.catalog[0].citation_id
+         if action=="plan":output={"result_type":"path","message":"冻结合成教学前提","nodes":[{"title":title,"objective":"解释公式和边界","prerequisites":[],"rationale":"按本卡合成资料核对参数与结果","citations":[cid],"completion_dimensions":[{"dimension":"value","required_point":"数值与定义域一致"}]}]}
+-        elif action=="exercise":output={"result_type":"exercise","message":"冻结当前练习","exercise_type":"calculation","difficulty":2,"stem":source,
++        elif action=="exercise":output={"result_type":"exercise","message":"冻结当前练习","exercise_type":"calculation","difficulty":2,"stem":"质量2，高度3，计算机械能。" if kind=="energy" else "二项概率：n3 k2 p0.5。",
+             "reference_points":[{"point_id":"p1","text":"58.8J" if kind=="energy" else "0.375，n0概率1","citations":[cid],"numeric":None}],
+             "reference_explanation":"按资料公式核对，不宣长期掌握","dimensions":[{"id":"value","point_ids":["p1"],"description":"核对数值与边界"}],"hint":"先列参数和定义域",
+             "variant":{"purpose":"initial","parent_exercise_record_id":None,"parent_feedback_record_id":None,"instance_data":{"kind":"calculation","quantities":[{"name":"n" if kind=="binomial" else "m","value_decimal":"3" if kind=="binomial" else "2","unit":"次" if kind=="binomial" else "kg"}]}}}
+--- C02-saved-pre/backend/tests/fixtures/task111/control.py
++++ post/backend/tests/fixtures/task111/control.py
+@@ -19,7 +19,13 @@
+  "public_PNG_gets_subset":3000,"public_inputs_subset":300,"internal_inputs":500,"preview_reaper_validation_batches":2}
+ CONTINUATION="TASK-111-G11-C01-20261010"
+ CONTINUE_ROOT=EVIDENCE/"continuation-01"
+-if (CONTINUE_ROOT/"timing.json").is_file():
++C02_ROOT=EVIDENCE/"continuation-02"
++if (C02_ROOT/"timing.json").is_file():
++    CONTINUATION="TASK-111-G11-C02-20261010";CONTINUE_ROOT=C02_ROOT
++    _continuation=json.loads((CONTINUE_ROOT/"timing.json").read_text(encoding="utf-8"))
++    if _continuation["permit"]!=CONTINUATION:raise RuntimeError("C02 identity")
++    CAPS.update(_continuation["hard_count_caps"]);CAPS["offline_related_batches"]=None
++elif (CONTINUE_ROOT/"timing.json").is_file():
+     _continuation=json.loads((CONTINUE_ROOT/"timing.json").read_text(encoding="utf-8"))
+     if _continuation["permit"]!=CONTINUATION or _continuation["original_deadline_ns"]!=902913370092600:raise RuntimeError("continuation identity")
+     CAPS.update({key:_continuation["caps_after"][key] for key in CAPS})
+@@ -47,14 +53,20 @@
+         finally:stream.seek(0);msvcrt.locking(stream.fileno(),msvcrt.LK_UNLCK,1)
+ 
+ 
+-def state():
++def read_state():
+     path=EVIDENCE/"budget.json"
+     if path.is_file():value=json.loads(path.read_text(encoding="utf-8"))
+     else:
+         initial=json.loads((EVIDENCE/"session-start.json").read_text(encoding="utf-8-sig"))
+         deadline=int(initial["deadline_tick"]*1000000000//initial["host_monotonic_frequency"])
+         value={"permit":PERMIT,"deadline_ns":deadline,"counts":{key:0 for key in CAPS},"time_seconds":{"offline":0,"real":0,"cleanup":0},"active_batch":None,"events":0}
+-    if value["permit"]!=PERMIT or time.monotonic_ns()>=value["deadline_ns"]:raise RuntimeError("TASK111 fixed window ended")
++    if value["permit"]!=PERMIT:raise RuntimeError("TASK111 ledger identity")
++    return value
++
++
++def state():
++    value=read_state()
++    if time.monotonic_ns()>=value.get("business_deadline_ns",value["deadline_ns"]):raise RuntimeError("TASK111 business window ended")
+     return value
+ 
+ 
+@@ -67,7 +79,9 @@
+     with (CONTINUE_ROOT/"phase-events.jsonl").open("a",encoding="utf-8") as stream:
+         stream.write(json.dumps({"phase":previous,"start_ns":value["phase_start_ns"],"end_ns":now,"seconds":elapsed,"next":kind})+"\n")
+     value["phase"]=kind;value["phase_start_ns"]=now;atomic(path,value)
+-    if now>=value["original_deadline_ns"] or any(value["used_seconds"][key]>limit for key,limit in value["caps_seconds"].items()):raise RuntimeError("continuation timing exhausted")
++    if CONTINUATION.endswith("C02-20261010"):
++        if kind not in ("cleanup","complete") and now>=value["business_deadline_ns"]:raise RuntimeError("C02 business timing exhausted")
++    elif now>=value["original_deadline_ns"] or any(value["used_seconds"][key]>limit for key,limit in value["caps_seconds"].items()):raise RuntimeError("continuation timing exhausted")
+     return value
+ 
+ 
+@@ -77,9 +91,9 @@
+     return value
+ 
+ 
+-def event(kind,value):
++def event(kind,value,*,cleanup=False):
+     with locked():
+-        budget=state();budget["events"]+=1
++        budget=read_state() if cleanup else state();budget["events"]+=1
+         row={"event":budget["events"],"kind":kind,"pid":os.getpid(),"at_ns":time.monotonic_ns(),"at_utc":datetime.now(timezone.utc).isoformat(),"data":_safe(value)}
+         with (EVIDENCE/"events.jsonl").open("a",encoding="utf-8") as stream:stream.write(json.dumps(row,ensure_ascii=False,allow_nan=False)+"\n")
+         atomic(EVIDENCE/"budget.json",budget)
+@@ -88,7 +102,7 @@
+ def reserve(kind,value=None):
+     with locked():
+         budget=state()
+-        if kind not in CAPS or budget["counts"][kind]>=CAPS[kind]:raise RuntimeError("TASK111 count cap reached: "+kind)
++        if kind not in CAPS or (CAPS[kind] is not None and budget["counts"][kind]>=CAPS[kind]):raise RuntimeError("TASK111 count cap reached: "+kind)
+         budget["counts"][kind]+=1;number=budget["counts"][kind];atomic(EVIDENCE/"budget.json",budget)
+     event("reserved",{"category":kind,"number":number,"detail":value or {}});return number
+ 
+@@ -105,26 +119,29 @@
+         number=reserve(category,{"name":name})
+     start=time.monotonic_ns()
+     with locked():
+-        budget=state()
++        budget=read_state() if kind=="cleanup" else state()
+         if budget["active_batch"] is not None:raise RuntimeError("TASK111 overlapping root batch")
+-        remaining=limits[kind]-budget["time_seconds"][kind]
++        remaining=float("inf") if kind=="offline" and CONTINUATION.endswith("C02-20261010") else limits[kind]-budget["time_seconds"][kind]
+         if remaining<=0:raise RuntimeError("TASK111 category time exhausted: "+kind)
+         maximum=min(maximum,remaining,1800 if kind=="cleanup" else 3500 if (CONTINUE_ROOT/"timing.json").is_file() and kind=="real" else 3600)
+-        budget["active_batch"]={"kind":kind,"number":number,"name":name,"start_ns":start,"deadline_ns":min(start+int(maximum*1000000000),budget["deadline_ns"])}
++        limit_deadline=start+int(maximum*1000000000)
++        if kind!="cleanup":limit_deadline=min(limit_deadline,budget.get("business_deadline_ns",budget["deadline_ns"]))
++        budget["active_batch"]={"kind":kind,"number":number,"name":name,"start_ns":start,"deadline_ns":limit_deadline}
+         atomic(EVIDENCE/"budget.json",budget)
+     try:yield budget["active_batch"]
+     finally:
+         elapsed=(time.monotonic_ns()-start)/1e9
+         with locked():
+-            budget=state();budget["time_seconds"][kind]+=elapsed;budget["active_batch"]=None;atomic(EVIDENCE/"budget.json",budget)
+-        event("batch_end",{"kind":kind,"number":number,"name":name,"elapsed":elapsed,"exceeded":elapsed>maximum})
++            budget=read_state();budget["time_seconds"][kind]+=elapsed;budget["active_batch"]=None;atomic(EVIDENCE/"budget.json",budget)
++        event("batch_end",{"kind":kind,"number":number,"name":name,"elapsed":elapsed,"exceeded":elapsed>maximum},cleanup=True)
+ 
+ 
+ def run(args,folder,*,cwd=None,env=None,maximum=60,name="command"):
+     folder=Path(folder);folder.mkdir(parents=True,exist_ok=True)
+-    budget=state();active=budget["active_batch"]
++    budget=read_state();active=budget["active_batch"]
+     if active is None:raise RuntimeError("TASK111 command outside budget batch")
+-    timeout=min(maximum,(min(active["deadline_ns"],budget["deadline_ns"])-time.monotonic_ns())/1e9)
++    if active["kind"]!="cleanup":state()
++    timeout=min(maximum,(active["deadline_ns"]-time.monotonic_ns())/1e9)
+     if timeout<=0:raise RuntimeError("TASK111 batch deadline")
+     started=time.monotonic_ns()
+     value=subprocess.run(args,cwd=cwd,env=env,timeout=timeout,capture_output=True,creationflags=subprocess.CREATE_NO_WINDOW)
+@@ -141,6 +158,11 @@
+       ROOT/"deploy/preview/renderer-host.cjs",ROOT/"deploy/preview/renderer-bootstrap.cjs",ROOT/"deploy/preview/descriptor.schema.json",
+       ROOT/"backend/migrations/012_html_explanations.sql",ROOT/"backend/app/activities/repository.py",ROOT/"backend/app/capabilities/contracts.py",ROOT/"backend/app/capabilities/gateway.py"]
+     paths+=list((ROOT/"frontend/src/explanations").glob("*"))
++    paths+=[ROOT/"backend/tests/fixtures/task111"/name for name in (
++      "control.py","resources.py","core.py","runtime.py","c01_seeds.py","c01_guardian.py","server.py","http_matrix.py",
++      "c02_coordinator.py","c02_step.py","c02_normal.py","c02_pg.py","c02_lineage_check.py","c02_faults.py")]
++    paths+=[ROOT/"frontend/tests/task111/browser.cjs",ROOT/"deploy/preview/build_renderer.py",ROOT/"deploy/preview/Dockerfile.production",
++      ROOT/"deploy/preview/resolve_license_materials.py",ROOT/"deploy/preview/license_resources.cjs"]
+     for path in paths:
+         if path.is_file():files.append({"path":str(path.relative_to(ROOT)).replace("\\","/"),"sha256":hashlib.sha256(path.read_bytes()).hexdigest(),"bytes":path.stat().st_size})
+     atomic(Path(folder)/"source-identity.json",files);return files
+--- C02-saved-pre/backend/tests/fixtures/task111/core.py
++++ post/backend/tests/fixtures/task111/core.py
+@@ -40,7 +40,15 @@
+           kernel_release=resource["platform"]["kernel"],docker=resources.DOCKER,registry_dir=(EVIDENCE/"synthetic/http-control").resolve(),authorization=PERMIT,
+           owner_name="Global\\RetroLumePreviewV2Task111")
+         def name(pid,generation):
+-            count=reserve("preview_creates",{"preview_id":pid});return "retrolume-task-111-g11-preview-"+str(count).zfill(2)
++            count=reserve("preview_creates",{"preview_id":pid})
++            from .control import CONTINUE_ROOT
++            plan=CONTINUE_ROOT/"preview-name-plan.json"
++            if plan.exists():
++                names=json.loads(plan.read_text(encoding="utf-8"))
++                if not names or names[0] not in [str(n).zfill(2) for n in range(2,15)]:raise RuntimeError("fixed preview name plan")
++                chosen=names.pop(0);atomic(plan,names)
++            else:chosen=str(count).zfill(2)
++            return "retrolume-task-111-g11-preview-"+chosen
+         def observer(kind,data):
+             if kind=="start_attempt":reserve("preview_starts",data)
+             event("preview_"+kind,data)
+--- C02-saved-pre/backend/tests/fixtures/task111/http_matrix.py
++++ post/backend/tests/fixtures/task111/http_matrix.py
+@@ -17,7 +17,7 @@
+ 
+ class HttpMatrix:
+     def __init__(self,resource,built,folder):
+-        self.resource,self.built,self.folder=resource,built,folder;self.token=secrets.token_urlsafe(32);self.process=None
++        self.resource,self.built,self.folder=resource,built,folder;self.token=secrets.token_urlsafe(32);self.process=None;self.actual_owner=None
+         self.client=httpx.Client(base_url=BASE,timeout=120,trust_env=False,headers={"X-RetroLume-Session":self.token,"Origin":BASE})
+         self.results=[]
+ 
+@@ -37,9 +37,19 @@
+             if self.process.poll() is not None:raise RuntimeError("TASK111 API process ended")
+             try:
+                 if self.client.get("/health").status_code==200:break
+-            except httpx.Error:pass
++            except httpx.HTTPError:pass
+             if time.monotonic()>until:raise RuntimeError("TASK111 API ready timeout")
+             time.sleep(.2)
++        from .control import CONTINUE_ROOT
++        from app.preview.host_job import child_lineage
++        primary=birth(self.process.pid);owners=[]
++        for path in CONTINUE_ROOT.glob("api-actual-*.json"):
++            row=json.loads(path.read_text(encoding="utf-8"))
++            if birth(row["pid"])["state"]=="exited":continue
++            try:row["lineage"]=child_lineage(row["pid"],row["birth"],self.process.pid,primary["birth"]);owners.append(row)
++            except RuntimeError:continue
++        if len(owners)!=1:raise RuntimeError("API actual owner unconfirmed")
++        self.actual_owner=owners[0];atomic(self.folder/"api-actual-bound.json",self.actual_owner)
+ 
+     def fixture_command(self,value):
+         if set(value)!={"scenario","activity_id","preview_id","generation"}:raise RuntimeError("fixture control fields")
+@@ -69,8 +79,11 @@
+ 
+     def close(self):
+         self.client.close()
++        if self.actual_owner:
++            from app.preview.process import terminate_owned
++            terminate_owned(self.actual_owner["pid"],self.actual_owner["birth"])
++        elif self.process and self.process.poll() is None:raise RuntimeError("API actual owner unknown")
+         if self.process and self.process.poll() is None:
+-            self.process.terminate()
+             try:self.process.wait(timeout=15)
+             except subprocess.TimeoutExpired:self.process.kill();self.process.wait(timeout=5)
+         self.stdout.close();self.stderr.close()
+--- C02-saved-pre/backend/tests/fixtures/task111/server.py
++++ post/backend/tests/fixtures/task111/server.py
+@@ -8,11 +8,13 @@
+ import sys,threading,time
+ from pydantic import SecretStr
+ import uvicorn
+-from .control import ROOT,EVIDENCE,PERMIT,reserve,event
++from .control import ROOT,EVIDENCE,CONTINUE_ROOT,PERMIT,reserve,event,atomic
+ 
+ 
+ def main():
+     if os.environ.get("RETROLUME_TASK111_FIXTURE")!=PERMIT:raise RuntimeError("fixture permit")
++    from app.preview.process import birth
++    atomic(CONTINUE_ROOT/("api-actual-"+str(os.getpid())+".json"),{"pid":os.getpid(),"birth":birth(os.getpid())["birth"]})
+     database=os.environ.get("RETROLUME_INTERACTIVE_TEST_DATABASE_URL","")
+     import psycopg
+     if psycopg.conninfo.conninfo_to_dict(database).get("dbname")!="retrolume_task111_main":raise RuntimeError("fixture database")
+@@ -32,10 +34,17 @@
+     app.state.activity_config=ActivityConfig(provider="deepseek_chat_completions",model="task111-synthetic",quota_preview=None,
+       model_service=ModelServiceConfig(provider="deepseek_chat_completions",base_url="https://api.deepseek.com",model="task111-synthetic",
+         api_key=SecretStr(secrets.token_urlsafe(32)),timeout_seconds=1.0,max_request_bytes=65536,max_response_bytes=65536,max_output_tokens_limit=4096),
+-      create_layer=LayerState(True),continue_layer=LayerState(True),html_generation_layer=LayerState(True),html_output_tokens=4096)
++      create_layer=LayerState(True),continue_layer=LayerState(True),teaching_layer=LayerState(True),teaching_output_tokens=2048,html_generation_layer=LayerState(True),html_output_tokens=4096)
+     policy=HostPolicy(**policy_data,registry_dir=(EVIDENCE/"synthetic/http-control").resolve(),authorization=PERMIT,owner_name="Global\\RetroLumePreviewV2Task111")
+     def name(pid,generation):
+-        count=reserve("preview_creates",{"preview_id":pid});return "retrolume-task-111-g11-preview-"+str(count).zfill(2)
++        count=reserve("preview_creates",{"preview_id":pid})
++        plan=CONTINUE_ROOT/"preview-name-plan.json"
++        if plan.exists():
++            names=json.loads(plan.read_text(encoding="utf-8"))
++            if not names or names[0] not in [str(n).zfill(2) for n in range(2,15)]:raise RuntimeError("fixed preview name plan")
++            chosen=names.pop(0);atomic(plan,names)
++        else:chosen=str(count).zfill(2)
++        return "retrolume-task-111-g11-preview-"+chosen
+     def observer(kind,data):
+         if kind=="start_attempt":reserve("preview_starts",data)
+         event("preview_"+kind,data)
+--- C02-saved-pre/deploy/preview/renderer-host.cjs
++++ post/deploy/preview/renderer-host.cjs
+@@ -7,6 +7,11 @@
+ let buffer=Buffer.alloc(0),identity=null,initPromise=null,browser=null,page=null,frame=null,context=null;
+ let inputSeq=0,frameSeq=0,statusSeq=0,lastAck=null,stopping=false,frameBusy=false;
+ let lastState=null;const engineEvents=[];let baseline=null,browserCdp=null,baselineTargets=null;
++let initStage='load';
++function reportHostError(error){
++ const value={stage:initStage,error_type:String(error?.name??'Error').slice(0,64),message:String(error?.message??'host_failed').slice(0,1024)};
++ process.stderr.write(JSON.stringify(value)+'\n');
++}
+ const manifestBytes=fs.readFileSync('/opt/preview/load-manifest.json'),manifest=JSON.parse(manifestBytes);
+ for(const [name,hash] of Object.entries(manifest.files))if(sha(fs.readFileSync('/opt/preview/'+name))!==hash)throw new Error('load_manifest_mismatch');
+ function exact(v,names){if(!v||typeof v!=='object'||Array.isArray(v)||Object.keys(v).length!==names.length||names.some(n=>!Object.hasOwn(v,n)))throw new Error('protocol_fields');}
+@@ -69,30 +74,33 @@
+  }
+ }
+ async function initialize(body){
++ initStage='init_fields';
+  emit('status',++statusSeq,{state:'initializing',reason_code:'bootstrap_identity',last_input_seq:0,processes:processFacts(),load_manifest_sha256:sha(manifestBytes)});
+  exact(body,['schema','description','description_sha256','renderer_sha256','viewport']);
+  if(body.schema!=='retrolume.preview.init.v2'||body.renderer_sha256!==manifest.renderer_sha256||
+    body.viewport?.width!==640||body.viewport?.height!==480||runtime.canonical(body.viewport)!=='{"height":480,"width":640}')throw new Error('init_identity');
+  runtime.validate(body.description);if(sha(Buffer.from(runtime.canonical(body.description),'utf8'))!==body.description_sha256)throw new Error('description_hash');
+  const executable=pw.chromium.executablePath();if(sha(fs.readFileSync(executable))!==manifest.browser_sha256)throw new Error('browser_identity');
+- browser=await pw.chromium.launch({executablePath:executable,headless:true,chromiumSandbox:true,args:['--enable-automation'],ignoreDefaultArgs:['--disable-popup-blocking'],timeout:8000});
++ initStage='sandbox_browser_launch';browser=await pw.chromium.launch({executablePath:executable,headless:true,chromiumSandbox:true,args:['--enable-automation'],ignoreDefaultArgs:['--disable-popup-blocking'],timeout:8000});
+  const cdp=await browser.newBrowserCDPSession(),version=await cdp.send('Browser.getVersion'),command=await cdp.send('Browser.getBrowserCommandLine');browserCdp=cdp;
+  await cdp.send('Target.setDiscoverTargets',{discover:true});
+  cdp.on('Target.targetCreated',event=>{if(baselineTargets&&['page','iframe'].includes(event.targetInfo.type)&&!baselineTargets.some(t=>t.id===event.targetInfo.targetId))stop('unexpected_target');});
+  if(version.product!=='Chrome/151.0.7922.34'||command.arguments.includes('--no-sandbox')||process.getuid()!==10001)throw new Error('sandbox_identity');
+  context=await browser.newContext({viewport:{width:640,height:480},deviceScaleFactor:1,serviceWorkers:'block',acceptDownloads:false});
+  await context.route(()=>true,route=>route.abort());await context.routeWebSocket(()=>true,socket=>socket.close());
+- const sandboxPage=await context.newPage();await sandboxPage.goto('chrome://sandbox');const sandbox=await sandboxPage.locator('body').innerText();await sandboxPage.close();
++ initStage='sandbox_attestation';const sandboxPage=await context.newPage();await sandboxPage.goto('chrome://sandbox');const sandbox=await sandboxPage.locator('body').innerText();await sandboxPage.close();
+  page=await context.newPage();page.on('dialog',dialog=>dialog.dismiss());
+  const style='html,body{margin:0;width:640px;height:480px}iframe{border:0;width:640px;height:480px}';
+  const scriptHash=crypto.createHash('sha256').update(fs.readFileSync('/opt/preview/runtime.cjs')).digest('base64');
+  const cssHash=crypto.createHash('sha256').update(fs.readFileSync('/opt/preview/runtime.css')).digest('base64');
+  const rootStyleHash=crypto.createHash('sha256').update(style).digest('base64');
+  const rootPolicy="default-src 'none'; script-src 'sha256-"+scriptHash+"'; style-src 'sha256-"+cssHash+"' 'sha256-"+rootStyleHash+"'; frame-src 'none'; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'; worker-src 'none'";
+- await page.setContent('<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="'+rootPolicy+'"><style>'+style+'</style></head><body></body></html>');
++ initStage='trusted_root';await page.setContent('<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="'+rootPolicy+'"><style>'+style+'</style></head><body></body></html>');
+  // srcdoc只接镜像固定程序，模型数据从不参与其字符串构造。
+  await page.evaluate(html=>{const f=document.createElement('iframe');f.id='render-frame';f.setAttribute('sandbox','allow-scripts');f.srcdoc=html;document.body.appendChild(f);},compiledHTML());
+- frame=await (await page.$('#render-frame')).contentFrame();if(!frame||frame.parentFrame()!==page.mainFrame())throw new Error('frame_identity');
++ initStage='trusted_frame';frame=await (await page.$('#render-frame')).contentFrame();if(!frame||frame.parentFrame()!==page.mainFrame())throw new Error('frame_identity');
++ // srcdoc提交与固定脚本执行是异步的；握手前等精确受信API，不延外层ready8。
++ await frame.waitForFunction(()=>typeof globalThis.RetroLumeRuntime?.start==='function',null,{timeout:3000});
+  lastState=await frame.evaluate(data=>globalThis.RetroLumeRuntime.start(data),body.description);
+  if(page.frames().length!==2)throw new Error('frame_count');
+  await installFrameObservers();baseline=await engineSnapshot();
+@@ -142,7 +150,7 @@
+     if(h.type==='stop'){exact(body,['reason']);stop('user');}
+     else if(h.type==='input')chain=chain.then(()=>input(body,h.seq));else throw new Error('protocol_type');
+    }
+-   chain.catch(()=>stop('host_failed'));
++   chain.catch(error=>{reportHostError(error);stop('host_failed');});
+   }
+  }catch{stop('protocol_failed');}
+ });
+--- C02-saved-pre/frontend/tests/task111/browser.cjs
++++ post/frontend/tests/task111/browser.cjs
+@@ -5,7 +5,16 @@
+ const input=JSON.parse(fs.readFileSync(process.argv[2],'utf8')),token=process.env.RETROLUME_TASK111_BROWSER_SESSION;
+ (async()=>{
+  const browser=await pw.chromium.launch({headless:true});const context=await browser.newContext();const page=await context.newPage();
+- const records=[];
++ const records=[],acks=[],frames=[],pending=[];
++ page.on('response',response=>{
++  const pathname=new URL(response.url()).pathname;
++  if(pathname.endsWith('/inputs'))pending.push(response.json().then(body=>{acks.push(body);fs.writeFileSync(path.join(input.out,'actual-remote-acks.json'),JSON.stringify(acks,null,2));}).catch(()=>{}));
++  if(pathname.endsWith('/frames')&&response.status()===200)pending.push(response.body().then(body=>{
++    if(body.length>524288)throw Error('frame output bound');
++    const name='remote-frame-'+frames.length+'.png';fs.writeFileSync(path.join(input.out,name),body);frames.push({path:name,bytes:body.length,url_path:pathname});
++    fs.writeFileSync(path.join(input.out,'actual-remote-frames.json'),JSON.stringify(frames,null,2));
++  }).catch(()=>{}));
++ });
+  try{
+   for(const item of input.cases){
+    await page.goto(input.base,{waitUntil:'domcontentloaded'});
+@@ -31,7 +40,10 @@
+       const minimum=Number(await slider.getAttribute('min')),increment=Number(await slider.getAttribute('step'));
+       for(let i=0;i<Math.round((Number(step.value)-minimum)/increment);i++)await slider.press('ArrowRight');
+     }
+-    await panel.getByRole('button',{name:'应用'+step.label,exact:true}).press('Enter');
++    const before=acks.length;await panel.getByRole('button',{name:'应用'+step.label,exact:true}).press('Enter');
++    const until=Date.now()+5000;while(acks.length===before&&Date.now()<until)await page.waitForTimeout(50);
++    assert.ok(acks.length>before,'real remote ACK missing');const last=acks.at(-1);
++    assert.equal(last.accepted,true);assert.ok(Math.abs(Number(last.readouts[0].value)-Number(step.expect.match(/[-+]?\d*\.?\d+/)[0]))<=1e-9,'independent ACK numerical oracle');
+     await panel.getByText(new RegExp(step.expect.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'))).first().waitFor({timeout:5000});
+     await page.waitForTimeout(2000);
+     await page.screenshot({path:path.join(input.out,'ui-'+item.kind+'-'+records.length+'.png'),fullPage:true});
+@@ -46,5 +58,6 @@
+    records.push({kind:item.kind,refresh:'readonly',html:await page.locator('body').innerText()});
+   }
+   fs.writeFileSync(path.join(input.out,'browser-effects.json'),JSON.stringify(records,null,2));
+- }finally{await browser.close();}
++ }catch(error){await page.screenshot({path:path.join(input.out,'ui-failure.png'),fullPage:true}).catch(()=>{});throw error;}
++ finally{await Promise.allSettled(pending);fs.writeFileSync(path.join(input.out,'browser-effects.json'),JSON.stringify(records,null,2));await browser.close();}
+ })().catch(error=>{process.stderr.write(String(error.stack));process.exitCode=1;});

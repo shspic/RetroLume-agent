@@ -1,0 +1,23 @@
+import json, pathlib, sys, unittest
+names = json.loads(sys.argv[1])
+output = pathlib.Path(sys.argv[2])
+class ObservedResult(unittest.TextTestResult):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.methods = []
+        self.subtests = []
+    def startTest(self, test):
+        self.methods.append(test.id())
+        super().startTest(test)
+    def addSubTest(self, test, subtest, err):
+        self.subtests.append({"method": test.id(), "subtest": str(subtest), "success": err is None})
+        super().addSubTest(test, subtest, err)
+suite = unittest.defaultTestLoader.loadTestsFromNames(names)
+result = unittest.TextTestRunner(verbosity=2, resultclass=ObservedResult).run(suite)
+summary = {"selected_names": names, "testsRun_method_count": result.testsRun, "methods": result.methods,
+    "subtest_count": len(result.subtests), "subtests": result.subtests,
+    "failure_count": len(result.failures), "error_count": len(result.errors), "skip_count": len(result.skipped),
+    "expected_failure_count": len(result.expectedFailures), "unexpected_success_count": len(result.unexpectedSuccesses),
+    "successful": result.wasSuccessful()}
+output.write_text(json.dumps(summary, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
+sys.exit(0 if result.wasSuccessful() else 1)

@@ -1,0 +1,355 @@
+
+backend/app/retrieval/repository.py
+181:               (aid,oid,admission,executor,context.execution_generation,context.scope_revision,intent.provider,intent.configured_model,intent.request_bytes,activity['reserve_cost_microunits']))
+182:             return EmbeddingAdmissionPermit(admission,oid,executor)
+183:         return await self._transaction(operation)
+184: 
+185:     @staticmethod
+186:     def _embedding_permit(permit):
+187:         if type(permit) is not EmbeddingAdmissionPermit:raise AdmissionDenied('embedding_permit_invalid')
+188:         return AdmissionPermit(permit.admission_id,permit.operation_id,permit.executor_id)
+189: 
+190:     async def mark_embedding_dispatch_started(self,permit):
+191:         value=self._embedding_permit(permit)
+192:         async def operation(connection):
+193:             activity,call,valid=await self._locked_operation(connection,value,kind='embedding')
+194:             await self._embedding_command_locked(connection,activity,call['operation_id'],valid)
+195:             if call['state']!='reserved' or activity['dispatch_closed'] or not self._operation_is_current(activity,call,valid):raise AdmissionDenied('embedding_send_invalidated')
+196:             await connection.execute("UPDATE activity_operations SET state='dispatched',dispatch_started_at=CURRENT_TIMESTAMP WHERE admission_id=%s",(permit.admission_id,))
+197:         await self._transaction(operation)
+198: 
+199:     async def record_embedding_outcome(self,permit,outcome):
+200:         value=self._embedding_permit(permit)
+201:         if type(outcome) is not EmbeddingLedgerOutcome:raise AdmissionDenied('embedding_outcome_invalid')
+202:         values=self._outcome_values(outcome);triple=self._payload_values(outcome)
+203:         stored=None if triple is None else json.loads(triple[1])['value']
+204:         if stored is not None:validate_stored_value(stored)
+205:         async def operation(connection):
+206:             activity,call,valid=await self._locked_operation(connection,value,kind='embedding')
+207:             confirmed=await self._terminal_confirmation(connection,call,values,triple)
+208:             if confirmed is not None:return confirmed
+209:             row=None
+210:             if outcome.disposition is not LedgerDisposition.UNKNOWN:
+211:                 if not self._operation_is_current(activity,call,valid) or activity['dispatch_closed'] or call['state']!='dispatched':raise AdmissionDenied('embedding_result_invalidated')
+212:                 row,ordinal=await self._embedding_command_locked(connection,activity,call['operation_id'],valid)
+213:                 if stored is not None:
+214:                     expected=json.loads(row['request_body'])['manifest']
+215:                     expected=expected[ordinal*4:ordinal*4+4] if row['action']=='source_index' else expected
+216:                     if (stored['space_id']!=row['space_id'] or stored['purpose']!=row['action'] or stored['request_sha256']!=row['request_sha256']
+217:                         or stored['manifest_sha256']!=row['manifest_sha256'] or [x['identity_sha256'] for x in stored['inputs']]!=[x['identity_sha256'] for x in expected]):raise AdmissionDenied('embedding_result_binding_invalid')
+218:             await self._write_outcome(connection,call,values,triple)
+219:             if stored is not None and row['action']=='source_index':
+220:                 for meta,inp in zip(expected,stored['inputs']):
+221:                     await connection.execute('''INSERT INTO retrieval_chunks(space_id,evidence_id,source_id,source_version_id,source_revision,origin,physical_page,start_codepoint,end_codepoint,text_sha256,vector_value,vector_sha256,committed_activity_id,committed_operation_id)
+222:                       VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::public.vector,%s,%s,%s) ON CONFLICT(space_id,evidence_id) DO NOTHING''',
+223:                       (row['space_id'],meta['evidence_id'],meta['source_id'],meta['source_version_id'],meta['source_revision'],meta['origin'],meta['physical_page'],meta['start_codepoint'],meta['end_codepoint'],meta['text_sha256'],canonical(inp['vector']),inp['vector_sha256'],call['activity_id'],call['operation_id']))
+224:                     cursor=await connection.execute('SELECT vector_value::text AS vector,vector_sha256 FROM retrieval_chunks WHERE space_id=%s AND evidence_id=%s',(row['space_id'],meta['evidence_id']))
+225:                     actual=await cursor.fetchone()
+226:                     if actual is None or vector_digest(json.loads(actual['vector']))!=actual['vector_sha256']:raise AdmissionDenied('embedding_storage_integrity_invalid')
+227:             return RecordOutcome.RECORDED
+228:         return await self._transaction(operation)
+229: 
+230:     async def retrieval_cached(self,space_id,evidence_ids):
+231:         async def operation(connection):
+232:             cursor=await connection.execute('''SELECT c.evidence_id,c.vector_sha256 FROM retrieval_chunks c JOIN material_sources s ON s.id=c.source_id
+233:               WHERE c.space_id=%s AND c.evidence_id=ANY(%s) AND c.vector_value IS NOT NULL AND c.vector_sha256=public.retrieval_vector_digest(c.vector_value)
+234:               AND s.current_version=c.source_version_id AND s.revision=c.source_revision
+235:               AND NOT EXISTS(SELECT 1 FROM data_tombstones t WHERE t.entity_kind='source' AND t.entity_id=c.source_id)''',(space_id,evidence_ids))
+236:             return {r['evidence_id']:r['vector_sha256'] for r in await cursor.fetchall()}
+237:         return await self._transaction(operation)
+238: 
+239:     async def retrieval_finish(self,activity_id,key,*,definitely_unadmitted=False):
+240:         async def operation(connection):
+241:             state=await self._memory_lock_prefix(connection,activity_id);activity=state['activity']
+242:             if activity is None:raise RetrievalRefusal('not_found',404)
+243:             await self._retrieval_domain_locked(connection,activity)
+244:             cursor=await connection.execute('SELECT * FROM retrieval_commands WHERE activity_id=%s AND business_key=%s FOR UPDATE',(activity_id,key));row=await cursor.fetchone()
+245:             if row is None:raise RetrievalRefusal('not_found',404)
+246:             if row['status']=='terminal':return plain(row)
+247:             current=await self._retrieval_current_locked(connection,activity,row,state['sources_valid'])
+248:             cursor=await connection.execute('SELECT o.operation_id,o.state,r.payload FROM activity_operations o LEFT JOIN activity_operation_results r USING(activity_id,operation_id) WHERE o.activity_id=%s AND o.operation_id=ANY(%s) ORDER BY o.operation_id',(activity_id,operation_ids(row)))
+249:             calls=await cursor.fetchall();complete=len(calls)==row['batch_count'] and all(c['state']=='received' and c['payload'] for c in calls)
+250:             uncertain=any(c['state'] in ('dispatched','unknown','reserved') for c in calls) or not calls and not definitely_unadmitted
+251:             outcome='invalidated' if not current else 'received' if complete else 'unknown' if uncertain else 'partial' if any(c['state']=='received' for c in calls) else 'not_sent'
+252:             result=None
+253:             if complete and current:
+254:                 result=digest({'space_id':row['space_id'],'manifest_sha256':row['manifest_sha256'],'results':[digest(json.loads(c['payload'])['value']) for c in calls]})
+255:             await connection.execute("UPDATE retrieval_commands SET status='terminal',terminal_disposition=%s,result_sha256=%s,error_code=%s,updated_at=CURRENT_TIMESTAMP WHERE activity_id=%s AND business_key=%s",(outcome,result,None if complete and current else 'retrieval_'+outcome,activity_id,key))
+256:             return plain({**row,'status':'terminal','terminal_disposition':outcome,'result_sha256':result})
+257:         return await self._transaction(operation)
+258: 
+259:     async def read_retrieval_command(self,activity_id,key,*,include_body=False):
+260:         async def operation(connection):
+261:             state=await self._memory_lock_prefix(connection,activity_id);activity=state['activity']
+262:             cursor=await connection.execute('SELECT * FROM retrieval_commands WHERE activity_id=%s AND business_key=%s',(activity_id,key));row=await cursor.fetchone()
+263:             if row is None:return None
+264:             current=activity is not None and await self._retrieval_current_locked(connection,activity,row,state['sources_valid'])
+265:             cursor=await connection.execute('SELECT operation_id,state,disposition,error_code,reserved_cost_microunits FROM activity_operations WHERE activity_id=%s AND operation_id=ANY(%s) ORDER BY operation_id',(activity_id,operation_ids(row)))
+266:             value=plain(row);value['current']=current;value['operations']=plain(await cursor.fetchall())
+267:             value['retry_policy']='same_key_before_claim' if current and row['status']=='accepted' else 'read_only'
+268:             if not include_body:value.pop('request_body')
+269:             return value
+270:         return await self._transaction(operation)
+271: 
+272:     async def _require_retrieval_ref(self,connection,activity,ref,*,domain=None,expected_revision=None):
+273:         if not isinstance(ref,RetrievalRef):raise AdmissionDenied('retrieval_ref_required')
+274:         cursor=await connection.execute('SELECT * FROM retrieval_commands WHERE activity_id=%s AND business_key=%s',(activity['id'],ref.business_key));row=await cursor.fetchone()
+275:         if (row is None or row['action']!='query' or row['status']!='terminal' or row['terminal_disposition']!='received'
+276:             or row['query_sha256']!=ref.query_sha256 or row['space_id']!=ref.space_id or row['result_sha256']!=ref.result_sha256
+277:             or domain is not None and row['domain']!=domain or expected_revision is not None and row['domain_revision']!=expected_revision
+278:             or row['scope_revision']!=activity['scope_revision'] or row['request_body'] is None or not activity.get('_memory_eligible',True)):
+279:             raise AdmissionDenied('retrieval_ref_invalidated')
+280:         # 已接受的领域动作可以占用head；冻结的revision由领域binding另行复核，不从新head追认。
+281:         body=json.loads(row['request_body'])
+282:         if body.get('memory_selection_sha256')!=activity.get('_memory_selection_sha256') or body.get('memory_dependency_sha256')!=activity.get('_memory_dependency_sha256'):
+283:             raise AdmissionDenied('retrieval_ref_invalidated')
+284:         if expected_revision is None:
+285:             current_domain,current_revision,parents=await self._retrieval_domain_locked(connection,activity)
+286:             if (current_domain,current_revision,parents)!=(row['domain'],row['domain_revision'],row['parent_refs']):raise AdmissionDenied('retrieval_ref_invalidated')
+287:         return row
+288: 
+289:     async def retrieval_vector_ranks(self,activity_id,key,evidence_ids):
+290:         async def operation(connection):
+291:             state=await self._memory_lock_prefix(connection,activity_id);activity=state['activity']
+292:             if activity is None:raise RetrievalRefusal('not_found',404)
+293:             cursor=await connection.execute('SELECT * FROM retrieval_commands WHERE activity_id=%s AND business_key=%s',(activity_id,key));row=await cursor.fetchone()
+294:             if row is None or row['terminal_disposition']!='received' or not await self._retrieval_current_locked(connection,activity,row,state['sources_valid']):raise RetrievalRefusal('retrieval_invalidated')
+295:             cursor=await connection.execute('SELECT payload FROM activity_operation_results WHERE activity_id=%s AND operation_id=%s',(activity_id,operation_ids(row)[0]));result=await cursor.fetchone()
+296:             if result is None:raise RetrievalRefusal('retrieval_integrity_invalid')
+297:             stored=json.loads(result['payload'])['value'];validate_stored_value(stored);vector=stored['inputs'][0]['vector']
+298:             cursor=await connection.execute('''SELECT c.evidence_id FROM retrieval_chunks c JOIN activity_scope_sources x ON x.source_id=c.source_id AND x.version_id=c.source_version_id AND x.source_revision=c.source_revision
+299:               JOIN material_sources s ON s.id=c.source_id AND s.current_version=c.source_version_id AND s.revision=c.source_revision
+300:               WHERE x.activity_id=%s AND c.space_id=%s AND c.evidence_id=ANY(%s) AND c.vector_value IS NOT NULL
+301:               AND c.vector_sha256=public.retrieval_vector_digest(c.vector_value)
+302:               AND NOT EXISTS(SELECT 1 FROM data_tombstones t WHERE t.entity_kind='source' AND t.entity_id=c.source_id)
+303:               ORDER BY c.vector_value OPERATOR(public.<=>) %s::public.vector,c.evidence_id LIMIT 32''',(activity_id,row['space_id'],evidence_ids,canonical(vector)))
+304:             return [r['evidence_id'] for r in await cursor.fetchall()]
+305:         return await self._transaction(operation)
+
+backend/app/retrieval/service.py
+1: """明确确认后的有限检索。每批经原Windows监督，一键查询不在GET中发生。"""
+2: from __future__ import annotations
+3: import asyncio
+4: from dataclasses import dataclass
+5: import json
+6: import os
+7: from pathlib import Path
+8: import secrets
+9: from pydantic import BaseModel, ConfigDict, Field
+10: from .contracts import canonical,digest,space_identity,fused_rank,RetrievalCommandInput,RetrievalRef,RetrievalRefusal
+11: from .repository import operation_ids
+12: from .evidence import build_fragments,verify_fragment,rank_term_candidates
+13: from app.learning.contracts import CatalogEntry,sha
+14: from app.learning.evidence import load_units,validate_snapshot
+15: from app.capabilities.embedding import EmbeddingServiceConfig,EmbeddingInput,EmbeddingBinding,EmbeddingRequest,OutboundGrant,OutboundSourceManifest
+16: from app.worker.one_call import run_one_embedding
+17: from app.worker.session import SessionConfig
+18: from app.data_exit.maintenance import owned_service
+19: 
+20: 
+21: class _IntegrationSection(BaseModel):
+22:     model_config=ConfigDict(extra='forbid',strict=True,frozen=True)
+23:     schema:str=Field(pattern=r'^retrolume.integration.v1$')
+24:     enabled:bool=False
+25:     embedding:dict
+26:     max_index_fragments:int=Field(default=512,ge=1,le=512)
+27:     outbound_grant_file:str|None=None
+28:     q_activation_receipt_file:str|None=None
+29:     price_snapshot_file:str|None=None
+30:     source_manifest_file:str|None=None
+31: 
+32: 
+33: @dataclass(frozen=True)
+34: class IntegrationConfig:
+35:     service:EmbeddingServiceConfig|None=None
+36:     reason:str|None='retrieval_not_configured'
+37:     max_index_fragments:int=512
+38:     @property
+39:     def available(self):
+40:         from app.capabilities.transport import HttpxModelTransport
+41:         return self.service is not None and self.reason is None and (self.service.outbound_grant is not None or not HttpxModelTransport.is_external)
+42:     def public(self):return {'available':self.available,'reason':self.reason,'method':'hybrid.cosine-terms.rrf60.v1',
+43:       'purpose':'当前已确认资料片段与本轮必要问题','provider':'zhipu_embeddings','model':'embedding-3','dimensions':512,
+44:       'batch_size':4,'max_index_fragments':self.max_index_fragments,'query_limit_chars':1024,'query_limit_bytes':4096,
+45:       'real_outbound_authorized':bool(self.service and self.service.outbound_grant),'reserve_cost_microunits':250000}
+46: 
+47: 
+48: def load_integration_config(path):
+49:     """正常server env loader；文件不携口令，启用Q要求受信激活和价格原件hash。"""
+50:     if path is None:return IntegrationConfig()
+51:     try:
+52:         raw=Path(path).read_bytes()
+53:         if len(raw)>65536:raise ValueError('config_size')
+54:         section=_IntegrationSection.model_validate_json(raw)
+55:         if not section.enabled:return IntegrationConfig(reason='retrieval_disabled')
+56:         key=os.environ.get('RETROLUME_EMBEDDING_API_KEY','').strip()
+57:         if not key:return IntegrationConfig(reason='embedding_key_not_configured')
+58:         body=dict(section.embedding)
+59:         if set(body)-{'provider','base_url','model','dimensions','returned_models','timeout_seconds','max_request_bytes','max_response_bytes'}:raise ValueError('config_shape')
+60:         body['api_key']=key
+61:         if section.outbound_grant_file:
+62:             if not section.q_activation_receipt_file or not section.price_snapshot_file or not section.source_manifest_file:raise ValueError('activation_missing')
+63:             grant_raw=Path(section.outbound_grant_file).read_bytes()
+64:             if len(grant_raw)>65536:raise ValueError('grant_size')
+65:             grant=OutboundGrant.model_validate_json(grant_raw)
+66:             manifest_raw=Path(section.source_manifest_file).read_bytes()
+67:             if len(manifest_raw)>65536:raise ValueError('manifest_size')
+68:             manifest=OutboundSourceManifest.model_validate_json(manifest_raw)
+69:             if manifest.sha256!=grant.source_manifest_sha256:raise ValueError('manifest_hash')
+70:             from hashlib import sha256
+71:             receipt_raw=Path(section.q_activation_receipt_file).read_bytes();price_raw=Path(section.price_snapshot_file).read_bytes()
+72:             if len(receipt_raw)>65536 or len(price_raw)>65536:raise ValueError('receipt_size')
+73:             receipt=json.loads(receipt_raw)
+74:             if (sha256(receipt_raw).hexdigest()!=grant.q_activation_receipt_sha256 or sha256(price_raw).hexdigest()!=grant.price_snapshot_sha256
+75:                 or receipt.get('stage')!='Q' or receipt.get('status')!='enabled' or receipt.get('TASK')!='TASK-117'
+76:                 or receipt.get('approved_receipt_sha256')!=grant.approved_receipt_sha256 or receipt.get('source_manifest_sha256')!=manifest.sha256 or not receipt.get('independent_audit_result_sha256')):raise ValueError('activation_invalid')
+77:             body['outbound_grant']=grant.model_dump(mode='json')
+78:             body['outbound_source_manifest']=manifest.model_dump(mode='json')
+79:         # JSON模式接受数组tuple；受信配置从本地env注入，不向客户端返回秘密。
+80:         service=EmbeddingServiceConfig.model_validate_json(json.dumps(body))
+81:         return IntegrationConfig(service,None,section.max_index_fragments)
+82:     except (ValueError,TypeError,OSError,KeyError):return IntegrationConfig(reason='retrieval_config_invalid')
+83: 
+84: 
+85: def fragments_for(units):
+86:     result={}
+87:     for unit in units:
+88:         for fragment in build_fragments(unit.unit,max_fragments=512):
+89:             if not verify_fragment(unit.unit,fragment) or fragment.evidence_id in result:raise RetrievalRefusal('retrieval_source_integrity')
+90:             result[fragment.evidence_id]=(fragment,unit)
+91:             if len(result)>512:raise RetrievalRefusal('retrieval_scope_limit',413)
+92:     return result
+93: 
+94: 
+95: def fragment_manifest(fragment,unit):
+96:     meta={'evidence_id':fragment.evidence_id,'source_id':fragment.source_id,'source_version_id':fragment.version_id,
+97:       'source_revision':fragment.source_revision,'origin':fragment.origin_kind,'physical_page':fragment.physical_page,
+98:       'supplement_id':unit.supplement_id,'start_codepoint':fragment.start_offset,'end_codepoint':fragment.end_offset,
+99:       'text_sha256':fragment.text_sha256,'unit_sha256':sha(unit.unit.text),'original_sha256':unit.source['sha256']}
+100:     return {**meta,'identity_sha256':digest(meta),'input_sha256':digest(fragment.text)}
+101: 
+102: 
+103: class RetrievalService:
+104:     def __init__(self,ledger,materials,originals):self.ledger,self.materials,self.originals=ledger,materials,originals
+105: 
+106:     async def _sources(self,activity_id):
+107:         snapshot=await self.ledger.read_learning_snapshot(activity_id);validate_snapshot(snapshot)
+108:         if self.materials is None:raise RetrievalRefusal('storage_unavailable',503)
+109:         units=await asyncio.to_thread(load_units,snapshot,self.materials,self.originals)
+110:         return snapshot,fragments_for(units)
+111: 
+112:     async def status(self,activity_id,config):
+113:         value=config.public()
+114:         if not config.available:return value
+115:         snapshot,fragments=await self._sources(activity_id)
+116:         context=await self.ledger.retrieval_context(activity_id)
+117:         cached=await self.ledger.retrieval_cached(space_identity(config.service.provider,config.service.model),list(fragments))
+118:         return {**value,'scope_revision':snapshot['scope_revision'],'domain_revision':context['domain_revision'],'fragments':len(fragments),'cached_fragments':len(cached),
+119:           'index_batches':(len(fragments)-len(cached)+3)//4,'ready':len(cached)==len(fragments) and bool(fragments),
+120:           'remaining_requests':max(0,snapshot['max_requests']-snapshot['requests_reserved']),
+121:           'reserve_cost_microunits':snapshot['reserve_cost_microunits'],
+122:           'remaining_cost_microunits':max(0,snapshot['max_cost_microunits']-snapshot['cost_reserved_microunits']),
+123:           'remaining_running_seconds':max(0,snapshot['max_running_seconds']-snapshot['running_settled_seconds']-snapshot['running_reserved_seconds']),
+124:           'query_then_model_requests':2,'query_then_model_reserve_microunits':2*snapshot['reserve_cost_microunits'],'window_reserve_seconds':SessionConfig().window_seconds}
+125: 
+126:     @owned_service
+127:     async def submit(self,activity_id,command,config,*,run_tag=None):
+128:         if not config.available:raise RetrievalRefusal(config.reason or 'retrieval_not_configured',503)
+129:         if type(command) is not RetrievalCommandInput:raise RetrievalRefusal('invalid_input',400)
+130:         previous=await self.ledger.read_retrieval_command(activity_id,command.business_key,include_body=True)
+131:         if previous is not None:
+132:             if previous['request_body'] is None:raise RetrievalRefusal('retrieval_invalidated')
+133:             body=json.loads(previous['request_body'])
+134:             if body['command']!=command.model_dump(mode='json'):raise RetrievalRefusal('retrieval_key_conflict')
+135:             if previous['status']!='accepted':return self._public(previous)
+136:             row=previous
+137:             snapshot,fragments=await self._sources(activity_id)
+138:         else:
+139:             snapshot,fragments=await self._sources(activity_id)
+140:             context=await self.ledger.retrieval_context(activity_id)
+141:             if not context['current'] or context['scope_revision']!=command.expected_scope_revision or context['domain_revision']!=command.expected_domain_revision:raise RetrievalRefusal('retrieval_invalidated')
+142:             space=space_identity(config.service.provider,config.service.model)
+143:             cached=await self.ledger.retrieval_cached(space,list(fragments))
+144:             if command.action=='source_index':
+145:                 missing=[fragment_manifest(*fragments[k]) for k in sorted(fragments) if k not in cached]
+146:                 if len(missing)>config.max_index_fragments:raise RetrievalRefusal('retrieval_index_limit',413)
+147:                 manifest=missing;batches=(len(missing)+3)//4
+148:             else:
+149:                 if not fragments or len(cached)!=len(fragments):raise RetrievalRefusal('retrieval_index_required')
+150:                 query=command.query.strip()
+151:                 # 输入只为用户本轮必要query；不自动附作答或记忆正文。
+152:                 manifest=[{'identity_sha256':digest({'query':query,'scope_revision':command.expected_scope_revision,'space_id':space}),
+153:                            'input_sha256':digest(query)}];batches=1
+154:             source_refs=[{'source_id':r['source_id'],'source_version_id':r['version_id'],'source_revision':r['source_revision']} for r in snapshot['sources']]
+155:             body={'schema':'retrieval.context.v1','activity_id':activity_id,'command':command.model_dump(mode='json'),
+156:                   'domain':context['domain'],'parent_refs':context['parent_refs'],'memory_selection_sha256':context['memory_selection_sha256'],
+157:                   'memory_dependency_sha256':context['memory_dependency_sha256'],'manifest':manifest,
+158:                   'coverage_sha256':digest([fragment_manifest(*fragments[k]) for k in sorted(fragments)])}
+159:             row,_=await self.ledger.retrieval_freeze(activity_id,command,body,{'space_id':space,'provider':config.service.provider,'configured_model':config.service.model},manifest,batches,source_refs,
+160:                     digest(command.query.strip()) if command.action=='query' else None)
+161:         if row['status']=='terminal':return self._public(row)
+162:         # 旧接受体必须能从当前原件逐项复建，不重新检索或替换其manifest。
+163:         if body['coverage_sha256']!=digest([fragment_manifest(*fragments[k]) for k in sorted(fragments)]):raise RetrievalRefusal('retrieval_source_invalid')
+164:         if not await self.ledger.retrieval_claim(activity_id,command.business_key,row['request_sha256']):
+165:             return self._public(await self.ledger.read_retrieval_command(activity_id,command.business_key))
+166:         windows=[];definitely_unadmitted=False
+167:         for ordinal,oid in enumerate(operation_ids(row)):
+168:             part=body['manifest'][ordinal*4:ordinal*4+4] if command.action=='source_index' else body['manifest']
+169:             inputs=[]
+170:             for index,meta in enumerate(part):
+171:                 text=fragments[meta['evidence_id']][0].text if command.action=='source_index' else command.query.strip()
+172:                 if digest(text)!=meta['input_sha256']:raise RetrievalRefusal('retrieval_source_invalid')
+173:                 inputs.append(EmbeddingInput(ordinal=index,identity_sha256=meta['identity_sha256'],text=text))
+174:             binding=EmbeddingBinding(business_key=command.business_key,purpose=command.action,request_sha256=row['request_sha256'],
+175:                 manifest_sha256=row['manifest_sha256'],batch_ordinal=ordinal,scope_revision=command.expected_scope_revision,domain=body['domain'],
+176:                 domain_revision=command.expected_domain_revision,memory_selection_sha256=body['memory_selection_sha256'],memory_dependency_sha256=body['memory_dependency_sha256'])
+177:             request=EmbeddingRequest(activity_id=activity_id,space_id=row['space_id'],binding=binding,inputs=tuple(inputs))
+178:             task=asyncio.create_task(asyncio.to_thread(run_one_embedding,self.ledger,SessionConfig(),activity_id,'local-ui',oid,request,config.service,
+179:                   run_tag=(run_tag or 'retrieval-'+secrets.token_hex(12))+'-'+str(ordinal)))
+180:             cancelled=False
+181:             while True:
+182:                 try:supervision=await asyncio.shield(task);break
+183:                 except asyncio.CancelledError:
+184:                     cancelled=True
+185:                     if task.done():supervision=task.result();break
+186:                 except Exception:supervision=None;break
+187:             if cancelled:raise asyncio.CancelledError
+188:             if supervision is not None:
+189:                 windows.append({k:getattr(supervision,k,None) for k in ('run_tag','state','generation','job_name','pid','active_processes_at_end','settled_seconds','reserved_seconds','pending_fold_seconds','elapsed_seconds','cleanup_incomplete','error_type','cleanup_errors','manager_pid','manager_created_100ns','running_owner_session_id','worker_created_100ns','model_receipt')})
+190:                 definitely_unadmitted=not supervision.cleanup_incomplete and supervision.state in ('not_started','budget_exhausted','startup_deadline','partial_window_too_small') and supervision.model_receipt is None
+191:             fact=await self.ledger.read_operation(activity_id,oid)
+192:             if supervision is None or fact is None or fact.state!='received' or not fact.payload:break
+193:         completed=await self.ledger.retrieval_finish(activity_id,command.business_key,definitely_unadmitted=definitely_unadmitted)
+194:         return {**self._public(await self.ledger.read_retrieval_command(activity_id,command.business_key) or completed),'supervision':windows}
+195: 
+196:     @staticmethod
+197:     def _public(row):
+198:         value={k:v for k,v in row.items() if k!='request_body'}
+199:         if row.get('action')=='query' and row.get('terminal_disposition')=='received' and row.get('result_sha256'):
+200:             value['retrieval_ref']={'business_key':str(row['business_key']),'query_sha256':row['query_sha256'],'space_id':row['space_id'],'result_sha256':row['result_sha256']}
+201:         return value
+202: 
+203:     async def catalog(self,activity_id,ref,request_sha,*,top_k=8,max_chars=12000,max_bytes=24000):
+204:         ref=RetrievalRef.model_validate(ref)
+205:         row=await self.ledger.read_retrieval_command(activity_id,ref.business_key,include_body=True)
+206:         if (row is None or not row['current'] or row['terminal_disposition']!='received' or row['action']!='query'
+207:             or (ref.query_sha256,ref.space_id,ref.result_sha256)!=(row['query_sha256'],row['space_id'],row['result_sha256'])):raise RetrievalRefusal('retrieval_invalidated')
+208:         body=json.loads(row['request_body']);query=body['command']['query'].strip()
+209:         snapshot,fragments=await self._sources(activity_id)
+210:         if body['coverage_sha256']!=digest([fragment_manifest(*fragments[k]) for k in sorted(fragments)]):raise RetrievalRefusal('retrieval_source_invalid')
+211:         term=rank_term_candidates(query,tuple(f[0] for f in fragments.values()),allowed_versions=frozenset((r['source_id'],r['version_id']) for r in snapshot['sources']),top_k=32,truncate_terms=True)
+212:         vectors=await self.ledger.retrieval_vector_ranks(activity_id,ref.business_key,list(fragments))
+213:         ids=fused_rank([c.fragment.evidence_id for c in term],vectors,top_k=top_k)
+214:         if not ids:raise RetrievalRefusal('no_evidence')
+215:         entries=[]
+216:         for eid in ids:
+217:             f,unit=fragments[eid]
+218:             if not verify_fragment(unit.unit,f):raise RetrievalRefusal('retrieval_source_integrity')
+219:             entries.append(CatalogEntry(source_id=f.source_id,version_id=f.version_id,source_revision=f.source_revision,citation_id='lc_'+sha(request_sha+eid)[:24],
+220:               evidence_id=eid,title=unit.source['title'],format=unit.source['format'],original_sha256=unit.source['sha256'],unit_sha256=sha(unit.unit.text),
+221:               fragment_sha256=f.text_sha256,start_line=f.start_line,end_line=f.end_line,start_offset=f.start_offset,end_offset=f.end_offset,
+222:               physical_page=f.physical_page,origin_kind=f.origin_kind,supplement_id=unit.supplement_id,text=f.text))
+223:         if sum(len(e.text) for e in entries)>max_chars or sum(len(e.text.encode('utf-8')) for e in entries)>max_bytes:raise RetrievalRefusal('retrieval_context_limit',413)
+224:         after=await self.ledger.read_retrieval_command(activity_id,ref.business_key)
+225:         if after is None or not after['current'] or after['result_sha256']!=ref.result_sha256:raise RetrievalRefusal('retrieval_invalidated')
+226:         return entries

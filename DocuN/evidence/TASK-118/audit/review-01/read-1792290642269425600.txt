@@ -1,0 +1,69 @@
+DocuN/evidence/TASK-117/execution/continuation-07/model-v2-as-run.json
+{
+  "sample": {
+    "utc": "2026-10-18T01:50:15.243085+00:00",
+    "mono_ns": 81875093000000,
+    "boot_epoch_seconds": 1792206340.150085,
+    "instance": "a4743325-5d68-4c1a-95b2-ccd3106218c2",
+    "pid": 5092
+  },
+  "files": [
+    {
+      "path": "backend/tests/test_step018_audit_repairs.py",
+      "sha256": "d9df63e28b8368589ceec32d3eb4aea8a474549f5b87abca21af5491e745b054"
+    },
+    {
+      "path": "backend/app/capabilities/gateway.py",
+      "sha256": "07f38bf2e4c11a7ca6be31b2cf9290e6a9db9ee349299f992d93bc692149bfc7"
+    },
+    {
+      "path": "backend/app/capabilities/embedding.py",
+      "sha256": "09e788f3e2207349b6bd5a11df2ec25a09893e8b0a504399332fbd44c5863e41"
+    }
+  ],
+  "correction": "fixture消息摘要按真实adapter的typed Message规范化，补默认空tool_calls；未改网关实现或降低断言"
+}
+
+DocuN/evidence/TASK-117/execution/continuation-07/targeted-no-io-as-run.json
+{
+  "sample": {
+    "utc": "2026-10-18T01:49:26.479406+00:00",
+    "mono_ns": 81826328000000,
+    "boot_epoch_seconds": 1792206340.151406,
+    "instance": "78337e58-9828-42d4-bf8f-a2454462052c",
+    "pid": 19476
+  },
+  "files": {
+    "length": 20,
+    "first": [
+      {
+        "path": "backend/app/data_exit/control.py",
+        "sha256": "0db51f9ff61f4005854f32007d3c0727d966c062f33e0a64c0a56af8b926bf7e"
+      },
+      {
+        "path": "backend/app/capabilities/embedding.py",
+        "sha256": "09e788f3e2207349b6bd5a11df2ec25a09893e8b0a504399332fbd44c5863e41"
+      },
+      {
+        "path": "backend/app/capabilities/gateway.py",
+        "sha256": "07f38bf2e4c11a7ca6be31b2cf9290e6a9db9ee349299f992d93bc692149bfc7"
+      },
+      {
+        "path": "frontend/src/activities/TeachingWorkspace.tsx",
+        "sha256": "1e6adfd581569aee7833f19b78b1ba8e60cbd893bb85cc4b1fdbe7cc5344bc1f"
+      }
+    ],
+    "last": [
+      {
+        "path": "frontend/src/activities/teachingDrafts.ts",
+        "sha256": "047b35052bd64e40e70ada9e650f93a1bfa909f812a4d1cccfef56522a3259bf"
+      },
+      {
+        "path": "backend/tests/fixtures/step018/s08_loop.py",
+        "sha256": "dc9c01cca8384509a757a6a35ba90ac3e7a0239f5a8805a909105ff858c04ba5"
+      }
+    ]
+  },
+  "environment_evidence": "async-stack.log: socket.py fallback_socketpair accept，未进入任何gateway协程",
+  "boundary": "只改离线测试事件循环self-pipe，实际gateway/协议/ledger/transport检查不替换；真实I/O fd注册直接拒绝"
+}

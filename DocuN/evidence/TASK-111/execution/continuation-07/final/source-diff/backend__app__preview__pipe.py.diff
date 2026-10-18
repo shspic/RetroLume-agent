@@ -1,0 +1,22 @@
+--- C06/backend/app/preview/pipe.py
++++ C07/backend/app/preview/pipe.py
+@@ -11,6 +11,9 @@
+ 
+ 
+ class PipeError(ValueError):pass
++
++
++class PipeReadError(PipeError):pass
+ 
+ 
+ def validate_png(body):
+@@ -61,7 +64,8 @@
+ def _read_exact(stream,count):
+     parts=bytearray()
+     while len(parts)<count:
+-        chunk=stream.read(count-len(parts))
++        try:chunk=stream.read(count-len(parts))
++        except (OSError,ValueError) as error:raise PipeReadError("pipe_read_unconfirmed") from error
+         if not chunk:raise EOFError("pipe_eof")
+         parts.extend(chunk)
+     return bytes(parts)

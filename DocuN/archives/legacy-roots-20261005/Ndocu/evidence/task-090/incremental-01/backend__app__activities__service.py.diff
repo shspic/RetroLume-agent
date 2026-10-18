@@ -1,0 +1,21 @@
+--- audit-initial/backend/app/activities/service.py
++++ incremental-01/backend/app/activities/service.py
+@@ -81,6 +81,9 @@
+             return ContinuationOutcome(mapping.get(parent.status,parent.status),parent)
+         if type(service) is not ModelServiceConfig or type(config) is not SessionConfig:
+             return ContinuationOutcome("invalid_input")
++        # 确定的 one_call 配置冲突在监督线程及任何 launcher 副作用之前拒绝。
++        if config.request_timeout_seconds > 120 or service.timeout_seconds > config.request_timeout_seconds:
++            return ContinuationOutcome("invalid_input")
+         snapshot=parent.snapshot
+         try:
+             validate_business_payload(snapshot.payload,snapshot.payload_format,snapshot.payload_sha256)
+@@ -125,7 +128,7 @@
+             supervision.pending_fold_seconds,supervision.cleanup_incomplete)
+         status=business.status
+         if business.status in ("no_operation","unresolved"):
+-            status="budget_exhausted" if supervision.state=="budget_exhausted" else "supervision_unknown"
++            status=supervision.state if supervision.state in {"cancelled","budget_exhausted"} else "supervision_unknown"
+             receipt=supervision.model_receipt
+             if receipt and receipt["result"].get("error_code"):
+                 status=receipt["result"]["error_code"]

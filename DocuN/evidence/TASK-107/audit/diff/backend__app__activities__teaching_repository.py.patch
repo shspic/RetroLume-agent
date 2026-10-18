@@ -1,0 +1,66 @@
+--- pre/backend/app/activities/teaching_repository.py
++++ current/backend/app/activities/teaching_repository.py
+@@ -131,6 +131,9 @@
+             extra=refs
+         state=await self._memory_lock_prefix(connection,activity_id,extra_sources=extra)
+         activity=state['activity']
++        from app.interview.contracts import InterviewRefusal
++        try: await self._interview_require_non_domain(connection,activity_id)
++        except InterviewRefusal as exc: raise TeachingRefusal('stage_conflict','此活动属于面试域或其资格不可靠') from None
+         if activity is None:raise TeachingRefusal('not_found','活动不存在')
+         await self._teaching_lock_operations(connection,activity_id)
+         activity['_teaching_sources_valid']=state['sources_valid'] and state['eligible']
+@@ -410,7 +413,7 @@
+ 
+     async def _teaching_rebuild_progress(self, connection, activity_id, head, extra=None):
+         guard=await self._memory_sql_guard(connection,"%s")
+-        cursor=await connection.execute("SELECT "+guard+" AS valid",tuple(activity_id for _ in range(guard.count('%s'))))
++        cursor=await connection.execute("SELECT "+guard+" AS valid",tuple(activity_id for _ in range(guard.count('%s'))))
+         if not (await cursor.fetchone())['valid']:
+             raise TeachingRefusal('memory_dependency_invalid','失效背景不能重建当前进度')
+         path = await self._teaching_read_record_row(connection, activity_id, head["path_record_id"])
+@@ -1512,25 +1515,25 @@
+ 
+         return await self._transaction(operation)
+ 
+-    async def read_teaching_recipe_records(self,activity_id,record_ids):
+-        """v2有限recipe一次资格快照复取全部引用，避免逐项重复schema探测。"""
+-        activity_id=self._uuid(activity_id,'activity_id')
+-        if not 1<=len(record_ids)<=12 or len(set(record_ids))!=len(record_ids):raise ValueError('invalid_input')
+-        ids=[self._uuid(rid,'record_id') for rid in record_ids]
+-        async def operation(connection):
+-            guard=await self._memory_sql_guard(connection,'r.activity_id')
+-            cursor=await connection.execute("""SELECT r.record_id::text,r.kind,r.body_sha256,r.exercise_record_id::text,
+-              r.answer_record_id::text,r.operation_id,
+-              CASE WHEN r.kind IN('goal','answer','correction') OR """+guard+""" THEN r.body ELSE NULL END AS body,
+-              CASE WHEN """+guard+""" THEN p.payload ELSE NULL END AS payload,
+-              p.payload_format,p.payload_sha256 AS operation_payload_sha256
+-              FROM teaching_records r LEFT JOIN activity_operation_results p
+-               ON p.activity_id=r.activity_id AND p.operation_id=r.operation_id
+-              WHERE r.activity_id=%s AND r.record_id=ANY(%s::uuid[]) ORDER BY r.seq""",(activity_id,ids))
+-            return list(await cursor.fetchall())
+-        return await self._transaction(operation)
+-
+-    async def read_teaching_head(self, activity_id: str) -> dict | None:
++    async def read_teaching_recipe_records(self,activity_id,record_ids):
++        """v2有限recipe一次资格快照复取全部引用，避免逐项重复schema探测。"""
++        activity_id=self._uuid(activity_id,'activity_id')
++        if not 1<=len(record_ids)<=12 or len(set(record_ids))!=len(record_ids):raise ValueError('invalid_input')
++        ids=[self._uuid(rid,'record_id') for rid in record_ids]
++        async def operation(connection):
++            guard=await self._memory_sql_guard(connection,'r.activity_id')
++            cursor=await connection.execute("""SELECT r.record_id::text,r.kind,r.body_sha256,r.exercise_record_id::text,
++              r.answer_record_id::text,r.operation_id,
++              CASE WHEN r.kind IN('goal','answer','correction') OR """+guard+""" THEN r.body ELSE NULL END AS body,
++              CASE WHEN """+guard+""" THEN p.payload ELSE NULL END AS payload,
++              p.payload_format,p.payload_sha256 AS operation_payload_sha256
++              FROM teaching_records r LEFT JOIN activity_operation_results p
++               ON p.activity_id=r.activity_id AND p.operation_id=r.operation_id
++              WHERE r.activity_id=%s AND r.record_id=ANY(%s::uuid[]) ORDER BY r.seq""",(activity_id,ids))
++            return list(await cursor.fetchall())
++        return await self._transaction(operation)
++
++    async def read_teaching_head(self, activity_id: str) -> dict | None:
+         """当前教学 head 只读快照（锁前组包用；锁内以 CAS/核对为准）。"""
+         activity_id = self._uuid(activity_id, "activity_id")
+ 

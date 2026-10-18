@@ -1,0 +1,102 @@
+--- first-pre/frontend/src/activities/TeachingWorkspace.tsx
++++ current/frontend/src/activities/TeachingWorkspace.tsx
+@@ -23,6 +23,8 @@
+ import { TeachingCitations, citationIds } from "./TeachingCitations";
+ import { HtmlExplanationPanel } from "../explanations/HtmlExplanationPanel";
+ import type { HtmlParent } from "../explanations/contracts";
++import {RetrievalPanel} from './RetrievalPanel';
++import {retrieveForCommand,storeRetrievalChain,type RetrievalChain} from './retrieval-api';
+ 
+ const POLL_MS = 3000;
+ const OBSERVE_MAX_SECONDS = 120;
+@@ -151,6 +153,7 @@
+   const editorOwner = useRef<string|null>(null);
+   const dirty = useRef({answer:false,goal:false,correction:false});
+   const workspaceToken = useRef("");
++  const [retrievalMode,setRetrievalMode]=useState<'hybrid'|'terms'>('hybrid');
+   const historySeq = useRef(0);
+   const historyAbort = useRef<AbortController|null>(null);
+   const pageSeq = useRef(0);
+@@ -315,13 +318,13 @@
+   }, [workspace, refresh]);
+ 
+   async function submit(action: TeachingAction, body: Record<string, unknown>,
+-                         extra?: Partial<TeachingIntentSummary>) {
++                         extra?: Partial<TeachingIntentSummary>, recovered?:RetrievalChain) {
+     if (busy || !intentsOk) return;
+     if ((action==='answer'||action==='correct') && editConflict) { setError("输入仍属于旧作答身份；请先核对并明确沿用草稿"); return; }
+     const submittedContext=contextKey.current;
+     const stillCurrent=()=>mounted.current&&activityRef.current===activityId&&contextKey.current===submittedContext;
+     setBusy(action); setError(""); setNotice("");
+-    const key = newTeachingKey();
++    const key = recovered?String(recovered.domain_input.business_key):newTeachingKey();
+     const input: Omit<TeachingCommandInput, "body"> = {
+       business_key: key,
+       expected_revision: workspace?.head.revision ?? 0,
+@@ -335,6 +338,16 @@
+       input.expected_scope_revision=editing.current.scope_revision;
+     }
+     try {
++      let retrievalChain:RetrievalChain|undefined;
++      if (['plan','exercise','evaluate'].includes(action)&&retrievalMode==='hybrid') {
++        const owner=await teachingEditorOwner();
++        if(!owner||!stillCurrent()||editorOwner.current!==owner)throw new Error('编辑身份不可核对，未提交');
++        if(recovered&&JSON.stringify(recovered.domain_input)!==JSON.stringify({...input,body}))throw new Error('原动作版本不同，不能改绑');
++        const query=String(workspace?.goal?.goal??goalText).trim().slice(0,1024);
++        const result=await retrieveForCommand(token,activityId,owner,'teaching',{...input,body},scopeRevision,input.expected_revision,query,()=>stillCurrent()&&editorOwner.current===owner,recovered);
++        if(!stillCurrent()||!result.ref)return;
++        input.retrieval_ref=result.ref;retrievalChain=result.row;
++      }
+       const built = await buildTeachingCommand(activityId, { ...input, body });
+       // 顺序：规范字节 → IndexedDB 完整正文 → localStorage 摘要 → POST 一次。
+       const stored = await saveTeachingDraft({
+@@ -372,6 +385,9 @@
+       reloadIntents();
+       let receipt: TeachingReceipt;
+       try {
++        if(retrievalChain)await storeRetrievalChain({...retrievalChain,domain_sent:true});
++        const currentOwner=await teachingEditorOwner();
++        if(!stillCurrent()||!currentOwner||currentOwner!==editorOwner.current)return;
+         receipt = await postTeachingCommand(activityId, { ...input, body }, token);
+       } catch (reason) {
+         const known = reason instanceof TeachingApiError && reason.status > 0;
+@@ -410,6 +426,8 @@
+         setNotice(action === "answer" ? "作答已零费保存（未调用模型）。" : "命令已提交。");
+       }
+       await refresh(true);
++    } catch(reason) {
++      if(stillCurrent())setError(reason instanceof Error?reason.message:'本轮未完成，请核对原操作');
+     } finally {
+       if (mounted.current&&activityRef.current===activityId) setBusy("");
+     }
+@@ -521,9 +539,12 @@
+   const reasonBody=(workspace?.reason?.body??{}) as Record<string,unknown>;
+   const reasonObservations=(reasonBody.observations??{}) as Record<string,unknown>;
+   const reasonCount=(key:string)=>Array.isArray(reasonObservations[key])?(reasonObservations[key] as unknown[]).length:0;
++  const answerEditReady=Boolean(workspace?.head.exercise_record_id&&editing.current?.draft_key
++    &&editing.current.activity_id===activityId&&editing.current.head.exercise_record_id===workspace?.head.exercise_record_id);
+ 
+   return (
+     <section className="ws-teaching" aria-label="教学工作区">
++      <RetrievalPanel token={token} activityId={activityId} scopeRevision={scopeRevision} domainRevision={workspace?.head.revision??0} owner={editorOwner.current} mode={retrievalMode} onMode={setRetrievalMode} onContinue={chain=>{const saved=chain.domain_input;void submit(saved.action as TeachingAction,saved.body as Record<string,unknown>,undefined,chain);}}/>
+       <div className="section-title">
+         <h4>教学闭环（零费保存 · 显式评价）</h4>
+         <span className="quiet">
+@@ -664,7 +685,7 @@
+         {Boolean(workspace?.answer?.text)&&<p aria-label="已保存作答">已保存作答：{String(workspace?.answer?.text)}</p>}
+         <label htmlFor="teaching-answer">作答</label>
+         <textarea
+-          id="teaching-answer" value={answerText} maxLength={ANSWER_MAX} disabled={busy !== ""}
++          id="teaching-answer" value={answerText} maxLength={ANSWER_MAX} disabled={busy !== ""||!answerEditReady}
+           placeholder="写下你的答案与依据（仅保存在本机浏览器，成功保存后成为不可变记录）"
+           onChange={event => {
+             editSeq.current++; dirty.current.answer=true; setAnswerText(event.target.value);
+@@ -680,7 +701,7 @@
+         <div className="ws-exercise-actions">
+           <button
+             className="primary"
+-            disabled={busy !== "" || !canLocal || editConflict || !workspace?.head.exercise_record_id || !answerText.trim()}
++            disabled={busy !== "" || !canLocal || !answerEditReady || editConflict || !workspace?.head.exercise_record_id || !answerText.trim()}
+             onClick={() => {
+               if (!workspace?.head.exercise_record_id) return;
+               void submit("answer", {

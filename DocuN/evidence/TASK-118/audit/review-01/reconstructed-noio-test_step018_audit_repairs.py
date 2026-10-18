@@ -1,0 +1,221 @@
+"""S08/D02：实际网关完整正文边界，仅test-only本机ledger/最低transport。"""
+import copy
+from dataclasses import replace
+from datetime import datetime,timedelta,timezone
+import hashlib
+import json
+import os
+from pathlib import Path
+from tempfile import mkdtemp
+import unittest
+from unittest.mock import patch
+from uuid import uuid4
+
+from app.capabilities.contracts import (AdmissionPermit,CallContext,CallStatus,ModelCallRequest,ModelServiceConfig,
+    RecordOutcome,LedgerDisposition,ResponseMode)
+from app.capabilities.embedding import OutboundSourceManifest,OutboundGrant
+from app.capabilities.gateway import ControlledModelGateway
+from app.capabilities.transport import TransportResponse
+from app.learning.contracts import SourceIdentity,canonical,sha
+from app.learning.teaching_contracts import TeachingCommandInput,TeachingProfile
+from app.learning.teaching_prompt import messages_for_teaching
+from app.learning.teaching_service import TeachingService
+from app.retrieval.contracts import digest
+from app.retrieval.service import load_integration_config,IntegrationConfig
+from app.worker.one_call import OneCallInput
+from test_step018_flows import adopted_fixture
+from tests.fixtures.step018.s08_loop import ClosedAsyncTestCase
+
+
+def assembled_request(action='plan',edit=None):
+    """真实StoredTeachingDocument装配；选用背景投影只测正文范围，不冒v2记忆资格。"""
+    entry,manifest,grant,_=adopted_fixture();aid=grant.allowed_activity_ids[0]
+    body={'confirmed':True} if action=='plan' else {'confirmed':True,'exercise_record_id':str(uuid4()),'answer_record_id':str(uuid4())}
+    command=TeachingCommandInput(business_key=str(uuid4()),expected_revision=1,expected_goal_version=1,
+        expected_scope_revision=1,action=action,body=body)
+    request_sha=command.request_sha256(aid)
+    entry=entry.model_copy(update={'citation_id':'lc_'+sha(request_sha+entry.evidence_id)[:24]})
+    facts={'goal_text':'合成分钟换秒目标','answer_text':'合成回答为120秒','exercise_projection':{'stem':'两分钟是多少秒'},
+           'correction_texts':['合成纠错说明'],'prior_observations':[{'message':'合成历史建议'}],'calculation_summary':None}
+    document=TeachingService._stored_document(command,{'scope_revision':1},[entry],{'goal_version':1},facts)
+    document['learning_background']=[{'memory_id':'01800000-0000-4000-8000-000000009001','version':1,
+        'kind':'self_report','uncertainty':'self_reported','title':'合成背景','text':'合成选择背景正文','observation':None,
+        'use':'仅背景，旧作答不算本活动独立表现，不是正确性引用或授权。'}]
+    if edit:edit(document)
+    messages=messages_for_teaching(action,document)
+    profile=TeachingProfile(action=action,command_key=command.business_key,request_sha256=request_sha,context_sha256='f'*64,
+        activity_id=aid,expected_revision=1,goal_record_id=str(uuid4()),goal_version=1,scope_revision=1,
+        sources=[SourceIdentity(source_id=entry.source_id,version_id=entry.version_id,source_revision=entry.source_revision)],
+        catalog=[entry],messages_sha256=sha(canonical(messages)),max_output_tokens=256)
+    request=ModelCallRequest(messages=messages,max_output_tokens=256,teaching_profile=profile,response_mode=ResponseMode.JSON_OBJECT)
+    context=CallContext(activity_id=aid,operation_id='teach8m.'+command.business_key+'.'+request_sha,
+        executor_id='test-only-s08',execution_generation=1,scope_revision=1)
+    return context,request,manifest,grant
+
+
+def config_for(request,manifest,grant):
+    config=ModelServiceConfig(provider='deepseek_chat_completions',base_url='https://api.deepseek.com',model='deepseek-chat',
+        api_key='test-only-not-a-real-key',timeout_seconds=1,max_request_bytes=65536,max_response_bytes=65536)
+    payload=ControlledModelGateway(config)._build_payload(request)
+    manifest=OutboundSourceManifest.from_wire(manifest.model_dump(mode='json')|{'model_requests':[
+        {'payload_sha256':digest(payload),'request_sha256':digest(request.model_dump(mode='json'))}]})
+    grant=grant.model_copy(update={'grant_id':'TEST-ONLY-S08-NOT-Q-ACTIVATION','source_manifest_sha256':manifest.sha256})
+    config=config.model_copy(update={'outbound_grant':grant.model_dump(mode='json'),'outbound_source_manifest':manifest.model_dump(mode='json')})
+    return config,manifest,grant,payload
+
+
+class Ledger:
+    def __init__(self,profile,after_admit=None,after_mark=None):
+        self.profile=profile;self.intents=[];self.marks=[];self.outcomes=[];self.after_admit=after_admit;self.after_mark=after_mark
+    async def read_learning_snapshot(self,activity):
+        return {'scope_revision':1,'sources':[{'source_id':e.source_id,'valid':True,'ready':True,'sha256':e.original_sha256,'title':e.title,'format':e.format} for e in self.profile.catalog]}
+    async def admit(self,intent):
+        self.intents.append(intent)
+        if self.after_admit:self.after_admit(intent)
+        return AdmissionPermit('test-only-permit',intent.context.operation_id,intent.context.executor_id)
+    async def mark_dispatch_started(self,permit,**kwargs):
+        self.marks.append(permit)
+        if self.after_mark:self.after_mark()
+    async def record_outcome(self,permit,outcome):self.outcomes.append(outcome);return RecordOutcome.RECORDED
+
+
+class Transport:
+    is_external=False
+    def __init__(self):self.calls=[]
+    async def send(self,**kwargs):
+        self.calls.append({k:v for k,v in kwargs.items() if k!='api_key'})
+        value={'result_type':'no_evidence','message':'合成替身不作语义结论','missing':['合成补充说明']}
+        raw=json.dumps({'model':'deepseek-chat','choices':[{'finish_reason':'stop','message':{'role':'assistant','content':json.dumps(value)}}],
+                        'usage':{'prompt_tokens':10,'completion_tokens':10,'total_tokens':20}}).encode()
+        return TransportResponse(200,raw,len(raw))
+
+
+class AuditModelScopeTests(ClosedAsyncTestCase):
+    async def test_complete_approved_payload_sends_exactly_once_and_wire_keeps_scope(self):
+        context,request,old,grant=assembled_request();config,manifest,grant,payload=config_for(request,old,grant)
+        ledger=Ledger(request.teaching_profile);transport=Transport()
+        result=await ControlledModelGateway(config,ledger=ledger,transport=transport).call(context,request)
+        self.assertEqual(result.status,CallStatus.SUCCEEDED)
+        self.assertEqual((len(ledger.intents),len(ledger.marks),len(transport.calls)),(1,1,1))
+        self.assertEqual(transport.calls[0]['payload'],payload)
+        self.assertEqual(ledger.intents[0].outbound_source_manifest,manifest.model_dump(mode='json'))
+        restored=OneCallInput.from_wire(OneCallInput(context.operation_id,request,config).to_wire())
+        self.assertEqual(OutboundSourceManifest.from_wire(restored.service.outbound_source_manifest).sha256,manifest.sha256)
+        self.assertEqual(restored.service.outbound_grant['source_manifest_sha256'],manifest.sha256)
+        self.assertNotEqual(old.sha256,manifest.sha256)
+
+    async def test_unapproved_actual_teaching_goal_answer_correction_history_memory_and_version_zero_admit(self):
+        context,request,old,grant=assembled_request('evaluate');config,manifest,grant,_=config_for(request,old,grant)
+        original=json.loads(request.messages[-1].content)
+        edits={
+          'goal':lambda x:x.update(goal='未批准目标正文'),
+          'answer':lambda x:x['task'].update(answer_text='未批准回答正文'),
+          'correction':lambda x:x['task'].update(corrections=['未批准纠错正文']),
+          'history':lambda x:x['task'].update(prior_observations=[{'message':'未批准历史正文'}]),
+          'selected-memory-text':lambda x:x['learning_background'][0].update(text='未批准记忆正文'),
+          'selected-memory-version':lambda x:x['learning_background'][0].update(version=2)}
+        for name,edit in edits.items():
+            with self.subTest(name=name):
+                value=copy.deepcopy(original);edit(value);messages=messages_for_teaching('evaluate',value)
+                profile=request.teaching_profile.model_copy(update={'messages_sha256':sha(canonical(messages))})
+                variant=ModelCallRequest(messages=messages,max_output_tokens=256,teaching_profile=profile)
+                ledger=Ledger(profile);transport=Transport()
+                result=await ControlledModelGateway(config,ledger=ledger,transport=transport).call(context,variant)
+                self.assertEqual(result.status,CallStatus.REJECTED);self.assertEqual(result.error_code,'outbound_conditions_unverified')
+                self.assertEqual(ledger.intents,[]);self.assertEqual(transport.calls,[])
+
+    async def test_unapproved_complete_request_payload_shape_and_system_zero_send(self):
+        context,request,old,grant=assembled_request();config,_,_,_=config_for(request,old,grant)
+        variants=[request.model_copy(update={'response_mode':ResponseMode.TEXT}),
+            request.model_copy(update={'messages':(request.messages[0].model_copy(update={'content':'未批准system'}),request.messages[1])})]
+        for variant in variants:
+            ledger=Ledger(variant.teaching_profile);transport=Transport()
+            result=await ControlledModelGateway(config,ledger=ledger,transport=transport).call(context,variant)
+            self.assertEqual(result.status,CallStatus.REJECTED);self.assertEqual(ledger.intents,[]);self.assertEqual(transport.calls,[])
+
+    async def test_after_admit_original_request_config_or_private_scope_change_keeps_reservation_no_dispatch(self):
+        for target in ('request','config','intent'):
+            with self.subTest(target=target):
+                context,request,old,grant=assembled_request();config,_,_,_=config_for(request,old,grant)
+                def change(intent):
+                    if target=='request':request.teaching_profile.catalog.append(request.teaching_profile.catalog[0])
+                    elif target=='config':config.outbound_source_manifest['query_input_sha256'].append('0'*64)
+                    else:intent.outbound_source_manifest['query_input_sha256'].append('0'*64)
+                ledger=Ledger(request.teaching_profile,after_admit=change);transport=Transport()
+                result=await ControlledModelGateway(config,ledger=ledger,transport=transport).call(context,request)
+                self.assertEqual(result.status,CallStatus.REJECTED)
+                self.assertEqual((len(ledger.intents),len(ledger.marks),len(transport.calls)),(1,0,0))
+                self.assertEqual(ledger.outcomes,[])
+
+    async def test_change_during_mark_records_not_sent_without_refund_or_retry(self):
+        context,request,old,grant=assembled_request();config,_,_,_=config_for(request,old,grant)
+        ledger=Ledger(request.teaching_profile,after_mark=lambda:config.outbound_grant.update(grant_id='test-only-changed'))
+        transport=Transport();result=await ControlledModelGateway(config,ledger=ledger,transport=transport).call(context,request)
+        self.assertEqual(result.status,CallStatus.NOT_SENT)
+        self.assertEqual((len(ledger.intents),len(ledger.marks),len(transport.calls)),(1,1,0))
+        self.assertEqual(ledger.outcomes[0].disposition,LedgerDisposition.NOT_SENT)
+
+    async def test_old_empty_approval_denies_model_but_local_no_grant_stays_usable(self):
+        context,request,old,grant=assembled_request();config,_,_,_=config_for(request,old,grant)
+        old_config=config.model_copy(update={'outbound_grant':grant.model_dump(mode='json'),'outbound_source_manifest':old.model_dump(mode='json')})
+        ledger=Ledger(request.teaching_profile);transport=Transport()
+        result=await ControlledModelGateway(old_config,ledger=ledger,transport=transport).call(context,request)
+        self.assertEqual(result.status,CallStatus.REJECTED);self.assertEqual(ledger.intents,[]);self.assertEqual(transport.calls,[])
+        self.assertEqual(old.sha256,digest(old.model_dump(mode='json',exclude={'model_requests'})))
+        local=config.model_copy(update={'outbound_grant':None,'outbound_source_manifest':None})
+        ledger=Ledger(request.teaching_profile);transport=Transport()
+        result=await ControlledModelGateway(local,ledger=ledger,transport=transport).call(context,request)
+        self.assertEqual(result.status,CallStatus.SUCCEEDED);self.assertEqual(len(transport.calls),1)
+
+    async def test_model_grant_expiry_after_admit_keeps_reservation_zero_send(self):
+        context,request,old,grant=assembled_request();config,_,_,_=config_for(request,old,grant)
+        now=[datetime.now(timezone.utc)]
+        class Clock(datetime):
+            @classmethod
+            def now(cls,tz=None):return now[0]
+        ledger=Ledger(request.teaching_profile,after_admit=lambda _:now.__setitem__(0,now[0]+timedelta(hours=2)))
+        transport=Transport()
+        with patch('app.capabilities.embedding.datetime',Clock):result=await ControlledModelGateway(config,ledger=ledger,transport=transport).call(context,request)
+        self.assertEqual(result.status,CallStatus.REJECTED)
+        self.assertEqual((len(ledger.intents),len(ledger.marks),len(transport.calls)),(1,0,0))
+
+
+class AuditManifestLoaderTests(unittest.TestCase):
+    def test_manifest_strict_fields_and_duplicate_pairs(self):
+        _,request,old,grant=assembled_request();_,manifest,_,_=config_for(request,old,grant)
+        wire=manifest.model_dump(mode='json')
+        for approvals in ([wire['model_requests'][0]]*2,[{'payload_sha256':'x','request_sha256':'0'*64}],
+                          [wire['model_requests'][0]|{'automatic':True}]):
+            with self.assertRaises(ValueError):OutboundSourceManifest.from_wire(wire|{'model_requests':approvals})
+
+    def test_real_local_loader_and_private_wire_bind_new_hash_without_normal_Q_files(self):
+        context,request,old,grant=assembled_request();_,manifest,grant,_=config_for(request,old,grant)
+        root=Path(mkdtemp(prefix='s08-TEST-ONLY-NOT-Q-',dir=os.environ.get('S08_EVIDENCE')))
+        price=b'TEST-ONLY-NOT-OFFICIAL-PRICE';(root/'test-price.bin').write_bytes(price)
+        receipt={'TEST_ONLY_NOT_Q_ACTIVATION':True,'stage':'Q','status':'enabled','TASK':'TASK-117',
+                 'approved_receipt_sha256':grant.approved_receipt_sha256,'source_manifest_sha256':manifest.sha256,
+                 'independent_audit_result_sha256':'0'*64}
+        raw=json.dumps(receipt).encode();(root/'test-receipt.json').write_bytes(raw)
+        grant=grant.model_copy(update={'q_activation_receipt_sha256':hashlib.sha256(raw).hexdigest(),'price_snapshot_sha256':hashlib.sha256(price).hexdigest()})
+        (root/'test-grant.json').write_text(grant.model_dump_json(),encoding='utf-8')
+        (root/'test-manifest.json').write_text(manifest.model_dump_json(),encoding='utf-8')
+        body={'schema':'retrolume.integration.v1','enabled':True,'embedding':{},'outbound_grant_file':str(root/'test-grant.json'),
+              'q_activation_receipt_file':str(root/'test-receipt.json'),'price_snapshot_file':str(root/'test-price.bin'),
+              'source_manifest_file':str(root/'test-manifest.json')}
+        (root/'test-integration.json').write_text(json.dumps(body),encoding='utf-8')
+        with patch.dict(os.environ,{'RETROLUME_EMBEDDING_API_KEY':'test-only-key'}):loaded=load_integration_config(root/'test-integration.json')
+        self.assertTrue(loaded.available);self.assertEqual(loaded.service.outbound_grant['source_manifest_sha256'],manifest.sha256)
+        self.assertEqual(OutboundSourceManifest.from_wire(loaded.service.outbound_source_manifest).sha256,manifest.sha256)
+        model=ModelServiceConfig(provider='deepseek_chat_completions',base_url='https://api.deepseek.com',model='deepseek-chat',api_key='test-only',max_request_bytes=65536,max_response_bytes=65536,
+            outbound_grant=loaded.service.outbound_grant,outbound_source_manifest=loaded.service.outbound_source_manifest)
+        restored=OneCallInput.from_wire(OneCallInput(context.operation_id,request,model).to_wire())
+        self.assertEqual(OutboundSourceManifest.from_wire(restored.service.outbound_source_manifest).sha256,manifest.sha256)
+        (root/'test-manifest.json').write_text(old.model_dump_json(),encoding='utf-8')
+        with patch.dict(os.environ,{'RETROLUME_EMBEDDING_API_KEY':'test-only-key'}):rejected=load_integration_config(root/'test-integration.json')
+        self.assertFalse(rejected.available);self.assertEqual(rejected.reason,'retrieval_config_invalid')
+
+    def test_public_identity_is_actual_config_or_explicitly_unknown(self):
+        self.assertIsNone(IntegrationConfig().public()['provider']);self.assertIsNone(IntegrationConfig().public()['model'])
+
+
+if __name__=='__main__':unittest.main()

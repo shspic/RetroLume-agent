@@ -1,0 +1,199 @@
+--- S06-pre/DocuN/evidence/TASK-117/execution/control.py
++++ S06-final/DocuN/evidence/TASK-117/execution/control.py
+@@ -36,8 +36,41 @@
+     return next((s for s in value.get('segments',[]) if s['permit']==permit and s['status']=='active'),None)
+ 
+ 
++def segment_activity_seconds(segment, now=None):
++    now=time.monotonic_ns() if now is None else now
++    elapsed=(now-segment['start_mono_ns'])/1e9-segment.get('paused_seconds',0)
++    if elapsed<0:raise RuntimeError('active_segment_host_clock_domain_changed')
++    return elapsed
++
++
++def guard_s06(value, segment):
++    """S06 explicitly has no second rolling offline cap; all other gates remain."""
++    if segment['status']!='active':raise RuntimeError('S06_permit_suspended_or_returned')
++    now=time.monotonic_ns();elapsed=segment_activity_seconds(segment,now)
++    if elapsed>=segment['save_only_after_seconds']:raise RuntimeError('S06_save_only_activity_gate')
++    if datetime.now(timezone.utc)>=datetime.fromisoformat(segment['calendar_deadline_utc']):raise RuntimeError('S06_calendar_gate')
++    used=sum(x['seconds'] for x in value['runtime_intervals'] if x.get('segment')==segment['permit'])
++    if value['active_root'] is not None:
++        root=next(r for r in value['roots'] if r['id']==value['active_root'])
++        if root.get('segment')!=segment['permit']:raise RuntimeError('old_root_not_authorized_by_S06')
++        if root['category']=='runtime':used+=(now-root.get('resumed_interval_start_mono_ns',root['start']['mono_ns']))/1e9
++        if now>=root['business_deadline_mono_ns']:raise RuntimeError('root_cleanup_only')
++    if used>=segment['runtime_holding_cap_seconds']:raise RuntimeError('S06_runtime_hard_gate')
++    process_used=segment.get('offline_process_run_seconds',0)
++    if segment.get('offline_process_run_active') is not None:
++        process_used+=(now-segment['offline_process_run_active']['start_mono_ns'])/1e9
++    if process_used>=segment['offline_process_run_cap_seconds']:raise RuntimeError('S06_offline_process_hard_gate')
++    # Explicit null values are deliberate, not zero and not old fallback limits.
++    if segment.get('offline_cap_seconds','missing') is not None or segment.get('cumulative_offline_cap_seconds','missing') is not None:
++        raise RuntimeError('S06_offline_policy_mismatch')
++    return value
++
++
+ def guard():
+-    value=state();segment=active_segment(value)
++    value=state()
++    requested=next((s for s in value.get('segments',[]) if s['permit']==value.get('active_segment')),None)
++    if requested is not None and requested.get('stage')=='S06':return guard_s06(value,requested)
++    segment=active_segment(value)
+     if segment is not None:
+         elapsed=(time.monotonic_ns()-segment['start_mono_ns'])/1e9
+         if elapsed<0:raise RuntimeError('active_segment_host_clock_domain_changed')
+@@ -74,12 +107,24 @@
+ def count(name,number=1):
+     value=guard()
+     segment=active_segment(value);limits=segment['cumulative_caps'] if segment else CAPS
+-    amendments=segment.get('scheduling_amendments',[]) if segment else []
++    amendments=segment.get('scheduling_amendments',[]) if segment and segment.get('stage')!='S06' else []
+     root_cap=amendments[-1]['S_root_cap'] if amendments else limits.get('roots')
+     effective_cap=root_cap if name=='roots' else amendments[-1].get('API_cumulative_cap',limits.get(name)) if name=='api_starts' and amendments else limits.get(name)
++    if segment and segment.get('stage')=='S06' and name in ('pg_create_attempts','pg_objects','volumes'):
++        # The seventh object is a conditional success02 allowance, not a retry pool.
++        conditional=segment.get('conditional_success02_evidence')
++        qualified=False
++        if conditional:
++            path=Path(conditional['path']).resolve();path.relative_to(Path(segment['evidence_directory']).resolve())
++            raw=path.read_bytes();proof=json.loads(raw)
++            qualified=(sha(raw)==conditional['sha256'] and proof.get('latest_status')=='known'
++                and bool(proof.get('current_missing')) and proof.get('slot')=='r02-success-02'
++                and proof.get('package_root_sha256')=='b040841394dfa82a14c2b180e60393b3b7f0d222b11016b468a81d6f17c3a347'
++                and proof.get('original_target_id')=='634aa034-51f6-4510-b075-38cb005481d8')
++        if not qualified:effective_cap=segment['baseline_counts'][name]
+     if name not in limits or number<1 or value['counts'][name]+number>effective_cap:raise RuntimeError('次数门关闭：'+name)
+     scheduling_override=bool(amendments and (name=='roots' or name=='api_starts' and 'API_cumulative_cap' in amendments[-1]))
+-    if segment and name in segment['segment_caps'] and (not scheduling_override or segment.get('stage') in ('S03','S04','S05') or 'S03' in segment['permit']) and value['counts'][name]+number-segment['baseline_counts'][name]>segment['segment_caps'][name]:raise RuntimeError('当前段次数门关闭：'+name)
++    if segment and name in segment['segment_caps'] and (not scheduling_override or segment.get('stage') in ('S03','S04','S05','S06') or 'S03' in segment['permit']) and value['counts'][name]+number-segment['baseline_counts'][name]>segment['segment_caps'][name]:raise RuntimeError('当前段次数门关闭：'+name)
+     value['counts'][name]+=number;write(HERE/'budget.json',value);event('attempt_reserved',counter=name,number=number,total=value['counts'][name])
+ 
+ 
+@@ -123,7 +168,7 @@
+     if root.get('segment'):interval['segment']=root['segment']
+     value[key].append(interval)
+     segment=active_segment(value)
+-    if segment and segment.get('stage') in ('S04','S05'):segment['offline_cursor_mono_ns']=root['end']['mono_ns']
++    if segment and segment.get('stage') in ('S04','S05','S06'):segment['offline_cursor_mono_ns']=root['end']['mono_ns']
+     value['active_root']=None;value['phase']='implementation';write(HERE/'budget.json',value);event('root_end',root=number,seconds=seconds,result=result)
+ 
+ 
+@@ -152,11 +197,54 @@
+ 
+ def reserve_offline(seconds):
+     value=guard();segment=active_segment(value)
++    if segment.get('stage')=='S06':
++        remaining=min(segment['save_only_after_seconds']-segment_activity_seconds(segment),segment['offline_process_run_cap_seconds']-segment.get('offline_process_run_seconds',0))
++        if seconds<=0 or seconds>remaining:raise RuntimeError('S06_offline_process_reservation_exceeds_remaining')
++        event('S06_offline_process_reserved',seconds=seconds,remaining_seconds=remaining)
++        return
+     used=sum(x['seconds'] for x in value['offline_intervals'] if x.get('segment')==segment['permit'])
+     live=(time.monotonic_ns()-segment['offline_cursor_mono_ns'])/1e9 if segment.get('offline_cursor_mono_ns') is not None else 0
+     if seconds<=0 or used+live+seconds>segment['offline_cap_seconds']:raise RuntimeError('offline_reservation_exceeds_segment')
+     if sum(x['seconds'] for x in value['offline_intervals'])+live+seconds>segment.get('cumulative_offline_cap_seconds',7200):raise RuntimeError('offline_reservation_exceeds_task')
+     event('offline_batch_reserved',seconds=seconds,remaining_segment_seconds=segment['offline_cap_seconds']-used-live)
++
++
++def run_offline(command,*,timeout,cwd=None):
++    """Bound actual offline child wall time; no second rolling off-resource cap."""
++    reserve_offline(timeout);value=state();segment=active_segment(value)
++    if segment.get('stage')!='S06' or value['active_root'] is not None or segment.get('offline_process_run_active'):
++        raise RuntimeError('S06_offline_process_identity')
++    stamp=sample();segment['offline_process_run_active']={'start_mono_ns':stamp['mono_ns'],'command_shape':command[:4],'timeout':timeout}
++    write(HERE/'budget.json',value)
++    try:return subprocess.run(command,cwd=cwd or ROOT,capture_output=True,timeout=timeout,check=False)
++    finally:
++        end=sample();value=state();segment=active_segment(value)
++        seconds=(end['mono_ns']-stamp['mono_ns'])/1e9
++        segment['offline_process_run_seconds']=segment.get('offline_process_run_seconds',0)+seconds
++        segment['offline_process_run_active']=None;write(HERE/'budget.json',value)
++        event('S06_offline_process_end',seconds=seconds,started=stamp,ended=end)
++
++
++def suspend_s06(*,stop_evidence,reason):
++    value=guard();segment=active_segment(value)
++    proof=json.loads(Path(stop_evidence).read_text(encoding='utf-8'))
++    if segment.get('stage')!='S06' or value['active_root'] is not None or segment.get('offline_process_run_active') or proof.get('all_stopped') is not True:
++        raise RuntimeError('S06_suspend_requires_no_resource_no_inflight')
++    settle_offline();value=state();segment=active_segment(value);stamp=sample()
++    segment['suspensions'].append({'start':stamp,'reason':reason,'stop_evidence':str(stop_evidence),'stop_sha256':sha(Path(stop_evidence).read_bytes()),'end':None})
++    segment['status']='suspended';write(HERE/'budget.json',value);event('S06_suspended',reason=reason,stamp=stamp)
++
++
++def resume_s06():
++    value=state();segment=next(s for s in value['segments'] if s['permit']==value['active_segment'])
++    if segment.get('stage')!='S06' or segment['status']!='suspended' or value['active_root'] is not None:raise RuntimeError('S06_resume_identity')
++    item=segment['suspensions'][-1];stamp=sample()
++    if item['end'] is not None:raise RuntimeError('S06_resume_already_closed')
++    seconds=(stamp['mono_ns']-item['start']['mono_ns'])/1e9
++    if seconds<0:raise RuntimeError('S06_resume_clock_domain')
++    item.update(end=stamp,seconds=seconds);segment['paused_seconds']+=seconds
++    segment['status']='active';segment['offline_cursor_mono_ns']=stamp['mono_ns']
++    guard_s06(value,segment);write(HERE/'budget.json',value);event('S06_resumed',stamp=stamp,paused_seconds=seconds)
+ 
+ 
+ def failure(label,reason,*,effect='保留失败，不改变原输入或预算'):
+--- S06-pre/backend/tests/fixtures/step018/sitecustomize.py
++++ S06-final/backend/tests/fixtures/step018/sitecustomize.py
+@@ -1,6 +1,6 @@
+ """只有本卡显式合成env才加载有限传输，产品默认路径不会包含此目录。"""
+ import os,sys
+-if (os.environ.get('RETROLUME_TASK117_SYNTHETIC') in ('TASK-117-STEP018-INTEGRATION-S01-20261014','TASK-117-STEP018-INTEGRATION-S02-20261015','TASK-117-STEP018-INTEGRATION-S03-20261015','TASK-117-STEP018-INTEGRATION-S04-20261016','TASK-117-STEP018-INTEGRATION-S05-20261016')
++if (os.environ.get('RETROLUME_TASK117_SYNTHETIC') in ('TASK-117-STEP018-INTEGRATION-S01-20261014','TASK-117-STEP018-INTEGRATION-S02-20261015','TASK-117-STEP018-INTEGRATION-S03-20261015','TASK-117-STEP018-INTEGRATION-S04-20261016','TASK-117-STEP018-INTEGRATION-S05-20261016','TASK-117-STEP018-INTEGRATION-S06-20261016')
+         and 'app.pdf_import.worker' not in sys.orig_argv):
+     from runtime_fixture import install
+     install()
+--- S06-pre/backend/tests/fixtures/step018/runtime_fixture.py
++++ S06-final/backend/tests/fixtures/step018/runtime_fixture.py
+@@ -11,7 +11,7 @@
+ def install():
+     if os.environ.get('RETROLUME_TASK117_SYNTHETIC') not in (
+         'TASK-117-STEP018-INTEGRATION-S01-20261014',
+-        'TASK-117-STEP018-INTEGRATION-S02-20261015','TASK-117-STEP018-INTEGRATION-S03-20261015','TASK-117-STEP018-INTEGRATION-S04-20261016','TASK-117-STEP018-INTEGRATION-S05-20261016',
++        'TASK-117-STEP018-INTEGRATION-S02-20261015','TASK-117-STEP018-INTEGRATION-S03-20261015','TASK-117-STEP018-INTEGRATION-S04-20261016','TASK-117-STEP018-INTEGRATION-S05-20261016','TASK-117-STEP018-INTEGRATION-S06-20261016',
+     ):return False
+     from app.capabilities.transport import HttpxModelTransport,TransportResponse
+     async def send(self,*,endpoint,api_key,payload,timeout_seconds,max_response_bytes):
+--- S06-pre/backend/app/data_exit/config.py
++++ S06-final/backend/app/data_exit/config.py
+@@ -223,6 +223,7 @@
+         safe = DataRepository(credentials["readonly_dsn"]).safe_state()
+         if str(safe["dataset_id"]) != target.dataset_id or str(safe["source_instance_observed"]) != target.instance_id or safe["mode_observed"] != "restored_readonly":
+             raise DataError("target_seal_unconfirmed", 503)
++        self._bound_profile = target.schema_profile
+         app.state.originals = OriginalStore(target.data_root / "originals")
+         app.state.materials = PostgresMaterials(credentials["readonly_dsn"])
+         app.state.materials.configure_data_exit(self.gate)
+@@ -235,7 +236,7 @@
+         self.packages = DataPackageService(self.hub, snapshot, self.settings.backup_dir, self.limits)
+ 
+     def caps(self):
+-        return {**self.context().public(), "format": getattr(self,'_reader_profile',None) or (self.source_state['schema_profile'] if self.source_state else PROFILE), "scope": ["all", "selected"],
++        return {**self.context().public(), "format": getattr(self,'_bound_profile',None) or getattr(self,'_reader_profile',None) or (self.source_state['schema_profile'] if self.source_state else PROFILE), "scope": ["all", "selected"],
+                 "backup_available": self.packages is not None and self.packages.snapshot is not None, "restore_executor_configured": self.factory is not None,
+                 'source_delete_available':self.deletions is not None and self.hub.state()['fence'] is None,
+                 'source_observation_status':'unknown' if self.source_error else 'configured',
+--- S06-pre/README.md
++++ S06-final/README.md
+@@ -2,9 +2,9 @@
+ 
+ 本目录为 RetroLume 本地工程，提供资料、学习、文字面试、低信任记忆和隔离只读恢复入口。STEP018 的混合检索集成仍在 TASK117 合成候选收口中；实际验收状态以 [执行动态文档](DocuS/执行动态文档.MD) 为准。合成传输与真实供应商语义分别验证。
+ 
+-TASK117 当前仍为部分交付，尚未形成稳定 S 候选，真实供应商调用保持关闭。面试须先开始场次，再明确确认资料索引；模型动作等待持久目标正文核对就绪，并使用该版本的目标构造查询。合成 source/compat 已应用记忆资格的传递只读授权及删源触发器别名修补，通过受信目录与业务行不变检查。该事实只适用于本次两个合成库，不授权自动迁移用户库。
++TASK117 的 S06 工程候选已补齐本轮定向证据，提交主控安排独立复核，真实供应商调用保持关闭。面试须先开始场次，再明确确认资料索引；模型动作等待持久目标正文核对就绪，并使用该版本的目标构造查询。合成 source/compat 已应用记忆资格的传递只读授权及删源触发器别名修补，通过受信目录与业务行不变检查。该事实只适用于本次两个合成库，不授权自动迁移用户库。
+ 
+-本次已完成两域的持久业务、同库应用重开及记忆／删源传播。正式 bundle7 已取得浏览器实际装载、三类丢回包后原键核对、同键／晚到视图／复制owner隔离，以及仅剩1请求时整步拒绝的证据。R01 隔离 reader 已通过真实封印库的 HTTP 历史读取及写入拒绝；它的浏览器查看仍未验证。R02 的617行固定包已成功装载并永久封印，独立记忆删除合同和依赖的正式切换按用户确认保留。PDF HTTP 解析及固定宿主 ACK/PNG 仍未闭。两个历史失败目标保持停止，不能清空复用。具体输入、源码身份、失败及资源停止证明见 [TASK117 结果](DocuN/results/TASK-117-result.md)；不要执行历史 runner 或按旧 key 重发未知调用。
++本次已完成两域的持久业务、同库应用重开及记忆／删源传播。正式 bundle7 已取得浏览器实际装载、三类丢回包后原键核对、同键／晚到视图／复制owner隔离，以及仅剩1请求时整步拒绝的证据。S06 复用已有业务与恢复结果，补齐原固定预览的真实 ACK、PNG 和正常 StopProof；同一冻结 PDF 已经真实 HTTP 受限解析、逐页确认及物理页回查。R01 隔离 reader 的七类历史浏览器查看及写门已核；R02 复用原617行封存包及 success01，沿原 source 控制根完成一次正式只读切换、旧响应抑制和正常只读重开，source 保持停止。恢复不恢复任何旧调用资格。历史失败、超额、未知及 PDF 原两次 HTTP 失败仍保留，原 PDF 失败的确切原因未追溯确认。两个历史失败目标保持停止，不能清空复用。具体输入、源码身份、适用验证层及资源停止证明见 [TASK117 结果](DocuN/results/TASK-117-result.md)；不要执行历史 runner 或按旧 key 重发未知调用。
+ 
+ 公开仓库为 [shspic/RetroLume-agent](https://github.com/shspic/RetroLume-agent)。本轮只关联本地 `origin`，不代表已有提交或上传。发布须显式选取产品源码、迁移、依赖锁、通用夹具、无秘密的配置样例及说明；本地配置、连接串、密钥、资料、备份、运行日志、原始执行证据和浏览器存储不随工程发布。不能把整个工作目录加入版本同步。
+ 
+@@ -103,6 +103,8 @@
+ 
+ 撤销预览说明全部版本与活动影响，先提交逻辑墓碑，再清理本条在线记忆正文。清理失败仍保持停用，刷新只读核对；明确重试使用原清单。它不删除资料、原始作答、活动历史或备份，不承诺撤回远端字节或擦除所有副本。010和角色最小权限只在获准目标执行，普通app无正文DELETE/TRUNCATE或拥有者权限，不关闭009不可变事实触发器。
+ 
++记忆删除沿现有 save/revise/revoke/purge 合同，验收分别核对修订后的旧资格失效、撤销墓碑即时失效、按撤销清单哈希和版本集合物理清理正文三个效果。S06 已只读核实既有记忆两个版本的正文行均为零、GET 不回正文，版本身份和旧选择记录保留；不新增独立 delete 命令，不为凑动作重建记忆或墓碑。
++
+ 本机IndexedDB只保存未确认动作及分身份草稿，不能代替服务端记忆。复制标签页由活跃owner互斥，修订冲突保留旧草稿，不自动改绑。刷新、轮询和重开均不重发命令或隐式清理。本次合成候选仍需编排安排稳定点独立审计；真实用户库、真实provider、部署和完整退出恢复没有因此获准。
+ 
+ ## 数据退出、备份与只读恢复

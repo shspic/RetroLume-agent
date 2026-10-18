@@ -1,0 +1,18 @@
+--- pre/backend/tests/fixtures/task111/core.py
++++ backend/tests/fixtures/task111/core.py
+@@ -34,11 +34,13 @@
+         from app.preview.production_supervisor import PreviewController
+         self.resource,self.folder=resource,folder
+         self.ledger=PostgresAdmissionLedger(resource["app"]);self.materials=PostgresMaterials(resource["app"])
+-        from .control import synthetic_root,preview_name
++        from .control import synthetic_root,preview_name,registry_root,CONTINUATION
++        if CONTINUATION.endswith("C04-20261011") and registry_dir is not None and Path(registry_dir).resolve()!=registry_root().resolve():
++            raise RuntimeError("C04唯一控制根不允许更换")
+         self.data=synthetic_root()/"data";self.data.mkdir(parents=True,exist_ok=True)
+         (self.data/"originals").mkdir(exist_ok=True);self.originals=OriginalStore(self.data/"originals")
+         self.policy=HostPolicy(image_id=built["image"]["id"],load_manifest_sha256=built["load_manifest_sha256"],renderer_sha256=built["renderer_sha256"],
+-          kernel_release=resource["platform"]["kernel"],docker=resources.DOCKER,registry_dir=registry_dir or (synthetic_root()/"http-control").resolve(),authorization=PERMIT,
++          kernel_release=resource["platform"]["kernel"],docker=resources.DOCKER,registry_dir=registry_dir or registry_root().resolve(),authorization=PERMIT,
+           owner_name="Global\\RetroLumePreviewV2Task111")
+         def name(pid,generation):
+             return preview_name(pid,generation)

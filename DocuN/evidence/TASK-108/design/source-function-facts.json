@@ -1,0 +1,1770 @@
+[
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "_tool_payload_semantics_ok",
+    "line": 61,
+    "end": 85,
+    "args": "payload_format: str | None, payload: str | None",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "__init__",
+    "line": 292,
+    "end": 311,
+    "args": "self, dsn: str, *, connect_timeout_seconds: int=3, statement_timeout_ms: int=3000, lock_timeout_ms: int=2000",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "_transaction",
+    "line": 313,
+    "end": 342,
+    "args": "self, operation: Callable[[object], Awaitable[_T]]",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "_uuid",
+    "line": 345,
+    "end": 349,
+    "args": "value: str, field: str",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "_bounded_name",
+    "line": 352,
+    "end": 355,
+    "args": "value: str, field: str, *, maximum: int=128",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "_validate_spec",
+    "line": 358,
+    "end": 402,
+    "args": "cls, spec: ActivitySpec",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "_source_rows",
+    "line": 404,
+    "end": 412,
+    "args": "self, connection: object, activity_id: str",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "_lock_sources",
+    "line": 414,
+    "end": 432,
+    "args": "self, connection: object, snapshots: list[dict] | tuple[SourceSnapshot, ...]",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "_scope_key",
+    "line": 435,
+    "end": 436,
+    "args": "rows",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "_verify_scope_hint",
+    "line": 438,
+    "end": 440,
+    "args": "self, connection, activity_id, hint",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "_normalize_scope",
+    "line": 443,
+    "end": 453,
+    "args": "cls, sources",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "inspect_scope",
+    "line": 455,
+    "end": 466,
+    "args": "self, activity_id: str",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "revise_scope",
+    "line": 468,
+    "end": 486,
+    "args": "self, activity_id: str, expected_scope_revision: int, sources",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "_apply_scope_locked",
+    "line": 488,
+    "end": 505,
+    "args": "self, connection, activity_id, row, locked, expected_scope_revision, sources, force_revision=False",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "create_activity",
+    "line": 507,
+    "end": 571,
+    "args": "self, spec: ActivitySpec, *, memory_selection=None",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "claim_lease",
+    "line": 573,
+    "end": 694,
+    "args": "self, activity_id: str, executor_id: str, *, lease_seconds: int, window_seconds: int, running_owner_session_id: int | None=None, expected_previous_generation: int | None=None",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "inspect_window",
+    "line": 696,
+    "end": 723,
+    "args": "self, activity_id: str",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "begin_window_close",
+    "line": 725,
+    "end": 759,
+    "args": "self, activity_id: str, executor_id: str, execution_generation: int",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "settle_execution_window",
+    "line": 761,
+    "end": 849,
+    "args": "self, activity_id: str, executor_id: str, execution_generation: int, *, window_seconds: int, elapsed_seconds: float",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "cancel_activity",
+    "line": 851,
+    "end": 884,
+    "args": "self, activity_id: str",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "recover_unknown",
+    "line": 886,
+    "end": 923,
+    "args": "self, activity_id: str, *, error_code: str='executor_lost'",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "list_unresolved_operations",
+    "line": 925,
+    "end": 970,
+    "args": "self, activity_id: str, *, limit: int=100, after_operation_id: str | None=None",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "recover_obsolete_operations",
+    "line": 972,
+    "end": 1032,
+    "args": "self, activity_id: str, *, error_code: str='executor_lost', limit: int=100",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "_intent_fields",
+    "line": 1035,
+    "end": 1064,
+    "args": "intent: AdmissionIntent",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "_activity_allows",
+    "line": 1067,
+    "end": 1084,
+    "args": "activity: dict, intent: AdmissionIntent, executor_id: str, *, now: datetime",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "admit",
+    "line": 1086,
+    "end": 1182,
+    "args": "self, intent: AdmissionIntent",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "_tool_permit_fields",
+    "line": 1187,
+    "end": 1209,
+    "args": "cls, permit: ToolAdmissionPermit",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "_tool_identity_matches",
+    "line": 1212,
+    "end": 1223,
+    "args": "operation: dict, fields: tuple",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "admit_tool_operation",
+    "line": 1225,
+    "end": 1339,
+    "args": "self, intent: ToolIntent",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "mark_tool_started",
+    "line": 1341,
+    "end": 1396,
+    "args": "self, permit: ToolAdmissionPermit, call: ToolExecutionInput",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "record_tool_outcome",
+    "line": 1398,
+    "end": 1465,
+    "args": "self, permit: ToolAdmissionPermit, call: ToolExecutionInput, outcome: LedgerOutcome",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "_locked_operation",
+    "line": 1467,
+    "end": 1503,
+    "args": "self, connection: object, permit: AdmissionPermit, *, kind: str='model'",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "_operation_is_current",
+    "line": 1506,
+    "end": 1518,
+    "args": "activity: dict, operation: dict, sources_valid: bool",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "mark_dispatch_started",
+    "line": 1520,
+    "end": 1544,
+    "args": "self, permit: AdmissionPermit",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "_outcome_values",
+    "line": 1547,
+    "end": 1579,
+    "args": "cls, outcome: LedgerOutcome",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "_payload_values",
+    "line": 1582,
+    "end": 1599,
+    "args": "outcome: LedgerOutcome",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "_stored_outcome",
+    "line": 1602,
+    "end": 1615,
+    "args": "call: dict",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "_stored_payload_row",
+    "line": 1618,
+    "end": 1633,
+    "args": "connection: object, call: dict",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "_terminal_confirmation",
+    "line": 1636,
+    "end": 1655,
+    "args": "connection: object, call: dict, values: tuple, payload_triple: tuple[str, str, str] | None",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "_write_outcome",
+    "line": 1658,
+    "end": 1687,
+    "args": "connection: object, call: dict, values: tuple, payload_triple: tuple[str, str, str] | None",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "record_outcome",
+    "line": 1689,
+    "end": 1727,
+    "args": "self, permit: AdmissionPermit, outcome: LedgerOutcome",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "_read_status",
+    "line": 1757,
+    "end": 1773,
+    "args": "row: dict, *, has_result: bool",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "_snapshot_from_row",
+    "line": 1776,
+    "end": 1803,
+    "args": "row: dict, status: ResultReadStatus, payload: str | None",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "read_committed_result",
+    "line": 1805,
+    "end": 1873,
+    "args": "self, activity_id: str, operation_id: str",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "list_committed_results",
+    "line": 1875,
+    "end": 1975,
+    "args": "self, activity_id: str, *, limit: int=100, after_operation_id: str | None=None",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "_activity_fact_from_row",
+    "line": 2007,
+    "end": 2035,
+    "args": "row: dict",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "probe_storage",
+    "line": 2037,
+    "end": 2049,
+    "args": "self",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "list_activities",
+    "line": 2051,
+    "end": 2079,
+    "args": "self, *, limit: int, after_created_at: datetime | None=None, after_activity_id: str | None=None",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "read_activity_facts",
+    "line": 2081,
+    "end": 2095,
+    "args": "self, activity_id: str",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "read_scope_source_versions",
+    "line": 2097,
+    "end": 2112,
+    "args": "self, source_ids: list[str]",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "_operation_row_from_row",
+    "line": 2160,
+    "end": 2199,
+    "args": "self, row: dict",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "_operation_list_row_from_row",
+    "line": 2201,
+    "end": 2240,
+    "args": "self, row: dict",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "list_operations",
+    "line": 2242,
+    "end": 2273,
+    "args": "self, activity_id: str, *, limit: int, after_operation_id: str | None=None",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "read_operation",
+    "line": 2275,
+    "end": 2288,
+    "args": "self, activity_id: str, operation_id: str",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "read_learning_snapshot",
+    "line": 2290,
+    "end": 2322,
+    "args": "self, activity_id: str",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "find_learning_operation",
+    "line": 2324,
+    "end": 2342,
+    "args": "self, activity_id: str, prefix: str",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "operation",
+    "line": 457,
+    "end": 465,
+    "args": "connection",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "operation",
+    "line": 473,
+    "end": 485,
+    "args": "connection",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "operation",
+    "line": 512,
+    "end": 569,
+    "args": "connection: object",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "operation",
+    "line": 624,
+    "end": 692,
+    "args": "connection: object",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "operation",
+    "line": 700,
+    "end": 721,
+    "args": "connection: object",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "operation",
+    "line": 738,
+    "end": 757,
+    "args": "connection: object",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "operation",
+    "line": 811,
+    "end": 847,
+    "args": "connection: object",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "operation",
+    "line": 859,
+    "end": 882,
+    "args": "connection: object",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "operation",
+    "line": 890,
+    "end": 922,
+    "args": "connection: object",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "operation",
+    "line": 946,
+    "end": 968,
+    "args": "connection: object",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "operation",
+    "line": 994,
+    "end": 1030,
+    "args": "connection: object",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "operation",
+    "line": 1089,
+    "end": 1180,
+    "args": "connection: object",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "operation",
+    "line": 1250,
+    "end": 1337,
+    "args": "connection: object",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "operation",
+    "line": 1359,
+    "end": 1394,
+    "args": "connection: object",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "operation",
+    "line": 1427,
+    "end": 1463,
+    "args": "connection: object",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "operation",
+    "line": 1521,
+    "end": 1542,
+    "args": "connection: object",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "operation",
+    "line": 1703,
+    "end": 1725,
+    "args": "connection: object",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "operation",
+    "line": 1817,
+    "end": 1871,
+    "args": "connection: object",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "operation",
+    "line": 1899,
+    "end": 1973,
+    "args": "connection: object",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "operation",
+    "line": 2040,
+    "end": 2047,
+    "args": "connection: object",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "operation",
+    "line": 2068,
+    "end": 2077,
+    "args": "connection: object",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "operation",
+    "line": 2085,
+    "end": 2093,
+    "args": "connection: object",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "operation",
+    "line": 2105,
+    "end": 2110,
+    "args": "connection: object",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "operation",
+    "line": 2266,
+    "end": 2271,
+    "args": "connection: object",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "operation",
+    "line": 2280,
+    "end": 2286,
+    "args": "connection: object",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "operation",
+    "line": 2294,
+    "end": 2320,
+    "args": "connection",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/repository.py",
+    "name": "operation",
+    "line": 2333,
+    "end": 2340,
+    "args": "connection",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/service.py",
+    "name": "_canonical_tool_execution_input",
+    "line": 58,
+    "end": 76,
+    "args": "operation_id, plan",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/activities/service.py",
+    "name": "__init__",
+    "line": 80,
+    "end": 81,
+    "args": "self, ledger: PostgresAdmissionLedger",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/activities/service.py",
+    "name": "read_result",
+    "line": 83,
+    "end": 92,
+    "args": "self, activity_id, operation_id",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/service.py",
+    "name": "resume_result",
+    "line": 94,
+    "end": 95,
+    "args": "self, activity_id, operation_id",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/service.py",
+    "name": "read_scope",
+    "line": 97,
+    "end": 99,
+    "args": "self, activity_id",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/service.py",
+    "name": "revise_scope",
+    "line": 101,
+    "end": 102,
+    "args": "self, activity_id, expected_scope_revision, sources",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/service.py",
+    "name": "continue_from_result",
+    "line": 104,
+    "end": 196,
+    "args": "self, activity_id, parent_operation_id, new_operation_id, followup, service, config, executor_id, run_tag",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/service.py",
+    "name": "execute_tool_action",
+    "line": 198,
+    "end": 266,
+    "args": "self, activity_id, operation_id, plan, config, executor_id, run_tag",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/service.py",
+    "name": "probe_storage",
+    "line": 270,
+    "end": 271,
+    "args": "self",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/service.py",
+    "name": "list_activities",
+    "line": 273,
+    "end": 276,
+    "args": "self, *, limit, after_created_at=None, after_activity_id=None",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/service.py",
+    "name": "read_activity",
+    "line": 278,
+    "end": 279,
+    "args": "self, activity_id",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/service.py",
+    "name": "list_activity_operations",
+    "line": 281,
+    "end": 284,
+    "args": "self, activity_id, *, limit, after_operation_id=None",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/service.py",
+    "name": "read_operation",
+    "line": 286,
+    "end": 287,
+    "args": "self, activity_id, operation_id",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/service.py",
+    "name": "list_scope_source_versions",
+    "line": 289,
+    "end": 290,
+    "args": "self, source_ids",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/service.py",
+    "name": "cancel_activity",
+    "line": 292,
+    "end": 294,
+    "args": "self, activity_id",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/api.py",
+    "name": "_error",
+    "line": 63,
+    "end": 64,
+    "args": "status_code: int, code: str, message: str",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/activities/api.py",
+    "name": "_uuid_text",
+    "line": 67,
+    "end": 71,
+    "args": "value: str, field: str",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/activities/api.py",
+    "name": "_ledger",
+    "line": 74,
+    "end": 78,
+    "args": "request: Request",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/activities/api.py",
+    "name": "_config",
+    "line": 81,
+    "end": 85,
+    "args": "request: Request",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/activities/api.py",
+    "name": "_guard",
+    "line": 88,
+    "end": 89,
+    "args": "request: Request",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/activities/api.py",
+    "name": "_iso",
+    "line": 92,
+    "end": 93,
+    "args": "value: datetime | None",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/activities/api.py",
+    "name": "_fact_payload",
+    "line": 96,
+    "end": 130,
+    "args": "fact: ActivityFactView, *, detail: bool",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/activities/api.py",
+    "name": "_operation_payload",
+    "line": 133,
+    "end": 159,
+    "args": "row: OperationRow, *, include_payload: bool",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/activities/api.py",
+    "name": "_encode_cursor",
+    "line": 162,
+    "end": 164,
+    "args": "fact: ActivityFactView",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/activities/api.py",
+    "name": "_decode_cursor",
+    "line": 167,
+    "end": 175,
+    "args": "value: str",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/activities/api.py",
+    "name": "_bounded_limit",
+    "line": 178,
+    "end": 183,
+    "args": "value: int | None, *, default: int, maximum: int, field: str",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/activities/api.py",
+    "name": "_map_read_error",
+    "line": 186,
+    "end": 196,
+    "args": "exc: Exception",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/activities/api.py",
+    "name": "capabilities",
+    "line": 200,
+    "end": 273,
+    "args": "request: Request",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/api.py",
+    "name": "list_activities",
+    "line": 277,
+    "end": 295,
+    "args": "request: Request, limit: int | None=None, cursor: str | None=None",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/api.py",
+    "name": "create_activity",
+    "line": 299,
+    "end": 373,
+    "args": "request: Request",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/api.py",
+    "name": "cancel_activity",
+    "line": 377,
+    "end": 393,
+    "args": "request: Request, activity_id: str",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/api.py",
+    "name": "continue_from_result",
+    "line": 397,
+    "end": 464,
+    "args": "request: Request, activity_id: str, body: ContinueInput",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/api.py",
+    "name": "read_activity",
+    "line": 484,
+    "end": 494,
+    "args": "request: Request, activity_id: str",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/api.py",
+    "name": "list_operations",
+    "line": 498,
+    "end": 520,
+    "args": "request: Request, activity_id: str, limit: int | None=None, cursor: str | None=None",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/activities/api.py",
+    "name": "read_operation",
+    "line": 524,
+    "end": 536,
+    "args": "request: Request, activity_id: str, operation_id: str",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/learning/service.py",
+    "name": "__init__",
+    "line": 20,
+    "end": 21,
+    "args": "self, ledger, materials, originals",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/learning/service.py",
+    "name": "reconcile",
+    "line": 23,
+    "end": 28,
+    "args": "self, activity_id, business_key, action",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/learning/service.py",
+    "name": "execute",
+    "line": 30,
+    "end": 136,
+    "args": "self, activity_id, business_key, text, config, *, parent_operation_id=None, run_tag",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/capabilities/contracts.py",
+    "name": "canonical_payload_bytes",
+    "line": 225,
+    "end": 229,
+    "args": "envelope: Mapping[str, Any]",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/capabilities/contracts.py",
+    "name": "payload_digest",
+    "line": 232,
+    "end": 234,
+    "args": "envelope: Mapping[str, Any]",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/capabilities/contracts.py",
+    "name": "_walk_payload_value",
+    "line": 237,
+    "end": 260,
+    "args": "value: Any",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/capabilities/contracts.py",
+    "name": "build_business_payload",
+    "line": 263,
+    "end": 284,
+    "args": "*, text: str | None=None, json_object: Mapping[str, Any] | None=None",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/capabilities/contracts.py",
+    "name": "validate_business_payload",
+    "line": 287,
+    "end": 330,
+    "args": "payload: str, payload_format: str, payload_sha256: str",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/capabilities/contracts.py",
+    "name": "_tool_names",
+    "line": 447,
+    "end": 450,
+    "args": "",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/capabilities/contracts.py",
+    "name": "_unique_pairs",
+    "line": 453,
+    "end": 459,
+    "args": "pairs",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/capabilities/contracts.py",
+    "name": "parse_tool_arguments",
+    "line": 462,
+    "end": 468,
+    "args": "text: str",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/capabilities/contracts.py",
+    "name": "canonical_tool_arguments",
+    "line": 471,
+    "end": 490,
+    "args": "parsed: Mapping[str, Any]",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/capabilities/contracts.py",
+    "name": "validate_base_url",
+    "line": 51,
+    "end": 56,
+    "args": "cls, value: str, info: Any",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/capabilities/contracts.py",
+    "name": "validate_api_key",
+    "line": 60,
+    "end": 63,
+    "args": "cls, value: SecretStr",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/capabilities/contracts.py",
+    "name": "validate_tool_message",
+    "line": 90,
+    "end": 102,
+    "args": "self",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/capabilities/contracts.py",
+    "name": "canonical_uuid",
+    "line": 120,
+    "end": 125,
+    "args": "cls, value: str",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/capabilities/contracts.py",
+    "name": "profile_exclusive",
+    "line": 141,
+    "end": 153,
+    "args": "self",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/capabilities/contracts.py",
+    "name": "validate_tool_names",
+    "line": 157,
+    "end": 161,
+    "args": "cls, value: frozenset[str]",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/capabilities/contracts.py",
+    "name": "validate_activity_id",
+    "line": 182,
+    "end": 187,
+    "args": "cls, value: str",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/capabilities/contracts.py",
+    "name": "visit",
+    "line": 241,
+    "end": 258,
+    "args": "item: Any, depth: int",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/capabilities/contracts.py",
+    "name": "admit",
+    "line": 368,
+    "end": 368,
+    "args": "self, intent: AdmissionIntent",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/capabilities/contracts.py",
+    "name": "mark_dispatch_started",
+    "line": 370,
+    "end": 370,
+    "args": "self, permit: AdmissionPermit",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/capabilities/contracts.py",
+    "name": "record_outcome",
+    "line": 372,
+    "end": 372,
+    "args": "self, permit: AdmissionPermit, outcome: LedgerOutcome",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/capabilities/contracts.py",
+    "name": "admit",
+    "line": 386,
+    "end": 388,
+    "args": "self, intent: AdmissionIntent",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/capabilities/contracts.py",
+    "name": "mark_dispatch_started",
+    "line": 390,
+    "end": 392,
+    "args": "self, permit: AdmissionPermit",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/capabilities/contracts.py",
+    "name": "record_outcome",
+    "line": 394,
+    "end": 396,
+    "args": "self, permit: AdmissionPermit, outcome: LedgerOutcome",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/capabilities/contracts.py",
+    "name": "to_wire",
+    "line": 508,
+    "end": 534,
+    "args": "self",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/capabilities/contracts.py",
+    "name": "from_wire",
+    "line": 537,
+    "end": 543,
+    "args": "cls, value",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/capabilities/contracts.py",
+    "name": "admit_tool_operation",
+    "line": 597,
+    "end": 597,
+    "args": "self, intent: ToolIntent",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/capabilities/contracts.py",
+    "name": "mark_tool_started",
+    "line": 599,
+    "end": 599,
+    "args": "self, permit: ToolAdmissionPermit, call: ToolExecutionInput",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/capabilities/contracts.py",
+    "name": "record_tool_outcome",
+    "line": 601,
+    "end": 603,
+    "args": "self, permit: ToolAdmissionPermit, call: ToolExecutionInput, outcome: LedgerOutcome",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/capabilities/contracts.py",
+    "name": "admit_tool_operation",
+    "line": 609,
+    "end": 611,
+    "args": "self, intent: ToolIntent",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/capabilities/contracts.py",
+    "name": "mark_tool_started",
+    "line": 613,
+    "end": 615,
+    "args": "self, permit: ToolAdmissionPermit, call: ToolExecutionInput",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/capabilities/contracts.py",
+    "name": "record_tool_outcome",
+    "line": 617,
+    "end": 621,
+    "args": "self, permit: ToolAdmissionPermit, call: ToolExecutionInput, outcome: LedgerOutcome",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/capabilities/gateway.py",
+    "name": "_safe_json_loads",
+    "line": 49,
+    "end": 50,
+    "args": "raw: bytes | str",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/capabilities/gateway.py",
+    "name": "_safe_remote_id",
+    "line": 53,
+    "end": 58,
+    "args": "value: str | None",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/capabilities/gateway.py",
+    "name": "_validate_json_shape",
+    "line": 61,
+    "end": 83,
+    "args": "value: Any, *, max_depth: int=12, max_nodes: int=2000",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/capabilities/gateway.py",
+    "name": "__init__",
+    "line": 44,
+    "end": 46,
+    "args": "self, error_code: str",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/capabilities/gateway.py",
+    "name": "visit",
+    "line": 64,
+    "end": 81,
+    "args": "item: Any, depth: int",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/capabilities/gateway.py",
+    "name": "__init__",
+    "line": 87,
+    "end": 98,
+    "args": "self, config: ModelServiceConfig, *, ledger: AdmissionLedger | None=None, transport: ModelTransport | None=None, tools: ToolRegistry | None=None",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/capabilities/gateway.py",
+    "name": "call",
+    "line": 100,
+    "end": 213,
+    "args": "self, context: CallContext, request: ModelCallRequest",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/capabilities/gateway.py",
+    "name": "_build_payload",
+    "line": 215,
+    "end": 230,
+    "args": "self, request: ModelCallRequest",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/capabilities/gateway.py",
+    "name": "_validate_conversation",
+    "line": 232,
+    "end": 255,
+    "args": "self, request: ModelCallRequest",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/capabilities/gateway.py",
+    "name": "_validate_permit",
+    "line": 258,
+    "end": 265,
+    "args": "permit: AdmissionPermit, context: CallContext",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/capabilities/gateway.py",
+    "name": "_handle_response",
+    "line": 267,
+    "end": 338,
+    "args": "self, permit: AdmissionPermit, context: CallContext, request: ModelCallRequest, response: TransportResponse",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/capabilities/gateway.py",
+    "name": "_parse_success",
+    "line": 340,
+    "end": 471,
+    "args": "self, context: CallContext, request: ModelCallRequest, response: TransportResponse, remote_request_id: str | None",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/capabilities/gateway.py",
+    "name": "_finish",
+    "line": 473,
+    "end": 512,
+    "args": "self, permit: AdmissionPermit, context: CallContext, outcome: LedgerOutcome, status: CallStatus, *, result: ModelCallResult | None=None",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/capabilities/gateway.py",
+    "name": "_record_unknown_best_effort",
+    "line": 514,
+    "end": 521,
+    "args": "self, permit: AdmissionPermit, error_code: str",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/capabilities/gateway.py",
+    "name": "_result",
+    "line": 523,
+    "end": 537,
+    "args": "self, context: CallContext, status: CallStatus, error_code: str | None=None, **values: Any",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/worker/one_call.py",
+    "name": "bounded",
+    "line": 29,
+    "end": 36,
+    "args": "value, limit=MAX_DATA_BYTES",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/worker/one_call.py",
+    "name": "exact",
+    "line": 39,
+    "end": 41,
+    "args": "value, names",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/worker/one_call.py",
+    "name": "validate_identity",
+    "line": 44,
+    "end": 50,
+    "args": "activity_id, executor_id, operation_id, run_tag",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/worker/one_call.py",
+    "name": "worker_request",
+    "line": 96,
+    "end": 104,
+    "args": "call, ledger_data, lease, run_tag, stop_ns, call_seconds",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/worker/one_call.py",
+    "name": "decode_worker_request",
+    "line": 107,
+    "end": 127,
+    "args": "value",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/worker/one_call.py",
+    "name": "receipt",
+    "line": 130,
+    "end": 151,
+    "args": "result, context, run_tag",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/worker/one_call.py",
+    "name": "decode_receipt",
+    "line": 154,
+    "end": 215,
+    "args": "value, context, run_tag",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/worker/one_call.py",
+    "name": "run_one_call",
+    "line": 218,
+    "end": 237,
+    "args": "ledger, config, activity_id: str, executor_id: str, operation_id: str, request: ModelCallRequest, service: ModelServiceConfig, *, run_tag: str",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/worker/one_call.py",
+    "name": "to_wire",
+    "line": 59,
+    "end": 81,
+    "args": "self",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/worker/one_call.py",
+    "name": "from_wire",
+    "line": 84,
+    "end": 93,
+    "args": "cls, value",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/worker/launcher.py",
+    "name": "_api",
+    "line": 54,
+    "end": 78,
+    "args": "",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/worker/launcher.py",
+    "name": "_remaining",
+    "line": 81,
+    "end": 82,
+    "args": "deadline_ns: int",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/worker/launcher.py",
+    "name": "_environment_block",
+    "line": 85,
+    "end": 95,
+    "args": "",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/worker/launcher.py",
+    "name": "_request",
+    "line": 184,
+    "end": 238,
+    "args": "ledger, config, activity_id, executor_id, command, run_tag, mapping_name, deadline_ns, one_call=None, tool_action=None",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/worker/launcher.py",
+    "name": "_decode_outcome",
+    "line": 241,
+    "end": 271,
+    "args": "frame: dict, run_tag: str, activity_id: str",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/worker/launcher.py",
+    "name": "run_supervised_window",
+    "line": 274,
+    "end": 410,
+    "args": "ledger: PostgresAdmissionLedger, config: SessionConfig, activity_id: str, executor_id: str, command: WorkerCommand, *, run_tag: str, one_call: OneCallInput | None=None, tool_action: ToolExecutionInput | None=None",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/worker/launcher.py",
+    "name": "__init__",
+    "line": 49,
+    "end": 51,
+    "args": "self, error_code: int, partial=None",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/worker/launcher.py",
+    "name": "__init__",
+    "line": 101,
+    "end": 104,
+    "args": "self, api, info: _PROCESS_INFORMATION",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/worker/launcher.py",
+    "name": "create",
+    "line": 107,
+    "end": 129,
+    "args": "cls, mapping_name: str",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/worker/launcher.py",
+    "name": "pid",
+    "line": 132,
+    "end": 133,
+    "args": "self",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/worker/launcher.py",
+    "name": "creation_time_100ns",
+    "line": 135,
+    "end": 142,
+    "args": "self",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/worker/launcher.py",
+    "name": "resume",
+    "line": 144,
+    "end": 147,
+    "args": "self",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/worker/launcher.py",
+    "name": "wait",
+    "line": 149,
+    "end": 158,
+    "args": "self, seconds: float",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/worker/launcher.py",
+    "name": "exit_code",
+    "line": 160,
+    "end": 164,
+    "args": "self",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/worker/launcher.py",
+    "name": "terminate",
+    "line": 166,
+    "end": 169,
+    "args": "self",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/worker/launcher.py",
+    "name": "close",
+    "line": 171,
+    "end": 181,
+    "args": "self",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/worker/session.py",
+    "name": "_local_lock",
+    "line": 30,
+    "end": 32,
+    "args": "activity_id: str",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/worker/session.py",
+    "name": "inspect_window",
+    "line": 36,
+    "end": 36,
+    "args": "self, activity_id: str",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/worker/session.py",
+    "name": "claim_lease",
+    "line": 37,
+    "end": 37,
+    "args": "self, activity_id: str, executor_id: str, *, lease_seconds: int, window_seconds: int, running_owner_session_id: int | None=None, expected_previous_generation: int | None=None",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/worker/session.py",
+    "name": "begin_window_close",
+    "line": 38,
+    "end": 38,
+    "args": "self, activity_id: str, executor_id: str, execution_generation: int",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/worker/session.py",
+    "name": "settle_execution_window",
+    "line": 39,
+    "end": 39,
+    "args": "self, activity_id: str, executor_id: str, execution_generation: int, *, window_seconds: int, elapsed_seconds: float",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/worker/session.py",
+    "name": "__post_init__",
+    "line": 54,
+    "end": 69,
+    "args": "self",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/worker/session.py",
+    "name": "manager_total_seconds",
+    "line": 72,
+    "end": 73,
+    "args": "self",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/worker/session.py",
+    "name": "__init__",
+    "line": 113,
+    "end": 115,
+    "args": "self, ledger: WindowLedger, config: SessionConfig",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/worker/session.py",
+    "name": "_remaining",
+    "line": 118,
+    "end": 122,
+    "args": "deadline_ns: int",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/worker/session.py",
+    "name": "_db",
+    "line": 124,
+    "end": 131,
+    "args": "self, awaitable, deadline_ns: int",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/worker/session.py",
+    "name": "run_once",
+    "line": 133,
+    "end": 440,
+    "args": "self, activity_id: str, executor_id: str, command: WorkerCommand, *, run_tag: str, manager_deadline_ns: int, one_call: OneCallInput | None=None, tool_action: ToolExecutionInput | None=None",
+    "async_function": true
+  },
+  {
+    "file": "backend/app/service_config.py",
+    "name": "_learning_check",
+    "line": 124,
+    "end": 135,
+    "args": "data, defaults, cont, service",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/service_config.py",
+    "name": "_teaching_check",
+    "line": 154,
+    "end": 178,
+    "args": "data, defaults, cont, service",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/service_config.py",
+    "name": "_unavailable",
+    "line": 181,
+    "end": 184,
+    "args": "reason: str",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/service_config.py",
+    "name": "_preview",
+    "line": 187,
+    "end": 198,
+    "args": "defaults: _ActivityDefaults",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/service_config.py",
+    "name": "_l1_dry_run",
+    "line": 201,
+    "end": 223,
+    "args": "provider: Provider, model: str, defaults: _ActivityDefaults",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/service_config.py",
+    "name": "_l2_check",
+    "line": 226,
+    "end": 273,
+    "args": "data: dict, provider: Provider, model: str, defaults: _ActivityDefaults",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/service_config.py",
+    "name": "_interview_check",
+    "line": 283,
+    "end": 294,
+    "args": "data, defaults, cont, service",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/service_config.py",
+    "name": "load_activity_config",
+    "line": 297,
+    "end": 356,
+    "args": "path: Path",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/service_config.py",
+    "name": "_tool_whitelist",
+    "line": 88,
+    "end": 94,
+    "args": "cls, value",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/service_config.py",
+    "name": "reserve_within_limit",
+    "line": 96,
+    "end": 97,
+    "args": "self",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/service_config.py",
+    "name": "_plain_number",
+    "line": 112,
+    "end": 115,
+    "args": "cls, value",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/service_config.py",
+    "name": "_strict_bool",
+    "line": 148,
+    "end": 151,
+    "args": "cls, value",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/main.py",
+    "name": "load_settings",
+    "line": 32,
+    "end": 43,
+    "args": "",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/main.py",
+    "name": "create_app",
+    "line": 45,
+    "end": 90,
+    "args": "materials=None",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/main.py",
+    "name": "existing_directory",
+    "line": 27,
+    "end": 30,
+    "args": "cls, value: Path",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/main.py",
+    "name": "health",
+    "line": 51,
+    "end": 52,
+    "args": "",
+    "async_function": false
+  },
+  {
+    "file": "backend/app/main.py",
+    "name": "no_store_api",
+    "line": 73,
+    "end": 78,
+    "args": "request, call_next",
+    "async_function": true
+  }
+]

@@ -1,0 +1,68 @@
+{
+  "schema": "TASK117.user-adoption.v1",
+  "recorded_at": "2026-10-14T13:15:56.281944+08:00",
+  "user_statement": "一并批准",
+  "binding_context": "编排展示AP1新增数据/接口/权限与AP2后续仅合成DeepSeek/智谱合计80次20元、独审及核价条款后启用，用户明确同时批准",
+  "package_path": "DocuN/evidence/TASK-116/design/adoption-package.md",
+  "package_sha256": "84cb852946220a09873225f8bde7b7138aa7366e137297638bb2aab01dbc1c84",
+  "prior_main_decision": {
+    "path": "DocuN/results/TASK-116-work-decision.md",
+    "bytes": 6873,
+    "sha256": "5587bcdfbb7602ac1cbe174a7a40d850518e65dfda1f25d743102ace69ee8226"
+  },
+  "AP1": {
+    "adopted": true,
+    "migration": "014_step018_retrieval.sql",
+    "new_tables": [
+      "retrieval_spaces",
+      "retrieval_commands",
+      "retrieval_chunks"
+    ],
+    "new_activity_column": "outbound_grant_sha256 nullable",
+    "new_kind": "embedding",
+    "protocol": "v4 typed union, old v3 retained",
+    "profiles": [
+      "learning.v2",
+      "teaching.v3",
+      "interview.v2",
+      "data_exit.v1.r02"
+    ],
+    "R01_and_original_migrations": "001—013原字节与原包/有限验收保留",
+    "restore_execution": false
+  },
+  "AP2": {
+    "conditionally_authorized": true,
+    "activated": false,
+    "providers": [
+      "deepseek_chat_completions/deepseek-chat candidate",
+      "zhipu_embeddings/embedding-3/512 candidate"
+    ],
+    "data_class": "frozen_synthetic_necessary_fragments_only",
+    "max_total_requests": 80,
+    "max_total_cost_CNY": 20,
+    "cost_microunits_per_yuan": 1000000,
+    "reserve_per_call_microunits": 250000,
+    "includes_failed_timeout_unknown": true,
+    "implicit_retries": 0,
+    "activation_conditions": [
+      "稳定新增kind/权限/预算/数据profile完整候选独立审计可用结论",
+      "官方现行能力/模型别名/维度/计价/条款及必要账号条件核对",
+      "保守最坏单次费用含必要边界/25%裕量不超预留",
+      "主控Q启用回执和受信固定roster OutboundGrant"
+    ],
+    "validity_from_future_explicit_activation_hours": 72,
+    "real_user_data_or_databases": false,
+    "new_spend_or_provider_calls_now": 0,
+    "old_13_CNY_reused": false
+  },
+  "no_repeat_permission_for": "已批准范围内实施/合成验证/普通修复及未来满足条件的20元额度",
+  "not_authorized": [
+    "个人资料外发",
+    "用户库迁移/写入",
+    "新供应商/维度/服务",
+    "部署发布",
+    "真实付费早于条件",
+    "旧额度重置"
+  ],
+  "dispatch_state": "not_transferred_or_received"
+}

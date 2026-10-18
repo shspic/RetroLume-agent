@@ -1,0 +1,33 @@
+--- pre/recovery
++++ current/recovery
+@@ -118,12 +118,16 @@
+             reserve_cost_microunits=100,
+             max_request_bytes=4096,
+             max_output_tokens=256,
++            max_running_seconds=3600,
+             allowed_models=((Provider.DEEPSEEK_CHAT_COMPLETIONS.value, "synthetic-model"),),
+             allowed_tools=(),
+             scope_revision=1,
+         )
+         await self.ledger.create_activity(spec)
+-        lease = await self.ledger.claim_lease(spec.activity_id, "worker-1", lease_seconds=300)
++        lease = await self.ledger.claim_lease(
++            spec.activity_id, "worker-1", lease_seconds=300, window_seconds=300
++        )
++        self.assertIsNotNone(lease)
+         return spec, lease, source
+ 
+     @staticmethod
+@@ -153,7 +157,11 @@
+ 
+     async def reclaim_next_generation(self, spec: ActivitySpec, *, executor: str = "worker-2"):
+         await self.expire_lease(spec)
+-        return await self.ledger.claim_lease(spec.activity_id, executor, lease_seconds=300)
++        lease = await self.ledger.claim_lease(
++            spec.activity_id, executor, lease_seconds=300, window_seconds=300
++        )
++        self.assertIsNotNone(lease)
++        return lease
+ 
+     async def test_01_valid_lease_does_not_block_finding_and_converging_old_generation(self) -> None:
+         spec, lease, _ = await self.build_activity()

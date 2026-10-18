@@ -1,0 +1,126 @@
+frontend/tests/step018-s08.mjs
+1: // S08：正式dist + 封闭合成HTTP；不访问PG、用户数据或真实供应商。
+2: import {chromium} from 'playwright';
+3: import fs from 'node:fs';
+4: import path from 'node:path';
+5: import http from 'node:http';
+6: import os from 'node:os';
+7: import {createHash,randomUUID} from 'node:crypto';
+8: import assert from 'node:assert/strict';
+9: 
+10: const canonical=x=>x===null||typeof x!=='object'?JSON.stringify(x):Array.isArray(x)?`[${x.map(canonical).join(',')}]`:`{${Object.keys(x).sort().map(k=>`${JSON.stringify(k)}:${canonical(x[k])}`).join(',')}}`;
+11: const sha=x=>createHash('sha256').update(x).digest('hex');
+12: const aid='01800000-0000-4000-8000-000000000001',sid='01800000-0000-4000-8000-000000001001',vid='01800000-0000-4000-8000-000000002001',gid='01800000-0000-4000-8000-000000004001';
+13: const origin='http://127.0.0.1:18119';
+14: const routes=['GET /','GET /assets/*','GET /api/session','GET /api/materials','GET /api/pdf-candidates',
+15:  'GET /api/activities/capabilities','GET /api/activities','GET /api/activities/:aid','GET /api/activities/:aid/operations',
+16:  'GET /api/activities/:aid/teaching/workspace','POST /api/activities/:aid/teaching/commands',
+17:  'GET /api/activities/:aid/retrieval/status','POST /api/activities/:aid/retrieval/commands','GET /api/activities/:aid/retrieval/commands/:key',
+18:  'GET /api/activities/:aid/interview/workspace','GET /api/activities/:aid/interview/records/:id','GET /api/activities/:aid/interview/history',
+19:  'GET /api/memories','GET /api/memories/choices','GET /api/memories/capabilities','GET /api/activities/:aid/memory-selection'];
+20: const closedResponseShapes={session:['token','storage_configured','max_bytes','data_context'],status:['available','provider','model','purpose','query_then_model_requests','query_then_model_reserve_microunits','window_reserve_seconds'],
+21:  teaching:['head','overlay','goal','history','pending','budgets','view_token'],interview:['head','records','sources','budget','capabilities','view_token']};
+22: if(process.argv.includes('--contract-check')){
+23:  assert.equal(sha(canonical({b:2,a:1})),sha('{"a":1,"b":2}'));
+24:  assert(routes.includes('GET /api/activities/:aid/retrieval/commands/:key'));
+25:  assert(routes.every(x=>!x.includes('http:')&&!x.includes('https:')));
+26:  console.log(JSON.stringify({static_contract_only:true,routes,closedResponseShapes,barrier:'真实draft事务commit之后、产品oncomplete回调之前；正常只读刷新驱动原activity的owner/view/head变化',
+27:    post_count:'server实际path+method+case计数，显式索引/query/domain分别计；没有自动重发推断混计'}));
+28:  process.exit(0);
+29: }
+30: assert(process.env.S08_SPEC,'必须由S08精确控制器启动');
+31: const spec=JSON.parse(fs.readFileSync(process.env.S08_SPEC,'utf8')),dir=spec.evidence;
+32: assert.equal(spec.permit,'TASK-117-STEP018-AUDIT-REPAIR-S08-20261017');
+33: const proof={status:'running',Q:'FROZEN',real_PG:false,real_provider:false,formal_dist:true,cases:[],assets:[],requests:[],external_attempts:[],unknown_routes:[],observation_errors:[],routes,closedResponseShapes};
+34: const save=()=>fs.writeFileSync(path.join(dir,'proof.json'),JSON.stringify(proof,null,2));
+35: let context,server,closing=false,shutdownPromise,fixture,caseNumber=0,deadlineTimer,watchTimer;
+36: const observations=new Set();
+37: function observe(work){const pending=Promise.resolve().then(work).catch(error=>proof.observation_errors.push(String(error))).finally(()=>observations.delete(pending));observations.add(pending);}
+38: function count(counter){
+39:  const b=JSON.parse(fs.readFileSync(spec.budget,'utf8')),s=b.segments.find(x=>x.permit===spec.permit);
+40:  assert.equal(b.active_segment,spec.permit);assert.equal(b.active_root,spec.root.id);
+41:  assert(Date.now()<Date.parse(spec.root.business_deadline_utc));assert(b.counts[counter]+1<=s.cumulative_caps[counter]);
+42:  b.counts[counter]++;fs.writeFileSync(spec.budget,JSON.stringify(b,null,2)+'\n');
+43: }
+44: const budget={max_requests:80,requests_reserved:0,max_cost_microunits:20000000,cost_reserved_microunits:0,reserve_cost_microunits:250000,
+45:  max_running_seconds:3600,running_reserved_seconds:0,running_settled_seconds:0,max_tool_calls:10,tools_reserved:0};
+46: function setup(name,{interview=false,missingVector=false,missingChat=false,changed=false,ready=true}={}){
+47:  caseNumber++;fixture={name,interview,ready,view:'s08-view-A',revision:1,scope:1,
+48:   vector:{provider:missingVector?null:changed?'synthetic_vector_b':'zhipu_embeddings',model:changed?'s08-vector-model-b':'embedding-3'},
+49:   chat:missingChat?{provider:'deepseek_chat_completions',model:null}:changed?{provider:'synthetic_chat_b',model:'s08-chat-model-b'}:{provider:'deepseek_chat_completions',model:'deepseek-chat'},
+50:   context:{control_id:'01800000-0000-4000-8000-000000008001',selection_generation:0,dataset_id:`01800000-0000-4000-8000-${String(8000+caseNumber).padStart(12,'0')}`,
+51:    instance_id:`01800000-0000-4000-8000-${String(9000+caseNumber).padStart(12,'0')}`,current_mode:'normal',read_only:false},receipts:new Map()};
+52:  return fixture;
+53: }
+54: function facts(){return {activity_id:aid,status:'idle',created_at:'2026-10-18T01:30:00Z',updated_at:'2026-10-18T01:30:00Z',deadline_at:'2099-01-01T00:00:00Z',cancelled_at:null,
+55:  scope_revision:fixture.scope,...budget,source_count:1,source_titles:['合成速度.md'],sources:[{source_id:sid,title:'合成速度.md',valid:true}],memory_selection:{selected:false,eligible:true},
+56:  ...(fixture.interview?{business_domain:'interview'}:{})};}
+57: function status(){return {available:true,reason:null,ready:fixture.ready,...fixture.vector,purpose:'当前已确认资料片段与本轮必要问题',fragments:1,cached_fragments:fixture.ready?1:0,index_batches:1,
+58:  reserve_cost_microunits:250000,remaining_requests:80,remaining_cost_microunits:20000000,remaining_running_seconds:3600,
+59:  query_then_model_requests:2,query_then_model_reserve_microunits:500000,window_reserve_seconds:30};}
+60: function teaching(){return {schema:'teaching.workspace.v1',activity_id:aid,view_token:fixture.view,read_at:new Date().toISOString(),
+61:  head:{revision:fixture.revision,goal_version:1,phase:'needs_plan',goal_record_id:gid,path_record_id:null,node_id:null,exercise_record_id:null,answer_record_id:null,feedback_record_id:null,reason_record_id:null,pending_business_key:null},
+62:  overlay:{source_invalid:false,cancelled:false,expired:false,processing:false,unknown:false},goal:{qualification:'current',record_id:gid,goal:'合成分钟换秒目标'},
+63:  path:null,proposal:null,exercise:null,answer:null,feedback:null,reason:null,nodes:{},budgets:budget,pending:[],history:[],next_cursor:null,sources:[],limits:{},memory_selected:false,memory_invalid:false};}
+64: function goalMeta(){return {record_id:gid,seq:1,kind:'goal',origin:'local',goal_version:1,scope_revision:1,round_index:0,probe_depth:0,answer_version:null,
+65:  question_record_id:null,body_sha256:'a'.repeat(64),operation_id:null,eligible:true,can_correct_answer:false};}
+66: function interview(){return {schema:'interview.view.v1',profile:'interview.v2',activity_id:aid,domain:'interview',head:{revision:1,goal_version:1,scope_revision:1,phase:'ready',round_index:0,probe_depth:0,last_seq:1,
+67:  goal_record_id:gid,root_question_id:null,current_question_id:null,current_answer_id:null,current_feedback_id:null,pending_key:null},
+68:  sources:[{source_id:sid,version_id:vid,source_revision:1,original_sha256:'b'.repeat(64),title:'合成速度.md',format:'md',valid:true}],budget,pending:null,records:[goalMeta()],
+69:  view_token:fixture.view,qualification:'current',suppression_reason:null,capabilities:{local:true,model:true,model_reason:null,max_followups_per_round:1,max_output_tokens:2048}};}
+70: function json(response,value,code=200){response.writeHead(code,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-RetroLume-Data-Context':canonical(fixture.context)});response.end(JSON.stringify(value));}
+71: async function handler(request,response){
+72:  const url=new URL(request.url,origin),p=url.pathname,method=request.method;
+73:  count('http');let body=null;
+74:  if(method==='POST'){const chunks=[];for await(const chunk of request){chunks.push(chunk);if(chunks.reduce((n,x)=>n+x.length,0)>65536)throw new Error('fixture_body_limit');}body=JSON.parse(Buffer.concat(chunks).toString());}
+75:  const row={at:new Date().toISOString(),case:fixture?.name,method,path:p,query:url.search,body};proof.requests.push(row);
+76:  if(method==='GET'&&(p==='/'||p.startsWith('/assets/'))){
+77:   const relative=p==='/'?'index.html':p.slice(1),file=path.resolve(spec.project,'frontend/dist',relative),base=path.resolve(spec.project,'frontend/dist')+path.sep;
+78:   assert(file.startsWith(base));assert(fs.statSync(file).isFile());const raw=fs.readFileSync(file);
+79:   response.writeHead(200,{'Content-Type':p.endsWith('.css')?'text/css':p.endsWith('.js')||p.endsWith('.mjs')?'text/javascript':'text/html','Cache-Control':'no-store'});response.end(raw);row.response_sha256=sha(raw);return;
+80:  }
+81:  if(p==='/favicon.ico'){response.writeHead(204);response.end();return;}
+82:  if(method==='GET'&&p==='/api/session')return json(response,{token:'test-only-s08-session',storage_configured:true,max_bytes:5242880,data_context:fixture.context});
+83:  if(method==='GET'&&p==='/api/materials')return json(response,{items:[],next_offset:null});
+84:  if(method==='GET'&&p==='/api/pdf-candidates')return json(response,{items:[]});
+85:  if(method==='GET'&&p==='/api/activities/capabilities')return json(response,{storage_ready:true,storage_reason:null,create:{available:true,reason:null},continue:{available:false,reason:'test_only'},
+86:   learning:{available:false,reason:'test_only',max_input_chars:1024,max_output_tokens:256},teaching:{available:true,reason:null,profile:'teaching.v3',max_output_tokens:2048},
+87:   teaching_calculation:{available:false,reason:'test_only',tool:'finite_calculate'},memory_model:{available:false,reason:'test_only'},provider:fixture.chat,quota_preview:budget,
+88:   supervision_management_budget_seconds:10,window_seconds:30,followup_max_chars:1024});
+89:  if(method==='GET'&&p==='/api/activities')return json(response,{items:[facts()],next_cursor:null});
+90:  if(method==='GET'&&p===`/api/activities/${aid}`)return json(response,{activity:facts()});
+91:  if(method==='GET'&&p===`/api/activities/${aid}/operations`)return json(response,{items:[],next_cursor:null});
+92:  if(method==='GET'&&p===`/api/activities/${aid}/teaching/workspace`)return json(response,teaching());
+93:  if(method==='GET'&&p===`/api/activities/${aid}/retrieval/status`)return json(response,status());
+94:  if(method==='POST'&&p===`/api/activities/${aid}/retrieval/commands`){
+95:   const value={business_key:body.business_key,action:body.action,status:'received',current:true,terminal_disposition:'received',error_code:null,
+96:    ...(body.action==='query'?{retrieval_ref:{business_key:body.business_key,query_sha256:sha(body.query),space_id:'c'.repeat(64),result_sha256:'d'.repeat(64)}}:{})};
+97:   fixture.receipts.set(body.business_key,value);if(body.action==='source_index')fixture.ready=true;return json(response,value);
+98:  }
+99:  if(method==='GET'&&p.startsWith(`/api/activities/${aid}/retrieval/commands/`)){
+100:   const value=fixture.receipts.get(p.split('/').at(-1));assert(value,'不存在的原检索键');return json(response,value);
+101:  }
+102:  if(method==='POST'&&p===`/api/activities/${aid}/teaching/commands`){
+103:   const {business_key,...rest}=body;const normalized={activity_id:aid,...rest};
+104:   return json(response,{activity_id:aid,business_key,action:body.action,request_sha256:sha(canonical(normalized)),status:'accepted',duplicate_of:null,record_ids:[],operation_id:null,
+105:    payload_sha256:null,applied_revision:null,head_revision_now:fixture.revision,qualification:'current',error_code:null,model_called:false,tool_called:false,retry_policy:'read_only',exposed_part:null});
+106:  }
+107:  if(method==='GET'&&p===`/api/activities/${aid}/interview/workspace`)return json(response,interview());
+108:  if(method==='GET'&&p===`/api/activities/${aid}/interview/records/${gid}`)return json(response,{schema:'interview.record.v1',activity_id:aid,record:goalMeta(),view_token:fixture.view,qualification:'current',suppression_reason:null,
+109:   body:{value:{goal:{target:'合成分钟换秒面试目标',focus:'只依据合成资料',clarifications:[],material_roles:[{source_id:sid,role:'reference'}]}}}});
+110:  if(method==='GET'&&p===`/api/activities/${aid}/interview/history`)return json(response,{records:[],view_token:fixture.view,next_before_seq:null,last_seq:1});
+111:  if(method==='GET'&&['/api/memories','/api/memories/choices'].includes(p))return json(response,{items:[],next_cursor:null});
+112:  if(method==='GET'&&p==='/api/memories/capabilities')return json(response,{read:true,write:false,cleanup:false});
+113:  if(method==='GET'&&p===`/api/activities/${aid}/memory-selection`)return json(response,{selected:false,eligible:true,entries:[],selection_sha256:null});
+114:  proof.unknown_routes.push({method,path:p});return json(response,{detail:{code:'fixture_route_not_closed',message:'封闭合成夹具未声明此路由'}},404);
+115: }
+116: async function shutdown(reason){
+117:  if(shutdownPromise)return shutdownPromise;
+118:  shutdownPromise=(async()=>{closing=true;proof.shutdown_reason=reason;clearTimeout(deadlineTimer);clearInterval(watchTimer);
+119:   await Promise.race([Promise.allSettled([...observations]),new Promise(resolve=>setTimeout(resolve,3000))]);
+120:   if(context){await context.close();proof.context_closed=true;}
+121:   if(server){server.closeAllConnections();await new Promise(resolve=>server.close(resolve));proof.server_closed=true;}
+122:   save();process.stdin.removeAllListeners();process.stdin.pause();process.stdin.unref?.();})();return shutdownPromise;
+123: }
+124: function installBarrier(){
+125:  const descriptor=Object.getOwnPropertyDescriptor(IDBTransaction.prototype,'oncomplete');

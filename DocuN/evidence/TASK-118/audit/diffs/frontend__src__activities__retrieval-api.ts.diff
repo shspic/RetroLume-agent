@@ -1,0 +1,24 @@
+--- first-pre/frontend/src/activities/retrieval-api.ts
++++ current/frontend/src/activities/retrieval-api.ts
+@@ -3,7 +3,7 @@
+ export type RetrievalRef={business_key:string;query_sha256:string;space_id:string;result_sha256:string};
+ export type RetrievalCommand={business_key:string;action:'source_index'|'query';expected_scope_revision:number;expected_domain_revision:number;query:string|null;confirmed:true};
+ export type RetrievalReceipt={business_key:string;action:string;status:string;current:boolean;terminal_disposition:string|null;error_code:string|null;retrieval_ref?:RetrievalRef};
+-export type RetrievalStatus={available:boolean;reason:string|null;ready?:boolean;fragments?:number;cached_fragments?:number;index_batches?:number;domain_revision?:number;purpose:string;reserve_cost_microunits:number};
++export type RetrievalStatus={available:boolean;reason:string|null;ready?:boolean;fragments?:number;cached_fragments?:number;index_batches?:number;domain_revision?:number;purpose:string;reserve_cost_microunits:number;remaining_requests:number;remaining_cost_microunits:number;remaining_running_seconds:number;query_then_model_reserve_microunits:number;window_reserve_seconds:number};
+ export type RetrievalChain={key:string;namespace:string;activity_id:string;owner:string;domain:'teaching'|'interview'|'index';domain_input:Record<string,unknown>;query:RetrievalCommand;domain_sent:boolean;receipt?:RetrievalReceipt;created_at:string};
+ const base=(aid:string)=>`/api/activities/${encodeURIComponent(aid)}/retrieval`;
+ export async function retrievalRequest<T>(token:string,aid:string,suffix:string,body?:unknown,guard=()=>true):Promise<T>{
+@@ -24,6 +24,12 @@
+   const live=()=>guard()&&row.namespace===dataNamespace();
+   if(!live()||row.owner!==owner||row.domain!==domain||row.domain_sent||row.query.expected_scope_revision!==scope||row.query.expected_domain_revision!==revision)throw new Error('原动作资格已变化，请只读核对');
+   await storeRetrievalChain(row);if(!live())throw new Error('页面身份已变化，未提交');
++  if(!recovered){
++    const preview=await retrievalRequest<RetrievalStatus>(token,aid,'/status',undefined,live);
++    if(!preview.available||![preview.remaining_requests,preview.remaining_cost_microunits,preview.remaining_running_seconds,preview.reserve_cost_microunits,preview.window_reserve_seconds].every(Number.isFinite))throw new Error('本步用途或额度尚不可核对，未发送。');
++    const needed=domain==='index'?(preview.index_batches??0):2;
++    if(preview.remaining_requests<needed||preview.remaining_cost_microunits<needed*preview.reserve_cost_microunits||preview.remaining_running_seconds<needed*preview.window_reserve_seconds)throw new Error('剩余额度不足以完成本步，查询和后续动作均未发送。');
++  }
+   const receipt=await retrievalRequest<RetrievalReceipt>(token,aid,recovered?`/commands/${row.query.business_key}`:'/commands',recovered?undefined:row.query,live);
+   if(receipt.business_key!==row.query.business_key)throw new Error('检索回执身份不同');row.receipt=receipt;await storeRetrievalChain(row);
+   if(!live()||(domain==='index'?!['received','cache_ready'].includes(receipt.terminal_disposition??''):receipt.terminal_disposition!=='received'||!receipt.current||!receipt.retrieval_ref))throw new Error('检索尚无当前合格结果，后续动作未发送；请按原键核对');

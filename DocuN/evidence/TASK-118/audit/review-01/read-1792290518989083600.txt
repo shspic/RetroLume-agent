@@ -1,0 +1,250 @@
+frontend/src/activities/teachingIntents.ts
+1: import {dataStorageKey} from "../data/context";
+2: // 教学意图摘要台账（localStorage，≤16 条/总 32768 字节）与
+3: // 完整待发正文库（原生 IndexedDB，≤16 草稿/总 262144 字节）。
+4: // 不迁改旧 retrolume.pending-intents.v1；本机草稿绝非教学历史。
+5: 
+6: const SUMMARY_KEY = () => dataStorageKey("retrolume.teaching-intents.v1");
+7: const DB_NAME = () => dataStorageKey("retrolume-teaching");
+8: const STORE = "drafts";
+9: const MAX_SUMMARY_ITEMS = 16;
+10: const MAX_SUMMARY_TOTAL_BYTES = 32768;
+11: const MAX_DRAFTS = 16;
+12: const MAX_DRAFT_TOTAL_BYTES = 262144;
+13: 
+14: const EDITOR_OWNER_KEY = () => dataStorageKey("retrolume.teaching-editor-owner.v1");
+15: let editorOwner: Promise<string | null> | null = null;
+16: 
+17: export function teachingEditorOwner(): Promise<string | null> {
+18:   if (editorOwner) return editorOwner.then(id=>{
+19:     // 会话存储身份被更换时不能把原链自动改绑给新owner。
+20:     try{return id&&sessionStorage.getItem(EDITOR_OWNER_KEY())===id?id:null;}catch{return null;}
+21:   });
+22:   editorOwner = new Promise(resolve => {
+23:     if (!navigator.locks || !crypto.randomUUID) { resolve(null); return; }
+24:     void (async () => {
+25:       let candidate: string;
+26:       try {
+27:         const saved=sessionStorage.getItem(EDITOR_OWNER_KEY());
+28:         candidate=saved && /^[0-9a-f-]{36}$/.test(saved) ? saved : crypto.randomUUID();
+29:       } catch { resolve(null); return; }
+30:       // A duplicated/opener tab can inherit sessionStorage. A live Web Lock makes
+31:       // the owner unique; reload keeps its id after the old document releases it.
+32:       for (let tries=0;tries<2;tries++) {
+33:         const id=candidate;
+34:         const acquired=await new Promise<boolean>(ready => {
+35:           void navigator.locks.request(`${EDITOR_OWNER_KEY()}:${id}`,{ifAvailable:true},async lock => {
+36:             if (!lock) { ready(false); return; }
+37:             try { sessionStorage.setItem(EDITOR_OWNER_KEY(),id); }
+38:             catch { ready(false); return; }
+39:             resolve(id);ready(true);
+40:             // Document destruction releases the lock; no server or business slot.
+41:             await new Promise<void>(() => {});
+42:           }).catch(()=>ready(false));
+43:         });
+44:         if (acquired) return;
+45:         candidate=crypto.randomUUID();
+46:       }
+47:       resolve(null);
+48:     })().catch(()=>resolve(null));
+49:   });
+50:   return editorOwner;
+51: }
+52: 
+53: export type TeachingIntentSummary = {
+54:   key: string;
+55:   action: string;
+56:   activity_id: string;
+57:   head_revision: number;
+58:   goal_version: number;
+59:   scope_revision: number;
+60:   exercise_id?: string;
+61:   answer_id?: string;
+62:   parent_id?: string;
+63:   request_sha?: string;
+64:   draft_id?: string;
+65:   created_at: string;
+66:   state: "pending" | "submitted" | "committed" | "unconfirmed" | "refused";
+67:   last_code?: string;
+68:   last_message?: string;
+69:   editor_owner_id?: string;
+70:   view_token?: string;
+71:   namespace?: string;
+72: };
+73: 
+74: function isSummary(value: unknown): value is TeachingIntentSummary {
+75:   if (typeof value !== "object" || value === null) return false;
+76:   const item = value as Record<string, unknown>;
+77:   return typeof item.key === "string" && typeof item.action === "string"
+78:     && typeof item.activity_id === "string" && typeof item.head_revision === "number"
+79:     && typeof item.goal_version === "number" && typeof item.scope_revision === "number"
+80:     && typeof item.created_at === "string" && typeof item.state === "string";
+81: }
+82: 
+83: export function loadTeachingIntents(): { ok: boolean; items: TeachingIntentSummary[] } {
+84:   try {
+85:     const raw = localStorage.getItem(SUMMARY_KEY());
+86:     if (raw === null) return { ok: true, items: [] };
+87:     const data = JSON.parse(raw) as unknown;
+88:     if (!Array.isArray(data)) return { ok: false, items: [] };
+89:     const items = data.filter(isSummary).slice(0, MAX_SUMMARY_ITEMS);
+90:     return { ok: items.length === data.length, items };
+91:   } catch {
+92:     return { ok: false, items: [] };
+93:   }
+94: }
+95: 
+96: function checkBudget(items: TeachingIntentSummary[]): boolean {
+97:   const serialized = JSON.stringify(items);
+98:   return items.length <= MAX_SUMMARY_ITEMS
+99:     && new TextEncoder().encode(serialized).length <= MAX_SUMMARY_TOTAL_BYTES;
+100: }
+101: 
+102: export function saveTeachingIntents(items: TeachingIntentSummary[]): boolean {
+103:   try {
+104:     if (!checkBudget(items)) return false;
+105:     localStorage.setItem(SUMMARY_KEY(), JSON.stringify(items));
+106:     return true;
+107:   } catch {
+108:     return false;
+109:   }
+110: }
+111: 
+112: async function mutateSummaries(change: (items: TeachingIntentSummary[]) => TeachingIntentSummary[],guard=()=>true): Promise<boolean> {
+113:   // 回环原生浏览器具有 Web Locks；缺失时保持零 POST，不退回竞态写入。
+114:   if (!navigator.locks) return false;
+115:   try {
+116:     const storageKey=SUMMARY_KEY();
+117:     return await navigator.locks.request(storageKey, () => {
+118:       if(!guard()||storageKey!==SUMMARY_KEY())return false;
+119:       const current = loadTeachingIntents();
+120:       return current.ok && saveTeachingIntents(change(current.items));
+121:     });
+122:   } catch { return false; }
+123: }
+124: 
+125: export function appendTeachingIntent(summary: TeachingIntentSummary,guard=()=>true): Promise<boolean> {
+126:   return mutateSummaries(items => [summary, ...items.filter(item => item.key !== summary.key)],guard);
+127: }
+128: 
+129: export function updateTeachingIntent(key: string, patch: Partial<TeachingIntentSummary>): Promise<boolean> {
+130:   return mutateSummaries(items => items.map(item => item.key === key ? { ...item, ...patch } : item));
+131: }
+132: 
+133: export function removeTeachingIntent(key: string): Promise<boolean> {
+134:   return mutateSummaries(items => items.filter(item => item.key !== key));
+135: }
+136: 
+137: // --- IndexedDB 草稿正文库 ---
+138: 
+139: export type TeachingDraft = {
+140:   draft_id: string;
+141:   activity_id: string;
+142:   goal_record_id?: string | null;
+143:   exercise_record_id?: string | null;
+144:   answer_record_id?: string | null;
+145:   path_record_id?: string | null;
+146:   node_id?: string | null;
+147:   head_revision?: number;
+148:   editor_owner_id?: string;
+149:   supersedes_answer_record_id?: string | null;
+150:   content: string;
+151:   created_at: string;
+152: };
+153: 
+154: function openDb(): Promise<IDBDatabase | null> {
+155:   return new Promise(resolve => {
+
+frontend/src/activities/teachingDrafts.ts
+1: // 教学命令的完整待发正文构造与本地 canonical 化。
+2: // 客户端按与服务端相同的规范对象计算 request 摘要，核对时重算比对。
+3: 
+4: import type { TeachingCommandInput } from "./teachingApi";
+5: 
+6: async function sha256Hex(text: string): Promise<string> {
+7:   const bytes = new TextEncoder().encode(text);
+8:   const digest = await crypto.subtle.digest("SHA-256", bytes);
+9:   return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, "0")).join("");
+10: }
+11: 
+12: function canonical(value: unknown): string {
+13:   const keys: string[] = [];
+14:   const collect = (item: unknown) => {
+15:     if (Array.isArray(item)) { item.forEach(collect); return; }
+16:     if (typeof item === "object" && item !== null) {
+17:       Object.keys(item as Record<string, unknown>).sort().forEach(k => keys.push(k));
+18:       Object.values(item as Record<string, unknown>).forEach(collect);
+19:     }
+20:   };
+21:   collect(value);
+22:   // 直接用 JSON.stringify 的稳定实现：服务端 sort_keys + 紧凑分隔符。
+23:   return stableStringify(value);
+24: }
+25: 
+26: function stableStringify(value: unknown): string {
+27:   if (value === null || typeof value !== "object") return JSON.stringify(value);
+28:   if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+29:   const entries = Object.entries(value as Record<string, unknown>)
+30:     .filter(([, v]) => v !== undefined)
+31:     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+32:   return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`).join(",")}}`;
+33: }
+34: 
+35: export async function buildTeachingCommand(
+36:   activityId: string,
+37:   input: Omit<TeachingCommandInput, "body"> & { body: Record<string, unknown> },
+38: ): Promise<{ command: TeachingCommandInput; request_sha256: string; request_body: string }> {
+39:   const requestBody = {
+40:     activity_id: activityId,
+41:     action: input.action,
+42:     expected_revision: input.expected_revision,
+43:     expected_goal_version: input.expected_goal_version,
+44:     expected_scope_revision: input.expected_scope_revision,
+45:     body: input.body,
+46:     ...(input.retrieval_ref?{retrieval_ref:input.retrieval_ref}:{}),
+47:   };
+48:   const request_body = canonical(requestBody);
+49:   const request_sha256 = await sha256Hex(request_body);
+50:   return { command: input, request_sha256, request_body };
+51: }
+52: 
+53: export function newTeachingKey(): string {
+54:   return crypto.randomUUID();
+55: }
+
+frontend/src/activities/teachingApi.ts
+87: };
+88: 
+89: export class TeachingApiError extends Error {
+90:   status: number;
+91:   code: string;
+92:   constructor(status: number, code: string, message: string) {
+93:     super(message);
+94:     this.status = status;
+95:     this.code = code;
+96:   }
+97: }
+98: 
+99: async function request(path: string, token: string, init: RequestInit = {}): Promise<Record<string, unknown>> {
+100:   let response: Response;
+101:   try {
+102:     response = await dataFetch(path, { ...init, headers: { ...init.headers, "X-RetroLume-Session": token } });
+103:   } catch {
+104:     throw new TeachingApiError(0, "network", "连接中断，结果未确认；刷新只重读，不会自动重发");
+105:   }
+106:   let data: unknown = null;
+107:   try { data = await response.json(); } catch { data = null; }
+108:   if (!response.ok) {
+109:     const detail = (data as { detail?: unknown } | null)?.detail;
+110:     const code = typeof detail === "object" && detail !== null
+111:       ? String((detail as { code?: string }).code ?? "http_error") : "http_error";
+112:     const message = typeof detail === "string" ? detail
+113:       : typeof detail === "object" && detail !== null
+114:         ? String((detail as { message?: string }).message ?? "请求未完成") : "请求未完成";
+115:     throw new TeachingApiError(response.status, code, message);
+116:   }
+117:   return data as Record<string, unknown>;
+118: }
+119: 
+
+FileNotFoundError: [Errno 2] No such file or directory: 'D:\\shspic\\project_NO3_RetroLume-agent\\frontend\\src\\data\\context.ts'

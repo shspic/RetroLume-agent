@@ -1,0 +1,11 @@
+--- before/backend/app/worker/one_tool.py
++++ final/backend/app/worker/one_tool.py
+@@ -54,7 +54,7 @@
+     validate_identity(context.activity_id, context.executor_id, call.operation_id, value["run_tag"])
+     if context.operation_id != call.operation_id or context.execution_generation < 1:
+         raise ValueError("worker identity mismatch")
+-    exact(value["ledger"], ("dsn", "connect_timeout_seconds", "statement_timeout_ms", "lock_timeout_ms"))
++    exact(value["ledger"], ("dsn", "connect_timeout_seconds", "statement_timeout_ms", "lock_timeout_ms") + (('data_guard',) if 'data_guard' in value['ledger'] else ()))
+     dsn = value["ledger"]["dsn"]
+     if type(dsn) is not str or not 1 <= len(dsn.encode("utf-8")) <= 4096 or "\0" in dsn:
+         raise ValueError("invalid ledger configuration")

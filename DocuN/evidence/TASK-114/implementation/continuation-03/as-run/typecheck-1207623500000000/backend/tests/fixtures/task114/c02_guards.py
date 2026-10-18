@@ -1,0 +1,57 @@
+"""真实normal新PG九原guard；逐条显式准入、非零命中、P0001函数上下文。
+
+管理员合成验证连接只用于负例，普通app权限和角色继承原已验证证据。
+"""
+import json
+from datetime import datetime,timezone,timedelta
+from uuid import uuid4
+from app.data_exit.contracts import canonical,digest
+
+
+def guards(rt,fixture,evidence):
+    import psycopg
+    from psycopg import sql
+    from psycopg.rows import dict_row
+    from psycopg.types.json import Jsonb
+    from c02_common import reference
+    _,creds=reference();aid=fixture['teaching_activity_id'];interview=fixture['interview_activity_id'];mid=fixture['memories']['valid']['memory_id']
+    cases=[]
+    def test(name,function):
+        with psycopg.connect(creds['admin_dsn'],connect_timeout=3,row_factory=dict_row) as conn:
+            conn.execute("SET LOCAL statement_timeout='10s'")
+            conn.execute('SELECT public.data_mutation_enter()')
+            mode=conn.execute('SELECT public.data_loading_allowed() AS loading,public.data_state() AS state').fetchone()
+            assert mode['state']['mode']=='normal' and not mode['loading']
+            try:function(conn)
+            except psycopg.Error as error:
+                assert error.sqlstate=='P0001' and name in error.diag.context,(name,error.sqlstate,error.diag.context)
+                cases.append({'guard':name,'sqlstate':error.sqlstate,'message_primary':error.diag.message_primary,'context':error.diag.context,
+                    'common_data_mutation_enter':'passed','mode':'normal','data_loading_allowed':False,'transaction':'rolled_back'})
+                conn.rollback()
+            else:raise AssertionError('guard未拒绝: '+name)
+    def update(conn,statement,args):
+        cursor=conn.execute(statement,args)
+        assert cursor.rowcount==1  # 未抛异常的零行UPDATE也不能签测试通过。
+    test('memory_head_guard',lambda c:update(c,'UPDATE public.learning_memories SET revision=revision+2 WHERE memory_id=%s',(mid,)))
+    test('memory_body_guard',lambda c:update(c,'UPDATE public.learning_memory_bodies SET body=body WHERE memory_id=%s AND version=1',(mid,)))
+    test('interview_command_guard',lambda c:update(c,'UPDATE public.interview_commands SET request_sha256=%s WHERE activity_id=%s AND business_key=(SELECT business_key FROM public.interview_commands WHERE activity_id=%s ORDER BY created_at LIMIT 1)',('b'*64,interview,interview)))
+    def clone_record(conn):
+        record=conn.execute('SELECT * FROM public.interview_records WHERE activity_id=%s ORDER BY seq LIMIT 1',(interview,)).fetchone();assert record
+        record=dict(record);record['record_id']=str(uuid4());record['seq']=100
+        body=json.loads(record['local_body']);body['schema']='C02 wrong binding';record['local_body']=canonical(body);record['body_sha256']=digest(record['local_body'])
+        names=list(record);values=[Jsonb(record[n]) if isinstance(record[n],dict) or n=='source_refs' else record[n] for n in names]
+        conn.execute(sql.SQL('INSERT INTO public.interview_records({}) VALUES({})').format(sql.SQL(',').join(map(sql.Identifier,names)),sql.SQL(',').join(sql.Placeholder() for _ in names)),values)
+    test('interview_record_insert_guard',clone_record)
+    test('interview_head_guard',lambda c:update(c,'UPDATE public.interview_heads SET revision=revision+2 WHERE activity_id=%s',(interview,)))
+    def html_command(conn):
+        key=str(uuid4());body=canonical({'schema':'C02 invalid binding'});renderer=conn.execute('SELECT public.html_expected_renderer() AS value').fetchone()['value']
+        conn.execute("INSERT INTO public.html_commands(activity_id,business_key,operation_id,request_body,request_sha256,context_body,context_sha256,renderer_sha256,scope_revision,parent_kind,parent_locator,parent_sha256) VALUES(%s,%s,%s,'{}',%s,%s,%s,%s,1,'learning','c02.invalid',%s)",(aid,key,'html11m.'+key.replace('-',''),digest('{}'),body,digest(body),renderer,'a'*64))
+    test('html_command_guard',html_command)
+    test('html_artifact_insert_guard',lambda c:c.execute("INSERT INTO public.html_artifacts(artifact_id,activity_id,business_key,operation_id,artifact_body,artifact_sha256,description_sha256,renderer_sha256,execution_package_sha256,body_sha256) VALUES(%s,%s,%s,'c02.invalid','{}',%s,%s,%s,%s,%s)",(str(uuid4()),aid,str(uuid4()),*(['a'*64]*5))))
+    test('html_preview_budget_guard',lambda c:c.execute('INSERT INTO public.html_preview_budgets(activity_id,config_sha256,starts_used) VALUES(%s,%s,1)',(aid,'a'*64)))
+    test('html_preview_session_guard',lambda c:c.execute("""INSERT INTO public.html_preview_sessions(preview_id,activity_id,artifact_id,start_key,generation,artifact_sha256,owner_id,owner_key_sha256,control_key_sha256,boot_id,nonce,image_id,reserve_seconds,t0_ns,deadline_ns,deadline_at,state)
+      VALUES(%s,%s,%s,%s,1,%s,%s,%s,%s,%s,%s,%s,30,1,30000000001,%s,'ready')""",
+      (str(uuid4()),aid,str(uuid4()),str(uuid4()),'a'*64,str(uuid4()),'b'*64,'c'*64,str(uuid4()),'d'*64,'sha256:'+'e'*64,datetime.now(timezone.utc)+timedelta(seconds=30))))
+    assert len(cases)==9
+    evidence.save('09-online-nine-guards',{'layer':'actual new PG normal mode, permitted SQL and actual trigger rejections; not frozen/42501/zero-row shortcut',
+        'connection_role':'new synthetic admin; no app grants changed','cases':cases,'Native_preview_provider':0})

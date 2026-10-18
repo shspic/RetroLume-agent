@@ -1,0 +1,409 @@
+{
+  "at": "2026-10-08",
+  "commands": [
+    {
+      "label": "固定许可与输入结构",
+      "wall": 0.5440202,
+      "exit": 0
+    },
+    {
+      "label": "Playwright技能及批准合同导航",
+      "wall": 0.5429598,
+      "exit": 0
+    },
+    {
+      "label": "初始对象和规则核对",
+      "command": "$env:PYTHONIOENCODING='utf-8'; $env:PYTHONDONTWRITEBYTECODE='1'\n@'\nimport sys\nsys.path.insert(0,r'D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-107/audit')\nfrom metadata import *\nr=load(OWN/'receipt.json')\nif r['first_read_mapping_conservative_seconds']==60:\n r['start_ns']-=60*10**9;r['deadline_ns']-=60*10**9;r['first_read_mapping_conservative_seconds']=120;r['clock_mapping_correction']='observed UTC到登记77秒，原扣60不足；仅将起点/截止提前60秒，不延后许可';save('receipt.json',r)\ncheck_deadline()\nj=load('DocuN/evidence/TASK-107/orchestration-setup-20261008/audit-input.json');rows=[]\nfor p,h in j['current_files'].items():\n cur=identity(p);post=identity(path(j['current_snapshot'])/p);rows.append({'current':cur,'post':post,'expected_sha256':h,'match':cur['sha256']==post['sha256']==h})\nfor r in j['rules']:\n cur=identity(r['absolute_path']);rows.append({'current':cur,'expected_sha256':r['sha256'],'match':cur['sha256']==r['sha256']})\nfor k in ['contract','approved_limits','execution_contract']:\n r=j[k];cur=identity(r['path']);rows.append({'current':cur,'expected_sha256':r['sha256'],'match':cur['sha256']==r['sha256'] and cur['bytes']==r['bytes']})\nsave('initial-identity-check.json',{'at':now(),'input':identity('DocuN/evidence/TASK-107/orchestration-setup-20261008/audit-input.json'),'checks':rows,'all_match':all(x['match'] for x in rows),'current_objects':363})\nprint('INITIAL',len(rows),all(x['match'] for x in rows));print('MISMATCHES',[x for x in rows if not x['match']]);print('PRODUCTION_SCOPE',j['all_G10_production_actual_scope']);print('RAW_NAV',load(j['raw_navigation']))\n'@ | python -",
+      "wall": 0.7776468,
+      "exit": 0
+    },
+    {
+      "label": "批准合同A-B与读澄清",
+      "command": "$i=0; Get-Content -LiteralPath 'DocuN/results/TASK-105-result.md' -Encoding utf8 | ForEach-Object { $i++; if($i -le 195){ '{0,4} {1}' -f $i,$_ } }; Get-Content -LiteralPath 'DocuN/results/TASK-105-work-decision.md' -Encoding utf8",
+      "wall": 0.5925311,
+      "exit": 0
+    },
+    {
+      "label": "需求及工具可用性",
+      "command": "$i=0; Get-Content -LiteralPath 'DocuS/最终需求文档.MD' -Encoding utf8 | ForEach-Object { $i++; if($i -ge 63 -and $i -le 124){ '{0,4} {1}' -f $i,$_ } }; Get-Command npx,node,python,docker -ErrorAction SilentlyContinue | Select-Object Name,Source; $i=0; Get-Content -LiteralPath 'DocuS/执行动态文档.MD' -Encoding utf8 | ForEach-Object { $i++; if($i -le 10){ '{0,4} {1}' -f $i,$_ } }",
+      "wall": 0.7328813,
+      "exit": 0
+    },
+    {
+      "label": "批准合同A2至B2与106续作边界",
+      "command": "定向Get-Content TASK-105-result.md 33–104与TASK-106.md 1–115",
+      "wall": 0.6171721,
+      "exit": 0
+    },
+    {
+      "label": "批准合同B3动作/launch/事务",
+      "command": "Get-Content TASK-105-result.md 103–154",
+      "wall": 0.4056021,
+      "exit": 0
+    },
+    {
+      "label": "批准B6配置/公开接口和生产文件范围",
+      "command": "Get-Content TASK105 155–197与stdlib源文件行数/导航结构",
+      "wall": 0.4859074,
+      "exit": 0
+    },
+    {
+      "label": "批准合同C完整增量及D执行范围",
+      "command": "Get-Content TASK105 198–271",
+      "wall": 0.3689619,
+      "exit": 0
+    },
+    {
+      "label": "批准V01–24及手工轨迹/FR011–012验收",
+      "command": "Get-Content TASK105 272–末与最终需求97/98",
+      "wall": 0.3989255,
+      "exit": 0
+    },
+    {
+      "label": "面试工作区完整前半异步链",
+      "command": "Get-Content InterviewWorkspace.tsx 1–103",
+      "wall": 0.3937685,
+      "exit": 0
+    },
+    {
+      "label": "工作区reconcile/历史修订/全部可观察UI",
+      "command": "Get-Content InterviewWorkspace.tsx 104–末",
+      "wall": 0.4061138,
+      "exit": 0
+    },
+    {
+      "label": "完整前端API/意图/draft/引用及直接Must",
+      "command": "Get-Content interviewApi/interviewIntents/interviewDrafts/InterviewCitations与rg FR011/012",
+      "wall": 0.4972538,
+      "exit": 0
+    },
+    {
+      "label": "InterviewService/API完整调用与取消收尾",
+      "command": "Get-Content interview/service.py与api.py全文",
+      "wall": 0.4469064,
+      "exit": 0
+    },
+    {
+      "label": "全G10前后链与真实函数定位",
+      "command": "纯stdlib difflib/AST保存28产品范围与12修改生产diff",
+      "wall": 0.7923111,
+      "exit": 0
+    },
+    {
+      "label": "011全文",
+      "command": "$i=0; Get-Content -LiteralPath 'backend/migrations/011_text_interview.sql' -Encoding utf8 | ForEach-Object { $i++; '{0,4} {1}' -f $i,$_ }",
+      "wall": 0.5362114,
+      "exit": 0
+    },
+    {
+      "label": "interview严格contracts全文",
+      "command": "$i=0; Get-Content -LiteralPath 'backend/app/interview/contracts.py' -Encoding utf8 | ForEach-Object { $i++; '{0,4} {1}' -f $i,$_ }",
+      "wall": 0.5395235,
+      "exit": 0
+    },
+    {
+      "label": "仓储S1/domain/锁序与幂等",
+      "command": "$i=0; Get-Content -LiteralPath 'backend/app/activities/interview_repository.py' -Encoding utf8 | ForEach-Object { $i++; if($i -le 228){ '{0,4} {1}' -f $i,$_ } }",
+      "wall": 0.5270148,
+      "exit": 0
+    },
+    {
+      "label": "policy/证据/prompt/views全文",
+      "command": "$files=@('backend/app/interview/policy.py','backend/app/interview/evidence.py','backend/app/interview/prompt.py','backend/app/interview/views.py'); foreach($file in $files){ Write-Output $file; $i=0; Get-Content -LiteralPath $file -Encoding utf8 | ForEach-Object { $i++; '{0,4} {1}' -f $i,$_ } }",
+      "wall": 0.4817311,
+      "exit": 0
+    },
+    {
+      "label": "九动作事务/历史递归/冻结核验",
+      "command": "Get-Content interview_repository.py 229–394",
+      "wall": 0.4329785,
+      "exit": 0
+    },
+    {
+      "label": "受信接受/claim/原子hook/取消diagnostic",
+      "command": "$i=0; Get-Content -LiteralPath 'backend/app/activities/interview_repository.py' -Encoding utf8 | ForEach-Object { $i++; if($i -ge 396 -and $i -le 562){ '{0,4} {1}' -f $i,$_ } }",
+      "wall": 0.4704146,
+      "exit": 0
+    },
+    {
+      "label": "单SQL快照/metadata/各读函数全文",
+      "command": "$i=0; Get-Content -LiteralPath 'backend/app/activities/interview_repository.py' -Encoding utf8 | ForEach-Object { $i++; if($i -ge 564){ '{0,4} {1}' -f $i,$_ } }",
+      "wall": 0.4221232,
+      "exit": 0
+    },
+    {
+      "label": "按文件分开完整G10实际diff",
+      "command": "stdlib difflib写本卡audit/diff下12份只读审计patch",
+      "wall": 0.4774497,
+      "exit": 0
+    },
+    {
+      "label": "ledger完整实际diff",
+      "command": "Get-Content -LiteralPath 'DocuN/evidence/TASK-107/audit/diff/backend__app__activities__repository.py.patch' -Encoding utf8",
+      "wall": 0.5044793,
+      "exit": 0
+    },
+    {
+      "label": "消费guard/carrier/gateway实际diff",
+      "command": "$files=@('backend__app__activities__service.py.patch','backend__app__activities__api.py.patch','backend__app__activities__teaching_repository.py.patch','backend__app__learning__service.py.patch','backend__app__capabilities__contracts.py.patch','backend__app__capabilities__gateway.py.patch'); foreach($name in $files){ Write-Output $name; Get-Content -LiteralPath ('DocuN/evidence/TASK-107/audit/diff/'+$name) -Encoding utf8 }",
+      "wall": 0.6057742,
+      "exit": 0
+    },
+    {
+      "label": "剩余配置/router/活动与导航完整diff",
+      "command": "Get-Content五份剩余实际diff及interview-workspace.css",
+      "wall": 0.6365505,
+      "exit": 0
+    },
+    {
+      "label": "直接ledger事务/native关门和同事务挂钩上下文",
+      "command": "$i=0; Get-Content -LiteralPath 'backend/app/activities/repository.py' -Encoding utf8 | ForEach-Object { $i++; if(($i -ge 309 -and $i -le 356) -or ($i -ge 1468 -and $i -le 1575) -or ($i -ge 1690 -and $i -le 1730)){ '{0,4} {1}' -f $i,$_ } }",
+      "wall": 0.554299,
+      "exit": 0
+    },
+    {
+      "label": "直接入口配置/父面板刷新上下文及本地取消语义",
+      "command": "$i=0; Get-Content -LiteralPath 'frontend/src/activities/ActivityWorkspace.tsx' -Encoding utf8 | ForEach-Object { $i++; if(($i -ge 243 -and $i -le 338) -or ($i -ge 822 -and $i -le 853)){ '{0,4} {1}' -f $i,$_ } }; rg -n 'class CancelScope|def __enter__|def __exit__|_deliver_cancellation|_effectively_cancelled|shield' backend/.venv/Lib/site-packages/anyio/_backends/_asyncio.py | Select-Object -First 30",
+      "wall": 0.4967784,
+      "exit": 0
+    },
+    {
+      "label": "实际AnyIO屏蔽语义和gateway提交确认",
+      "command": "定向读取已安装AnyIO 552–626与gateway/config直接调用段",
+      "wall": 0.4831904,
+      "exit": 0
+    },
+    {
+      "label": "源码预判后既有原件导航及seed",
+      "command": "纯stdlib结构定位run-index/matrix/session-close及原browser-seed",
+      "wall": 0.405163,
+      "exit": 0
+    },
+    {
+      "label": "原执行/矩阵方法导航与缓存夹具定位",
+      "command": "stdlib仅提取run-index.runs/matrix.matrix和必要fixture/config/oracle文件名",
+      "wall": 0.7783663,
+      "exit": 0
+    },
+    {
+      "label": "限定执行字段与旧证据文件清单",
+      "command": "仅提取run基本身份/24方法导航/五重点组文件名，不输出producer message或源manifest",
+      "wall": 0.4390521,
+      "exit": 0
+    },
+    {
+      "label": "必要底层fixture代码只读参考",
+      "command": "$files=@('backend/tests/fixtures/task106/c01/model.py','backend/tests/fixtures/task106/c01/server.py','backend/tests/fixtures/task106/c01/harness.py','backend/tests/fixtures/task106/c01/resources.py','DocuN/evidence/TASK-106/continuation-01/synthetic/activity-normal.json'); foreach($file in $files){ Write-Output $file; $i=0; Get-Content -LiteralPath $file -Encoding utf8 | ForEach-Object { $i++; '{0,4} {1}' -f $i,$_ } }",
+      "wall": 0.5393903,
+      "exit": 0
+    },
+    {
+      "label": "主证据数据结构不取通过答案",
+      "command": "$env:PYTHONIOENCODING='utf-8'; $env:PYTHONDONTWRITEBYTECODE='1'\n@'\nimport sys\nsys.path.insert(0,r'D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-107/audit')\nfrom metadata import *\nrels=['P01-core-remaining-PG-HTTP-native/positive-two-directions.json','P01-core-remaining-PG-HTTP-native/historical-recursive-correction.json','P01-core-remaining-PG-HTTP-native/samples-oracle.json','P04-resume-real-cancel-and-config/exact-cancellation-cases.json','P04-resume-real-cancel-and-config/scope-before-admit.json','P05-M6-selected-valid-to-unreliable/M6-unreliable-new-domain-refusal.json','P01-core-remaining-PG-HTTP-native/pre-source.json']\nfor rel in rels:\n p='DocuN/evidence/TASK-106/continuation-01/runs/'+rel;v=load(p)\n print('RAW_STRUCT',rel,{'type':type(v).__name__,'length':len(v),'keys':list(v)[:12] if isinstance(v,dict) else None,'first_fields':list(v[0])[:12] if isinstance(v,list) and v and isinstance(v[0],dict) else None})\n if isinstance(v,dict):print('VALUE_SHAPES',{k:({'type':type(x).__name__,'length':len(x),'keys':list(x)[:6] if isinstance(x,dict) else None} if isinstance(x,(dict,list)) else type(x).__name__) for k,x in v.items() if k not in ['source_manifest']})\nfor p in ['DocuN/evidence/TASK-106/continuation-01/final/run-index.json']:\n v=load(p);print('C01_RUN_ROWS',[{k:x.get(k) for k in ['name','category','status','elapsed_seconds','start_ns','end_ns']} for x in v['runs']])\n'@ | python -",
+      "wall": 0.4770622,
+      "exit": 0
+    },
+    {
+      "label": "seed期限及bootstrap单项读取必要事实",
+      "command": "Get-Content旧harness35–45/resources30–50与P06 checkpoint限定budget字段",
+      "wall": 0.6009474,
+      "exit": 0
+    },
+    {
+      "label": "冻结原句/oracle与真实正向T/H/历史抑制",
+      "command": "取samples原文、positive第一反馈/quotes、递归修订具体record和head",
+      "wall": 0.4408035,
+      "exit": 0
+    },
+    {
+      "label": "T/H原句坐标独立SHA配对与取消具体状态",
+      "command": "纯stdlib原文slice/SHA + 五取消前后op/007/receipt状态抽取",
+      "wall": 0.5062699,
+      "exit": 0
+    },
+    {
+      "label": "最低传输/观察边界和真实Playwright缓存接口",
+      "command": "只读旧runtime/bootstrap/samples及mjs导入头与真实transport签名",
+      "wall": 0.4902888,
+      "exit": 0
+    },
+    {
+      "label": "三精确CID/五端口只读现状与固定剩余",
+      "command": "docker inspect指定3CID并仅输出无Env字段；loopback监听只读检查",
+      "wall": 1.8111853999999998,
+      "exit": 0
+    },
+    {
+      "label": "31旧执行实际版本及受影响函数适用性",
+      "command": "python -B DocuN/evidence/TASK-107/audit/old_version_binding.py",
+      "wall": 5.3996769,
+      "exit": 0
+    },
+    {
+      "label": "旧源原件实际存放点与现有浏览器缓存",
+      "command": "只读三旧run目录层级、final目录和现有playwright/Chromium缓存路径",
+      "wall": 0.47361,
+      "exit": 0
+    },
+    {
+      "label": "107静态缓存/底层Transport及Env Settings核对",
+      "command": "读取现有Playwright package和原Transport接口/main Settings，未导入或运行产品",
+      "wall": 0.6415252,
+      "exit": 0
+    },
+    {
+      "label": "107自己的首次完整静态夹具离线批",
+      "command": "backend/.venv/Scripts/python.exe -X utf8 -B -m tests.fixtures.task107.offline",
+      "wall": 0.9847739,
+      "exit": 0,
+      "category": "offline"
+    },
+    {
+      "label": "R01一个实际107会话最后三组UI",
+      "command": "backend/.venv/Scripts/python.exe -X utf8 -B -m tests.fixtures.task107.run",
+      "wall": 10.0103067,
+      "session_id": 8812,
+      "category": "real"
+    },
+    {
+      "label": "R01自己的FAIL/真实POST与收尾原件定位",
+      "command": "只读107 R01浏览器error/POST、PG前后、cleanup和已脱敏APIstderr",
+      "wall": 0.7247033,
+      "exit": 1
+    },
+    {
+      "label": "R01收尾异常真实原因核对",
+      "command": "只读cleanup-unconfirmed/result/PG旧行原件，保留metadata缺文件错误",
+      "wall": 0.5622823,
+      "exit": 0
+    },
+    {
+      "label": "R01出生身份和收尾现状只读核证",
+      "command": "仅R01已登记自有PID出生状态/3端口和精确pg1State，不停止",
+      "wall": 1.2229882,
+      "exit": 0
+    },
+    {
+      "label": "R01补完整收尾与有据夹具修正",
+      "command": "只停止精确pg1、核原自有PID及五端口，保留R01失败",
+      "wall": 4.1060578,
+      "exit": 0,
+      "category": "cleanup"
+    },
+    {
+      "label": "R01分页/退出竞态有据修正及第二夹具离线批",
+      "command": "保留第一角色重置原件；只复检107新改夹具与mjs语法 O02",
+      "wall": 0.7953301,
+      "exit": 0,
+      "category": "offline"
+    },
+    {
+      "label": "R02有据修正续作、复用已创建107场次",
+      "command": "backend/.venv/Scripts/python.exe -X utf8 -B -m tests.fixtures.task107.run",
+      "wall": 10.0099871,
+      "session_id": 92981,
+      "category": "real"
+    },
+    {
+      "label": "R02具体失败和已保存native/领域事实定位",
+      "command": "只读本卡R02 error/POST/PG head和command/收尾原件，不重发",
+      "wall": 0.4816987,
+      "exit": 0
+    },
+    {
+      "label": "R02公开UI等待条件与真实原生终态",
+      "command": "只读R02 failure DOM/实际network尾/cleanup和native-session见证",
+      "wall": 0.3371706,
+      "exit": 0
+    },
+    {
+      "label": "R02辨明空回答禁写正常、修夹具并保存第二角色原件 O03",
+      "command": "只复检新harness，问题phase用结束按钮判非busy，续作已COMMIT第一問，不重新ask/start",
+      "wall": 0.6361947,
+      "exit": 0,
+      "category": "offline"
+    },
+    {
+      "label": "R03最后有据夹具续作，只读确认后继承第一问",
+      "command": "backend/.venv/Scripts/python.exe -X utf8 -B -m tests.fixtures.task107.run",
+      "wall": 10.0103444,
+      "session_id": 55594,
+      "category": "real"
+    },
+    {
+      "label": "R03真实五方法及收尾状态分层读取",
+      "command": "只读Root/browser实际结论、PG旧行对照和cleanup异常，不追加运行",
+      "wall": 0.4162541,
+      "exit": 0
+    },
+    {
+      "label": "R03资源与原出生PID补收尾",
+      "command": "原自有PID只读再核均停；仅精确pg1 stop；三CID/五端口全部停止见证",
+      "wall": 2.8497333,
+      "exit": 0,
+      "category": "cleanup"
+    },
+    {
+      "label": "只读旧实际源码原件可用性及V01–24原件定位",
+      "command": "hash解析31 run缺exact asrun的可用原字节；不伪造旧源，并只列必须原件名字/类型",
+      "wall": 0.8481746,
+      "exit": 0
+    },
+    {
+      "label": "V08/09/16/17/18/20/24关键原始数据定位",
+      "command": "仅已保存原件结构与确定拒绝码/旧行hash/物理容量字段，不采新测试",
+      "wall": 0.4111379,
+      "exit": 0
+    },
+    {
+      "label": "对自身原件独立PG/hash/view/草稿/Native配对",
+      "command": "stdlib执行UI-independent-binding.py，未导入产品/fixture、未开启资源或测试",
+      "wall": 0.7797425,
+      "exit": 0
+    },
+    {
+      "label": "旧跨消费/容量/权限/concurrency与当前011真实定义独立核对",
+      "command": "只读原raw拒绝码、真实S1函数prosrc与SQL源码，不采新运行",
+      "wall": 0.3326261,
+      "exit": 1
+    },
+    {
+      "label": "修正probe结构展示后仅补未完成S1/权限/并发原件核证",
+      "command": "stdlib regex当前5函数body/live比较及原probe/ACL/非空升级/concurrency字段",
+      "wall": 0.342632,
+      "exit": 0
+    },
+    {
+      "label": "取消五实际层次/Probe深度/原预算和引用截止原件",
+      "command": "raw during/after/GET证据与引用前后/未发送重试结构，不以summary PASS代替",
+      "wall": 0.4107094,
+      "exit": 0
+    },
+    {
+      "label": "旧原子回滚/合法重试/范围/引用截止/记忆拒绝独立字段",
+      "command": "只读七份必要raw对象，比较前后/读取结果，保存范围分层原件",
+      "wall": 0.4008646,
+      "exit": 0
+    },
+    {
+      "label": "最终已有截图/固定预算及原子业务回滚字段",
+      "wall": 0.3287803,
+      "exit": 0
+    },
+    {
+      "label": "独立24方法适用性矩阵与57原件可读hash",
+      "command": "stdlib保存每V实际方法/原件/范围/层次，不重运行旧测试",
+      "wall": 0.5048967,
+      "exit": 0
+    }
+  ],
+  "measured_metadata_command_wall_seconds": 36.279482699999996,
+  "early_known_read_seconds": 0.8362731,
+  "unmeasured_scope": "模型读审、夹具书写、显示及记录没有独立逐秒拆分；主动计时完整，metadata另保守分摊，不伪称精确",
+  "metadata_failures": [
+    "多次过宽输出截断，补未显示范围",
+    "R01原cleanup.json未保存而读缺文件；改核实际cleanup-unconfirmed及补收尾",
+    "probe原件为detail不是receipt，展示status KeyError；按record.probe_depth和真实invalid receipt修正"
+  ],
+  "real_failures_preserved": true
+}

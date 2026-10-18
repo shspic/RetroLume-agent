@@ -1,0 +1,9 @@
+{
+  "kind": "sql",
+  "pid": 28032,
+  "value": {
+    "tag": "memory-detail",
+    "sql": "SELECT c.relname,t.tgname,t.tgenabled,pg_get_triggerdef(t.oid)\n            FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace\n            WHERE n.nspname='public' AND c.relname=ANY(%s) AND NOT t.tgisinternal\n            AND t.tgname IN('memory_binding_immutable','memory_binding_shape','memory_choice_immutable','memory_choices_shape',\n             'memory_head_identity','memory_body_integrity','memory_command_immutable','memory_dependencies_shape',\n             'memory_dependency_immutable','memory_revision_immutable','memory_revision_shape') ORDER BY c.relname,t.tgname",
+    "arguments_saved": false
+  }
+}

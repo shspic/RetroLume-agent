@@ -1,0 +1,80 @@
+{
+  "schema": "retrolume.design.task119.hand-traces.v1",
+  "executed": false,
+  "count": 4,
+  "traces": [
+    {
+      "id": "T1",
+      "topic": "two_dependent_model_calls",
+      "activity": "01800000-0000-4000-8000-000000000001",
+      "keys": [
+        "K-Qplan",
+        "K-plan",
+        "K-Qexercise",
+        "K-exercise"
+      ],
+      "approvals": [
+        "AP-Qplan",
+        "AP-M1",
+        "AP-Qexercise",
+        "AP-M2"
+      ],
+      "parents": [
+        "frozen_goal_and_N",
+        "received_Qplan",
+        "received_007_and_path_M1",
+        "received_Qexercise_and_path_M1"
+      ],
+      "model_sends": 2,
+      "embedding_sends": 2,
+      "requests_reserved": 4,
+      "cost_reserved_microunits": 1000000
+    },
+    {
+      "id": "T2",
+      "topic": "result_COMMIT_lost_ACK_reopen",
+      "original_key": "K-plan",
+      "original_approval": "AP-M1",
+      "operations_before_after_same": true,
+      "model_sends_before_after": [
+        1,
+        1
+      ],
+      "total_requests_including_original_query": 2,
+      "cost_reserved_microunits": 500000,
+      "next_only_after": "GET_same_007_and_business_record_committed_current",
+      "unknown_or_missing_parent": "read_only_no_derivation"
+    },
+    {
+      "id": "T3",
+      "topic": "approval_wait_scope_memory_or_unapproved_answer_change",
+      "original_key": "K-review",
+      "original_prepared": "P3",
+      "waiting_operation_absent": true,
+      "after_change": "invalidated_cannot_approve_personal_text",
+      "new_sends": 0,
+      "new_reserved_microunits": 0,
+      "late_after_admit": "keep_250000_NOT_SENT_if_proven_zero_send_else_UNKNOWN"
+    },
+    {
+      "id": "T4",
+      "topic": "cross_provider_near_global_limit",
+      "keys": [
+        "K-model-A1",
+        "K-embedding-A2"
+      ],
+      "approvals": [
+        "AP-C1",
+        "AP-C2"
+      ],
+      "initial_pg_requests": 79,
+      "initial_pg_cost_microunits": 19750000,
+      "maximum_new_COMMIT": 1,
+      "maximum_new_sends": 1,
+      "maximum_final_pg_requests": 80,
+      "maximum_final_pg_cost_microunits": 20000000,
+      "timeout_or_unknown": "no_refund_on_reopen",
+      "separate_cost_only_79_20M_fixture": "unreachable_under_fixed_250000_per_request_do_not_fabricate"
+    }
+  ]
+}

@@ -1,0 +1,84 @@
+--- C05-pre/backend/app/preview/host_job.py
++++ backend/app/preview/host_job.py
+@@ -12,6 +12,7 @@
+ import msvcrt
+ from app.worker.windows_job import _kernel,_EXTENDED_LIMIT,_BASIC_ACCOUNTING
+ from .process import OwnershipUnknown,birth
++from .description import digest
+ 
+ _local=threading.local()
+ 
+@@ -65,6 +66,29 @@
+         data=_BASIC_ACCOUNTING()
+         if not self.api.QueryInformationJobObject(self.handle,1,ctypes.byref(data),ctypes.sizeof(data),None):raise OwnershipUnknown("host_job_query")
+         return int(data.ActiveProcesses)
++    def premise(self,owner):
++        """读取实际限制/非继承句柄/成员；取证不终止任何进程。"""
++        current=birth(owner["pid"])
++        if current.get("state")!="running" or current.get("birth")!=owner["birth"]:raise OwnershipUnknown("job_owner_birth")
++        limits=_EXTENDED_LIMIT()
++        if not self.api.QueryInformationJobObject(self.handle,9,ctypes.byref(limits),ctypes.sizeof(limits),None):raise OwnershipUnknown("job_limits_query")
++        flags=int(limits.BasicLimitInformation.LimitFlags)
++        api=ctypes.WinDLL("kernel32",use_last_error=True)
++        api.GetHandleInformation.argtypes=(wintypes.HANDLE,ctypes.POINTER(wintypes.DWORD));api.GetHandleInformation.restype=wintypes.BOOL
++        inherited=wintypes.DWORD()
++        if not api.GetHandleInformation(self.handle,ctypes.byref(inherited)):raise OwnershipUnknown("job_handle_flags")
++        class Members(ctypes.Structure):
++            _fields_=[("assigned",wintypes.DWORD),("listed",wintypes.DWORD),("pids",ctypes.c_size_t*4)]
++        members=Members()
++        if not self.api.QueryInformationJobObject(self.handle,3,ctypes.byref(members),ctypes.sizeof(members),None) or members.listed>4:raise OwnershipUnknown("job_members_query")
++        rows=[]
++        for pid in list(members.pids)[:members.listed]:
++            row=birth(int(pid))
++            if row.get("state")!="running":raise OwnershipUnknown("job_member_birth")
++            rows.append({"pid":int(pid),"birth":row["birth"]})
++        if not flags&0x2000 or flags&(0x800|0x1000) or inherited.value&1:raise OwnershipUnknown("job_private_limits")
++        return {"name":self.name,"owner":owner,"limit_flags":flags,"handle_noninheritable":True,
++          "kill_on_close":True,"breakaway_allowed":False,"members":rows,"observed_ns":time.monotonic_ns(),"actual_query":True}
+     def terminate(self):
+         if self.active() and not self.api.TerminateJobObject(self.handle,1):raise OwnershipUnknown("host_job_terminate")
+     def finish(self,seconds=2):
+@@ -77,6 +101,43 @@
+         if self.handle:self.api.CloseHandle(self.handle);self.handle=None
+     def __enter__(self):return self
+     def __exit__(self,*_):self.close()
++
++
++def instance_ended(owned):
++    current=birth(owned["pid"])
++    if current.get("state")=="exited" or current.get("state")=="running" and current.get("birth")!=owned["birth"]:return current
++    raise OwnershipUnknown("job_owned_instance_unconfirmed")
++
++
++def observe_job_end(name,premise):
++    """只查询零任务或准确已销毁；不存在绝不填ActiveProcesses=0。"""
++    if (not isinstance(premise,dict) or premise.get("name")!=name or premise.get("actual_query") is not True
++        or not premise.get("limit_flags",0)&0x2000 or premise["limit_flags"]&(0x800|0x1000)
++        or premise.get("handle_noninheritable") is not True or premise.get("kill_on_close") is not True
++        or premise.get("breakaway_allowed") is not False or not premise.get("owner")):
++        raise OwnershipUnknown("job_end_premise_missing")
++    ended=[{"instance":row,"current":instance_ended(row)} for row in [premise["owner"],*premise["members"]]]
++    api=_kernel();ctypes.set_last_error(0);handle=api.OpenJobObjectW(0x0004,False,name);error=ctypes.get_last_error()
++    if handle:
++        try:
++            account=_BASIC_ACCOUNTING()
++            if not api.QueryInformationJobObject(handle,1,ctypes.byref(account),ctypes.sizeof(account),None):raise OwnershipUnknown("job_end_query_error")
++            if account.ActiveProcesses:raise OwnershipUnknown("job_end_still_active")
++            return {"name":name,"termination_evidence":"queried_zero","ActiveProcesses":0,"actual_query":True,
++              "premise_sha256":digest(premise),"instances":ended,"at_ns":time.monotonic_ns(),"observer_terminated":False}
++        finally:api.CloseHandle(handle)
++    if error!=2:raise OwnershipUnknown("job_end_open_error_"+str(error))
++    return {"name":name,"termination_evidence":"job_destroyed","open_error":2,"premise_sha256":digest(premise),
++      "instances":ended,"at_ns":time.monotonic_ns(),"observer_terminated":False,"mechanism":"last_private_handle_kill_on_close"}
++
++
++def valid_job_end(proof,name,premise=None):
++    if not isinstance(proof,dict) or proof.get("name")!=name:return False
++    if proof.get("ActiveProcesses")==0:return True
++    return (proof.get("termination_evidence")=="job_destroyed" and "ActiveProcesses" not in proof and proof.get("open_error")==2
++      and premise is not None and proof.get("premise_sha256")==digest(premise) and proof.get("observer_terminated") is False
++      and all(r.get("current",{}).get("state")=="exited" or r.get("current",{}).get("state")=="running" and r["current"].get("birth")!=r["instance"]["birth"] for r in proof.get("instances",[]))
++      and len(proof.get("instances",[]))==1+len(premise.get("members",[])))
+ 
+ 
+ def job_name(preview_id,nonce,role):

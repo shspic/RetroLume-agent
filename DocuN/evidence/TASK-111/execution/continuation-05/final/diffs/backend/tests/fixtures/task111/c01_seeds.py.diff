@@ -1,0 +1,16 @@
+--- C05-pre/backend/tests/fixtures/task111/c01_seeds.py
++++ backend/tests/fixtures/task111/c01_seeds.py
+@@ -18,11 +18,11 @@
+     source="机械能合成资料：E=mgh，g=9.8，m和h均为0到10。m=2,h=3为58.8J，零因子为0。" if kind=="energy" else "二项概率合成资料：P(X=k)=C(n,k)p^k(1-p)^(n-k)，n为0到20整数，k为0到n整数，p为0到1。n3,k2,p0.5为0.375；n0/k0概率1，n20最多21柱。"
+     aid=activity_id or str(uuid4())
+     deadline=datetime(2026,10,10,14,35,tzinfo=timezone.utc)
+-    if CONTINUATION.endswith(("C03-20261011","C04-20261011")):
++    if CONTINUATION.endswith(("C03-20261011","C04-20261011","C05-20261011")):
+         deadline=datetime.fromisoformat(json.loads((CONTINUE_ROOT/"timing.json").read_text(encoding="utf-8"))["deadline_utc"])-timedelta(seconds=600)
+     if not resume_existing:
+       original=h.originals.put(io.BytesIO(source.encode()),max_bytes=5242880)
+-      prefix="c04-" if CONTINUATION.endswith("C04-20261011") else "c03-" if CONTINUATION.endswith("C03-20261011") else "c01-"
++      prefix="c05-" if CONTINUATION.endswith("C05-20261011") else "c04-" if CONTINUATION.endswith("C04-20261011") else "c03-" if CONTINUATION.endswith("C03-20261011") else "c01-"
+       material=h.materials.save(source_id=None,expected_version=None,filename=prefix+kind+".md",format="md",sha256=original.sha256,size=original.size)
+       await h.ledger.create_activity(ActivitySpec(activity_id=aid,sources=(SourceSnapshot(material["id"],material["version_id"],material["revision"]),),
+         deadline_at=deadline,max_requests=8,max_cost_microunits=10000,reserve_cost_microunits=100,

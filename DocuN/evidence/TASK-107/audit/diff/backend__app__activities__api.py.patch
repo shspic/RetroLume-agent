@@ -1,0 +1,34 @@
+--- pre/backend/app/activities/api.py
++++ current/backend/app/activities/api.py
+@@ -95,7 +95,8 @@
+ 
+ def _fact_payload(fact: ActivityFactView, *, detail: bool) -> dict:
+     data = {
+-        "activity_id": fact.activity_id,
++        "activity_id": fact.activity_id,
++        **({"business_domain":fact.business_domain} if fact.business_domain is not None else {}),
+         "status": fact.status,
+         **({"memory_selection":fact.memory_selection} if fact.memory_selection is not None else {}),
+         "created_at": _iso(fact.created_at),
+@@ -182,7 +183,10 @@
+     return value
+ 
+ 
+-def _map_read_error(exc: Exception) -> HTTPException:
++def _map_read_error(exc: Exception) -> HTTPException:
++    from app.interview.contracts import InterviewRefusal
++    if isinstance(exc, InterviewRefusal):
++        return _error(exc.status or 409,exc.code,exc.message)
+     if isinstance(exc, ResultIntegrityError):
+         return _error(409, "integrity_error", "活动数据完整性检查失败，未返回可能不可信的内容")
+     if isinstance(exc, ActivityLedgerConflict):
+@@ -429,6 +433,9 @@
+         "learning_followup_required": (409, "learning_followup_required"),
+         "memory_profile_required": (409, "memory_profile_required"),
+         "memory_dependency_invalid": (409, "memory_dependency_invalid"),
++        "interview_domain_conflict": (409, "interview_domain_conflict"),
++        "interview_parent_forbidden": (409, "interview_parent_forbidden"),
++        "interview_schema_not_ready": (503, "interview_schema_not_ready"),
+         "integrity_error": (409, "integrity_error"),
+     }
+     if outcome.status in refusal:

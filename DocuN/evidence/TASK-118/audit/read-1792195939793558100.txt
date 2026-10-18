@@ -1,0 +1,47 @@
+
+DocuN/evidence/TASK-117/execution/continuation-05/pdf_probe.py
+1: """S06 bounded observation of the real PDF path; no text, env values or changed results."""
+2: import sys,os,time,json,hashlib,ctypes
+3: from pathlib import Path
+4: def install():
+5:     if os.environ.get('RETROLUME_TASK117_SYNTHETIC')!='TASK-117-STEP018-INTEGRATION-S06-20261016':return
+6:     import app.pdf_import as package
+7:     from app.pdf_import import supervisor as s,_windows_job as w
+8:     original_parse=s.parse_pdf_bytes;original_build=s._build_worker_command;original_config=w._configure_signatures
+9:     rows=[];current={}
+10:     def configure(kernel):
+11:         original_config(kernel)
+12:         for name in ('CreateJobObjectW','SetInformationJobObject','CreateProcessW','AssignProcessToJobObject','ResumeThread','WaitForSingleObject','GetExitCodeProcess','TerminateJobObject'):
+13:             original=getattr(kernel,name)
+14:             def observed(*args,_original=original,_name=name):
+15:                 start=time.monotonic_ns();result=_original(*args)
+16:                 if len(rows)<24:rows.append({'stage':_name,'result':result,'last_error':ctypes.get_last_error(),'elapsed_seconds':(time.monotonic_ns()-start)/1e9,'mono_ns':time.monotonic_ns()})
+17:                 return result
+18:             setattr(kernel,name,observed)
+19:     def build(input_path,output_path,limits):
+20:         command=original_build(input_path,output_path,limits);current['output']=output_path
+21:         current['command']={'interpreter':sys.executable,'interpreter_sha256':hashlib.sha256(Path(sys.executable).read_bytes()).hexdigest(),'argv_shape':[command[0],'-m','app.pdf_import.worker','--input','<temp-input>','--output','<temp-output>',*command[7:]],'worker_module_matches_fixture_exclusion':command[2]=='app.pdf_import.worker','global_trace_enabled':sys.gettrace() is not None,'timeout_seconds':limits.timeout_seconds,'process_memory_bytes':limits.process_memory_bytes}
+22:         return command
+23:     original_run=s.run_in_job
+24:     def job(*args,**kwargs):
+25:         try:
+26:             result=original_run(*args,**kwargs);current['job_result']={'exit_code':result.exit_code,'elapsed_seconds':result.elapsed_seconds};return result
+27:         finally:
+28:             output=current.get('output');exists=bool(output and output.is_file());current['output_observation']={'exists':exists,'bytes':output.stat().st_size if exists else 0}
+29:             if exists:
+30:                 try:
+31:                     payload=json.loads(output.read_text(encoding='utf-8'));current['output_observation'].update(ok=payload.get('ok'),envelope_error_code=(payload.get('error') or {}).get('code'))
+32:                 except Exception as error:current['output_observation']['decode_error_type']=type(error).__name__
+33:     def parse(data,**kwargs):
+34:         rows.clear();current.clear();start=time.monotonic_ns();current.update(parse_entered=True,input_sha256=hashlib.sha256(data).hexdigest(),input_bytes=len(data),pid=os.getpid())
+35:         try:
+36:             result=original_parse(data,**kwargs);current.update(result='success',physical_pages=result.page_count,manual_review_required=True);return result
+37:         except Exception as error:
+38:             current.update(result='error',error_type=type(error).__name__,error_code=getattr(error,'code',None));raise
+39:         finally:
+40:             current.update(elapsed_seconds=(time.monotonic_ns()-start)/1e9,job_stages=list(rows),no_text_or_private_env_recorded=True)
+41:             Path(__file__).with_name('PDF-HTTP-bounded-probe.json').write_text(json.dumps({k:v for k,v in current.items() if k!='output'},indent=2)+'\n',encoding='utf-8')
+42:     w._configure_signatures=configure;s._build_worker_command=build;s.run_in_job=job;s.parse_pdf_bytes=parse;package.parse_pdf_bytes=parse
+43:     # If an ordinary import already bound the entry, preserve that exact entry with observation.
+44:     api=sys.modules.get('app.materials.api')
+45:     if api is not None:api.parse_pdf_bytes=parse

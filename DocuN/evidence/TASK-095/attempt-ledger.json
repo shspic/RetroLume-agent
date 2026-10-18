@@ -1,0 +1,594 @@
+[
+  {
+    "at": "2026-10-01T16:13:55+0800",
+    "batch": "1-pg-http",
+    "phase": "attempt-1-guard-failed",
+    "container_starts": 0,
+    "windows_sessions": 0,
+    "reason": "fixture guard misjudged named volume bind as host bind; container untouched",
+    "result": "failed-not-counted-as-run"
+  },
+  {
+    "at": "2026-10-01T16:14:04+0800",
+    "batch": "1-pg-http",
+    "phase": "start",
+    "guard": {
+      "id": "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4",
+      "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+      "state_running": false,
+      "pid": 0,
+      "port": "127.0.0.1:55441",
+      "volume": "retrolume-task-088-g3-w1-data"
+    },
+    "note": "pre-batch container state verified stopped before start"
+  },
+  {
+    "at": "2026-10-01T16:14:13+0800",
+    "batch": "1-pg-http",
+    "phase": "abort",
+    "reason": "create role/db failed"
+  },
+  {
+    "at": "2026-10-01T16:15:17+0800",
+    "batch": "1-pg-http",
+    "phase": "correction",
+    "note": "attempt-3 abort entry under-recorded container_starts; actual container start count = 1 and container was stopped in the abort path",
+    "container_starts": 1,
+    "condition": "admin channel wrong role name (retrolume); object creation never executed"
+  },
+  {
+    "at": "2026-10-01T16:15:20+0800",
+    "batch": "1-pg-http",
+    "phase": "start",
+    "guard": {
+      "id": "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4",
+      "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+      "state_running": false,
+      "pid": 0,
+      "port": "127.0.0.1:55441",
+      "volume": "retrolume-task-088-g3-w1-data"
+    },
+    "note": "pre-batch container state verified stopped before start"
+  },
+  {
+    "at": "2026-10-01T16:15:52+0800",
+    "batch": "1-pg-http",
+    "phase": "end",
+    "container_starts": 1,
+    "pg_batches": 1,
+    "windows_sessions": 0,
+    "business_seconds": 10.782,
+    "cleanup_seconds": 20.703,
+    "migrations": [
+      {
+        "migration": "001_materials.sql",
+        "returncode": 0
+      },
+      {
+        "migration": "002_activities.sql",
+        "returncode": 0
+      },
+      {
+        "migration": "003_pdf_review.sql",
+        "returncode": 0
+      },
+      {
+        "migration": "004_activities_time_budget.sql",
+        "returncode": 0
+      },
+      {
+        "migration": "005_activities_dispatch_closed.sql",
+        "returncode": 0
+      },
+      {
+        "migration": "006_activities_running_owner_session.sql",
+        "returncode": 0
+      },
+      {
+        "migration": "007_activity_operation_results.sql",
+        "returncode": 0
+      },
+      {
+        "migration": "008_activity_tool_budget.sql",
+        "returncode": 0
+      }
+    ],
+    "tests": {
+      "returncode": 1,
+      "tail": [
+        "Ran 26 tests in 6.648s",
+        "",
+        "FAILED (errors=10)"
+      ],
+      "skipped_present": false
+    },
+    "container_after": {
+      "running": "false 0",
+      "pid": null
+    },
+    "result": "fail"
+  },
+  {
+    "at": "2026-10-01T16:16:28+0800",
+    "batch": "1-pg-http",
+    "phase": "start",
+    "guard": {
+      "id": "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4",
+      "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+      "state_running": false,
+      "pid": 0,
+      "port": "127.0.0.1:55441",
+      "volume": "retrolume-task-088-g3-w1-data"
+    },
+    "note": "pre-batch container state verified stopped before start"
+  },
+  {
+    "at": "2026-10-01T16:16:39+0800",
+    "batch": "1-pg-http",
+    "phase": "end",
+    "adopted_existing": true,
+    "container_starts": 1,
+    "pg_batches": 1,
+    "windows_sessions": 0,
+    "business_seconds": 10.094,
+    "cleanup_seconds": 0.625,
+    "migrations": [
+      {
+        "adopted": true,
+        "reused_existing_schema": true
+      }
+    ],
+    "tests": {
+      "returncode": 1,
+      "tail": [
+        "Ran 26 tests in 7.998s",
+        "",
+        "FAILED (failures=4, errors=5)"
+      ],
+      "skipped_present": false
+    },
+    "container_after": {
+      "running": false,
+      "pid": 0
+    },
+    "result": "fail"
+  },
+  {
+    "at": "2026-10-01T16:22:41+0800",
+    "batch": "2-pg-retry-win-browser",
+    "phase": "end",
+    "container_starts": 1,
+    "pg_batches": 1,
+    "windows_sessions": 7,
+    "windows_sessions_note": "保守计 SUP 启动上限；实际 claim 窗口 5 个",
+    "browser_sessions": 1,
+    "business_seconds": 35.797,
+    "cleanup_seconds": 0.609,
+    "container_after": {
+      "running": false,
+      "pid": 0
+    },
+    "result": "fail",
+    "steps": [
+      {
+        "step": "resource-identity",
+        "ok": true,
+        "identity": {
+          "owner": "retrolume_task095_synth",
+          "role": [
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "sessions": 0
+        }
+      },
+      {
+        "step": "pg-api-retest",
+        "ok": false,
+        "returncode": 1,
+        "tail": "FAILED (failures=1)"
+      },
+      {
+        "step": "app-ready",
+        "ok": true,
+        "pid": 35112,
+        "created_100ns": 134353165355629958
+      },
+      {
+        "step": "create-via-http",
+        "ok": true,
+        "status": 200
+      },
+      {
+        "step": "continue-chain",
+        "ok": false,
+        "status": 200,
+        "supervision": {
+          "state": "worker_failed_full_reservation",
+          "settled_seconds": 0,
+          "reserved_seconds": 90,
+          "pending_fold_seconds": 90,
+          "cleanup_incomplete": false
+        },
+        "business": {
+          "read_status": "no_operation",
+          "payload_available": false
+        }
+      },
+      {
+        "step": "transport-single-send",
+        "ok": false,
+        "sends": 0,
+        "roles": null
+      },
+      {
+        "step": "pg-facts-after-chain",
+        "ok": false,
+        "operations": [],
+        "account": {
+          "requests_reserved": 1,
+          "cost_reserved_microunits": 100000,
+          "running_reserved_seconds": 90,
+          "dispatch_closed": false,
+          "status": "running",
+          "last_settled_generation": 1,
+          "running_settled_seconds": 1
+        },
+        "payload_value": null
+      },
+      {
+        "step": "job-gone-after-settle",
+        "ok": true,
+        "generation": 1,
+        "job_name": "Local\\RetroLume.Activity.a307b67113b441a5bcf87031a1a8b312.G1"
+      },
+      {
+        "step": "same-key-replay",
+        "ok": false,
+        "status": 200,
+        "supervision": {
+          "state": "failed_closed",
+          "settled_seconds": null,
+          "reserved_seconds": null,
+          "pending_fold_seconds": null,
+          "cleanup_incomplete": true
+        }
+      },
+      {
+        "step": "same-key-race-unique",
+        "ok": false,
+        "rows": 0,
+        "sends": 0,
+        "account": {
+          "requests_reserved": 1,
+          "cost_reserved_microunits": 100000
+        },
+        "responses": [
+          200,
+          200
+        ]
+      },
+      {
+        "step": "pre-admit-fail-no-row",
+        "ok": true,
+        "status": 200,
+        "rows": 0,
+        "body_status": "supervision_unknown",
+        "supervision": "failed_closed"
+      },
+      {
+        "step": "same-key-retry-after-fail",
+        "ok": false,
+        "status": 200,
+        "sends": 0,
+        "rows": []
+      },
+      {
+        "step": "browser-continue",
+        "ok": false,
+        "summary": {
+          "ok": false,
+          "console_errors": [],
+          "steps": [
+            "workspace-list-visible"
+          ],
+          "error": "TimeoutError: locator.waitFor: Timeout 15000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('.ws-op').filter({ hasText: 'ui-cont-b2-1' }).first() to be visible\u001b[22m\n"
+        }
+      },
+      {
+        "step": "app-terminated",
+        "ok": true,
+        "pid": 35112
+      }
+    ]
+  },
+  {
+    "at": "2026-10-01T16:26:17+0800",
+    "batch": "3-pg-win-browser-final",
+    "phase": "end",
+    "container_starts": 1,
+    "pg_batches": 1,
+    "windows_sessions": 7,
+    "windows_sessions_note": "保守计 SUP 启动上限；实际 claim 窗口 5 个",
+    "browser_sessions": 2,
+    "business_seconds": 86.454,
+    "cleanup_seconds": 0.656,
+    "container_after": {
+      "running": false,
+      "pid": 0
+    },
+    "result": "fail",
+    "steps": [
+      {
+        "step": "resource-identity",
+        "ok": true,
+        "identity": {
+          "owner": "retrolume_task095_synth",
+          "role": [
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "sessions": 0
+        }
+      },
+      {
+        "step": "pg-api-retest",
+        "ok": false,
+        "returncode": 1,
+        "tail": "FAILED (errors=1)"
+      },
+      {
+        "step": "app-ready",
+        "ok": true,
+        "pid": 20744
+      },
+      {
+        "step": "create-via-http",
+        "ok": true,
+        "status": 200
+      },
+      {
+        "step": "continue-chain",
+        "ok": true,
+        "status": 200,
+        "supervision": {
+          "state": "settled",
+          "settled_seconds": 6,
+          "reserved_seconds": 0,
+          "pending_fold_seconds": 0,
+          "cleanup_incomplete": false
+        },
+        "business": {
+          "read_status": "committed_current",
+          "payload_available": true
+        }
+      },
+      {
+        "step": "transport-single-send",
+        "ok": true,
+        "sends": 1,
+        "roles": [
+          "assistant",
+          "user"
+        ]
+      },
+      {
+        "step": "pg-facts-after-chain",
+        "ok": true,
+        "operations": [
+          {
+            "state": "received",
+            "disposition": "received"
+          }
+        ],
+        "account": {
+          "requests_reserved": 2,
+          "cost_reserved_microunits": 200000,
+          "running_reserved_seconds": 0,
+          "dispatch_closed": true,
+          "status": "pending",
+          "last_settled_generation": 3,
+          "running_settled_seconds": 7
+        },
+        "payload_value": {
+          "reply": "synthetic-continue-095"
+        }
+      },
+      {
+        "step": "job-gone-after-settle",
+        "ok": true,
+        "generation": 3
+      },
+      {
+        "step": "same-key-replay",
+        "ok": true,
+        "status": 200,
+        "supervision": null
+      },
+      {
+        "step": "same-key-race-unique",
+        "ok": true,
+        "rows": 1,
+        "sends": 2,
+        "account": {
+          "requests_reserved": 3,
+          "cost_reserved_microunits": 300000
+        },
+        "responses": [
+          200,
+          200
+        ]
+      },
+      {
+        "step": "pre-admit-fail-no-row",
+        "ok": true,
+        "status": 200,
+        "rows": 0,
+        "body_status": "supervision_unknown",
+        "supervision": "failed_closed"
+      },
+      {
+        "step": "same-key-retry-after-fail",
+        "ok": true,
+        "status": 200,
+        "sends": 4,
+        "rows": [
+          {
+            "state": "received"
+          }
+        ]
+      },
+      {
+        "step": "browser-continue",
+        "ok": false,
+        "summary": {
+          "ok": false,
+          "console_errors": [],
+          "steps": [
+            "workspace-list-visible"
+          ],
+          "error": "TimeoutError: locator.innerText: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('.ws-op-detail pre').first()\u001b[22m\n"
+        }
+      },
+      {
+        "step": "browser-workspace",
+        "ok": false,
+        "summary": {
+          "ok": false,
+          "steps": [
+            "capabilities-layers",
+            "ui-create"
+          ],
+          "console_errors": [],
+          "expected_network_errors": [],
+          "counts": {},
+          "error": "TimeoutError: locator.waitFor: Timeout 15000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByText('上次动作未确认') to be visible\u001b[22m\n",
+          "page_errors": []
+        }
+      },
+      {
+        "step": "app-terminated",
+        "ok": true,
+        "pid": 20744
+      }
+    ]
+  },
+  {
+    "at": "2026-10-01T16:28:41+0800",
+    "batch": "4-final-verification",
+    "phase": "end",
+    "container_starts": 1,
+    "pg_batches": 1,
+    "windows_sessions": 0,
+    "browser_sessions": 2,
+    "note": "只读查看与工作区流；不重跑 Windows 链，不新增监督会话",
+    "business_seconds": 30.593,
+    "cleanup_seconds": 0.625,
+    "container_after": {
+      "running": false,
+      "pid": 0
+    },
+    "result": "fail",
+    "steps": [
+      {
+        "step": "resource-identity",
+        "ok": true,
+        "identity": {
+          "owner": "retrolume_task095_synth",
+          "role": [
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "sessions": 0
+        }
+      },
+      {
+        "step": "pg-api-retest",
+        "ok": true,
+        "returncode": 0,
+        "tail": "OK"
+      },
+      {
+        "step": "app-ready",
+        "ok": true,
+        "pid": 37180
+      },
+      {
+        "step": "browser-continue-readonly",
+        "ok": false,
+        "summary": {
+          "ok": false,
+          "console_errors": [],
+          "steps": [
+            "workspace-list-visible"
+          ],
+          "error": "TimeoutError: locator.waitFor: Timeout 15000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('.ws-op-detail pre').first() to be visible\u001b[22m\n"
+        }
+      },
+      {
+        "step": "browser-workspace",
+        "ok": true,
+        "summary": {
+          "ok": true,
+          "steps": [
+            "capabilities-layers",
+            "ui-create",
+            "lost-response-banner",
+            "409-verify-after-lost-response",
+            "explicit-same-key-retry",
+            "cancel-two-step",
+            "corrupt-ledger-gate",
+            "materials-upload-read",
+            "pdf-branch-reason"
+          ],
+          "console_errors": [],
+          "expected_network_errors": [
+            "Failed to load resource: the server responded with a status of 409 (Conflict)",
+            "Failed to load resource: net::ERR_FAILED",
+            "Failed to load resource: the server responded with a status of 404 (Not Found)",
+            "Failed to load resource: the server responded with a status of 422 (Unprocessable Entity)"
+          ],
+          "counts": {
+            "hold_flow_posts": 2,
+            "abort_flow_posts": 2
+          },
+          "page_errors": []
+        }
+      },
+      {
+        "step": "app-terminated",
+        "ok": true,
+        "pid": 37180
+      }
+    ]
+  },
+  {
+    "at": "2026-10-01T16:30:19+0800",
+    "batch": "post-batch-fixes",
+    "phase": "offline-fix",
+    "note": "UI展开操作未取回单操作正文与面板误用列表行渲染两处缺陷修复（产品文件）；typecheck/build通过；批次/会话/启动上限已尽，未再做实机复验",
+    "result": "fixed-offline-live-reverification-pending"
+  },
+  {
+    "at": "2026-10-01T16:30:19+0800",
+    "batch": "stop-decision",
+    "phase": "budget-stop",
+    "note": "同缺陷两次有据修正并以构建验证；批次入口与监督会话各超上限1次（含首检夹具误判与运行期才可见缺陷返工），按卡面停止规则停止实机运行并交回",
+    "result": "stopped-per-card-rule"
+  }
+]

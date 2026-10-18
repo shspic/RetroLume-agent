@@ -1,0 +1,119 @@
+{
+  "ids": [
+    "TASK-003",
+    "SPIKE-001",
+    "HYP-001",
+    "FR-001",
+    "FR-004",
+    "NFR-001",
+    "NFR-002",
+    "DR-001",
+    "DR-003"
+  ],
+  "run_id": "evidence_utf8_run",
+  "fixture_count": 7,
+  "parse_attempts": 14,
+  "parse_successes": 12,
+  "parse_errors": 2,
+  "manifest_status_checks": {
+    "passed": 14,
+    "total": 14
+  },
+  "fragment_checks": {
+    "passed": 62,
+    "total": 62
+  },
+  "location_checks": {
+    "passed": 62,
+    "total": 62
+  },
+  "page_count_checks": {
+    "passed": 8,
+    "total": 8
+  },
+  "reading_order_checks": {
+    "passed": 11,
+    "total": 14,
+    "failures": [
+      {
+        "case_id": "complex",
+        "mode": "plain",
+        "name": "column_reading",
+        "expected": [
+          "L1",
+          "L2",
+          "L3",
+          "R1",
+          "R2",
+          "R3"
+        ],
+        "observed": [
+          "L1",
+          "R1",
+          "L2",
+          "R2",
+          "L3",
+          "R3"
+        ],
+        "pass": false
+      },
+      {
+        "case_id": "complex",
+        "mode": "plain",
+        "name": "table_row_reading",
+        "expected": [
+          "TH1",
+          "TH2",
+          "T1A",
+          "T1B",
+          "T2A",
+          "T2B"
+        ],
+        "observed": [
+          "TH1",
+          "T1A",
+          "T2A",
+          "TH2",
+          "T1B",
+          "T2B"
+        ],
+        "pass": false
+      },
+      {
+        "case_id": "complex",
+        "mode": "layout",
+        "name": "column_reading",
+        "expected": [
+          "L1",
+          "L2",
+          "L3",
+          "R1",
+          "R2",
+          "R3"
+        ],
+        "observed": [
+          "L1",
+          "R1",
+          "L2",
+          "R2",
+          "L3",
+          "R3"
+        ],
+        "pass": false
+      }
+    ]
+  },
+  "bare_batch_failure_reproduced": true,
+  "isolated_wrapper_expected_statuses": true,
+  "replacement_observations_pass": true,
+  "input_hashes_unchanged": true,
+  "render_commands": {
+    "passed": 4,
+    "total": 4
+  },
+  "visual_review": "pending human/agent PNG inspection; command success alone does not validate glyphs or layout",
+  "experiment_evidence_collected": true,
+  "general_pdf_semantic_order_supported": false,
+  "hypothesis_recommendation": "部分支持简单资料的内容/位置与包装层失败隔离；通用文字 PDF 阅读顺序被合成反例否定，HYP-001 不可标为整体通过。",
+  "entrypoint_exit_code": 0
+}

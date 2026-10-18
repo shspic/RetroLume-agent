@@ -1,0 +1,22 @@
+--- first-audit/backend/tests/test_step018_flows.py
++++ current/backend/tests/test_step018_flows.py
+@@ -103,7 +103,8 @@
+             async def send(self,**kwargs):counts['send']+=1;raise AssertionError('expired grant sent')
+         context=CallContext(activity_id=request.activity_id,operation_id='emb18i.'+request.binding.business_key+'.0',executor_id='S02-pure',execution_generation=1,scope_revision=1)
+         config=EmbeddingServiceConfig(api_key='synthetic',outbound_grant=grant.model_dump(mode='json'),outbound_source_manifest=manifest.model_dump(mode='json'))
+-        with patch('app.capabilities.embedding.datetime',Clock):result=asyncio.run(ControlledEmbeddingGateway(config,ledger=Ledger(),transport=Transport()).call(context,request))
++        from tests.fixtures.step018.s08_loop import run_no_io
++        with patch('app.capabilities.embedding.datetime',Clock):result=run_no_io(ControlledEmbeddingGateway(config,ledger=Ledger(),transport=Transport()).call(context,request))
+         self.assertEqual(result.status,CallStatus.REJECTED);self.assertEqual(counts,{'admit':1,'dispatch':0,'send':0})
+ 
+     def test_frozen_numeric_variants_and_safe_preview_descriptor(self):
+@@ -135,7 +136,8 @@
+ 
+     def test_valid_adopted_source_and_both_capabilities(self):
+         entry,manifest,grant,request=adopted_fixture();manifest.check_embedding(request)
+-        manifest.check_model(SimpleNamespace(learning_profile=None,teaching_profile=SimpleNamespace(catalog=[entry]),interview_profile=None,html_profile=None))
++        # D02：旧清单仍可批准Embedding；完整模型正文缺少独立批准时必须拒绝。
++        with self.assertRaises(AdmissionDenied):manifest.check_model(SimpleNamespace(learning_profile=None,teaching_profile=SimpleNamespace(catalog=[entry]),interview_profile=None,html_profile=None))
+         manifest.check_sources(manifest.sources)
+         for provider,model in [('zhipu_embeddings','embedding-3'),('deepseek_chat_completions','deepseek-chat')]:grant.check(request.activity_id,provider,model,1000,200)
+         self.assertEqual(OutboundGrant.from_wire(grant.model_dump(mode='json')).sha256,grant.sha256)

@@ -1,0 +1,236 @@
+"""TASK090消费引用、服务边界与真实准入。"""
+import asyncio,json,threading,time,unittest
+from dataclasses import replace
+from types import SimpleNamespace
+from unittest.mock import patch
+from uuid import uuid4
+from pydantic import ValidationError,create_model,ConfigDict
+from app.activities import *
+from app.activities.service import ActivityService
+from app.capabilities.contracts import *
+from app.capabilities.gateway import ControlledModelGateway
+from app.worker.one_call import OneCallInput,worker_request,decode_worker_request
+from app.worker.session import SessionConfig
+from tests.fixtures.task090.support import PGBase,DSN
+from tests.test_worker_one_call import service,request
+
+class ContinuationOfflineTests(unittest.IsolatedAsyncioTestCase):
+    def ref(self,**kw):
+        return ResultConsumptionRef(**({'activity_id':str(uuid4()),'operation_id':'P','scope_revision':1,'payload_sha256':'a'*64}|kw))
+    def test_reference_strict_types(self):
+        for kw in ({'scope_revision':True},{'scope_revision':'1'},{'scope_revision':0},{'payload_sha256':'A'*64},{'payload_sha256':'a'*65},{'activity_id':uuid4()},{'operation_id':'bad key'}):
+            with self.subTest(kw=kw),self.assertRaises(ValidationError):self.ref(**kw)
+    def test_ipc_and_old_without_reference_compatibility(self):
+        ref=self.ref();new=request(input_result=ref);call=OneCallInput('Q',new,service());wire=call.to_wire()
+        self.assertEqual(OneCallInput.from_wire(wire).request.input_result,ref)
+        old=OneCallInput('Q',request(),service()).to_wire();self.assertNotIn('input_result',old['request'])
+        fields={k:(v.annotation,v) for k,v in ModelCallRequest.model_fields.items() if k!='input_result'}
+        OldRequest=create_model('Frozen089Request',__config__=ConfigDict(extra='forbid',frozen=True),**fields)
+        OldRequest.model_validate(old['request'])
+        with self.assertRaises(ValidationError):OldRequest.model_validate(wire['request'])
+        lease=ActivityLease(str(uuid4()),'executor',1,1,None,10)
+        with self.assertRaises(ValueError):worker_request(call,{},lease,'run090',time.monotonic_ns()+10000000000,1)
+        with self.assertRaises(ValueError):OneCallInput('P',new,service()).to_wire()
+        with self.assertRaises(ValueError):OneCallInput('Q',request(messages=[{'role':'user','content':'中'*30000}]),service(max_request_bytes=65536)).to_wire()
+    def test_provider_projection_excludes_reference(self):
+        ref=self.ref();req=request(input_result=ref)
+        payload=ControlledModelGateway(service())._build_payload(req)
+        self.assertNotIn('input_result',payload);self.assertNotIn(ref.payload_sha256,json.dumps(payload))
+    async def test_activity_binding_at_launcher_sup_and_worker_before_claim(self):
+        from app.worker.launcher import _request
+        from app.worker.supervisor_main import _validated_request
+        from app.worker.session import SessionConfig,SingleWindowSupervisor
+        from app.worker.command import WorkerCommand
+        a=str(uuid4());ref=self.ref(activity_id=a);call=OneCallInput('Q',request(input_result=ref),service());ledger=PostgresAdmissionLedger('synthetic-dsn')
+        config=SessionConfig(window_seconds=10,request_timeout_seconds=1,stop_grace_seconds=1,startup_limit_seconds=3,manager_db_timeout_seconds=2,cleanup_seconds=2,mutex_wait_seconds=1,manager_overhead_seconds=12)
+        frame=_request(ledger,config,a,'executor',WorkerCommand('one_call'),'run090','mapping',time.monotonic_ns()+60000000000,call)
+        frame['activity_id']=str(uuid4())
+        with self.assertRaises(ValueError):_validated_request(frame,'mapping')
+        with self.assertRaises(ValueError):_request(ledger,config,frame['activity_id'],'executor',WorkerCommand('one_call'),'run090','mapping',time.monotonic_ns()+60000000000,call)
+        with patch.object(ledger,'claim_lease') as claim:
+            with self.assertRaises(ValueError):await SingleWindowSupervisor(ledger,config).run_once(frame['activity_id'],'executor',WorkerCommand('one_call'),run_tag='run090',manager_deadline_ns=time.monotonic_ns()+60000000000,one_call=call)
+            claim.assert_not_called()
+        lease=ActivityLease(a,'executor',1,1,None,10)
+        value=worker_request(call,{'dsn':'synthetic','connect_timeout_seconds':1,'statement_timeout_ms':500,'lock_timeout_ms':100},lease,'run090',time.monotonic_ns()+60000000000,1)
+        value['context']['activity_id']=str(uuid4())
+        with self.assertRaises(ValueError):decode_worker_request(value)
+
+    async def test_tools_reference_rejected_without_ledger_or_send(self):
+        ref=self.ref();ctx=CallContext(activity_id=ref.activity_id,operation_id='Q',executor_id='executor',execution_generation=1,scope_revision=1)
+        result=await ControlledModelGateway(service()).call(ctx,request(input_result=ref,allowed_tools={'finite_calculate'}))
+        self.assertEqual(result.error_code,'invalid_input')
+    async def test_read_errors_are_zero_dispatch(self):
+        class Broken:
+            async def read_committed_result(self,*a):raise AdmissionUnavailable('redacted')
+        svc=ActivityService(Broken());self.assertEqual((await svc.resume_result(str(uuid4()),'P')).status,'read_unavailable')
+    async def test_service_composes_assistant_user_and_waits_cancelled_thread(self):
+        fmt,payload,sha=build_business_payload(json_object={'parent':'低信任历史'})
+        a=str(uuid4());snap=CommittedResultSnapshot(a,'P',ResultReadStatus.COMMITTED_CURRENT,scope_revision=1,payload_format=fmt,payload=payload,payload_sha256=sha)
+        class ReadLedger:
+            _bounded_name=staticmethod(PostgresAdmissionLedger._bounded_name)
+            async def read_committed_result(self,activity,key):
+                return snap if key=='P' else CommittedResultSnapshot(a,key,ResultReadStatus.NO_OPERATION)
+        entered=threading.Event();release=threading.Event();ended=threading.Event();captured=[]
+        def run(*args,**kw):
+            captured.append(args[5]);entered.set()
+            try:assert release.wait(3)
+            finally:ended.set()
+            return SimpleNamespace(settled_seconds=1,reserved_seconds=0,pending_fold_seconds=0,cleanup_incomplete=False,state='settled',model_receipt=None)
+        with patch('app.worker.one_call.run_one_call',run):
+            task=asyncio.create_task(ActivityService(ReadLedger()).continue_from_result(a,'P','Q','followup',service(),SessionConfig(),'executor','run090'))
+            try:
+                while not entered.is_set():await asyncio.sleep(0)
+                task.cancel();await asyncio.sleep(0);self.assertFalse(task.done());self.assertFalse(ended.is_set());release.set()
+                with self.assertRaises(asyncio.CancelledError):await task
+                self.assertTrue(ended.is_set())
+            finally:release.set();await asyncio.gather(task,return_exceptions=True)
+        req=captured[0];self.assertEqual([m.role for m in req.messages],['assistant','user']);self.assertEqual(req.messages[0].content,'{"parent":"低信任历史"}');self.assertFalse(req.allowed_tools)
+    def current_parent_ledger(self):
+        a=str(uuid4());fmt,payload,sha=build_business_payload(json_object={'parent':'low trust'})
+        snap=CommittedResultSnapshot(a,'P',ResultReadStatus.COMMITTED_CURRENT,scope_revision=1,payload_format=fmt,payload=payload,payload_sha256=sha)
+        class ReadLedger:
+            _bounded_name=staticmethod(PostgresAdmissionLedger._bounded_name)
+            def __init__(self):self.reads=[]
+            async def read_committed_result(self,activity,key):
+                self.reads.append(key)
+                return snap if key=='P' else CommittedResultSnapshot(a,key,ResultReadStatus.NO_OPERATION)
+        return a,ReadLedger()
+
+    async def test_cancel_after_parent_read_preserves_confirmed_supervision(self):
+        # 替身只复现服务已读P后SUP确认取消的返回边界；不代替真实PG取消证明。
+        from app.worker.session import SessionOutcome
+        a,ledger=self.current_parent_ledger()
+        supervision=SessionOutcome('run090','cancelled',a,settled_seconds=None,reserved_seconds=0,pending_fold_seconds=0)
+        def cancelled_after_read(*args,**kw):
+            self.assertEqual(ledger.reads,['Q','P'])
+            return supervision
+        with patch('app.worker.one_call.run_one_call',side_effect=cancelled_after_read) as invoke:
+            result=await ActivityService(ledger).continue_from_result(a,'P','Q','followup',service(),SessionConfig(),'executor','run090')
+        self.assertEqual(invoke.call_count,1)
+        self.assertEqual(result.status,'cancelled')
+        self.assertEqual(result.business.status,'no_operation')
+        self.assertEqual(ledger.reads,['Q','P','Q'])
+        self.assertIs(result.supervision,supervision)
+        self.assertIsNone(result.settlement.settled_seconds)
+        self.assertEqual(result.settlement.reserved_seconds,0)
+        self.assertEqual(result.settlement.pending_fold_seconds,0)
+        self.assertFalse(result.settlement.cleanup_incomplete)
+
+    async def test_known_timeout_conflicts_reject_before_supervision(self):
+        for model,config in ((service(timeout_seconds=30),SessionConfig(request_timeout_seconds=10)),
+                             (service(),SessionConfig(window_seconds=200,request_timeout_seconds=121))):
+            with self.subTest(model_timeout=model.timeout_seconds,session_timeout=config.request_timeout_seconds):
+                a,ledger=self.current_parent_ledger()
+                with patch('app.worker.one_call.run_one_call') as invoke:
+                    result=await ActivityService(ledger).continue_from_result(a,'P','Q','followup',model,config,'executor','run090')
+                    invoke.assert_not_called()
+                self.assertEqual(result.status,'invalid_input')
+                self.assertEqual(ledger.reads,['Q','P'])
+                self.assertIsNone(result.supervision)
+                self.assertIsNone(result.settlement)
+
+    async def test_unexpected_supervision_error_remains_unknown_no_resend(self):
+        a,ledger=self.current_parent_ledger()
+        with patch('app.worker.one_call.run_one_call',side_effect=ValueError('synthetic supervisor response lost')) as invoke:
+            result=await ActivityService(ledger).continue_from_result(a,'P','Q','followup',service(),SessionConfig(),'executor','run090')
+            self.assertEqual(invoke.call_count,1)
+            self.assertEqual((await ActivityService(ledger).resume_result(a,'Q')).status,'no_operation')
+            self.assertEqual(invoke.call_count,1)
+        self.assertEqual(result.status,'supervision_unknown')
+        self.assertEqual(result.business.status,'no_operation')
+        self.assertIsNone(result.supervision)
+        self.assertIsNone(result.settlement)
+
+    async def test_too_large_before_supervision(self):
+        a=str(uuid4());fmt,payload,sha=build_business_payload(text='x'*70000)
+        class ReadLedger:
+            _bounded_name=staticmethod(PostgresAdmissionLedger._bounded_name)
+            async def read_committed_result(self,activity,key):
+                return CommittedResultSnapshot(a,key,ResultReadStatus.COMMITTED_CURRENT if key=='P' else ResultReadStatus.NO_OPERATION,scope_revision=1,payload_format=fmt,payload=payload,payload_sha256=sha)
+        with patch('app.worker.one_call.run_one_call') as invoke:
+            outcome=await ActivityService(ReadLedger()).continue_from_result(a,'P','Q','followup',service(max_request_bytes=65536),SessionConfig(),'executor','run090')
+            self.assertEqual(outcome.status,'input_too_large');invoke.assert_not_called()
+
+@unittest.skipUnless(DSN,'专用TASK090合成库未注入')
+class ContinuationPostgresTests(PGBase):
+    async def test_v3_current_parent_child_and_same_key_race(self):
+        from app.capabilities.transport import TransportResponse
+        lease,ref=await self.parent();intent=self.intent(lease,'Q',ref)
+        class SyntheticTransport:
+            calls=0
+            async def send(self,**kwargs):
+                self.calls+=1
+                assert 'input_result' not in kwargs['payload']
+                raw=json.dumps({'model':'synthetic-model','choices':[{'message':{'role':'assistant','content':'{"child":true}'},'finish_reason':'stop'}],'usage':{'prompt_tokens':2,'completion_tokens':1,'total_tokens':3}}).encode()
+                return TransportResponse(200,raw,len(raw))
+        transport=SyntheticTransport();req=ModelCallRequest(messages=[{'role':'assistant','content':'低信任历史'},{'role':'user','content':'explicit'}],max_output_tokens=40,input_result=ref)
+        gateways=[ControlledModelGateway(service(),ledger=self.ledger,transport=transport),ControlledModelGateway(service(),ledger=PostgresAdmissionLedger(DSN),transport=transport)]
+        results=await asyncio.gather(*(g.call(intent.context,req) for g in gateways))
+        self.assertEqual([x.status for x in results].count(CallStatus.SUCCEEDED),1)
+        self.assertEqual([x.status for x in results].count(CallStatus.REJECTED),1)
+        self.assertEqual(transport.calls,1);self.assertEqual((await self.account())['requests_reserved'],2)
+        self.assertEqual((await self.ledger.read_committed_result(self.activity,'Q')).read_status,ResultReadStatus.COMMITTED_CURRENT)
+        print(json.dumps({'event':'same_new_key_gateway_race','transport_calls':transport.calls}),flush=True)
+    async def test_v3_scope_change_after_read_no_new_reservation(self):
+        lease,ref=await self.parent();second=await self.new_source();await self.ledger.revise_scope(self.activity,1,(second,));before=await self.account()
+        with self.assertRaises(AdmissionDenied):await self.ledger.admit(self.intent(lease,'Q',ref))
+        self.assertEqual(before,await self.account());self.assertEqual((await self.ledger.read_committed_result(self.activity,'P')).read_status,ResultReadStatus.INVALIDATED_SCOPE_CHANGED)
+        self.assertEqual(await self.rows('SELECT 1 FROM activity_operations WHERE activity_id=%s AND operation_id=%s',(self.activity,'Q')),[])
+    async def test_v3_source_change_after_read_no_reservation(self):
+        lease,ref=await self.parent();await self.sql('UPDATE material_sources SET revision=revision+1 WHERE id=%s',(self.source.source_id,));before=await self.account()
+        with self.assertRaisesRegex(AdmissionDenied,'source_invalid'):await self.ledger.admit(self.intent(lease,'Q',ref))
+        self.assertEqual(before,await self.account())
+    async def test_v3_cross_activity_forged_hash_no_payload_invalid_binding(self):
+        lease,ref=await self.parent();before=await self.account()
+        for bad in (ref.model_copy(update={'activity_id':str(uuid4())}),ref.model_copy(update={'payload_sha256':'b'*64}),ref.model_copy(update={'operation_id':'absent'})):
+            with self.assertRaises(AdmissionDenied):await self.ledger.admit(self.intent(lease,'Q',bad))
+        empty=await self.ledger.admit(self.intent(lease,'empty'));await self.ledger.mark_dispatch_started(empty);await self.ledger.record_outcome(empty,LedgerOutcome(LedgerDisposition.RECEIVED));before=await self.account()
+        with self.assertRaises(AdmissionDenied):await self.ledger.admit(self.intent(lease,'Q',ref.model_copy(update={'operation_id':'empty'})))
+        await self.sql('UPDATE activity_operation_results SET execution_generation=execution_generation+1 WHERE activity_id=%s AND operation_id=%s',(self.activity,'P'))
+        with self.assertRaises(AdmissionDenied):await self.ledger.admit(self.intent(lease,'Q',ref))
+        self.assertEqual(before,await self.account())
+    async def test_v3_corrupt_payload_fail_closed(self):
+        lease,ref=await self.parent();before=await self.account()
+        await self.sql('UPDATE activity_operation_results SET payload=%s WHERE activity_id=%s AND operation_id=%s',('{"format":"json","value":{"tampered":true}}',self.activity,'P'))
+        with self.assertRaisesRegex(AdmissionDenied,'integrity_error'):await self.ledger.admit(self.intent(lease,'Q',ref))
+        self.assertEqual(before,await self.account())
+    async def test_v4_revise_after_admit_or_dispatch_no_refund_no_body(self):
+        lease,ref=await self.parent();q=await self.ledger.admit(self.intent(lease,'Q',ref));dispatched=await self.ledger.admit(self.intent(lease,'inflight',ref));await self.ledger.mark_dispatch_started(dispatched);before=await self.account()
+        await self.ledger.revise_scope(self.activity,1,())
+        with self.assertRaises(AdmissionDenied):await self.ledger.mark_dispatch_started(q)
+        with self.assertRaises(AdmissionDenied):await self.ledger.record_outcome(dispatched,self.outcome())
+        self.assertEqual(before,await self.account());self.assertEqual(await self.rows('SELECT 1 FROM activity_operation_results WHERE activity_id=%s AND operation_id=%s',(self.activity,'inflight')),[])
+        await self.ledger.record_outcome(dispatched,LedgerOutcome(LedgerDisposition.UNKNOWN,error_code='scope_changed'))
+    async def test_v5_resume_cancelled_unknown_no_send_or_rebudget(self):
+        lease,ref=await self.parent();q=await self.ledger.admit(self.intent(lease,'unknown'));await self.ledger.mark_dispatch_started(q)
+        await self.ledger.cancel_activity(self.activity);await self.ledger.recover_unknown(self.activity);before=await self.account();svc=ActivityService(PostgresAdmissionLedger(DSN))
+        with patch('app.worker.one_call.run_one_call') as invoke:
+            self.assertEqual((await svc.resume_result(self.activity,'P')).status,'committed_history_cancelled')
+            self.assertEqual((await svc.resume_result(self.activity,'unknown')).status,'unresolved')
+            result=await svc.continue_from_result(self.activity,'P','Q','followup',service(),SessionConfig(),'executor','run090');self.assertEqual(result.status,'cancelled');invoke.assert_not_called()
+        self.assertEqual(before,await self.account())
+    async def test_v5_budget_exhausted_history_remains_readable(self):
+        lease,ref=await self.parent();await self.sql('UPDATE activities SET requests_reserved=max_requests WHERE id=%s',(self.activity,));before=await self.account()
+        self.assertEqual((await ActivityService(self.ledger).resume_result(self.activity,'P')).status,'committed_current')
+        with self.assertRaisesRegex(AdmissionDenied,'budget_exhausted'):await self.ledger.admit(self.intent(lease,'Q',ref))
+        self.assertEqual(before,await self.account())
+    async def test_v5_lost_commit_resume_no_resend(self):
+        lease=await self.claim();permit=await self.ledger.admit(self.intent(lease));await self.ledger.mark_dispatch_started(permit)
+        original=self.ledger._transaction
+        async def lose(op):await original(op);raise RuntimeError('synthetic response loss')
+        with patch.object(self.ledger,'_transaction',lose):
+            with self.assertRaises(RuntimeError):await self.ledger.record_outcome(permit,self.outcome())
+        before=await self.account()
+        with patch('app.worker.one_call.run_one_call') as invoke:
+            self.assertEqual((await ActivityService(PostgresAdmissionLedger(DSN)).resume_result(self.activity,'P')).status,'committed_current');invoke.assert_not_called()
+        self.assertEqual(before,await self.account())
+
+    async def test_v5_time_exhausted_resume_and_scope_never_refill(self):
+        lease,ref=await self.parent()
+        await self.ledger.begin_window_close(self.activity,lease.executor_id,lease.execution_generation)
+        await self.ledger.settle_execution_window(self.activity,lease.executor_id,lease.execution_generation,window_seconds=30,elapsed_seconds=1)
+        await self.sql('UPDATE activities SET running_settled_seconds=max_running_seconds WHERE id=%s',(self.activity,))
+        before=await self.account();svc=ActivityService(PostgresAdmissionLedger(DSN))
+        self.assertEqual((await svc.resume_result(self.activity,'P')).status,'committed_current')
+        await svc.revise_scope(self.activity,1,(self.source,))
+        self.assertIsNone(await self.claim());self.assertEqual(before,await self.account())

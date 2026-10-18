@@ -1,0 +1,184 @@
+{
+  "start_utc": "2026-09-28T00:11:19.601355+00:00",
+  "attempt": 1,
+  "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+  "name": "retrolume-task-085-onecall-20260928t001119z-77ba1b",
+  "volume": "retrolume-task-085-20260928t001119z-77ba1b",
+  "port": "127.0.0.1:55440",
+  "cpu": 1,
+  "memory": 536870912,
+  "pids": 128,
+  "restart": "no",
+  "commands": [
+    {
+      "args": [
+        "image",
+        "inspect",
+        "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+        "--format",
+        "{{.Id}}"
+      ],
+      "exit": 0,
+      "seconds": 0.25
+    },
+    {
+      "args": [
+        "create",
+        "--name",
+        "retrolume-task-085-onecall-20260928t001119z-77ba1b",
+        "--cpus",
+        "1",
+        "--memory",
+        "512m",
+        "--pids-limit",
+        "128",
+        "--restart",
+        "no",
+        "--security-opt",
+        "no-new-privileges",
+        "--publish",
+        "127.0.0.1:55440:5432",
+        "--mount",
+        "type=volume,source=retrolume-task-085-20260928t001119z-77ba1b,target=/var/lib/postgresql/data",
+        "--env",
+        "POSTGRES_PASSWORD",
+        "--env",
+        "POSTGRES_USER=task085_8e1596ac",
+        "--env",
+        "POSTGRES_DB=retrolume_task085_onecall",
+        "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f"
+      ],
+      "exit": 0,
+      "seconds": 7.125
+    },
+    {
+      "args": [
+        "inspect",
+        "f67f57cd43914c05c192282f438afa193ca97b68b29912c538d9f27d741eb7a3",
+        "--format",
+        "{{json .Id}}|{{json .Image}}|{{json .HostConfig.NanoCpus}}|{{json .HostConfig.Memory}}|{{json .HostConfig.PidsLimit}}|{{json .HostConfig.Privileged}}|{{json .HostConfig.RestartPolicy.Name}}|{{json .HostConfig.PortBindings}}|{{json .Mounts}}"
+      ],
+      "exit": 0,
+      "seconds": 0.2029999999795109
+    },
+    {
+      "args": [
+        "start",
+        "f67f57cd43914c05c192282f438afa193ca97b68b29912c538d9f27d741eb7a3"
+      ],
+      "exit": 0,
+      "seconds": 0.48399999999674037
+    },
+    {
+      "args": [
+        "exec",
+        "f67f57cd43914c05c192282f438afa193ca97b68b29912c538d9f27d741eb7a3",
+        "pg_isready",
+        "-U",
+        "task085_8e1596ac",
+        "-d",
+        "retrolume_task085_onecall"
+      ],
+      "exit": 2,
+      "seconds": 0.5470000000204891
+    },
+    {
+      "args": [
+        "exec",
+        "f67f57cd43914c05c192282f438afa193ca97b68b29912c538d9f27d741eb7a3",
+        "pg_isready",
+        "-U",
+        "task085_8e1596ac",
+        "-d",
+        "retrolume_task085_onecall"
+      ],
+      "exit": 0,
+      "seconds": 0.43799999996554106
+    },
+    {
+      "args": [
+        "stop",
+        "--time",
+        "10",
+        "f67f57cd43914c05c192282f438afa193ca97b68b29912c538d9f27d741eb7a3"
+      ],
+      "exit": 0,
+      "seconds": 0.5320000000065193
+    },
+    {
+      "args": [
+        "inspect",
+        "f67f57cd43914c05c192282f438afa193ca97b68b29912c538d9f27d741eb7a3",
+        "--format",
+        "{{.State.Running}}"
+      ],
+      "exit": 0,
+      "seconds": 0.1720000000204891
+    }
+  ],
+  "cleanup_incomplete": false,
+  "cid": "f67f57cd43914c05c192282f438afa193ca97b68b29912c538d9f27d741eb7a3",
+  "inspect": [
+    "f67f57cd43914c05c192282f438afa193ca97b68b29912c538d9f27d741eb7a3",
+    "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+    1000000000,
+    536870912,
+    128,
+    false,
+    "no",
+    {
+      "5432/tcp": [
+        {
+          "HostIp": "127.0.0.1",
+          "HostPort": "55440"
+        }
+      ]
+    },
+    [
+      {
+        "Destination": "/var/lib/postgresql/data",
+        "Driver": "local",
+        "Mode": "z",
+        "Name": "retrolume-task-085-20260928t001119z-77ba1b",
+        "Propagation": "",
+        "RW": true,
+        "Source": "/var/lib/docker/volumes/retrolume-task-085-20260928t001119z-77ba1b/_data",
+        "Type": "volume"
+      }
+    ]
+  ],
+  "process": {
+    "pid": 27412,
+    "created_100ns": 134350278889701065
+  },
+  "batch_exit": 0,
+  "outer_tree_zero": true,
+  "outer_handles_closed": true,
+  "process_events": [
+    {
+      "event": "suspended_identity",
+      "monotonic": 307600.968,
+      "pid": 27412,
+      "created_100ns": 134350278889701065
+    },
+    {
+      "event": "assigned_outer_job",
+      "monotonic": 307600.968,
+      "active_processes": 1
+    },
+    {
+      "event": "resumed",
+      "monotonic": 307600.968
+    },
+    {
+      "event": "control_handles_closed",
+      "monotonic": 307626.406,
+      "tree_zero_confirmed": true
+    }
+  ],
+  "mapping_closed": true,
+  "container_stopped": true,
+  "seconds": 35.53200000000652,
+  "end_utc": "2026-09-28T00:11:55.142761+00:00",
+  "source_unchanged": true
+}

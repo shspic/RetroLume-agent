@@ -1,0 +1,1501 @@
+{
+  "cases": [
+    {
+      "name": "recover_model_and_tool",
+      "status": "pass",
+      "elapsed": 7.937999999965541
+    },
+    {
+      "name": "numeric_small_conflict",
+      "status": "pass",
+      "elapsed": 3.922000000020489
+    },
+    {
+      "name": "grounded_three_scenarios",
+      "status": "pass",
+      "elapsed": 34.84299999999348
+    },
+    {
+      "name": "prepare_browser",
+      "status": "pass",
+      "elapsed": 2.4689999999827705
+    }
+  ],
+  "facts": [
+    {
+      "name": "accepted_commit_unclaimed_concurrent_model_recovery",
+      "activity_id": "5419dcd3-d0d2-4e0b-8d6e-ba1f1d6c4084",
+      "before": {
+        "status": "pending",
+        "execution_generation": 0,
+        "requests_reserved": 2,
+        "cost_reserved_microunits": 200000,
+        "tools_reserved": 0,
+        "running_reserved_seconds": 0,
+        "running_settled_seconds": 0
+      },
+      "after": {
+        "status": "pending",
+        "execution_generation": 2,
+        "requests_reserved": 3,
+        "cost_reserved_microunits": 300000,
+        "tools_reserved": 0,
+        "running_reserved_seconds": 0,
+        "running_settled_seconds": 2
+      },
+      "receipts": [
+        {
+          "activity_id": "5419dcd3-d0d2-4e0b-8d6e-ba1f1d6c4084",
+          "business_key": "7698a33b-533e-408a-83cc-4bdd96c7876a",
+          "action": "evaluate",
+          "request_sha256": "f294ee2d87618c109189a763aac7349fa23443da39c8bc2759a80defc7e40474",
+          "status": "started",
+          "duplicate_of": null,
+          "record_ids": [],
+          "operation_id": "teach8m.7698a33b-533e-408a-83cc-4bdd96c7876a.f294ee2d87618c109189a763aac7349fa23443da39c8bc2759a80defc7e40474",
+          "payload_sha256": null,
+          "applied_revision": null,
+          "head_revision_now": 5,
+          "qualification": "current",
+          "error_code": null,
+          "model_called": null,
+          "tool_called": null,
+          "retry_policy": "read_only",
+          "exposed_part": null
+        },
+        {
+          "activity_id": "5419dcd3-d0d2-4e0b-8d6e-ba1f1d6c4084",
+          "business_key": "7698a33b-533e-408a-83cc-4bdd96c7876a",
+          "action": "evaluate",
+          "request_sha256": "f294ee2d87618c109189a763aac7349fa23443da39c8bc2759a80defc7e40474",
+          "status": "committed",
+          "duplicate_of": null,
+          "record_ids": [
+            {
+              "record_id": "cb6174d5-9575-4a04-97e9-33c7c15a7b19",
+              "kind": "feedback",
+              "seq": 6
+            },
+            {
+              "record_id": "c8dad7cc-540f-4c9a-b7f8-4ed186afa11d",
+              "kind": "exposure",
+              "seq": 7
+            },
+            {
+              "record_id": "1eae640e-06df-4631-8735-7f2e07d67d35",
+              "kind": "progress",
+              "seq": 8
+            }
+          ],
+          "operation_id": "teach8m.7698a33b-533e-408a-83cc-4bdd96c7876a.f294ee2d87618c109189a763aac7349fa23443da39c8bc2759a80defc7e40474",
+          "payload_sha256": "9c84b2a106a39003159419ed00a1f34397d0f26def65b07405e039d826b2a082",
+          "applied_revision": 6,
+          "head_revision_now": 6,
+          "qualification": "current",
+          "error_code": null,
+          "model_called": null,
+          "tool_called": null,
+          "retry_policy": "none",
+          "exposed_part": null
+        }
+      ],
+      "command": {
+        "business_key": "7698a33b-533e-408a-83cc-4bdd96c7876a",
+        "expected_revision": 5,
+        "expected_goal_version": 1,
+        "expected_scope_revision": 1,
+        "action": "evaluate",
+        "body": {
+          "confirmed": true,
+          "exercise_record_id": "915fb69c-405b-4045-a517-872c08d15a75",
+          "answer_record_id": "421884f4-feff-442b-a194-823d8332bb49",
+          "correction_record_id": null,
+          "retry_of": null
+        }
+      },
+      "frozen_context_sha256": "75d9a65d044b7a85eb9cc48e36b61d6ba9281a8f20b4c335bfee33a8c2c9aeca",
+      "original_context_preserved": true,
+      "actual_sup_delta": 1,
+      "model_observations_injected": "all met",
+      "progress": {
+        "advance": false,
+        "answer_record_id": "421884f4-feff-442b-a194-823d8332bb49",
+        "feedback_record_id": "cb6174d5-9575-4a04-97e9-33c7c15a7b19",
+        "node_after": "n1",
+        "node_before": "n1",
+        "observations": {
+          "assisted": [],
+          "contested": [
+            "421884f4-feff-442b-a194-823d8332bb49"
+          ],
+          "independent_answers": [],
+          "status": "needs_repair"
+        },
+        "reason": "保留当前节点；独立实例不足、存在辅助或争议时不推定长期掌握。",
+        "support_checks": [
+          {
+            "answer_status": "conflict",
+            "answer_unit": "m/s",
+            "answer_value_decimal": "60",
+            "computed": "1",
+            "dimension_ids": [
+              "value"
+            ],
+            "point_id": "p1",
+            "reference_status": "matched",
+            "status": "conflict",
+            "unit_matched": true,
+            "value_matched": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "accepted_commit_unclaimed_tool_recovery",
+      "activity_id": "5419dcd3-d0d2-4e0b-8d6e-ba1f1d6c4084",
+      "before": {
+        "status": "pending",
+        "execution_generation": 2,
+        "requests_reserved": 3,
+        "cost_reserved_microunits": 300000,
+        "tools_reserved": 0,
+        "running_reserved_seconds": 0,
+        "running_settled_seconds": 2
+      },
+      "after": {
+        "status": "pending",
+        "execution_generation": 4,
+        "requests_reserved": 3,
+        "cost_reserved_microunits": 300000,
+        "tools_reserved": 1,
+        "running_reserved_seconds": 0,
+        "running_settled_seconds": 4
+      },
+      "receipt": {
+        "activity_id": "5419dcd3-d0d2-4e0b-8d6e-ba1f1d6c4084",
+        "business_key": "b3f1eeb4-c1ee-4866-ab8e-1a599af9ac80",
+        "action": "calculate",
+        "request_sha256": "aa01eb6ef40cdb8ccd68c7d0e85b57b72a2ecf41736990abbc95bfc194317736",
+        "status": "committed",
+        "duplicate_of": null,
+        "record_ids": [
+          {
+            "record_id": "fb3769b9-bc32-40ea-940d-cc66a2ea601d",
+            "kind": "calculation",
+            "seq": 9
+          }
+        ],
+        "operation_id": "teach8t.b3f1eeb4-c1ee-4866-ab8e-1a599af9ac80.aa01eb6ef40cdb8ccd68c7d0e85b57b72a2ecf41736990abbc95bfc194317736",
+        "payload_sha256": "5a26e577b7272e04cf2da5bebf2dd0faf64511bc521ee51db90112652a90a5a9",
+        "applied_revision": 7,
+        "head_revision_now": 7,
+        "qualification": "current",
+        "error_code": null,
+        "model_called": null,
+        "tool_called": null,
+        "retry_policy": "none",
+        "exposed_part": null
+      },
+      "original_context_sha256": "f954587049806bc47a9631adda09530fb5fe39ad67495b5370c972be1d724010",
+      "actual_sup_delta": 1,
+      "actual_model_delta": 0,
+      "actual_tool_delta": 1
+    },
+    {
+      "name": "small_finite_answer_false_model_met_cannot_advance",
+      "activity_id": "30f33ce2-1b04-498f-85b8-7a5c85eed3ad",
+      "before": {
+        "status": "pending",
+        "execution_generation": 0,
+        "requests_reserved": 2,
+        "cost_reserved_microunits": 200000,
+        "tools_reserved": 0,
+        "running_reserved_seconds": 0,
+        "running_settled_seconds": 0
+      },
+      "after": {
+        "status": "pending",
+        "execution_generation": 2,
+        "requests_reserved": 3,
+        "cost_reserved_microunits": 300000,
+        "tools_reserved": 0,
+        "running_reserved_seconds": 0,
+        "running_settled_seconds": 2
+      },
+      "receipt": {
+        "activity_id": "30f33ce2-1b04-498f-85b8-7a5c85eed3ad",
+        "business_key": "350efbb3-0e2d-43e4-92bb-fffc710edb42",
+        "action": "evaluate",
+        "request_sha256": "6db288385eff5d4b0e33f1a41a6f3c384749046c7a7946229e4614ab7dd9c85e",
+        "status": "committed",
+        "duplicate_of": null,
+        "record_ids": [
+          {
+            "record_id": "2e32aead-a451-4b30-8ba1-fecc59333235",
+            "kind": "feedback",
+            "seq": 7
+          },
+          {
+            "record_id": "8041a048-c874-40eb-8fc1-9669789f3703",
+            "kind": "exposure",
+            "seq": 8
+          },
+          {
+            "record_id": "1c00df4c-1f9e-4538-bd17-d1d59c140cbf",
+            "kind": "progress",
+            "seq": 9
+          }
+        ],
+        "operation_id": "teach8m.350efbb3-0e2d-43e4-92bb-fffc710edb42.6db288385eff5d4b0e33f1a41a6f3c384749046c7a7946229e4614ab7dd9c85e",
+        "payload_sha256": "409030a164386be6789ab453d8aeb52253631e69020f4bce2688557ef5246f7e",
+        "applied_revision": 7,
+        "head_revision_now": 7,
+        "qualification": "current",
+        "error_code": null,
+        "model_called": null,
+        "tool_called": null,
+        "retry_policy": "none",
+        "exposed_part": null
+      },
+      "progress": {
+        "advance": false,
+        "answer_record_id": "4c7fb45f-6b1a-43be-9c15-7decbf897537",
+        "feedback_record_id": "2e32aead-a451-4b30-8ba1-fecc59333235",
+        "node_after": "n1",
+        "node_before": "n1",
+        "observations": {
+          "assisted": [],
+          "contested": [
+            "4c7fb45f-6b1a-43be-9c15-7decbf897537"
+          ],
+          "independent_answers": [],
+          "status": "needs_repair"
+        },
+        "reason": "保留当前节点；独立实例不足、存在辅助或争议时不推定长期掌握。",
+        "support_checks": [
+          {
+            "answer_status": "conflict",
+            "answer_unit": "m/s",
+            "answer_value_decimal": "0.01",
+            "computed": "1",
+            "dimension_ids": [
+              "value"
+            ],
+            "point_id": "p1",
+            "reference_status": "matched",
+            "status": "conflict",
+            "unit_matched": true,
+            "value_matched": false
+          }
+        ]
+      },
+      "model_observations_injected": "all met"
+    },
+    {
+      "name": "actual_plan_calculation_and_new_independent_instance",
+      "activity_id": "20fc7995-ca60-461d-b8d0-8f11ea7cfa0b",
+      "before": {
+        "status": "pending",
+        "execution_generation": 0,
+        "requests_reserved": 0,
+        "cost_reserved_microunits": 0,
+        "tools_reserved": 0,
+        "running_reserved_seconds": 0,
+        "running_settled_seconds": 0
+      },
+      "after": {
+        "status": "pending",
+        "execution_generation": 10,
+        "requests_reserved": 5,
+        "cost_reserved_microunits": 500000,
+        "tools_reserved": 0,
+        "running_reserved_seconds": 0,
+        "running_settled_seconds": 10
+      },
+      "head": {
+        "revision": 9,
+        "goal_version": 1,
+        "phase": "ready",
+        "goal_record_id": "810880f7-57fb-4a94-bfd6-3b0a475f5864",
+        "path_record_id": "516e6f11-2d58-4d14-ac5a-731178da5bd9",
+        "node_id": "n2",
+        "exercise_record_id": null,
+        "answer_record_id": null,
+        "feedback_record_id": null,
+        "reason_record_id": "a942377a-f968-419e-b5cd-d72bc6904022",
+        "pending_business_key": null
+      },
+      "nodes": {
+        "n1": {
+          "assisted": [],
+          "contested": [],
+          "independent_answers": [
+            "c5a8df3d-ca6a-4a43-91be-12d7ef13e577",
+            "0b1bb0c8-8331-4997-bb5a-d98cfea24643"
+          ],
+          "status": "evidence_sufficient"
+        },
+        "n2": {
+          "assisted": [],
+          "contested": [],
+          "independent_answers": [],
+          "status": "not_started"
+        },
+        "n3": {
+          "assisted": [],
+          "contested": [],
+          "independent_answers": [],
+          "status": "not_started"
+        }
+      }
+    },
+    {
+      "name": "actual_concept_exercise_answer_feedback",
+      "activity_id": "0cf86287-cfff-446c-adff-f0751d12fb90",
+      "before": {
+        "status": "pending",
+        "execution_generation": 4,
+        "requests_reserved": 5,
+        "cost_reserved_microunits": 500000,
+        "tools_reserved": 0,
+        "running_reserved_seconds": 0,
+        "running_settled_seconds": 0
+      },
+      "after": {
+        "status": "pending",
+        "execution_generation": 8,
+        "requests_reserved": 7,
+        "cost_reserved_microunits": 700000,
+        "tools_reserved": 0,
+        "running_reserved_seconds": 0,
+        "running_settled_seconds": 4
+      },
+      "receipt": {
+        "activity_id": "0cf86287-cfff-446c-adff-f0751d12fb90",
+        "business_key": "7a66e862-f0cf-46f2-9005-b030b25358a2",
+        "action": "evaluate",
+        "request_sha256": "31511501487f157d6d392ae1c2a5deff42e3e60eb9023c6dd18d8ba0720f6844",
+        "status": "committed",
+        "duplicate_of": null,
+        "record_ids": [
+          {
+            "record_id": "aea5d722-1a2f-40e1-a98f-64d85ffc6865",
+            "kind": "feedback",
+            "seq": 17
+          },
+          {
+            "record_id": "30997e56-870f-4bdf-adcf-547a0de2e1e6",
+            "kind": "exposure",
+            "seq": 18
+          },
+          {
+            "record_id": "3ac50e86-1dbe-47f7-82f3-8b8c51496e35",
+            "kind": "progress",
+            "seq": 19
+          }
+        ],
+        "operation_id": "teach8m.7a66e862-f0cf-46f2-9005-b030b25358a2.31511501487f157d6d392ae1c2a5deff42e3e60eb9023c6dd18d8ba0720f6844",
+        "payload_sha256": "a65d8e8909c55b03726b58edcce91e69cc9ea644490d7a4107ef387eeee725ae",
+        "applied_revision": 13,
+        "head_revision_now": 13,
+        "qualification": "current",
+        "error_code": null,
+        "model_called": null,
+        "tool_called": null,
+        "retry_policy": "none",
+        "exposed_part": null
+      },
+      "exercise": {
+        "qualification": "current",
+        "record_id": "30ade434-8889-4bd4-87dc-f15c1319769e",
+        "kind": "exercise",
+        "exercise_type": "concept",
+        "difficulty": 2,
+        "stem": "同一事务 A100/B50 扣10成功、加10失败。原子性下状态及解释？区分隔离；资料给级别？",
+        "dimensions": [
+          {
+            "id": "state",
+            "point_ids": [
+              "p1"
+            ],
+            "description": "给出数值或最终状态"
+          },
+          {
+            "id": "atomic_explanation",
+            "point_ids": [
+              "p2"
+            ],
+            "description": "说明单位、性质或条件"
+          },
+          {
+            "id": "property_distinction",
+            "point_ids": [
+              "p3"
+            ],
+            "description": "写出换算依据或逐步过程"
+          },
+          {
+            "id": "evidence_boundary",
+            "point_ids": [
+              "p4"
+            ],
+            "description": "说明数量级、资料边界或返回位置"
+          }
+        ],
+        "variant_purpose": "initial",
+        "reference_available": true,
+        "hint_available": false,
+        "reference_points": [
+          {
+            "point_id": "p1",
+            "text": "最终 A100/B50。",
+            "citations": [
+              "lc_a7ac6a40ee390687c0f3898b"
+            ],
+            "numeric": null
+          },
+          {
+            "point_id": "p2",
+            "text": "全部成功或全部不生效。",
+            "citations": [
+              "lc_a7ac6a40ee390687c0f3898b"
+            ],
+            "numeric": null
+          },
+          {
+            "point_id": "p3",
+            "text": "原子性不能单独保证隔离。",
+            "citations": [
+              "lc_a7ac6a40ee390687c0f3898b"
+            ],
+            "numeric": null
+          },
+          {
+            "point_id": "p4",
+            "text": "材料未给具体隔离级别。",
+            "citations": [
+              "lc_a7ac6a40ee390687c0f3898b"
+            ],
+            "numeric": null
+          }
+        ],
+        "reference_explanation": "按给定资料逐项核对，未知原因保留；本样本未运行用户程序。"
+      },
+      "feedback": {
+        "qualification": "current",
+        "record_id": "aea5d722-1a2f-40e1-a98f-64d85ffc6865",
+        "kind": "feedback",
+        "result_type": "feedback",
+        "message": "同一事务 A100/B50 扣10成功、加10失败。原子性下状态及解释？区分隔离；资料给级别？：本次观察符合有限依据。",
+        "correct_parts": [
+          {
+            "answer_excerpt": "A100/B50，全部成功或全部不生效；原子性不能单独保证隔离，材料未给隔离级别。",
+            "explanation": "答案明确说明了给定资料中的依据。",
+            "point_ids": [
+              "p1"
+            ],
+            "citations": [
+              "lc_d5e9e2b3751683413ca5c6c6"
+            ]
+          }
+        ],
+        "errors": [],
+        "evidence_gaps": [],
+        "cause_hypotheses": [],
+        "dimension_observations": [
+          {
+            "id": "state",
+            "observation": "met",
+            "reason": "按当前给定答案和资料核对，暂不推断长期能力。",
+            "point_ids": [
+              "p1"
+            ]
+          },
+          {
+            "id": "atomic_explanation",
+            "observation": "met",
+            "reason": "按当前给定答案和资料核对，暂不推断长期能力。",
+            "point_ids": [
+              "p2"
+            ]
+          },
+          {
+            "id": "property_distinction",
+            "observation": "met",
+            "reason": "按当前给定答案和资料核对，暂不推断长期能力。",
+            "point_ids": [
+              "p3"
+            ]
+          },
+          {
+            "id": "evidence_boundary",
+            "observation": "met",
+            "reason": "按当前给定答案和资料核对，暂不推断长期能力。",
+            "point_ids": [
+              "p4"
+            ]
+          }
+        ],
+        "next_focus": {
+          "focus_dimension": "atomic_explanation",
+          "reason": "新实例需独立完成，当前一次观察不能代表长期掌握。",
+          "suggested_mode": "retest"
+        }
+      }
+    },
+    {
+      "name": "actual_program_exercise_answer_feedback",
+      "activity_id": "677056ec-d82f-4671-b273-7c7af1cb7fbc",
+      "before": {
+        "status": "pending",
+        "execution_generation": 4,
+        "requests_reserved": 5,
+        "cost_reserved_microunits": 500000,
+        "tools_reserved": 0,
+        "running_reserved_seconds": 0,
+        "running_settled_seconds": 0
+      },
+      "after": {
+        "status": "pending",
+        "execution_generation": 8,
+        "requests_reserved": 7,
+        "cost_reserved_microunits": 700000,
+        "tools_reserved": 0,
+        "running_reserved_seconds": 0,
+        "running_settled_seconds": 4
+      },
+      "receipt": {
+        "activity_id": "677056ec-d82f-4671-b273-7c7af1cb7fbc",
+        "business_key": "fdad739a-6936-4fb6-aa5a-cd4d561790a3",
+        "action": "evaluate",
+        "request_sha256": "ca1eb713c3b325c8660cb9a6cf8678aa64eee62770524fb8ae25c1ef8c0fde5d",
+        "status": "committed",
+        "duplicate_of": null,
+        "record_ids": [
+          {
+            "record_id": "bf5e1cc6-9a16-46a2-a0b6-7a83b535a3ba",
+            "kind": "feedback",
+            "seq": 18
+          },
+          {
+            "record_id": "a69cd4f8-4481-4bb6-a005-98a0a348ed3f",
+            "kind": "exposure",
+            "seq": 19
+          },
+          {
+            "record_id": "6ea219a2-70c1-4d8a-936f-f676d99f6bd9",
+            "kind": "progress",
+            "seq": 20
+          }
+        ],
+        "operation_id": "teach8m.fdad739a-6936-4fb6-aa5a-cd4d561790a3.ca1eb713c3b325c8660cb9a6cf8678aa64eee62770524fb8ae25c1ef8c0fde5d",
+        "payload_sha256": "822c8bdcda9162f4ff8f1eced77499ccae7206e0c4bbc0a7a8fcce3aa302990b",
+        "applied_revision": 14,
+        "head_revision_now": 14,
+        "qualification": "current",
+        "error_code": null,
+        "model_called": null,
+        "tool_called": null,
+        "retry_policy": "none",
+        "exposed_part": null
+      },
+      "exercise": {
+        "qualification": "current",
+        "record_id": "f9caf0c1-ac44-4b11-b5d5-9ec4daf3c8d3",
+        "kind": "exercise",
+        "exercise_type": "program",
+        "difficulty": 2,
+        "stem": "输入 [-2,0,3,5] 返回多少？给逐次 count，解释 0 是否计入与 return 位置。",
+        "dimensions": [
+          {
+            "id": "result",
+            "point_ids": [
+              "p1"
+            ],
+            "description": "给出数值或最终状态"
+          },
+          {
+            "id": "condition",
+            "point_ids": [
+              "p2"
+            ],
+            "description": "说明单位、性质或条件"
+          },
+          {
+            "id": "trace",
+            "point_ids": [
+              "p3"
+            ],
+            "description": "写出换算依据或逐步过程"
+          },
+          {
+            "id": "return_position",
+            "point_ids": [
+              "p4"
+            ],
+            "description": "说明数量级、资料边界或返回位置"
+          }
+        ],
+        "variant_purpose": "initial",
+        "reference_available": true,
+        "hint_available": false,
+        "reference_points": [
+          {
+            "point_id": "p1",
+            "text": "结果为 2。",
+            "citations": [
+              "lc_6150671e98dd8585c6731b1f"
+            ],
+            "numeric": null
+          },
+          {
+            "point_id": "p2",
+            "text": "0>0 为假。",
+            "citations": [
+              "lc_6150671e98dd8585c6731b1f"
+            ],
+            "numeric": null
+          },
+          {
+            "point_id": "p3",
+            "text": "逐次 count 为 0/0/1/2。",
+            "citations": [
+              "lc_6150671e98dd8585c6731b1f"
+            ],
+            "numeric": null
+          },
+          {
+            "point_id": "p4",
+            "text": "return 在循环后。",
+            "citations": [
+              "lc_6150671e98dd8585c6731b1f"
+            ],
+            "numeric": null
+          }
+        ],
+        "reference_explanation": "按给定资料逐项核对，未知原因保留；本样本未运行用户程序。"
+      },
+      "feedback": {
+        "qualification": "current",
+        "record_id": "bf5e1cc6-9a16-46a2-a0b6-7a83b535a3ba",
+        "kind": "feedback",
+        "result_type": "feedback",
+        "message": "输入 [-2,0,3,5] 返回多少？给逐次 count，解释 0 是否计入与 return 位置。：保留正确部分，针对理由复测。",
+        "correct_parts": [
+          {
+            "answer_excerpt": "返回2，0也满足value>0并被计数",
+            "explanation": "返回2这一结果可保留。",
+            "point_ids": [
+              "p1"
+            ],
+            "citations": [
+              "lc_681c00da41dc50c8318d210b"
+            ]
+          }
+        ],
+        "errors": [
+          {
+            "answer_excerpt": "返回2，0也满足value>0并被计数",
+            "explanation": "0>0为假，0不计入；逐次count为0/0/1/2，return位于循环后。",
+            "point_ids": [
+              "p2"
+            ],
+            "citations": [
+              "lc_681c00da41dc50c8318d210b"
+            ]
+          }
+        ],
+        "evidence_gaps": [
+          {
+            "answer_excerpt": "返回2，0也满足value>0并被计数",
+            "explanation": "仍缺逐次count状态及return位于循环后的说明。",
+            "point_ids": [
+              "p1"
+            ],
+            "citations": [
+              "lc_681c00da41dc50c8318d210b"
+            ]
+          }
+        ],
+        "cause_hypotheses": [
+          {
+            "hypothesis": "可能混用了单位或误读了条件",
+            "evidence_for": "返回2，0也满足value>0并被计数",
+            "missing_evidence": "仍缺另一独立实例观察",
+            "confidence": "tentative"
+          }
+        ],
+        "dimension_observations": [
+          {
+            "id": "result",
+            "observation": "met",
+            "reason": "按当前给定答案和资料核对，暂不推断长期能力。",
+            "point_ids": [
+              "p1"
+            ]
+          },
+          {
+            "id": "condition",
+            "observation": "not_met",
+            "reason": "按当前给定答案和资料核对，暂不推断长期能力。",
+            "point_ids": [
+              "p2"
+            ]
+          },
+          {
+            "id": "trace",
+            "observation": "unknown",
+            "reason": "按当前给定答案和资料核对，暂不推断长期能力。",
+            "point_ids": [
+              "p3"
+            ]
+          },
+          {
+            "id": "return_position",
+            "observation": "unknown",
+            "reason": "按当前给定答案和资料核对，暂不推断长期能力。",
+            "point_ids": [
+              "p4"
+            ]
+          }
+        ],
+        "next_focus": {
+          "focus_dimension": "condition",
+          "reason": "新实例需独立完成，当前一次观察不能代表长期掌握。",
+          "suggested_mode": "retest"
+        }
+      }
+    },
+    {
+      "kind": "browser_preconditions",
+      "activity_id": "5419dcd3-d0d2-4e0b-8d6e-ba1f1d6c4084",
+      "history_count": 32,
+      "seed": {
+        "activity_id": "556b7bed-a5f1-4306-8a31-c8b4492c4205",
+        "source": {
+          "id": "f5f1ed20-4bdd-4a2d-a7c1-f30c653cc21b",
+          "title": "task100-repair-g7-90b3e673.md",
+          "revision": 1,
+          "version_id": "1bace6ce-2b54-4109-999d-dc04c490893b",
+          "sha256": "fb2f7a7231b1f082794c5467637cc5f4fc229db8fcbb6b708c7c7cd96783dc7e",
+          "size": 581,
+          "filename": "task100-repair-g7-90b3e673.md",
+          "format": "md",
+          "created_at": "2026-10-05T10:31:50.684620+00:00"
+        },
+        "operation_id": "learn-first-v1.8cd70c22756669d3ffca66faa1f137dab5ee05bc061d0b7498973159057241e4",
+        "payload_sha256": "7b93323ea59af93629aaa3a18ed4144fae6a96af1f26fe7edae2473ff653e40d",
+        "goal": "能换算平均速度、解释原子性并手推程序条件",
+        "synthetic_precondition": true,
+        "sup_created": false,
+        "provider_sent": false
+      },
+      "actual_model_requests": false,
+      "new_sup": 0,
+      "delete_used": false
+    }
+  ],
+  "session_outcomes": [
+    {
+      "run_tag": "teach-09912873bbb5129e854cf8d4",
+      "state": "settled",
+      "activity_id": "5419dcd3-d0d2-4e0b-8d6e-ba1f1d6c4084",
+      "generation": 1,
+      "job_name": "Local\\RetroLume.Activity.5419dcd3d0d24e0b8d6eba1f1d6c4084.G1",
+      "pid": 21980,
+      "active_processes_at_end": 0,
+      "settled_seconds": 2,
+      "reserved_seconds": 0,
+      "pending_fold_seconds": 0,
+      "elapsed_seconds": 1.218,
+      "cleanup_incomplete": false,
+      "error_type": null,
+      "cleanup_errors": [],
+      "timing_diagnostic": [
+        467736078000000,
+        467737296000000,
+        1218000000,
+        2,
+        90
+      ],
+      "manager_pid": 13512,
+      "manager_created_100ns": 134356698631815171,
+      "running_owner_session_id": 1,
+      "worker_created_100ns": 134356698641383765,
+      "model_receipt": {
+        "business_commit": "committed",
+        "context": {
+          "activity_id": "5419dcd3-d0d2-4e0b-8d6e-ba1f1d6c4084",
+          "execution_generation": 1,
+          "executor_id": "local-ui",
+          "operation_id": "teach8m.7698a33b-533e-408a-83cc-4bdd96c7876a.f294ee2d87618c109189a763aac7349fa23443da39c8bc2759a80defc7e40474",
+          "scope_revision": 1
+        },
+        "protocol": 3,
+        "result": {
+          "configured_model": "synthetic-model-100",
+          "error_code": null,
+          "finish_reason": "stop",
+          "json_object": null,
+          "operation_id": "teach8m.7698a33b-533e-408a-83cc-4bdd96c7876a.f294ee2d87618c109189a763aac7349fa23443da39c8bc2759a80defc7e40474",
+          "payload_sha256": "9c84b2a106a39003159419ed00a1f34397d0f26def65b07405e039d826b2a082",
+          "provider": "deepseek_chat_completions",
+          "remote_request_id": "task100-synthetic",
+          "returned_model": "synthetic-model-100",
+          "status": "succeeded",
+          "text": null,
+          "tool_plans": [],
+          "usage": {
+            "completion_tokens": 256,
+            "prompt_tokens": 128,
+            "total_tokens": 384
+          }
+        },
+        "run_tag": "teach-09912873bbb5129e854cf8d4"
+      },
+      "tool_receipt": null
+    },
+    {
+      "run_tag": "teach-c392593b18798949deb86697",
+      "state": "settled",
+      "activity_id": "5419dcd3-d0d2-4e0b-8d6e-ba1f1d6c4084",
+      "generation": 3,
+      "job_name": "Local\\RetroLume.Activity.5419dcd3d0d24e0b8d6eba1f1d6c4084.G3",
+      "pid": 41576,
+      "active_processes_at_end": 0,
+      "settled_seconds": 2,
+      "reserved_seconds": 0,
+      "pending_fold_seconds": 0,
+      "elapsed_seconds": 1.578,
+      "cleanup_incomplete": false,
+      "error_type": null,
+      "cleanup_errors": [],
+      "timing_diagnostic": [
+        467739718000000,
+        467741296000000,
+        1578000000,
+        2,
+        90
+      ],
+      "manager_pid": 26288,
+      "manager_created_100ns": 134356698665276301,
+      "running_owner_session_id": 1,
+      "worker_created_100ns": 134356698677716602,
+      "model_receipt": null,
+      "tool_receipt": {
+        "business_commit": "committed",
+        "context": {
+          "activity_id": "5419dcd3-d0d2-4e0b-8d6e-ba1f1d6c4084",
+          "execution_generation": 3,
+          "executor_id": "local-ui",
+          "operation_id": "teach8t.b3f1eeb4-c1ee-4866-ab8e-1a599af9ac80.aa01eb6ef40cdb8ccd68c7d0e85b57b72a2ecf41736990abbc95bfc194317736",
+          "scope_revision": 1
+        },
+        "protocol": 4,
+        "result": {
+          "arguments_sha256": "dddc42ca5403f84df6d3bb0e2e1121a05114a7ee127963e69c4991d57ded953d",
+          "call_id": "tc-b3f1eeb4",
+          "error_code": null,
+          "kind": "tool",
+          "name": "finite_calculate",
+          "payload_sha256": "5a26e577b7272e04cf2da5bebf2dd0faf64511bc521ee51db90112652a90a5a9",
+          "status": "succeeded"
+        },
+        "run_tag": "teach-c392593b18798949deb86697"
+      }
+    },
+    {
+      "run_tag": "teach-dae771badf7bc3396baab6a2",
+      "state": "settled",
+      "activity_id": "30f33ce2-1b04-498f-85b8-7a5c85eed3ad",
+      "generation": 1,
+      "job_name": "Local\\RetroLume.Activity.30f33ce21b04498f85b87a5c85eed3ad.G1",
+      "pid": 20456,
+      "active_processes_at_end": 0,
+      "settled_seconds": 2,
+      "reserved_seconds": 0,
+      "pending_fold_seconds": 0,
+      "elapsed_seconds": 1.172,
+      "cleanup_incomplete": false,
+      "error_type": null,
+      "cleanup_errors": [],
+      "timing_diagnostic": [
+        467744265000000,
+        467745437000000,
+        1172000000,
+        2,
+        90
+      ],
+      "manager_pid": 29292,
+      "manager_created_100ns": 134356698713632246,
+      "running_owner_session_id": 1,
+      "worker_created_100ns": 134356698723207718,
+      "model_receipt": {
+        "business_commit": "committed",
+        "context": {
+          "activity_id": "30f33ce2-1b04-498f-85b8-7a5c85eed3ad",
+          "execution_generation": 1,
+          "executor_id": "local-ui",
+          "operation_id": "teach8m.350efbb3-0e2d-43e4-92bb-fffc710edb42.6db288385eff5d4b0e33f1a41a6f3c384749046c7a7946229e4614ab7dd9c85e",
+          "scope_revision": 1
+        },
+        "protocol": 3,
+        "result": {
+          "configured_model": "synthetic-model-100",
+          "error_code": null,
+          "finish_reason": "stop",
+          "json_object": null,
+          "operation_id": "teach8m.350efbb3-0e2d-43e4-92bb-fffc710edb42.6db288385eff5d4b0e33f1a41a6f3c384749046c7a7946229e4614ab7dd9c85e",
+          "payload_sha256": "409030a164386be6789ab453d8aeb52253631e69020f4bce2688557ef5246f7e",
+          "provider": "deepseek_chat_completions",
+          "remote_request_id": "task100-synthetic",
+          "returned_model": "synthetic-model-100",
+          "status": "succeeded",
+          "text": null,
+          "tool_plans": [],
+          "usage": {
+            "completion_tokens": 256,
+            "prompt_tokens": 128,
+            "total_tokens": 384
+          }
+        },
+        "run_tag": "teach-dae771badf7bc3396baab6a2"
+      },
+      "tool_receipt": null
+    },
+    {
+      "run_tag": "teach-1f977edf1ca71bfdde7aae9e",
+      "state": "settled",
+      "activity_id": "20fc7995-ca60-461d-b8d0-8f11ea7cfa0b",
+      "generation": 1,
+      "job_name": "Local\\RetroLume.Activity.20fc7995ca60461db8d08f11ea7cfa0b.G1",
+      "pid": 10860,
+      "active_processes_at_end": 0,
+      "settled_seconds": 2,
+      "reserved_seconds": 0,
+      "pending_fold_seconds": 0,
+      "elapsed_seconds": 1.109,
+      "cleanup_incomplete": false,
+      "error_type": null,
+      "cleanup_errors": [],
+      "timing_diagnostic": [
+        467747359000000,
+        467748468000000,
+        1109000000,
+        2,
+        90
+      ],
+      "manager_pid": 22076,
+      "manager_created_100ns": 134356698744724088,
+      "running_owner_session_id": 1,
+      "worker_created_100ns": 134356698754122777,
+      "model_receipt": {
+        "business_commit": "committed",
+        "context": {
+          "activity_id": "20fc7995-ca60-461d-b8d0-8f11ea7cfa0b",
+          "execution_generation": 1,
+          "executor_id": "local-ui",
+          "operation_id": "teach8m.c6cccae9-2f2b-4aac-b321-2440d072b638.13fe436b4d57ea54b9dd9e7a7b3898fb2ae849b1d6e7ea7a8e05cf08f54ee925",
+          "scope_revision": 1
+        },
+        "protocol": 3,
+        "result": {
+          "configured_model": "synthetic-model-100",
+          "error_code": null,
+          "finish_reason": "stop",
+          "json_object": null,
+          "operation_id": "teach8m.c6cccae9-2f2b-4aac-b321-2440d072b638.13fe436b4d57ea54b9dd9e7a7b3898fb2ae849b1d6e7ea7a8e05cf08f54ee925",
+          "payload_sha256": "c424581fa38552acfe5038bfa17f01516910cc85f780cc60107f8029cb92387c",
+          "provider": "deepseek_chat_completions",
+          "remote_request_id": "task100-synthetic",
+          "returned_model": "synthetic-model-100",
+          "status": "succeeded",
+          "text": null,
+          "tool_plans": [],
+          "usage": {
+            "completion_tokens": 256,
+            "prompt_tokens": 128,
+            "total_tokens": 384
+          }
+        },
+        "run_tag": "teach-1f977edf1ca71bfdde7aae9e"
+      },
+      "tool_receipt": null
+    },
+    {
+      "run_tag": "teach-63fe86f4fb0970f305ab0069",
+      "state": "settled",
+      "activity_id": "20fc7995-ca60-461d-b8d0-8f11ea7cfa0b",
+      "generation": 3,
+      "job_name": "Local\\RetroLume.Activity.20fc7995ca60461db8d08f11ea7cfa0b.G3",
+      "pid": 34704,
+      "active_processes_at_end": 0,
+      "settled_seconds": 2,
+      "reserved_seconds": 0,
+      "pending_fold_seconds": 0,
+      "elapsed_seconds": 1.141,
+      "cleanup_incomplete": false,
+      "error_type": null,
+      "cleanup_errors": [],
+      "timing_diagnostic": [
+        467750421000000,
+        467751562000000,
+        1141000000,
+        2,
+        90
+      ],
+      "manager_pid": 36464,
+      "manager_created_100ns": 134356698775367563,
+      "running_owner_session_id": 1,
+      "worker_created_100ns": 134356698784601956,
+      "model_receipt": {
+        "business_commit": "committed",
+        "context": {
+          "activity_id": "20fc7995-ca60-461d-b8d0-8f11ea7cfa0b",
+          "execution_generation": 3,
+          "executor_id": "local-ui",
+          "operation_id": "teach8m.e41cdadf-9baf-4af8-be6a-439a92a32cfd.6252312dd369a25d3b776eb933ab5fa85eae8c310d38737fed9f80b95d430e05",
+          "scope_revision": 1
+        },
+        "protocol": 3,
+        "result": {
+          "configured_model": "synthetic-model-100",
+          "error_code": null,
+          "finish_reason": "stop",
+          "json_object": null,
+          "operation_id": "teach8m.e41cdadf-9baf-4af8-be6a-439a92a32cfd.6252312dd369a25d3b776eb933ab5fa85eae8c310d38737fed9f80b95d430e05",
+          "payload_sha256": "e682049cb455e5263f7e86f733f23cd8c07ae6e548b99fa6320a401f9f0ed305",
+          "provider": "deepseek_chat_completions",
+          "remote_request_id": "task100-synthetic",
+          "returned_model": "synthetic-model-100",
+          "status": "succeeded",
+          "text": null,
+          "tool_plans": [],
+          "usage": {
+            "completion_tokens": 256,
+            "prompt_tokens": 128,
+            "total_tokens": 384
+          }
+        },
+        "run_tag": "teach-63fe86f4fb0970f305ab0069"
+      },
+      "tool_receipt": null
+    },
+    {
+      "run_tag": "teach-182a3decd40b5cfac5b26459",
+      "state": "settled",
+      "activity_id": "20fc7995-ca60-461d-b8d0-8f11ea7cfa0b",
+      "generation": 5,
+      "job_name": "Local\\RetroLume.Activity.20fc7995ca60461db8d08f11ea7cfa0b.G5",
+      "pid": 13036,
+      "active_processes_at_end": 0,
+      "settled_seconds": 2,
+      "reserved_seconds": 0,
+      "pending_fold_seconds": 0,
+      "elapsed_seconds": 1.203,
+      "cleanup_incomplete": false,
+      "error_type": null,
+      "cleanup_errors": [],
+      "timing_diagnostic": [
+        467753500000000,
+        467754703000000,
+        1203000000,
+        2,
+        90
+      ],
+      "manager_pid": 33496,
+      "manager_created_100ns": 134356698805829323,
+      "running_owner_session_id": 1,
+      "worker_created_100ns": 134356698815468591,
+      "model_receipt": {
+        "business_commit": "committed",
+        "context": {
+          "activity_id": "20fc7995-ca60-461d-b8d0-8f11ea7cfa0b",
+          "execution_generation": 5,
+          "executor_id": "local-ui",
+          "operation_id": "teach8m.7e592cb5-f341-4d06-9906-b924a1baa797.bbd38fe3fb0de204b2c7d6e18bdcf958099abd82fda6182342e3e71252e459ed",
+          "scope_revision": 1
+        },
+        "protocol": 3,
+        "result": {
+          "configured_model": "synthetic-model-100",
+          "error_code": null,
+          "finish_reason": "stop",
+          "json_object": null,
+          "operation_id": "teach8m.7e592cb5-f341-4d06-9906-b924a1baa797.bbd38fe3fb0de204b2c7d6e18bdcf958099abd82fda6182342e3e71252e459ed",
+          "payload_sha256": "940b58aa9178b801e16e6052ff40a8fbd09a3bf11dc5d12b73e6855039a6ab35",
+          "provider": "deepseek_chat_completions",
+          "remote_request_id": "task100-synthetic",
+          "returned_model": "synthetic-model-100",
+          "status": "succeeded",
+          "text": null,
+          "tool_plans": [],
+          "usage": {
+            "completion_tokens": 256,
+            "prompt_tokens": 128,
+            "total_tokens": 384
+          }
+        },
+        "run_tag": "teach-182a3decd40b5cfac5b26459"
+      },
+      "tool_receipt": null
+    },
+    {
+      "run_tag": "teach-b7f1e05a5e5e837f3480ea41",
+      "state": "settled",
+      "activity_id": "20fc7995-ca60-461d-b8d0-8f11ea7cfa0b",
+      "generation": 7,
+      "job_name": "Local\\RetroLume.Activity.20fc7995ca60461db8d08f11ea7cfa0b.G7",
+      "pid": 17232,
+      "active_processes_at_end": 0,
+      "settled_seconds": 2,
+      "reserved_seconds": 0,
+      "pending_fold_seconds": 0,
+      "elapsed_seconds": 1.297,
+      "cleanup_incomplete": false,
+      "error_type": null,
+      "cleanup_errors": [],
+      "timing_diagnostic": [
+        467756843000000,
+        467758140000000,
+        1297000000,
+        2,
+        90
+      ],
+      "manager_pid": 26556,
+      "manager_created_100ns": 134356698839333523,
+      "running_owner_session_id": 1,
+      "worker_created_100ns": 134356698848827560,
+      "model_receipt": {
+        "business_commit": "committed",
+        "context": {
+          "activity_id": "20fc7995-ca60-461d-b8d0-8f11ea7cfa0b",
+          "execution_generation": 7,
+          "executor_id": "local-ui",
+          "operation_id": "teach8m.5075aade-96d4-4251-af79-86632e066876.c251121d5d87d422ace298afdff93ebfe86079f07b8b3aed2efce24cb5ee9bd2",
+          "scope_revision": 1
+        },
+        "protocol": 3,
+        "result": {
+          "configured_model": "synthetic-model-100",
+          "error_code": null,
+          "finish_reason": "stop",
+          "json_object": null,
+          "operation_id": "teach8m.5075aade-96d4-4251-af79-86632e066876.c251121d5d87d422ace298afdff93ebfe86079f07b8b3aed2efce24cb5ee9bd2",
+          "payload_sha256": "b7f6e22ae43ba68c7164e9e3999ac1d233677e3d003be99fe06465242f225852",
+          "provider": "deepseek_chat_completions",
+          "remote_request_id": "task100-synthetic",
+          "returned_model": "synthetic-model-100",
+          "status": "succeeded",
+          "text": null,
+          "tool_plans": [],
+          "usage": {
+            "completion_tokens": 256,
+            "prompt_tokens": 128,
+            "total_tokens": 384
+          }
+        },
+        "run_tag": "teach-b7f1e05a5e5e837f3480ea41"
+      },
+      "tool_receipt": null
+    },
+    {
+      "run_tag": "teach-efff952af07c1598760bdd04",
+      "state": "settled",
+      "activity_id": "20fc7995-ca60-461d-b8d0-8f11ea7cfa0b",
+      "generation": 9,
+      "job_name": "Local\\RetroLume.Activity.20fc7995ca60461db8d08f11ea7cfa0b.G9",
+      "pid": 11700,
+      "active_processes_at_end": 0,
+      "settled_seconds": 2,
+      "reserved_seconds": 0,
+      "pending_fold_seconds": 0,
+      "elapsed_seconds": 1.156,
+      "cleanup_incomplete": false,
+      "error_type": null,
+      "cleanup_errors": [],
+      "timing_diagnostic": [
+        467760125000000,
+        467761281000000,
+        1156000000,
+        2,
+        90
+      ],
+      "manager_pid": 15400,
+      "manager_created_100ns": 134356698871925176,
+      "running_owner_session_id": 1,
+      "worker_created_100ns": 134356698881689763,
+      "model_receipt": {
+        "business_commit": "committed",
+        "context": {
+          "activity_id": "20fc7995-ca60-461d-b8d0-8f11ea7cfa0b",
+          "execution_generation": 9,
+          "executor_id": "local-ui",
+          "operation_id": "teach8m.71a3cc40-884d-4dae-9731-46c39a32bb46.ba555705f695426ac519fe27c2b882214bbe71d88594224e0bc143252be342f0",
+          "scope_revision": 1
+        },
+        "protocol": 3,
+        "result": {
+          "configured_model": "synthetic-model-100",
+          "error_code": null,
+          "finish_reason": "stop",
+          "json_object": null,
+          "operation_id": "teach8m.71a3cc40-884d-4dae-9731-46c39a32bb46.ba555705f695426ac519fe27c2b882214bbe71d88594224e0bc143252be342f0",
+          "payload_sha256": "9e202130ff6fb3bed62d3b2dc67ebc5cebf067bb04fa40a58ceae397d6dbd773",
+          "provider": "deepseek_chat_completions",
+          "remote_request_id": "task100-synthetic",
+          "returned_model": "synthetic-model-100",
+          "status": "succeeded",
+          "text": null,
+          "tool_plans": [],
+          "usage": {
+            "completion_tokens": 256,
+            "prompt_tokens": 128,
+            "total_tokens": 384
+          }
+        },
+        "run_tag": "teach-efff952af07c1598760bdd04"
+      },
+      "tool_receipt": null
+    },
+    {
+      "run_tag": "teach-d284376220b67a5c8fe91bae",
+      "state": "settled",
+      "activity_id": "0cf86287-cfff-446c-adff-f0751d12fb90",
+      "generation": 5,
+      "job_name": "Local\\RetroLume.Activity.0cf86287cfff446cadfff0751d12fb90.G5",
+      "pid": 13104,
+      "active_processes_at_end": 0,
+      "settled_seconds": 2,
+      "reserved_seconds": 0,
+      "pending_fold_seconds": 0,
+      "elapsed_seconds": 1.141,
+      "cleanup_incomplete": false,
+      "error_type": null,
+      "cleanup_errors": [],
+      "timing_diagnostic": [
+        467766171000000,
+        467767312000000,
+        1141000000,
+        2,
+        90
+      ],
+      "manager_pid": 3292,
+      "manager_created_100ns": 134356698932945366,
+      "running_owner_session_id": 1,
+      "worker_created_100ns": 134356698942042658,
+      "model_receipt": {
+        "business_commit": "committed",
+        "context": {
+          "activity_id": "0cf86287-cfff-446c-adff-f0751d12fb90",
+          "execution_generation": 5,
+          "executor_id": "local-ui",
+          "operation_id": "teach8m.91afc4a8-24ad-47bc-9c6c-806c6bbf1781.52c4ee80fcc60b2369d5efe35aa0d989bc7e4fea15133e41260369448944abf0",
+          "scope_revision": 1
+        },
+        "protocol": 3,
+        "result": {
+          "configured_model": "synthetic-model-100",
+          "error_code": null,
+          "finish_reason": "stop",
+          "json_object": null,
+          "operation_id": "teach8m.91afc4a8-24ad-47bc-9c6c-806c6bbf1781.52c4ee80fcc60b2369d5efe35aa0d989bc7e4fea15133e41260369448944abf0",
+          "payload_sha256": "915eb961f26762d7b6beb1adf237879c0cb6599b7bea01b7a6af61708ae232a2",
+          "provider": "deepseek_chat_completions",
+          "remote_request_id": "task100-synthetic",
+          "returned_model": "synthetic-model-100",
+          "status": "succeeded",
+          "text": null,
+          "tool_plans": [],
+          "usage": {
+            "completion_tokens": 256,
+            "prompt_tokens": 128,
+            "total_tokens": 384
+          }
+        },
+        "run_tag": "teach-d284376220b67a5c8fe91bae"
+      },
+      "tool_receipt": null
+    },
+    {
+      "run_tag": "teach-3a03907d95ce40f2aadee1c9",
+      "state": "settled",
+      "activity_id": "0cf86287-cfff-446c-adff-f0751d12fb90",
+      "generation": 7,
+      "job_name": "Local\\RetroLume.Activity.0cf86287cfff446cadfff0751d12fb90.G7",
+      "pid": 40552,
+      "active_processes_at_end": 0,
+      "settled_seconds": 2,
+      "reserved_seconds": 0,
+      "pending_fold_seconds": 0,
+      "elapsed_seconds": 1.203,
+      "cleanup_incomplete": false,
+      "error_type": null,
+      "cleanup_errors": [],
+      "timing_diagnostic": [
+        467769203000000,
+        467770406000000,
+        1203000000,
+        2,
+        90
+      ],
+      "manager_pid": 22752,
+      "manager_created_100ns": 134356698962827995,
+      "running_owner_session_id": 1,
+      "worker_created_100ns": 134356698972529878,
+      "model_receipt": {
+        "business_commit": "committed",
+        "context": {
+          "activity_id": "0cf86287-cfff-446c-adff-f0751d12fb90",
+          "execution_generation": 7,
+          "executor_id": "local-ui",
+          "operation_id": "teach8m.7a66e862-f0cf-46f2-9005-b030b25358a2.31511501487f157d6d392ae1c2a5deff42e3e60eb9023c6dd18d8ba0720f6844",
+          "scope_revision": 1
+        },
+        "protocol": 3,
+        "result": {
+          "configured_model": "synthetic-model-100",
+          "error_code": null,
+          "finish_reason": "stop",
+          "json_object": null,
+          "operation_id": "teach8m.7a66e862-f0cf-46f2-9005-b030b25358a2.31511501487f157d6d392ae1c2a5deff42e3e60eb9023c6dd18d8ba0720f6844",
+          "payload_sha256": "a65d8e8909c55b03726b58edcce91e69cc9ea644490d7a4107ef387eeee725ae",
+          "provider": "deepseek_chat_completions",
+          "remote_request_id": "task100-synthetic",
+          "returned_model": "synthetic-model-100",
+          "status": "succeeded",
+          "text": null,
+          "tool_plans": [],
+          "usage": {
+            "completion_tokens": 256,
+            "prompt_tokens": 128,
+            "total_tokens": 384
+          }
+        },
+        "run_tag": "teach-3a03907d95ce40f2aadee1c9"
+      },
+      "tool_receipt": null
+    },
+    {
+      "run_tag": "teach-ef27f2dfd91e32b1c7ddfec2",
+      "state": "settled",
+      "activity_id": "677056ec-d82f-4671-b273-7c7af1cb7fbc",
+      "generation": 5,
+      "job_name": "Local\\RetroLume.Activity.677056ecd82f4671b2737c7af1cb7fbc.G5",
+      "pid": 40328,
+      "active_processes_at_end": 0,
+      "settled_seconds": 2,
+      "reserved_seconds": 0,
+      "pending_fold_seconds": 0,
+      "elapsed_seconds": 1.187,
+      "cleanup_incomplete": false,
+      "error_type": null,
+      "cleanup_errors": [],
+      "timing_diagnostic": [
+        467775531000000,
+        467776718000000,
+        1187000000,
+        2,
+        90
+      ],
+      "manager_pid": 7760,
+      "manager_created_100ns": 134356699026743708,
+      "running_owner_session_id": 1,
+      "worker_created_100ns": 134356699035652672,
+      "model_receipt": {
+        "business_commit": "committed",
+        "context": {
+          "activity_id": "677056ec-d82f-4671-b273-7c7af1cb7fbc",
+          "execution_generation": 5,
+          "executor_id": "local-ui",
+          "operation_id": "teach8m.311c9655-b91d-411c-82aa-0293d53077f4.26b484be3c2810f0700617defafae4689d813b345b8331c9e1fd0d567729f78e",
+          "scope_revision": 1
+        },
+        "protocol": 3,
+        "result": {
+          "configured_model": "synthetic-model-100",
+          "error_code": null,
+          "finish_reason": "stop",
+          "json_object": null,
+          "operation_id": "teach8m.311c9655-b91d-411c-82aa-0293d53077f4.26b484be3c2810f0700617defafae4689d813b345b8331c9e1fd0d567729f78e",
+          "payload_sha256": "ab512a08367886a1c99482f800683eda176de36ad0e520ee15ecaff17bcdb7b8",
+          "provider": "deepseek_chat_completions",
+          "remote_request_id": "task100-synthetic",
+          "returned_model": "synthetic-model-100",
+          "status": "succeeded",
+          "text": null,
+          "tool_plans": [],
+          "usage": {
+            "completion_tokens": 256,
+            "prompt_tokens": 128,
+            "total_tokens": 384
+          }
+        },
+        "run_tag": "teach-ef27f2dfd91e32b1c7ddfec2"
+      },
+      "tool_receipt": null
+    },
+    {
+      "run_tag": "teach-a61c213f712bceeb4af0b618",
+      "state": "settled",
+      "activity_id": "677056ec-d82f-4671-b273-7c7af1cb7fbc",
+      "generation": 7,
+      "job_name": "Local\\RetroLume.Activity.677056ecd82f4671b2737c7af1cb7fbc.G7",
+      "pid": 21036,
+      "active_processes_at_end": 0,
+      "settled_seconds": 2,
+      "reserved_seconds": 0,
+      "pending_fold_seconds": 0,
+      "elapsed_seconds": 1.219,
+      "cleanup_incomplete": false,
+      "error_type": null,
+      "cleanup_errors": [],
+      "timing_diagnostic": [
+        467778562000000,
+        467779781000000,
+        1219000000,
+        2,
+        90
+      ],
+      "manager_pid": 33852,
+      "manager_created_100ns": 134356699056358543,
+      "running_owner_session_id": 1,
+      "worker_created_100ns": 134356699066224936,
+      "model_receipt": {
+        "business_commit": "committed",
+        "context": {
+          "activity_id": "677056ec-d82f-4671-b273-7c7af1cb7fbc",
+          "execution_generation": 7,
+          "executor_id": "local-ui",
+          "operation_id": "teach8m.fdad739a-6936-4fb6-aa5a-cd4d561790a3.ca1eb713c3b325c8660cb9a6cf8678aa64eee62770524fb8ae25c1ef8c0fde5d",
+          "scope_revision": 1
+        },
+        "protocol": 3,
+        "result": {
+          "configured_model": "synthetic-model-100",
+          "error_code": null,
+          "finish_reason": "stop",
+          "json_object": null,
+          "operation_id": "teach8m.fdad739a-6936-4fb6-aa5a-cd4d561790a3.ca1eb713c3b325c8660cb9a6cf8678aa64eee62770524fb8ae25c1ef8c0fde5d",
+          "payload_sha256": "822c8bdcda9162f4ff8f1eced77499ccae7206e0c4bbc0a7a8fcce3aa302990b",
+          "provider": "deepseek_chat_completions",
+          "remote_request_id": "task100-synthetic",
+          "returned_model": "synthetic-model-100",
+          "status": "succeeded",
+          "text": null,
+          "tool_plans": [],
+          "usage": {
+            "completion_tokens": 256,
+            "prompt_tokens": 128,
+            "total_tokens": 384
+          }
+        },
+        "run_tag": "teach-a61c213f712bceeb4af0b618"
+      },
+      "tool_receipt": null
+    }
+  ],
+  "provider_real": false,
+  "user_program_executed": false,
+  "old_17_windows_rerun": false
+}

@@ -1,0 +1,90 @@
+--- before/backend/app/preview/production_supervisor.py
++++ final/backend/app/preview/production_supervisor.py
+@@ -200,6 +200,9 @@
+ 
+     async def open(self,aid,artifact_id,command):
+         async with self._open_lock:
++            gate=getattr(self,'mutation_gate',None)
++            if gate is not None:
++                with gate.acquire(outgoing=True):return await self._open_serial(aid,artifact_id,command)
+             return await self._open_serial(aid,artifact_id,command)
+ 
+     async def _open_serial(self,aid,artifact_id,command):
+@@ -252,6 +255,10 @@
+                   "intent":current["intent"],"cid":None,"complete":False,"control_key_blob":protect_control_key(control_key),
+                   "activity_id":aid,"preview_id":pid,"generation":row["generation"],"attach_pid":None,"attach_birth":None}
+         current["registry"]=registry;atomic_json(folder/"registry.json",registry);atomic_json(self.current_file,{"folder":str(folder),"preview_id":pid})
++        gate=getattr(self,'mutation_gate',None)
++        if gate is not None:
++            current['data_owned_id']=gate.register_owned('preview',{'parent':registry['parent'],'preview_id':pid,
++                'boot_id':self.boot_id,'generation':row['generation'],'native_registry_id':pid})
+         with self._lock:
+             if self.current is not None:raise OwnershipUnknown("physical_owner_conflict")
+             self.current=current
+@@ -383,6 +390,18 @@
+         self._save_observation(c,c["folder"]/"stderr-observation.json",{**self._pipe_observation(c),"at_ns":time.monotonic_ns()})
+ 
+     def _run(self,c):
++        gate=getattr(self,'mutation_gate',None)
++        if gate is not None:
++            with gate.close_lane(c['data_owned_id']):
++                with gate.acquire():
++                    try:self._run_data_owned(c)
++                    finally:
++                        gate.end_owned(c['data_owned_id'],confirmed=c['registry'].get('complete') is True,
++                                       proof_sha256=hashlib.sha256(canonical(c['registry']).encode('utf-8')).hexdigest())
++            return
++        self._run_data_owned(c)
++
++    def _run_data_owned(self,c):
+         with HostJob(job_name(c["preview_id"],c["nonce"],"SUP")) as job:
+             c["host_job"]=job;c["reaper_job"]=None
+             with scope(job):self._run_owned(c)
+@@ -406,18 +425,21 @@
+             c["reaper_owner"]={"pid":ready_owner["pid"],"birth":ready_owner["birth"]};c["registry"]["reaper_owner"]=c["reaper_owner"]
+             self._registry(c);atomic_json(c["folder"]/"reaper-lineage.json",lineage)
+             c["reaper_job"]=HostJob(expected_job,existing=True)
+-            c["registry"]["create_requested_ns"]=time.monotonic_ns();self._registry(c)
+-            existing=find_intent(self.policy.docker,c["intent"])
+-            if existing is not None:raise OwnershipUnknown("name_conflict")
+-            self._event("create_attempt",{"name":c["name"],"preview_id":c["preview_id"]})
+-            try:
+-                result=call(self.policy.docker,creation_args(c["intent"],PREVIEW_ROOT/"seccomp.json"),timeout=2)
+-                atomic_json(c["folder"]/"create.json",result)
+-                if result["code"]:raise DockerUnknown("create_failed")
+-                cid=result["stdout"].strip();inspect_owned(self.policy.docker,cid,c["intent"])
+-            except DockerUnknown:
+-                cid=find_intent(self.policy.docker,c["intent"])
+-                if cid is None:raise
++            gate=getattr(self,'mutation_gate',None)
++            from contextlib import nullcontext
++            with gate.outgoing_section() if gate is not None else nullcontext():
++                c["registry"]["create_requested_ns"]=time.monotonic_ns();self._registry(c)
++                existing=find_intent(self.policy.docker,c["intent"])
++                if existing is not None:raise OwnershipUnknown("name_conflict")
++                self._event("create_attempt",{"name":c["name"],"preview_id":c["preview_id"]})
++                try:
++                    result=call(self.policy.docker,creation_args(c["intent"],PREVIEW_ROOT/"seccomp.json"),timeout=2)
++                    atomic_json(c["folder"]/"create.json",result)
++                    if result["code"]:raise DockerUnknown("create_failed")
++                    cid=result["stdout"].strip();inspect_owned(self.policy.docker,cid,c["intent"])
++                except DockerUnknown:
++                    cid=find_intent(self.policy.docker,c["intent"])
++                    if cid is None:raise
+             c["cid"]=cid;c["registry"]["cid"]=cid;self._registry(c);self._transition(c,"registered",cid=cid)
+             while not (c["folder"]/"reaper-bound.json").exists():
+                 if reaper.poll() is not None or time.monotonic_ns()>min(c["t0_ns"]+4500000000,c["deadline_ns"]-10000000000):raise OwnershipUnknown("reaper_bind_unconfirmed")
+@@ -441,9 +463,10 @@
+                 raise OwnershipUnknown("start_window_closed")
+             stage="start_transition";self._transition(c,"start_requested")
+             if c["stop"].is_set():raise OwnershipUnknown("start_observation_failed")
+-            stage="attach_resume";attach.resume();started=True;stage="init_send"
+-            with self._writer:send_packet(attach.stdin,c,"init",0,{"schema":"retrolume.preview.init.v2","description":c["description"],
+-              "description_sha256":digest(c["description"]),"renderer_sha256":self.policy.renderer_sha256,"viewport":{"width":640,"height":480}})
++            with gate.outgoing_section() if gate is not None else nullcontext():
++                stage="attach_resume";attach.resume();started=True;stage="init_send"
++                with self._writer:send_packet(attach.stdin,c,"init",0,{"schema":"retrolume.preview.init.v2","description":c["description"],
++                  "description_sha256":digest(c["description"]),"renderer_sha256":self.policy.renderer_sha256,"viewport":{"width":640,"height":480}})
+             self._wait_ready(c)
+             stage="ready_transition";self._transition(c,"ready");stage="running"
+             while not c["stop"].wait(.05):

@@ -1,0 +1,9 @@
+{
+  "kind": "sql",
+  "pid": 28032,
+  "value": {
+    "tag": "workspace",
+    "sql": "SELECT p.proname,p.prosrc,p.provolatile,p.prosecdef,p.proconfig,\n            EXISTS(SELECT 1 FROM aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) a WHERE a.grantee=0 AND a.privilege_type='EXECUTE') AS public_execute\n          FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace\n          WHERE n.nspname='public' AND p.proname=ANY(%s)",
+    "arguments_saved": false
+  }
+}

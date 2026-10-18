@@ -1,0 +1,1675 @@
+DocuN/evidence/TASK-117/execution/continuation-02/compat-SQL-before.json
+{
+  "who": {
+    "current_user": "step018_compat_admin",
+    "database": "step018_compat"
+  },
+  "mode": {
+    "schema_profile": "data_exit.v1.r02",
+    "mode_observed": "normal"
+  },
+  "role": {
+    "rolname": "retrolume_interview_owner",
+    "rolcanlogin": false,
+    "rolsuper": false,
+    "rolcreatedb": false,
+    "rolcreaterole": false,
+    "rolreplication": false,
+    "rolbypassrls": false
+  },
+  "shape": {
+    "columns": {
+      "count": 43,
+      "first": [
+        {
+          "relname": "activities",
+          "attname": "outbound_grant_sha256",
+          "type": "text",
+          "attnotnull": false,
+          "default": null,
+          "owner": "step018_compat_admin",
+          "owner_super": true,
+          "acl": "{retrolume_data_app=ar/step018_compat_admin,retrolume_data_snapshot=r/step018_compat_admin,retrolume_data_restore_loader=ar/step018_compat_admin}"
+        },
+        {
+          "relname": "retrieval_chunks",
+          "attname": "space_id",
+          "type": "text",
+          "attnotnull": true,
+          "default": null,
+          "owner": "retrolume_retrieval_owner",
+          "owner_super": false,
+          "acl": null
+        },
+        {
+          "relname": "retrieval_chunks",
+          "attname": "evidence_id",
+          "type": "text",
+          "attnotnull": true,
+          "default": null,
+          "owner": "retrolume_retrieval_owner",
+          "owner_super": false,
+          "acl": null
+        },
+        {
+          "relname": "retrieval_chunks",
+          "attname": "source_id",
+          "type": "uuid",
+          "attnotnull": true,
+          "default": null,
+          "owner": "retrolume_retrieval_owner",
+          "owner_super": false,
+          "acl": null
+        },
+        {
+          "relname": "retrieval_chunks",
+          "attname": "source_version_id",
+          "type": "uuid",
+          "attnotnull": true,
+          "default": null,
+          "owner": "retrolume_retrieval_owner",
+          "owner_super": false,
+          "acl": null
+        },
+        {
+          "relname": "retrieval_chunks",
+          "attname": "source_revision",
+          "type": "integer",
+          "attnotnull": true,
+          "default": null,
+          "owner": "retrolume_retrieval_owner",
+          "owner_super": false,
+          "acl": null
+        }
+      ],
+      "last": [
+        {
+          "relname": "retrieval_spaces",
+          "attname": "chunk_recipe",
+          "type": "text",
+          "attnotnull": true,
+          "default": null,
+          "owner": "retrolume_retrieval_owner",
+          "owner_super": false,
+          "acl": null
+        },
+        {
+          "relname": "retrieval_spaces",
+          "attname": "created_at",
+          "type": "timestamp with time zone",
+          "attnotnull": true,
+          "default": "CURRENT_TIMESTAMP",
+          "owner": "retrolume_retrieval_owner",
+          "owner_super": false,
+          "acl": null
+        }
+      ]
+    },
+    "constraints": {
+      "count": 47,
+      "first": [
+        {
+          "relname": "activities",
+          "conname": "activities_outbound_grant_sha256_check",
+          "definition": "CHECK (((outbound_grant_sha256 IS NULL) OR (outbound_grant_sha256 ~ '^[0-9a-f]{64}$'::text)))",
+          "convalidated": true,
+          "condeferrable": false,
+          "condeferred": false
+        },
+        {
+          "relname": "activity_operations",
+          "conname": "activity_operations_kind_domain",
+          "definition": "CHECK ((kind = ANY (ARRAY['model'::text, 'tool'::text, 'embedding'::text])))",
+          "convalidated": true,
+          "condeferrable": false,
+          "condeferred": false
+        },
+        {
+          "relname": "activity_operations",
+          "conname": "activity_operations_kind_shape",
+          "definition": {
+            "characters": 1492,
+            "sha256_utf8": "91510697e079ea502e763c3b1e78ce438f34eef05c18fa44321020732d1f13a2",
+            "prefix": "CHECK ((((kind = 'model'::text) AND (provider IS NOT NULL) AND (configured_model IS NOT NULL) AND (request_bytes IS NOT NULL) AND (request_bytes > 0) AND (max_output_tokens IS NOT NULL) AND (max_outpu"
+          },
+          "convalidated": true,
+          "condeferrable": false,
+          "condeferred": false
+        },
+        {
+          "relname": "activity_operations",
+          "conname": "activity_operations_max_output_tokens_check",
+          "definition": "CHECK ((max_output_tokens >= 0))",
+          "convalidated": true,
+          "condeferrable": false,
+          "condeferred": false
+        },
+        {
+          "relname": "data_control",
+          "conname": "data_control_schema_profile_check",
+          "definition": "CHECK ((schema_profile = ANY (ARRAY['data_exit.v1.r01'::text, 'data_exit.v1.r02'::text])))",
+          "convalidated": true,
+          "condeferrable": false,
+          "condeferred": false
+        },
+        {
+          "relname": "interview_commands",
+          "conname": "interview_command_execution",
+          "definition": "CHECK ((((duplicate_of IS NOT NULL) AND (operation_id IS NULL) AND (context_body IS NULL) AND (context_sha256 IS NULL) AND (NOT effect_applied) AND (NOT launch_claimed)) OR ((duplicate_of IS NULL) AND (execution_kind = 'local'::text) AND (operation_id IS NULL) AND (context_body IS NULL) AND (context_sha256 IS NULL) AND (NOT launch_claimed)) OR ((duplicate_of IS NULL) AND (execution_kind = 'model'::text) AND (action = ANY (ARRAY['ask'::text, 'review'::text])) AND (context_body IS NOT NULL) AND (context_sha256 IS NOT NULL) AND (((((request_body)::jsonb ->> 'schema'::text) = 'interview.command.v1'::text) AND (((context_body)::jsonb ->> 'schema'::text) = 'interview.context.v1'::text) AND (operation_id = ('int10m.'::text || replace((business_key)::text, '-'::text, ''::text)))) OR ((((request_body)::jsonb ->> 'schema'::text) = 'interview.command.v2'::text) AND (((context_body)::jsonb ->> 'schema'::text) = 'interview.context.v2'::text) AND (operation_id = ('int18m.'::text || replace((business_key)::text, '-'::text, ''::text))))))))",
+          "convalidated": true,
+          "condeferrable": false,
+          "condeferred": false
+        }
+      ],
+      "last": [
+        {
+          "relname": "retrieval_spaces",
+          "conname": "retrieval_spaces_provider_configured_model_dimensions_norma_key",
+          "definition": "UNIQUE (provider, configured_model, dimensions, normalization, chunk_recipe)",
+          "convalidated": true,
+          "condeferrable": false,
+          "condeferred": false
+        },
+        {
+          "relname": "retrieval_spaces",
+          "conname": "retrieval_spaces_space_id_check",
+          "definition": "CHECK ((space_id ~ '^[0-9a-f]{64}$'::text))",
+          "convalidated": true,
+          "condeferrable": false,
+          "condeferred": false
+        }
+      ]
+    },
+    "indexes": [
+      {
+        "tablename": "retrieval_chunks",
+        "indexname": "retrieval_chunks_pkey",
+        "indexdef": "CREATE UNIQUE INDEX retrieval_chunks_pkey ON public.retrieval_chunks USING btree (space_id, evidence_id)"
+      },
+      {
+        "tablename": "retrieval_commands",
+        "indexname": "retrieval_commands_pkey",
+        "indexdef": "CREATE UNIQUE INDEX retrieval_commands_pkey ON public.retrieval_commands USING btree (activity_id, business_key)"
+      },
+      {
+        "tablename": "retrieval_spaces",
+        "indexname": "retrieval_spaces_pkey",
+        "indexdef": "CREATE UNIQUE INDEX retrieval_spaces_pkey ON public.retrieval_spaces USING btree (space_id)"
+      },
+      {
+        "tablename": "retrieval_spaces",
+        "indexname": "retrieval_spaces_provider_configured_model_dimensions_norma_key",
+        "indexdef": "CREATE UNIQUE INDEX retrieval_spaces_provider_configured_model_dimensions_norma_key ON public.retrieval_spaces USING btree (provider, configured_model, dimensions, normalization, chunk_recipe)"
+      }
+    ],
+    "triggers": [
+      {
+        "relname": "activities",
+        "tgname": "retrieval_grant_immutable",
+        "tgenabled": "O",
+        "definition": "CREATE TRIGGER retrieval_grant_immutable BEFORE UPDATE ON public.activities FOR EACH ROW EXECUTE FUNCTION retrieval_grant_guard()"
+      },
+      {
+        "relname": "activity_operation_results",
+        "tgname": "retrieval_embedding_result",
+        "tgenabled": "O",
+        "definition": "CREATE TRIGGER retrieval_embedding_result BEFORE INSERT ON public.activity_operation_results FOR EACH ROW EXECUTE FUNCTION retrieval_result_guard()"
+      },
+      {
+        "relname": "activity_operations",
+        "tgname": "retrieval_embedding_operation",
+        "tgenabled": "O",
+        "definition": "CREATE TRIGGER retrieval_embedding_operation BEFORE INSERT ON public.activity_operations FOR EACH ROW EXECUTE FUNCTION retrieval_embedding_operation_guard()"
+      },
+      {
+        "relname": "data_tombstones",
+        "tgname": "retrieval_source_tombstone",
+        "tgenabled": "O",
+        "definition": "CREATE TRIGGER retrieval_source_tombstone AFTER INSERT ON public.data_tombstones FOR EACH ROW EXECUTE FUNCTION purge_retrieval_payloads()"
+      },
+      {
+        "relname": "retrieval_chunks",
+        "tgname": "data_runtime_write",
+        "tgenabled": "O",
+        "definition": "CREATE TRIGGER data_runtime_write BEFORE INSERT OR DELETE OR UPDATE ON public.retrieval_chunks FOR EACH ROW EXECUTE FUNCTION data_runtime_write_guard()"
+      },
+      {
+        "relname": "retrieval_chunks",
+        "tgname": "retrieval_chunk_identity",
+        "tgenabled": "O",
+        "definition": "CREATE TRIGGER retrieval_chunk_identity BEFORE INSERT OR DELETE OR UPDATE ON public.retrieval_chunks FOR EACH ROW EXECUTE FUNCTION retrieval_chunk_guard()"
+      },
+      {
+        "relname": "retrieval_commands",
+        "tgname": "data_runtime_write",
+        "tgenabled": "O",
+        "definition": "CREATE TRIGGER data_runtime_write BEFORE INSERT OR DELETE OR UPDATE ON public.retrieval_commands FOR EACH ROW EXECUTE FUNCTION data_runtime_write_guard()"
+      },
+      {
+        "relname": "retrieval_commands",
+        "tgname": "retrieval_command_identity",
+        "tgenabled": "O",
+        "definition": "CREATE TRIGGER retrieval_command_identity BEFORE INSERT OR DELETE OR UPDATE ON public.retrieval_commands FOR EACH ROW EXECUTE FUNCTION retrieval_command_guard()"
+      },
+      {
+        "relname": "retrieval_spaces",
+        "tgname": "data_runtime_write",
+        "tgenabled": "O",
+        "definition": "CREATE TRIGGER data_runtime_write BEFORE INSERT OR DELETE OR UPDATE ON public.retrieval_spaces FOR EACH ROW EXECUTE FUNCTION data_runtime_write_guard()"
+      },
+      {
+        "relname": "retrieval_spaces",
+        "tgname": "retrieval_space_identity",
+        "tgenabled": "O",
+        "definition": "CREATE TRIGGER retrieval_space_identity BEFORE INSERT OR DELETE OR UPDATE ON public.retrieval_spaces FOR EACH ROW EXECUTE FUNCTION retrieval_space_guard()"
+      }
+    ],
+    "table_acl": [
+      {
+        "relname": "retrieval_chunks",
+        "acl": "{retrolume_retrieval_owner=arwdDxtm/retrolume_retrieval_owner,retrolume_retrieval_app=ar/retrolume_retrieval_owner,retrolume_data_snapshot=r/retrolume_retrieval_owner,retrolume_data_restore_loader=ar/retrolume_retrieval_owner,retrolume_data_owner=r/retrolume_retrieval_owner}"
+      },
+      {
+        "relname": "retrieval_commands",
+        "acl": "{retrolume_retrieval_owner=arwdDxtm/retrolume_retrieval_owner,retrolume_retrieval_app=ar/retrolume_retrieval_owner,retrolume_data_snapshot=r/retrolume_retrieval_owner,retrolume_data_restore_loader=ar/retrolume_retrieval_owner,retrolume_data_owner=r/retrolume_retrieval_owner}"
+      },
+      {
+        "relname": "retrieval_spaces",
+        "acl": "{retrolume_retrieval_owner=arwdDxtm/retrolume_retrieval_owner,retrolume_retrieval_app=ar/retrolume_retrieval_owner,retrolume_data_snapshot=r/retrolume_retrieval_owner,retrolume_data_restore_loader=ar/retrolume_retrieval_owner,retrolume_data_owner=r/retrolume_retrieval_owner}"
+      }
+    ],
+    "roles": [
+      {
+        "rolname": "retrolume_retrieval_app",
+        "rolcanlogin": false,
+        "rolsuper": false,
+        "rolcreatedb": false,
+        "rolcreaterole": false,
+        "rolreplication": false,
+        "rolbypassrls": false
+      },
+      {
+        "rolname": "retrolume_retrieval_owner",
+        "rolcanlogin": false,
+        "rolsuper": false,
+        "rolcreatedb": false,
+        "rolcreaterole": false,
+        "rolreplication": false,
+        "rolbypassrls": false
+      }
+    ],
+    "functions": [
+      {
+        "proname": "interview_head_guard",
+        "arguments": "",
+        "prosrc": {
+          "characters": 3445,
+          "sha256_utf8": "ef5d7e5efaaa665a0147c549fe7290ad40488b676087ed5db872afcb72b10456",
+          "prefix": "\nDECLARE a public.activities; ptr uuid; p public.interview_records;\nBEGIN\n IF TG_OP='DELETE' THEN RAISE EXCEPTION 'interview heads retained'; END IF;\n SELECT * INTO a FROM public.activities WHERE id=N"
+        },
+        "prosecdef": true,
+        "provolatile": "v",
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ],
+        "owner": "retrolume_interview_owner",
+        "acl": "{retrolume_interview_owner=X/retrolume_interview_owner}"
+      },
+      {
+        "proname": "interview_record_insert_guard",
+        "arguments": "",
+        "prosrc": {
+          "characters": 3902,
+          "sha256_utf8": "3b6209dbdf90faa9233b5af6b0961092852d3254e7967912d22db2888227b084",
+          "prefix": "\nDECLARE c public.interview_commands; p public.interview_records; r public.activity_operation_results; o public.activity_operations; b jsonb; ref jsonb;\nBEGIN\n SELECT * INTO c FROM public.interview_co"
+        },
+        "prosecdef": true,
+        "provolatile": "v",
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ],
+        "owner": "retrolume_interview_owner",
+        "acl": "{retrolume_interview_owner=X/retrolume_interview_owner}"
+      },
+      {
+        "proname": "interview_result_eligible",
+        "arguments": "aid uuid, op text",
+        "prosrc": {
+          "characters": 1819,
+          "sha256_utf8": "d76c2d0791e42416702a8b907f0e526fe32dd052de482463bbbf1bef84c838e6",
+          "prefix": "\n SELECT EXISTS(SELECT 1 FROM public.interview_commands c JOIN public.interview_heads h USING(activity_id)\n  JOIN public.interview_records ir ON ir.activity_id=c.activity_id AND ir.business_key=c.busi"
+        },
+        "prosecdef": true,
+        "provolatile": "s",
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ],
+        "owner": "retrolume_interview_owner",
+        "acl": "{retrolume_interview_owner=X/retrolume_interview_owner,retrolume_interview_app=X/retrolume_interview_owner,retrolume_data_snapshot=X/retrolume_interview_owner,retrolume_data_restore_loader=X/retrolume_interview_owner}"
+      },
+      {
+        "proname": "purge_retrieval_payloads",
+        "arguments": "",
+        "prosrc": "\nDECLARE aid uuid;k uuid;opid text;\nBEGIN\n IF NEW.entity_kind<>'source' THEN RETURN NEW; END IF;\n IF public.data_loading_allowed() THEN RETURN NEW; END IF;\n FOR aid,k IN SELECT activity_id,business_key FROM public.retrieval_commands c\n  WHERE EXISTS(SELECT 1 FROM jsonb_array_elements(c.source_refs) x WHERE (x->>'source_id')::uuid=NEW.entity_id) LOOP\n  DELETE FROM public.retrieval_chunks WHERE source_id=NEW.entity_id OR (committed_activity_id=aid AND split_part(committed_operation_id,'.',2)=k::text);\n  DELETE FROM public.activity_operation_results r USING public.activity_operations o\n   WHERE o.activity_id=aid AND o.kind='embedding' AND split_part(o.operation_id,'.',2)=k::text\n    AND r.activity_id=o.activity_id AND r.operation_id=o.operation_id;\n  UPDATE public.retrieval_commands SET request_body=NULL,updated_at=CURRENT_TIMESTAMP WHERE activity_id=aid AND business_key=k;\n END LOOP;\n RETURN NEW;\nEND ",
+        "prosecdef": true,
+        "provolatile": "v",
+        "proconfig": [
+          "search_path=pg_catalog, pg_temp"
+        ],
+        "owner": "retrolume_retrieval_owner",
+        "acl": "{retrolume_retrieval_owner=X/retrolume_retrieval_owner}"
+      },
+      {
+        "proname": "retrieval_chunk_guard",
+        "arguments": "",
+        "prosrc": {
+          "characters": 2919,
+          "sha256_utf8": "146ecfe01e809872ae867e0b9336d011bdfab930c2e7bd8a1444e30d216c6028",
+          "prefix": "\nDECLARE op public.activity_operations;r public.activity_operation_results;c public.retrieval_commands;b jsonb;item jsonb;meta jsonb;key uuid;\nBEGIN\n IF TG_OP='DELETE' THEN\n  IF NOT EXISTS(SELECT 1 FR"
+        },
+        "prosecdef": true,
+        "provolatile": "v",
+        "proconfig": [
+          "search_path=pg_catalog, pg_temp"
+        ],
+        "owner": "retrolume_retrieval_owner",
+        "acl": "{retrolume_retrieval_owner=X/retrolume_retrieval_owner}"
+      },
+      {
+        "proname": "retrieval_command_guard",
+        "arguments": "",
+        "prosrc": {
+          "characters": 2568,
+          "sha256_utf8": "4e153d507a269d7eba93a20681b139039b1e9416c60a480bfc9fbdc65df583b7",
+          "prefix": "\nDECLARE a public.activities;ref jsonb;v public.material_versions;\nBEGIN\n IF TG_OP='DELETE' THEN RAISE EXCEPTION 'retrieval_commands_retained'; END IF;\n IF TG_OP='UPDATE' THEN\n  IF (to_jsonb(NEW)-ARRA"
+        },
+        "prosecdef": true,
+        "provolatile": "v",
+        "proconfig": [
+          "search_path=pg_catalog, pg_temp"
+        ],
+        "owner": "retrolume_retrieval_owner",
+        "acl": "{retrolume_retrieval_owner=X/retrolume_retrieval_owner}"
+      },
+      {
+        "proname": "retrieval_embedding_operation_guard",
+        "arguments": "",
+        "prosrc": {
+          "characters": 1325,
+          "sha256_utf8": "493d2f47e6d240570d7aa7138bb723e001bc18be9443caa370e9c4adb2db02af",
+          "prefix": "\nDECLARE a public.activities;c public.retrieval_commands;ordinal integer;\nBEGIN\n IF NEW.kind IS DISTINCT FROM 'embedding' THEN RETURN NEW; END IF;\n IF NEW.operation_id!~'^emb18[iq]\\.[0-9a-f-]{36}\\.(0|"
+        },
+        "prosecdef": true,
+        "provolatile": "v",
+        "proconfig": [
+          "search_path=pg_catalog, pg_temp"
+        ],
+        "owner": "retrolume_retrieval_owner",
+        "acl": "{retrolume_retrieval_owner=X/retrolume_retrieval_owner}"
+      },
+      {
+        "proname": "retrieval_grant_guard",
+        "arguments": "",
+        "prosrc": "\nBEGIN\n IF NEW.outbound_grant_sha256 IS DISTINCT FROM OLD.outbound_grant_sha256 THEN RAISE EXCEPTION 'outbound_grant_cannot_rebind'; END IF;\n RETURN NEW;\nEND ",
+        "prosecdef": false,
+        "provolatile": "v",
+        "proconfig": [
+          "search_path=pg_catalog, pg_temp"
+        ],
+        "owner": "retrolume_retrieval_owner",
+        "acl": "{retrolume_retrieval_owner=X/retrolume_retrieval_owner}"
+      },
+      {
+        "proname": "retrieval_result_guard",
+        "arguments": "",
+        "prosrc": {
+          "characters": 1588,
+          "sha256_utf8": "2fe94f1322f5a6acf3eb5bc41df171877f62fad18e15fcc7e226bb1f6e8090b9",
+          "prefix": "\nDECLARE op public.activity_operations;b jsonb;c public.retrieval_commands;key uuid;ordinal integer;\nBEGIN\n SELECT * INTO op FROM public.activity_operations WHERE activity_id=NEW.activity_id AND opera"
+        },
+        "prosecdef": true,
+        "provolatile": "v",
+        "proconfig": [
+          "search_path=pg_catalog, pg_temp"
+        ],
+        "owner": "retrolume_retrieval_owner",
+        "acl": "{retrolume_retrieval_owner=X/retrolume_retrieval_owner}"
+      },
+      {
+        "proname": "retrieval_space_guard",
+        "arguments": "",
+        "prosrc": "\nDECLARE body text;\nBEGIN\n IF TG_OP<>'INSERT' THEN RAISE EXCEPTION 'retrieval_space_immutable'; END IF;\n body:='{\"chunk_recipe\":\"lossless-line-2048cp.v1\",\"configured_model\":'||to_json(NEW.configured_model)::text||\n ',\"dimensions\":512,\"normalization\":\"l2.v1\",\"provider\":'||to_json(NEW.provider)::text||'}';\n IF NEW.space_id IS DISTINCT FROM encode(sha256(convert_to(body,'UTF8')),'hex') THEN RAISE EXCEPTION 'retrieval_space_identity'; END IF;\n RETURN NEW;\nEND ",
+        "prosecdef": false,
+        "provolatile": "v",
+        "proconfig": [
+          "search_path=pg_catalog, pg_temp"
+        ],
+        "owner": "retrolume_retrieval_owner",
+        "acl": "{retrolume_retrieval_owner=X/retrolume_retrieval_owner}"
+      },
+      {
+        "proname": "retrieval_vector_digest",
+        "arguments": "value vector",
+        "prosrc": "\nDECLARE raw bytea;part bytea;little bytea:=''::bytea;i integer;\nBEGIN\n raw:=public.vector_send(value);\n IF octet_length(raw)<>2052 THEN RAISE EXCEPTION 'retrieval_vector_dimensions'; END IF;\n FOR i IN 0..511 LOOP\n  part:=substr(raw,5+i*4,4);\n  little:=little||substr(part,4,1)||substr(part,3,1)||substr(part,2,1)||substr(part,1,1);\n END LOOP;\n RETURN encode(sha256(little),'hex');\nEND ",
+        "prosecdef": false,
+        "provolatile": "i",
+        "proconfig": [
+          "search_path=pg_catalog, pg_temp"
+        ],
+        "owner": "retrolume_retrieval_owner",
+        "acl": "{retrolume_retrieval_owner=X/retrolume_retrieval_owner,retrolume_retrieval_app=X/retrolume_retrieval_owner,retrolume_data_restore_loader=X/retrolume_retrieval_owner,retrolume_data_snapshot=X/retrolume_retrieval_owner}"
+      }
+    ],
+    "interview_read_acl": [
+      {
+        "relname": "activity_memory_choices",
+        "readable": true,
+        "writable": false
+      },
+      {
+        "relname": "learning_memories",
+        "readable": true,
+        "writable": false
+      },
+      {
+        "relname": "learning_memory_bodies",
+        "readable": true,
+        "writable": false
+      },
+      {
+        "relname": "learning_memory_commands",
+        "readable": true,
+        "writable": false
+      },
+      {
+        "relname": "learning_memory_dependencies",
+        "readable": true,
+        "writable": false
+      },
+      {
+        "relname": "learning_memory_revisions",
+        "readable": true,
+        "writable": false
+      },
+      {
+        "relname": "teaching_commands",
+        "readable": true,
+        "writable": false
+      }
+    ],
+    "extensions": [
+      {
+        "extname": "vector",
+        "extversion": "0.8.6"
+      }
+    ]
+  },
+  "data": {
+    "activities": {
+      "count": 1,
+      "sha256": "a205d705af9144beeda5ae99cd7308004ad134446bcf31ee2dff1d28e5c7f6e6"
+    },
+    "activity_allowed_models": {
+      "count": 1,
+      "sha256": "b5db3a1b3341f40e630c0db9a5b39e7a03fdb276243d02ba97966a4aaf77abcc"
+    },
+    "activity_memory_bindings": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "activity_memory_choices": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "activity_operation_results": {
+      "count": 1,
+      "sha256": "7cb62b36b57529241e619302cb746f200bcdd066908fe8c4b1aa75df9286e40c"
+    },
+    "activity_operations": {
+      "count": 3,
+      "sha256": "9af4b755fdb5a8d3c3bf56b179d9c5598c5f1c0536321d896bcbc068845157f8"
+    },
+    "activity_scope_sources": {
+      "count": 1,
+      "sha256": "90f03a0e5e287e1d62dcccdb3cefc1324a05b69890a82f14315d2f7dd562d6e5"
+    },
+    "data_control": {
+      "count": 1,
+      "sha256": "5657dc8d63ed197267587b3cc0137e82c8c84f6a59ffa763264d4c4062b96169"
+    },
+    "data_operation_jobs": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "data_tombstones": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "html_artifacts": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "html_commands": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "html_preview_budgets": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "html_preview_sessions": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "interview_commands": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "interview_heads": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "interview_records": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "learning_memories": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "learning_memory_bodies": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "learning_memory_commands": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "learning_memory_dependencies": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "learning_memory_revisions": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "material_sources": {
+      "count": 1,
+      "sha256": "3b5b4b1f9a754710d159daf6fe024b4623b29e31cefb8b496ec3a3b54966f86a"
+    },
+    "material_versions": {
+      "count": 1,
+      "sha256": "b243240eca4a26e9e0e627eb41e520b3113508b4ddf9e5aea4e84454c20d0f42"
+    },
+    "pdf_extracted_pages": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "pdf_review_candidates": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "pdf_review_pages": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "pdf_user_supplements": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "retrieval_chunks": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "retrieval_commands": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "retrieval_spaces": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "teaching_commands": {
+      "count": 1,
+      "sha256": "a039319a88a29a85f90151eea3e6a2cfa297b8a1fc9c19e0ce505283da86ff4f"
+    },
+    "teaching_heads": {
+      "count": 1,
+      "sha256": "5f938ac881a26182605a84b4a43ecbd172c9c64cd5e6dbf389241d909d1c9a66"
+    },
+    "teaching_records": {
+      "count": 1,
+      "sha256": "41d5d276d66641fbdfd493e9dff7d611e45d0f5f55f59652fc0488db304e2944"
+    }
+  }
+}
+DocuN/evidence/TASK-117/execution/continuation-02/compat-SQL-after.json
+{
+  "shape": {
+    "columns": {
+      "count": 43,
+      "first": [
+        {
+          "relname": "activities",
+          "attname": "outbound_grant_sha256",
+          "type": "text",
+          "attnotnull": false,
+          "default": null,
+          "owner": "step018_compat_admin",
+          "owner_super": true,
+          "acl": "{retrolume_data_app=ar/step018_compat_admin,retrolume_data_snapshot=r/step018_compat_admin,retrolume_data_restore_loader=ar/step018_compat_admin}"
+        },
+        {
+          "relname": "retrieval_chunks",
+          "attname": "space_id",
+          "type": "text",
+          "attnotnull": true,
+          "default": null,
+          "owner": "retrolume_retrieval_owner",
+          "owner_super": false,
+          "acl": null
+        },
+        {
+          "relname": "retrieval_chunks",
+          "attname": "evidence_id",
+          "type": "text",
+          "attnotnull": true,
+          "default": null,
+          "owner": "retrolume_retrieval_owner",
+          "owner_super": false,
+          "acl": null
+        },
+        {
+          "relname": "retrieval_chunks",
+          "attname": "source_id",
+          "type": "uuid",
+          "attnotnull": true,
+          "default": null,
+          "owner": "retrolume_retrieval_owner",
+          "owner_super": false,
+          "acl": null
+        },
+        {
+          "relname": "retrieval_chunks",
+          "attname": "source_version_id",
+          "type": "uuid",
+          "attnotnull": true,
+          "default": null,
+          "owner": "retrolume_retrieval_owner",
+          "owner_super": false,
+          "acl": null
+        },
+        {
+          "relname": "retrieval_chunks",
+          "attname": "source_revision",
+          "type": "integer",
+          "attnotnull": true,
+          "default": null,
+          "owner": "retrolume_retrieval_owner",
+          "owner_super": false,
+          "acl": null
+        }
+      ],
+      "last": [
+        {
+          "relname": "retrieval_spaces",
+          "attname": "chunk_recipe",
+          "type": "text",
+          "attnotnull": true,
+          "default": null,
+          "owner": "retrolume_retrieval_owner",
+          "owner_super": false,
+          "acl": null
+        },
+        {
+          "relname": "retrieval_spaces",
+          "attname": "created_at",
+          "type": "timestamp with time zone",
+          "attnotnull": true,
+          "default": "CURRENT_TIMESTAMP",
+          "owner": "retrolume_retrieval_owner",
+          "owner_super": false,
+          "acl": null
+        }
+      ]
+    },
+    "constraints": {
+      "count": 47,
+      "first": [
+        {
+          "relname": "activities",
+          "conname": "activities_outbound_grant_sha256_check",
+          "definition": "CHECK (((outbound_grant_sha256 IS NULL) OR (outbound_grant_sha256 ~ '^[0-9a-f]{64}$'::text)))",
+          "convalidated": true,
+          "condeferrable": false,
+          "condeferred": false
+        },
+        {
+          "relname": "activity_operations",
+          "conname": "activity_operations_kind_domain",
+          "definition": "CHECK ((kind = ANY (ARRAY['model'::text, 'tool'::text, 'embedding'::text])))",
+          "convalidated": true,
+          "condeferrable": false,
+          "condeferred": false
+        },
+        {
+          "relname": "activity_operations",
+          "conname": "activity_operations_kind_shape",
+          "definition": {
+            "characters": 1492,
+            "sha256_utf8": "91510697e079ea502e763c3b1e78ce438f34eef05c18fa44321020732d1f13a2",
+            "prefix": "CHECK ((((kind = 'model'::text) AND (provider IS NOT NULL) AND (configured_model IS NOT NULL) AND (request_bytes IS NOT NULL) AND (request_bytes > 0) AND (max_output_tokens IS NOT NULL) AND (max_outpu"
+          },
+          "convalidated": true,
+          "condeferrable": false,
+          "condeferred": false
+        },
+        {
+          "relname": "activity_operations",
+          "conname": "activity_operations_max_output_tokens_check",
+          "definition": "CHECK ((max_output_tokens >= 0))",
+          "convalidated": true,
+          "condeferrable": false,
+          "condeferred": false
+        },
+        {
+          "relname": "data_control",
+          "conname": "data_control_schema_profile_check",
+          "definition": "CHECK ((schema_profile = ANY (ARRAY['data_exit.v1.r01'::text, 'data_exit.v1.r02'::text])))",
+          "convalidated": true,
+          "condeferrable": false,
+          "condeferred": false
+        },
+        {
+          "relname": "interview_commands",
+          "conname": "interview_command_execution",
+          "definition": "CHECK ((((duplicate_of IS NOT NULL) AND (operation_id IS NULL) AND (context_body IS NULL) AND (context_sha256 IS NULL) AND (NOT effect_applied) AND (NOT launch_claimed)) OR ((duplicate_of IS NULL) AND (execution_kind = 'local'::text) AND (operation_id IS NULL) AND (context_body IS NULL) AND (context_sha256 IS NULL) AND (NOT launch_claimed)) OR ((duplicate_of IS NULL) AND (execution_kind = 'model'::text) AND (action = ANY (ARRAY['ask'::text, 'review'::text])) AND (context_body IS NOT NULL) AND (context_sha256 IS NOT NULL) AND (((((request_body)::jsonb ->> 'schema'::text) = 'interview.command.v1'::text) AND (((context_body)::jsonb ->> 'schema'::text) = 'interview.context.v1'::text) AND (operation_id = ('int10m.'::text || replace((business_key)::text, '-'::text, ''::text)))) OR ((((request_body)::jsonb ->> 'schema'::text) = 'interview.command.v2'::text) AND (((context_body)::jsonb ->> 'schema'::text) = 'interview.context.v2'::text) AND (operation_id = ('int18m.'::text || replace((business_key)::text, '-'::text, ''::text))))))))",
+          "convalidated": true,
+          "condeferrable": false,
+          "condeferred": false
+        }
+      ],
+      "last": [
+        {
+          "relname": "retrieval_spaces",
+          "conname": "retrieval_spaces_provider_configured_model_dimensions_norma_key",
+          "definition": "UNIQUE (provider, configured_model, dimensions, normalization, chunk_recipe)",
+          "convalidated": true,
+          "condeferrable": false,
+          "condeferred": false
+        },
+        {
+          "relname": "retrieval_spaces",
+          "conname": "retrieval_spaces_space_id_check",
+          "definition": "CHECK ((space_id ~ '^[0-9a-f]{64}$'::text))",
+          "convalidated": true,
+          "condeferrable": false,
+          "condeferred": false
+        }
+      ]
+    },
+    "indexes": [
+      {
+        "tablename": "retrieval_chunks",
+        "indexname": "retrieval_chunks_pkey",
+        "indexdef": "CREATE UNIQUE INDEX retrieval_chunks_pkey ON public.retrieval_chunks USING btree (space_id, evidence_id)"
+      },
+      {
+        "tablename": "retrieval_commands",
+        "indexname": "retrieval_commands_pkey",
+        "indexdef": "CREATE UNIQUE INDEX retrieval_commands_pkey ON public.retrieval_commands USING btree (activity_id, business_key)"
+      },
+      {
+        "tablename": "retrieval_spaces",
+        "indexname": "retrieval_spaces_pkey",
+        "indexdef": "CREATE UNIQUE INDEX retrieval_spaces_pkey ON public.retrieval_spaces USING btree (space_id)"
+      },
+      {
+        "tablename": "retrieval_spaces",
+        "indexname": "retrieval_spaces_provider_configured_model_dimensions_norma_key",
+        "indexdef": "CREATE UNIQUE INDEX retrieval_spaces_provider_configured_model_dimensions_norma_key ON public.retrieval_spaces USING btree (provider, configured_model, dimensions, normalization, chunk_recipe)"
+      }
+    ],
+    "triggers": [
+      {
+        "relname": "activities",
+        "tgname": "retrieval_grant_immutable",
+        "tgenabled": "O",
+        "definition": "CREATE TRIGGER retrieval_grant_immutable BEFORE UPDATE ON public.activities FOR EACH ROW EXECUTE FUNCTION retrieval_grant_guard()"
+      },
+      {
+        "relname": "activity_operation_results",
+        "tgname": "retrieval_embedding_result",
+        "tgenabled": "O",
+        "definition": "CREATE TRIGGER retrieval_embedding_result BEFORE INSERT ON public.activity_operation_results FOR EACH ROW EXECUTE FUNCTION retrieval_result_guard()"
+      },
+      {
+        "relname": "activity_operations",
+        "tgname": "retrieval_embedding_operation",
+        "tgenabled": "O",
+        "definition": "CREATE TRIGGER retrieval_embedding_operation BEFORE INSERT ON public.activity_operations FOR EACH ROW EXECUTE FUNCTION retrieval_embedding_operation_guard()"
+      },
+      {
+        "relname": "data_tombstones",
+        "tgname": "retrieval_source_tombstone",
+        "tgenabled": "O",
+        "definition": "CREATE TRIGGER retrieval_source_tombstone AFTER INSERT ON public.data_tombstones FOR EACH ROW EXECUTE FUNCTION purge_retrieval_payloads()"
+      },
+      {
+        "relname": "retrieval_chunks",
+        "tgname": "data_runtime_write",
+        "tgenabled": "O",
+        "definition": "CREATE TRIGGER data_runtime_write BEFORE INSERT OR DELETE OR UPDATE ON public.retrieval_chunks FOR EACH ROW EXECUTE FUNCTION data_runtime_write_guard()"
+      },
+      {
+        "relname": "retrieval_chunks",
+        "tgname": "retrieval_chunk_identity",
+        "tgenabled": "O",
+        "definition": "CREATE TRIGGER retrieval_chunk_identity BEFORE INSERT OR DELETE OR UPDATE ON public.retrieval_chunks FOR EACH ROW EXECUTE FUNCTION retrieval_chunk_guard()"
+      },
+      {
+        "relname": "retrieval_commands",
+        "tgname": "data_runtime_write",
+        "tgenabled": "O",
+        "definition": "CREATE TRIGGER data_runtime_write BEFORE INSERT OR DELETE OR UPDATE ON public.retrieval_commands FOR EACH ROW EXECUTE FUNCTION data_runtime_write_guard()"
+      },
+      {
+        "relname": "retrieval_commands",
+        "tgname": "retrieval_command_identity",
+        "tgenabled": "O",
+        "definition": "CREATE TRIGGER retrieval_command_identity BEFORE INSERT OR DELETE OR UPDATE ON public.retrieval_commands FOR EACH ROW EXECUTE FUNCTION retrieval_command_guard()"
+      },
+      {
+        "relname": "retrieval_spaces",
+        "tgname": "data_runtime_write",
+        "tgenabled": "O",
+        "definition": "CREATE TRIGGER data_runtime_write BEFORE INSERT OR DELETE OR UPDATE ON public.retrieval_spaces FOR EACH ROW EXECUTE FUNCTION data_runtime_write_guard()"
+      },
+      {
+        "relname": "retrieval_spaces",
+        "tgname": "retrieval_space_identity",
+        "tgenabled": "O",
+        "definition": "CREATE TRIGGER retrieval_space_identity BEFORE INSERT OR DELETE OR UPDATE ON public.retrieval_spaces FOR EACH ROW EXECUTE FUNCTION retrieval_space_guard()"
+      }
+    ],
+    "table_acl": [
+      {
+        "relname": "retrieval_chunks",
+        "acl": "{retrolume_retrieval_owner=arwdDxtm/retrolume_retrieval_owner,retrolume_retrieval_app=ar/retrolume_retrieval_owner,retrolume_data_snapshot=r/retrolume_retrieval_owner,retrolume_data_restore_loader=ar/retrolume_retrieval_owner,retrolume_data_owner=r/retrolume_retrieval_owner}"
+      },
+      {
+        "relname": "retrieval_commands",
+        "acl": "{retrolume_retrieval_owner=arwdDxtm/retrolume_retrieval_owner,retrolume_retrieval_app=ar/retrolume_retrieval_owner,retrolume_data_snapshot=r/retrolume_retrieval_owner,retrolume_data_restore_loader=ar/retrolume_retrieval_owner,retrolume_data_owner=r/retrolume_retrieval_owner}"
+      },
+      {
+        "relname": "retrieval_spaces",
+        "acl": "{retrolume_retrieval_owner=arwdDxtm/retrolume_retrieval_owner,retrolume_retrieval_app=ar/retrolume_retrieval_owner,retrolume_data_snapshot=r/retrolume_retrieval_owner,retrolume_data_restore_loader=ar/retrolume_retrieval_owner,retrolume_data_owner=r/retrolume_retrieval_owner}"
+      }
+    ],
+    "roles": [
+      {
+        "rolname": "retrolume_retrieval_app",
+        "rolcanlogin": false,
+        "rolsuper": false,
+        "rolcreatedb": false,
+        "rolcreaterole": false,
+        "rolreplication": false,
+        "rolbypassrls": false
+      },
+      {
+        "rolname": "retrolume_retrieval_owner",
+        "rolcanlogin": false,
+        "rolsuper": false,
+        "rolcreatedb": false,
+        "rolcreaterole": false,
+        "rolreplication": false,
+        "rolbypassrls": false
+      }
+    ],
+    "functions": [
+      {
+        "proname": "interview_head_guard",
+        "arguments": "",
+        "prosrc": {
+          "characters": 3445,
+          "sha256_utf8": "ef5d7e5efaaa665a0147c549fe7290ad40488b676087ed5db872afcb72b10456",
+          "prefix": "\nDECLARE a public.activities; ptr uuid; p public.interview_records;\nBEGIN\n IF TG_OP='DELETE' THEN RAISE EXCEPTION 'interview heads retained'; END IF;\n SELECT * INTO a FROM public.activities WHERE id=N"
+        },
+        "prosecdef": true,
+        "provolatile": "v",
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ],
+        "owner": "retrolume_interview_owner",
+        "acl": "{retrolume_interview_owner=X/retrolume_interview_owner}"
+      },
+      {
+        "proname": "interview_record_insert_guard",
+        "arguments": "",
+        "prosrc": {
+          "characters": 3902,
+          "sha256_utf8": "3b6209dbdf90faa9233b5af6b0961092852d3254e7967912d22db2888227b084",
+          "prefix": "\nDECLARE c public.interview_commands; p public.interview_records; r public.activity_operation_results; o public.activity_operations; b jsonb; ref jsonb;\nBEGIN\n SELECT * INTO c FROM public.interview_co"
+        },
+        "prosecdef": true,
+        "provolatile": "v",
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ],
+        "owner": "retrolume_interview_owner",
+        "acl": "{retrolume_interview_owner=X/retrolume_interview_owner}"
+      },
+      {
+        "proname": "interview_result_eligible",
+        "arguments": "aid uuid, op text",
+        "prosrc": {
+          "characters": 1819,
+          "sha256_utf8": "d76c2d0791e42416702a8b907f0e526fe32dd052de482463bbbf1bef84c838e6",
+          "prefix": "\n SELECT EXISTS(SELECT 1 FROM public.interview_commands c JOIN public.interview_heads h USING(activity_id)\n  JOIN public.interview_records ir ON ir.activity_id=c.activity_id AND ir.business_key=c.busi"
+        },
+        "prosecdef": true,
+        "provolatile": "s",
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ],
+        "owner": "retrolume_interview_owner",
+        "acl": "{retrolume_interview_owner=X/retrolume_interview_owner,retrolume_interview_app=X/retrolume_interview_owner,retrolume_data_snapshot=X/retrolume_interview_owner,retrolume_data_restore_loader=X/retrolume_interview_owner}"
+      },
+      {
+        "proname": "purge_retrieval_payloads",
+        "arguments": "",
+        "prosrc": "\nDECLARE aid uuid;k uuid;opid text;\nBEGIN\n IF NEW.entity_kind<>'source' THEN RETURN NEW; END IF;\n IF public.data_loading_allowed() THEN RETURN NEW; END IF;\n FOR aid,k IN SELECT activity_id,business_key FROM public.retrieval_commands c\n  WHERE EXISTS(SELECT 1 FROM jsonb_array_elements(c.source_refs) x WHERE (x->>'source_id')::uuid=NEW.entity_id) LOOP\n  DELETE FROM public.retrieval_chunks WHERE source_id=NEW.entity_id OR (committed_activity_id=aid AND split_part(committed_operation_id,'.',2)=k::text);\n  DELETE FROM public.activity_operation_results r USING public.activity_operations o\n   WHERE o.activity_id=aid AND o.kind='embedding' AND split_part(o.operation_id,'.',2)=k::text\n    AND r.activity_id=o.activity_id AND r.operation_id=o.operation_id;\n  UPDATE public.retrieval_commands SET request_body=NULL,updated_at=CURRENT_TIMESTAMP WHERE activity_id=aid AND business_key=k;\n END LOOP;\n RETURN NEW;\nEND ",
+        "prosecdef": true,
+        "provolatile": "v",
+        "proconfig": [
+          "search_path=pg_catalog, pg_temp"
+        ],
+        "owner": "retrolume_retrieval_owner",
+        "acl": "{retrolume_retrieval_owner=X/retrolume_retrieval_owner}"
+      },
+      {
+        "proname": "retrieval_chunk_guard",
+        "arguments": "",
+        "prosrc": {
+          "characters": 2967,
+          "sha256_utf8": "276053be3862f13422008404ef715a3e3c5c4b12a2a89a75ed4d351ec942e193",
+          "prefix": "\nDECLARE op public.activity_operations;r public.activity_operation_results;c public.retrieval_commands;b jsonb;item jsonb;meta jsonb;key uuid;\nBEGIN\n IF TG_OP='DELETE' THEN\n  IF NOT EXISTS(SELECT 1 FR"
+        },
+        "prosecdef": true,
+        "provolatile": "v",
+        "proconfig": [
+          "search_path=pg_catalog, pg_temp"
+        ],
+        "owner": "retrolume_retrieval_owner",
+        "acl": "{retrolume_retrieval_owner=X/retrolume_retrieval_owner}"
+      },
+      {
+        "proname": "retrieval_command_guard",
+        "arguments": "",
+        "prosrc": {
+          "characters": 2568,
+          "sha256_utf8": "4e153d507a269d7eba93a20681b139039b1e9416c60a480bfc9fbdc65df583b7",
+          "prefix": "\nDECLARE a public.activities;ref jsonb;v public.material_versions;\nBEGIN\n IF TG_OP='DELETE' THEN RAISE EXCEPTION 'retrieval_commands_retained'; END IF;\n IF TG_OP='UPDATE' THEN\n  IF (to_jsonb(NEW)-ARRA"
+        },
+        "prosecdef": true,
+        "provolatile": "v",
+        "proconfig": [
+          "search_path=pg_catalog, pg_temp"
+        ],
+        "owner": "retrolume_retrieval_owner",
+        "acl": "{retrolume_retrieval_owner=X/retrolume_retrieval_owner}"
+      },
+      {
+        "proname": "retrieval_embedding_operation_guard",
+        "arguments": "",
+        "prosrc": {
+          "characters": 1325,
+          "sha256_utf8": "493d2f47e6d240570d7aa7138bb723e001bc18be9443caa370e9c4adb2db02af",
+          "prefix": "\nDECLARE a public.activities;c public.retrieval_commands;ordinal integer;\nBEGIN\n IF NEW.kind IS DISTINCT FROM 'embedding' THEN RETURN NEW; END IF;\n IF NEW.operation_id!~'^emb18[iq]\\.[0-9a-f-]{36}\\.(0|"
+        },
+        "prosecdef": true,
+        "provolatile": "v",
+        "proconfig": [
+          "search_path=pg_catalog, pg_temp"
+        ],
+        "owner": "retrolume_retrieval_owner",
+        "acl": "{retrolume_retrieval_owner=X/retrolume_retrieval_owner}"
+      },
+      {
+        "proname": "retrieval_grant_guard",
+        "arguments": "",
+        "prosrc": "\nBEGIN\n IF NEW.outbound_grant_sha256 IS DISTINCT FROM OLD.outbound_grant_sha256 THEN RAISE EXCEPTION 'outbound_grant_cannot_rebind'; END IF;\n RETURN NEW;\nEND ",
+        "prosecdef": false,
+        "provolatile": "v",
+        "proconfig": [
+          "search_path=pg_catalog, pg_temp"
+        ],
+        "owner": "retrolume_retrieval_owner",
+        "acl": "{retrolume_retrieval_owner=X/retrolume_retrieval_owner}"
+      },
+      {
+        "proname": "retrieval_result_guard",
+        "arguments": "",
+        "prosrc": {
+          "characters": 1588,
+          "sha256_utf8": "2fe94f1322f5a6acf3eb5bc41df171877f62fad18e15fcc7e226bb1f6e8090b9",
+          "prefix": "\nDECLARE op public.activity_operations;b jsonb;c public.retrieval_commands;key uuid;ordinal integer;\nBEGIN\n SELECT * INTO op FROM public.activity_operations WHERE activity_id=NEW.activity_id AND opera"
+        },
+        "prosecdef": true,
+        "provolatile": "v",
+        "proconfig": [
+          "search_path=pg_catalog, pg_temp"
+        ],
+        "owner": "retrolume_retrieval_owner",
+        "acl": "{retrolume_retrieval_owner=X/retrolume_retrieval_owner}"
+      },
+      {
+        "proname": "retrieval_space_guard",
+        "arguments": "",
+        "prosrc": "\nDECLARE body text;\nBEGIN\n IF TG_OP<>'INSERT' THEN RAISE EXCEPTION 'retrieval_space_immutable'; END IF;\n body:='{\"chunk_recipe\":\"lossless-line-2048cp.v1\",\"configured_model\":'||to_json(NEW.configured_model)::text||\n ',\"dimensions\":512,\"normalization\":\"l2.v1\",\"provider\":'||to_json(NEW.provider)::text||'}';\n IF NEW.space_id IS DISTINCT FROM encode(sha256(convert_to(body,'UTF8')),'hex') THEN RAISE EXCEPTION 'retrieval_space_identity'; END IF;\n RETURN NEW;\nEND ",
+        "prosecdef": false,
+        "provolatile": "v",
+        "proconfig": [
+          "search_path=pg_catalog, pg_temp"
+        ],
+        "owner": "retrolume_retrieval_owner",
+        "acl": "{retrolume_retrieval_owner=X/retrolume_retrieval_owner}"
+      },
+      {
+        "proname": "retrieval_vector_digest",
+        "arguments": "value vector",
+        "prosrc": "\nDECLARE raw bytea;part bytea;little bytea:=''::bytea;i integer;\nBEGIN\n raw:=public.vector_send(value);\n IF octet_length(raw)<>2052 THEN RAISE EXCEPTION 'retrieval_vector_dimensions'; END IF;\n FOR i IN 0..511 LOOP\n  part:=substr(raw,5+i*4,4);\n  little:=little||substr(part,4,1)||substr(part,3,1)||substr(part,2,1)||substr(part,1,1);\n END LOOP;\n RETURN encode(sha256(little),'hex');\nEND ",
+        "prosecdef": false,
+        "provolatile": "i",
+        "proconfig": [
+          "search_path=pg_catalog, pg_temp"
+        ],
+        "owner": "retrolume_retrieval_owner",
+        "acl": "{retrolume_retrieval_owner=X/retrolume_retrieval_owner,retrolume_retrieval_app=X/retrolume_retrieval_owner,retrolume_data_restore_loader=X/retrolume_retrieval_owner,retrolume_data_snapshot=X/retrolume_retrieval_owner}"
+      }
+    ],
+    "interview_read_acl": [
+      {
+        "relname": "activity_memory_choices",
+        "readable": true,
+        "writable": false
+      },
+      {
+        "relname": "learning_memories",
+        "readable": true,
+        "writable": false
+      },
+      {
+        "relname": "learning_memory_bodies",
+        "readable": true,
+        "writable": false
+      },
+      {
+        "relname": "learning_memory_commands",
+        "readable": true,
+        "writable": false
+      },
+      {
+        "relname": "learning_memory_dependencies",
+        "readable": true,
+        "writable": false
+      },
+      {
+        "relname": "learning_memory_revisions",
+        "readable": true,
+        "writable": false
+      },
+      {
+        "relname": "material_versions",
+        "readable": true,
+        "writable": false
+      },
+      {
+        "relname": "pdf_extracted_pages",
+        "readable": true,
+        "writable": false
+      },
+      {
+        "relname": "pdf_review_candidates",
+        "readable": true,
+        "writable": false
+      },
+      {
+        "relname": "pdf_review_pages",
+        "readable": true,
+        "writable": false
+      },
+      {
+        "relname": "teaching_commands",
+        "readable": true,
+        "writable": false
+      },
+      {
+        "relname": "teaching_records",
+        "readable": true,
+        "writable": false
+      }
+    ],
+    "extensions": [
+      {
+        "extname": "vector",
+        "extversion": "0.8.6"
+      }
+    ]
+  },
+  "data_unchanged": true,
+  "shape_sha256": "5b7dc68a94101307bcbd63a16607c5b2ee79906b5f32669d764853a55172dc12",
+  "migration_014": "3a919b2562ded5765de132519b841c1d1439c65c001795cfbd608cbc03586e78",
+  "scope": "仅批准GRANT SELECT及函数别名；没有重跑迁移链"
+}
+DocuN/evidence/TASK-117/execution/continuation-02/catalog-exact-differences.json
+{
+  "count": 14,
+  "first": [
+    {
+      "section": "DB_observation_adopted",
+      "actual": null,
+      "expected": false
+    },
+    {
+      "section": "columns",
+      "actual": {
+        "count": 43,
+        "first": [
+          {
+            "relname": "activities",
+            "attname": "outbound_grant_sha256",
+            "type": "text",
+            "attnotnull": false,
+            "default": null,
+            "owner": "bootstrap_owner",
+            "owner_super": true,
+            "acl": "{retrolume_data_app=ar/trusted_owner,retrolume_data_snapshot=r/trusted_owner,retrolume_data_restore_loader=ar/trusted_owner}"
+          },
+          {
+            "relname": "retrieval_chunks",
+            "attname": "space_id",
+            "type": "text",
+            "attnotnull": true,
+            "default": null,
+            "owner": "retrolume_retrieval_owner",
+            "owner_super": false,
+            "acl": null
+          },
+          {
+            "relname": "retrieval_chunks",
+            "attname": "evidence_id",
+            "type": "text",
+            "attnotnull": true,
+            "default": null,
+            "owner": "retrolume_retrieval_owner",
+            "owner_super": false,
+            "acl": null
+          },
+          {
+            "relname": "retrieval_chunks",
+            "attname": "source_id",
+            "type": "uuid",
+            "attnotnull": true,
+            "default": null,
+            "owner": "retrolume_retrieval_owner",
+            "owner_super": false,
+            "acl": null
+          },
+          {
+            "relname": "retrieval_chunks",
+            "attname": "source_version_id",
+            "type": "uuid",
+            "attnotnull": true,
+            "default": null,
+            "owner": "retrolume_retrieval_owner",
+            "owner_super": false,
+            "acl": null
+          },
+          {
+            "relname": "retrieval_chunks",
+            "attname": "source_revision",
+            "type": "integer",
+            "attnotnull": true,
+            "default": null,
+            "owner": "retrolume_retrieval_owner",
+            "owner_super": false,
+            "acl": null
+          }
+        ],
+        "last": [
+          {
+            "relname": "retrieval_spaces",
+            "attname": "chunk_recipe",
+            "type": "text",
+            "attnotnull": true,
+            "default": null,
+            "owner": "retrolume_retrieval_owner",
+            "owner_super": false,
+            "acl": null
+          },
+          {
+            "relname": "retrieval_spaces",
+            "attname": "created_at",
+            "type": "timestamp with time zone",
+            "attnotnull": true,
+            "default": "CURRENT_TIMESTAMP",
+            "owner": "retrolume_retrieval_owner",
+            "owner_super": false,
+            "acl": null
+          }
+        ]
+      },
+      "expected": null
+    },
+    {
+      "section": "constraints",
+      "actual": {
+        "count": 47,
+        "first": [
+          {
+            "relname": "activities",
+            "conname": "activities_outbound_grant_sha256_check",
+            "definition": "CHECK (((outbound_grant_sha256 IS NULL) OR (outbound_grant_sha256 ~ '^[0-9a-f]{64}$'::text)))",
+            "convalidated": true,
+            "condeferrable": false,
+            "condeferred": false
+          },
+          {
+            "relname": "activity_operations",
+            "conname": "activity_operations_kind_domain",
+            "definition": "CHECK ((kind = ANY (ARRAY['model'::text, 'tool'::text, 'embedding'::text])))",
+            "convalidated": true,
+            "condeferrable": false,
+            "condeferred": false
+          },
+          {
+            "relname": "activity_operations",
+            "conname": "activity_operations_kind_shape",
+            "definition": {
+              "characters": 1492,
+              "sha256_utf8": "91510697e079ea502e763c3b1e78ce438f34eef05c18fa44321020732d1f13a2",
+              "prefix": "CHECK ((((kind = 'model'::text) AND (provider IS NOT NULL) AND (configured_model IS NOT NULL) AND (request_bytes IS NOT NULL) AND (request_bytes > 0) AND (max_output_tokens IS NOT NULL) AND (max_outpu"
+            },
+            "convalidated": true,
+            "condeferrable": false,
+            "condeferred": false
+          },
+          {
+            "relname": "activity_operations",
+            "conname": "activity_operations_max_output_tokens_check",
+            "definition": "CHECK ((max_output_tokens >= 0))",
+            "convalidated": true,
+            "condeferrable": false,
+            "condeferred": false
+          },
+          {
+            "relname": "data_control",
+            "conname": "data_control_schema_profile_check",
+            "definition": "CHECK ((schema_profile = ANY (ARRAY['data_exit.v1.r01'::text, 'data_exit.v1.r02'::text])))",
+            "convalidated": true,
+            "condeferrable": false,
+            "condeferred": false
+          },
+          {
+            "relname": "interview_commands",
+            "conname": "interview_command_execution",
+            "definition": "CHECK ((((duplicate_of IS NOT NULL) AND (operation_id IS NULL) AND (context_body IS NULL) AND (context_sha256 IS NULL) AND (NOT effect_applied) AND (NOT launch_claimed)) OR ((duplicate_of IS NULL) AND (execution_kind = 'local'::text) AND (operation_id IS NULL) AND (context_body IS NULL) AND (context_sha256 IS NULL) AND (NOT launch_claimed)) OR ((duplicate_of IS NULL) AND (execution_kind = 'model'::text) AND (action = ANY (ARRAY['ask'::text, 'review'::text])) AND (context_body IS NOT NULL) AND (context_sha256 IS NOT NULL) AND (((((request_body)::jsonb ->> 'schema'::text) = 'interview.command.v1'::text) AND (((context_body)::jsonb ->> 'schema'::text) = 'interview.context.v1'::text) AND (operation_id = ('int10m.'::text || replace((business_key)::text, '-'::text, ''::text)))) OR ((((request_body)::jsonb ->> 'schema'::text) = 'interview.command.v2'::text) AND (((context_body)::jsonb ->> 'schema'::text) = 'interview.context.v2'::text) AND (operation_id = ('int18m.'::text || replace((business_key)::text, '-'::text, ''::text))))))))",
+            "convalidated": true,
+            "condeferrable": false,
+            "condeferred": false
+          }
+        ],
+        "last": [
+          {
+            "relname": "retrieval_spaces",
+            "conname": "retrieval_spaces_provider_configured_model_dimensions_norma_key",
+            "definition": "UNIQUE (provider, configured_model, dimensions, normalization, chunk_recipe)",
+            "convalidated": true,
+            "condeferrable": false,
+            "condeferred": false
+          },
+          {
+            "relname": "retrieval_spaces",
+            "conname": "retrieval_spaces_space_id_check",
+            "definition": "CHECK ((space_id ~ '^[0-9a-f]{64}$'::text))",
+            "convalidated": true,
+            "condeferrable": false,
+            "condeferred": false
+          }
+        ]
+      },
+      "expected": null
+    },
+    {
+      "section": "controlled_changes",
+      "actual": null,
+      "expected": [
+        "exact retrieval_chunk_guard DELETE alias",
+        "SELECT-only transitive invoker dependencies: material_versions,pdf_review_candidates,pdf_review_pages,pdf_extracted_pages,teaching_records"
+      ]
+    },
+    {
+      "section": "derived_from",
+      "actual": null,
+      "expected": "a3c9bc08f104ad5f6dfc03c3902ad720ea871f6ff94fab299210cd68befaedbb"
+    },
+    {
+      "section": "extensions",
+      "actual": [
+        {
+          "extname": "vector",
+          "extversion": "0.8.6"
+        }
+      ],
+      "expected": null
+    }
+  ],
+  "last": [
+    {
+      "section": "table_acl",
+      "actual": [
+        {
+          "relname": "retrieval_chunks",
+          "acl": "{retrolume_retrieval_owner=arwdDxtm/trusted_owner,retrolume_retrieval_app=ar/trusted_owner,retrolume_data_snapshot=r/trusted_owner,retrolume_data_restore_loader=ar/trusted_owner,retrolume_data_owner=r/trusted_owner}"
+        },
+        {
+          "relname": "retrieval_commands",
+          "acl": "{retrolume_retrieval_owner=arwdDxtm/trusted_owner,retrolume_retrieval_app=ar/trusted_owner,retrolume_data_snapshot=r/trusted_owner,retrolume_data_restore_loader=ar/trusted_owner,retrolume_data_owner=r/trusted_owner}"
+        },
+        {
+          "relname": "retrieval_spaces",
+          "acl": "{retrolume_retrieval_owner=arwdDxtm/trusted_owner,retrolume_retrieval_app=ar/trusted_owner,retrolume_data_snapshot=r/trusted_owner,retrolume_data_restore_loader=ar/trusted_owner,retrolume_data_owner=r/trusted_owner}"
+        }
+      ],
+      "expected": null
+    },
+    {
+      "section": "triggers",
+      "actual": [
+        {
+          "relname": "activities",
+          "tgname": "retrieval_grant_immutable",
+          "tgenabled": "O",
+          "definition": "CREATE TRIGGER retrieval_grant_immutable BEFORE UPDATE ON public.activities FOR EACH ROW EXECUTE FUNCTION retrieval_grant_guard()"
+        },
+        {
+          "relname": "activity_operation_results",
+          "tgname": "retrieval_embedding_result",
+          "tgenabled": "O",
+          "definition": "CREATE TRIGGER retrieval_embedding_result BEFORE INSERT ON public.activity_operation_results FOR EACH ROW EXECUTE FUNCTION retrieval_result_guard()"
+        },
+        {
+          "relname": "activity_operations",
+          "tgname": "retrieval_embedding_operation",
+          "tgenabled": "O",
+          "definition": "CREATE TRIGGER retrieval_embedding_operation BEFORE INSERT ON public.activity_operations FOR EACH ROW EXECUTE FUNCTION retrieval_embedding_operation_guard()"
+        },
+        {
+          "relname": "data_tombstones",
+          "tgname": "retrieval_source_tombstone",
+          "tgenabled": "O",
+          "definition": "CREATE TRIGGER retrieval_source_tombstone AFTER INSERT ON public.data_tombstones FOR EACH ROW EXECUTE FUNCTION purge_retrieval_payloads()"
+        },
+        {
+          "relname": "retrieval_chunks",
+          "tgname": "data_runtime_write",
+          "tgenabled": "O",
+          "definition": "CREATE TRIGGER data_runtime_write BEFORE INSERT OR DELETE OR UPDATE ON public.retrieval_chunks FOR EACH ROW EXECUTE FUNCTION data_runtime_write_guard()"
+        },
+        {
+          "relname": "retrieval_chunks",
+          "tgname": "retrieval_chunk_identity",
+          "tgenabled": "O",
+          "definition": "CREATE TRIGGER retrieval_chunk_identity BEFORE INSERT OR DELETE OR UPDATE ON public.retrieval_chunks FOR EACH ROW EXECUTE FUNCTION retrieval_chunk_guard()"
+        },
+        {
+          "relname": "retrieval_commands",
+          "tgname": "data_runtime_write",
+          "tgenabled": "O",
+          "definition": "CREATE TRIGGER data_runtime_write BEFORE INSERT OR DELETE OR UPDATE ON public.retrieval_commands FOR EACH ROW EXECUTE FUNCTION data_runtime_write_guard()"
+        },
+        {
+          "relname": "retrieval_commands",
+          "tgname": "retrieval_command_identity",
+          "tgenabled": "O",
+          "definition": "CREATE TRIGGER retrieval_command_identity BEFORE INSERT OR DELETE OR UPDATE ON public.retrieval_commands FOR EACH ROW EXECUTE FUNCTION retrieval_command_guard()"
+        },
+        {
+          "relname": "retrieval_spaces",
+          "tgname": "data_runtime_write",
+          "tgenabled": "O",
+          "definition": "CREATE TRIGGER data_runtime_write BEFORE INSERT OR DELETE OR UPDATE ON public.retrieval_spaces FOR EACH ROW EXECUTE FUNCTION data_runtime_write_guard()"
+        },
+        {
+          "relname": "retrieval_spaces",
+          "tgname": "retrieval_space_identity",
+          "tgenabled": "O",
+          "definition": "CREATE TRIGGER retrieval_space_identity BEFORE INSERT OR DELETE OR UPDATE ON public.retrieval_spaces FOR EACH ROW EXECUTE FUNCTION retrieval_space_guard()"
+        }
+      ],
+      "expected": null
+    }
+  ]
+}
+DocuN/evidence/TASK-117/execution/continuation-01/compat-final-forward-repair.json
+{
+  "source": {
+    "cid": "1df68961975a43929fa06f63314a0da6e4e5cea113e3c403fc1ffd90d7c0fa5f",
+    "before": {
+      "read": true,
+      "write": false
+    },
+    "after": {
+      "read": true,
+      "write": false
+    },
+    "legacy_operations": {
+      "count": 23,
+      "first": [
+        {
+          "operation_id": "emb18i.598ca9f9-6238-4858-9613-8c3bbb374231.0",
+          "kind": "embedding",
+          "request_bytes": 277,
+          "max_output_tokens": 0,
+          "reserved_cost_microunits": 250000,
+          "state": "received",
+          "disposition": "received"
+        },
+        {
+          "operation_id": "emb18i.74bc4b87-ad27-4033-a649-cff5a0d18814.0",
+          "kind": "embedding",
+          "request_bytes": 277,
+          "max_output_tokens": 0,
+          "reserved_cost_microunits": 250000,
+          "state": "dispatched",
+          "disposition": null
+        },
+        {
+          "operation_id": "emb18i.ddb25776-e48d-4a1e-bb25-f3295591da67.0",
+          "kind": "embedding",
+          "request_bytes": 277,
+          "max_output_tokens": 0,
+          "reserved_cost_microunits": 250000,
+          "state": "dispatched",
+          "disposition": null
+        },
+        {
+          "operation_id": "emb18q.39d7ac95-52a3-4bf6-a362-97a5d117873f.0",
+          "kind": "embedding",
+          "request_bytes": 88,
+          "max_output_tokens": 0,
+          "reserved_cost_microunits": 250000,
+          "state": "received",
+          "disposition": "received"
+        },
+        {
+          "operation_id": "emb18q.4a9e737f-f848-4009-8b30-24a1ddd02f1c.0",
+          "kind": "embedding",
+          "request_bytes": 88,
+          "max_output_tokens": 0,
+          "reserved_cost_microunits": 250000,
+          "state": "received",
+          "disposition": "received"
+        },
+        {
+          "operation_id": "emb18q.53464664-2c8e-491f-b0c4-d68a7bd64b92.0",
+          "kind": "embedding",
+          "request_bytes": 88,
+          "max_output_tokens": 0,
+          "reserved_cost_microunits": 250000,
+          "state": "received",
+          "disposition": "received"
+        }
+      ],
+      "last": [
+        {
+          "operation_id": "teach8m.65c77e00-853c-4bc3-ae0d-e634e3a16f1b.2b59e395ed510d61eac8e4e74a411e5e20ad790bb6335572645169260e2f4dad",
+          "kind": "model",
+          "request_bytes": 2726,
+          "max_output_tokens": 2048,
+          "reserved_cost_microunits": 250000,
+          "state": "received",
+          "disposition": "received"
+        },
+        {
+          "operation_id": "teach8m.e17fcd77-c349-45f1-887a-f88a92666410.ae879eacb63f8543a85b99d225cd9cc12f454731aedf4610f6344af79db794d4",
+          "kind": "model",
+          "request_bytes": 2019,
+          "max_output_tokens": 2048,
+          "reserved_cost_microunits": 250000,
+          "state": "received",
+          "disposition": "received"
+        }
+      ]
+    },
+    "functions": [
+      {
+        "proname": "interview_head_guard",
+        "prosrc": {
+          "characters": 3445,
+          "sha256_utf8": "ef5d7e5efaaa665a0147c549fe7290ad40488b676087ed5db872afcb72b10456",
+          "prefix": "\nDECLARE a public.activities; ptr uuid; p public.interview_records;\nBEGIN\n IF TG_OP='DELETE' THEN RAISE EXCEPTION 'interview heads retained'; END IF;\n SELECT * INTO a FROM public.activities WHERE id=N"
+        },
+        "prosecdef": true,
+        "provolatile": "v",
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ]
+      },
+      {
+        "proname": "interview_record_insert_guard",
+        "prosrc": {
+          "characters": 3902,
+          "sha256_utf8": "3b6209dbdf90faa9233b5af6b0961092852d3254e7967912d22db2888227b084",
+          "prefix": "\nDECLARE c public.interview_commands; p public.interview_records; r public.activity_operation_results; o public.activity_operations; b jsonb; ref jsonb;\nBEGIN\n SELECT * INTO c FROM public.interview_co"
+        },
+        "prosecdef": true,
+        "provolatile": "v",
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ]
+      },
+      {
+        "proname": "interview_result_eligible",
+        "prosrc": {
+          "characters": 1819,
+          "sha256_utf8": "d76c2d0791e42416702a8b907f0e526fe32dd052de482463bbbf1bef84c838e6",
+          "prefix": "\n SELECT EXISTS(SELECT 1 FROM public.interview_commands c JOIN public.interview_heads h USING(activity_id)\n  JOIN public.interview_records ir ON ir.activity_id=c.activity_id AND ir.business_key=c.busi"
+        },
+        "prosecdef": true,
+        "provolatile": "s",
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ]
+      }
+    ],
+    "extra_shape_sha": "a3c9bc08f104ad5f6dfc03c3902ad720ea871f6ff94fab299210cd68befaedbb",
+    "exact_schema": true,
+    "migrations_rerun": 0
+  },
+  "compat": {
+    "cid": "0741d770fe07cc145660929044c471ef73fee11bb58e3ee6593e9a47adaa67c8",
+    "before": {
+      "read": false,
+      "write": false
+    },
+    "after": {
+      "read": true,
+      "write": false
+    },
+    "legacy_operations": [
+      {
+        "operation_id": "legacy-model",
+        "kind": "model",
+        "request_bytes": 64,
+        "max_output_tokens": 1,
+        "reserved_cost_microunits": 250000,
+        "state": "received",
+        "disposition": "received"
+      },
+      {
+        "operation_id": "legacy-tool",
+        "kind": "tool",
+        "request_bytes": null,
+        "max_output_tokens": null,
+        "reserved_cost_microunits": 0,
+        "state": "received",
+        "disposition": "received"
+      },
+      {
+        "operation_id": "legacy-unknown",
+        "kind": "model",
+        "request_bytes": 64,
+        "max_output_tokens": 1,
+        "reserved_cost_microunits": 250000,
+        "state": "unknown",
+        "disposition": "unknown"
+      }
+    ],
+    "functions": [
+      {
+        "proname": "interview_head_guard",
+        "prosrc": {
+          "characters": 3445,
+          "sha256_utf8": "ef5d7e5efaaa665a0147c549fe7290ad40488b676087ed5db872afcb72b10456",
+          "prefix": "\nDECLARE a public.activities; ptr uuid; p public.interview_records;\nBEGIN\n IF TG_OP='DELETE' THEN RAISE EXCEPTION 'interview heads retained'; END IF;\n SELECT * INTO a FROM public.activities WHERE id=N"
+        },
+        "prosecdef": true,
+        "provolatile": "v",
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ]
+      },
+      {
+        "proname": "interview_record_insert_guard",
+        "prosrc": {
+          "characters": 3902,
+          "sha256_utf8": "3b6209dbdf90faa9233b5af6b0961092852d3254e7967912d22db2888227b084",
+          "prefix": "\nDECLARE c public.interview_commands; p public.interview_records; r public.activity_operation_results; o public.activity_operations; b jsonb; ref jsonb;\nBEGIN\n SELECT * INTO c FROM public.interview_co"
+        },
+        "prosecdef": true,
+        "provolatile": "v",
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ]
+      },
+      {
+        "proname": "interview_result_eligible",
+        "prosrc": {
+          "characters": 1819,
+          "sha256_utf8": "d76c2d0791e42416702a8b907f0e526fe32dd052de482463bbbf1bef84c838e6",
+          "prefix": "\n SELECT EXISTS(SELECT 1 FROM public.interview_commands c JOIN public.interview_heads h USING(activity_id)\n  JOIN public.interview_records ir ON ir.activity_id=c.activity_id AND ir.business_key=c.busi"
+        },
+        "prosecdef": true,
+        "provolatile": "s",
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ]
+      }
+    ],
+    "extra_shape_sha": "a3c9bc08f104ad5f6dfc03c3902ad720ea871f6ff94fab299210cd68befaedbb",
+    "exact_schema": true,
+    "migrations_rerun": 0
+  }
+}

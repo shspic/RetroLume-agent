@@ -1,0 +1,250 @@
+"""Offline delivery identities and method index; never imports/runs a business test.
+
+Original attempts stay untouched. This script reads their raw artifacts and copies
+the current approved source bytes. It opens no PG/HTTP/browser/SUP resource.
+"""
+from __future__ import annotations
+import ast
+from collections import Counter
+import difflib
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import sys
+import time
+
+ROOT=Path(__file__).resolve().parents[4]
+sys.path.insert(0,str(ROOT/'backend'))
+from tests.fixtures.task100.control import EVIDENCE,Ledger,atomic_json,hash_files,utc
+from tests.fixtures.task100.runner import source_paths
+
+B1='2026-10-05T101329.428351-0000-repair-combo'
+B2='2026-10-05T101919.561049-0000-repair-combo'
+B3='2026-10-05T103020.095611-0000-repair-combo'
+B4='2026-10-05T110007.993696-0000-readonly-browser-combo'
+LAST_OFFLINE='2026-10-05T105948.833483-0000-offline'
+LAST_BUILD='2026-10-05T105833.370399-0000-frontend-build'
+load=lambda p:json.loads(Path(p).read_text('utf-8'))
+sha=lambda p:hashlib.sha256(Path(p).read_bytes()).hexdigest()
+link=lambda relative:f'[{relative}]({(ROOT/relative).as_posix()})'
+
+
+def method_runs(batch,stage):
+    path=EVIDENCE/batch/stage/'stderr.txt'
+    runs=[]
+    for number,line in enumerate(path.read_text('utf-8').splitlines(),1):
+        match=re.fullmatch(r'(test_[A-Za-z0-9_]+) \(([^)]+)\) \.\.\. (ok|skipped .+|FAIL|ERROR)',line)
+        if match:
+            name=match.group(2)
+            if not name.endswith('.'+match.group(1)):name+='.'+match.group(1)
+            runs.append({'method':name,'verdict':match.group(3),'batch':batch,'raw':str(path),'line':number})
+    return runs
+
+
+def identities():
+    inputs=load(ROOT/'DocuN/evidence/TASK-100/orchestration-receipt-04/continuation-input.json')
+    checks=[]
+    for item in inputs['objects']:
+        path=Path(item['path']);actual=sha(path) if path.is_file() else None
+        checks.append({**item,'post':actual,'unchanged':actual==item['actual']})
+    for item in checks:
+        if item['group']!='source_files' and not item['unchanged']:
+            raise AssertionError('protected input drift: '+item['path'])
+    pre={p.relative_to(EVIDENCE/'pre').as_posix():sha(p) for p in (EVIDENCE/'pre').rglob('*') if p.is_file()}
+    current=hash_files(source_paths())
+    dist=hash_files([p for p in (ROOT/'frontend/dist').rglob('*') if p.is_file()])
+    full={**current,**dist}
+    actual=load(EVIDENCE/B4/'as-run/manifest.json')
+    assert full==actual, 'final bytes differ from final browser entry'
+    backend={p:h for p,h in current.items() if p.startswith('backend/app/')}
+    for batch in (B1,B3,B4):
+        manifest=load(EVIDENCE/batch/'as-run-files.json')
+        assert backend=={p:h for p,h in manifest.items() if p.startswith('backend/app/')}
+    build=next(e['detail'] for e in reversed(Ledger().load()['events']) if e['event']=='frontend_build_pass')
+    assert build['batch']==str(EVIDENCE/LAST_BUILD)
+    assert build['dist']==dist
+    for p,h in build['files'].items():
+        if p.startswith('frontend/src/') or p=='frontend/package.json':assert current[p]==h
+    assets=load(EVIDENCE/B4/'readonly-browser/served-assets.json')
+    for asset in assets:
+        relative='frontend/dist/'+asset['url'].split('18100/',1)[1]
+        assert full[relative]==asset['sha256']
+    post=EVIDENCE/'post';post.mkdir(exist_ok=False)
+    for p,h in full.items():
+        target=post/p;target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(ROOT/p,target)
+        assert sha(target)==h
+    atomic_json(post/'manifest.json',full)
+    changes=[]
+    for p in sorted(set(pre)|set(full)):
+        old,new=pre.get(p),full.get(p)
+        if old==new:continue
+        oldbytes=(EVIDENCE/'pre'/p).read_bytes() if old else b''
+        newbytes=(ROOT/p).read_bytes() if new else b''
+        destination=EVIDENCE/'diff'/(p+'.diff');destination.parent.mkdir(parents=True,exist_ok=True)
+        try:
+            difference=''.join(difflib.unified_diff(oldbytes.decode('utf-8').splitlines(True),
+                newbytes.decode('utf-8').splitlines(True),fromfile='pre/'+p,tofile='post/'+p))
+            destination.write_text(difference,encoding='utf-8',newline='')
+        except UnicodeDecodeError:
+            destination.write_text(json.dumps({'pre':old,'post':new,'binary_copies':True}),encoding='utf-8')
+        changes.append({'path':p,'pre':old,'post':new,'kind':'modified' if old and new else 'added' if new else 'removed',
+                        'diff':str(destination),'diff_sha256':sha(destination)})
+    atomic_json(EVIDENCE/'final-identity.json',{'at':utc(),'baseline_input_objects':checks,'pre_files':pre,
+        'post_files':full,'changes':changes,'backend_identical_as_run_batches':[B1,B3,B4],
+        'final_source_and_dist_exact_as_run':B4,'final_build':LAST_BUILD,'consumed_bundle_assets':assets,
+        'new_file_pre_absence':'new repair files have no invented predecessor bytes',
+        'dist_removed_asset':'authorized Vite build replaced a generated bundle; pre bytes retained',
+        'immutable_009_sha256':full['backend/migrations/009_teaching.sql']})
+    return full,changes
+
+
+def selected_fixture_applicability():
+    path='backend/tests/fixtures/task100/synthetic_content.py'
+    old=(EVIDENCE/B1/'as-run'/path).read_text('utf-8');new=(ROOT/path).read_text('utf-8')
+    a,b=ast.parse(old),ast.parse(new)
+    # The only changed constant is n2's shorter stem; none of B1's selected PG
+    # exercises selects n2. Compare a normalized complete AST, not just a helper name.
+    changed=[]
+    for x,y in zip(ast.walk(a),ast.walk(b),strict=True):
+        if isinstance(x,ast.Constant) and isinstance(y,ast.Constant) and x.value!=y.value:
+            changed.append({'old':x.value,'new':y.value});x.value=y.value
+    assert len(changed)==1 and 'A100/B50' in changed[0]['old'] and 'A100/B50' in changed[0]['new']
+    assert ast.dump(a,include_attributes=False)==ast.dump(b,include_attributes=False)
+    native=load(EVIDENCE/B1/'as-run-files.json');current=hash_files(source_paths())
+    relevant=['backend/tests/'+p for p in ['test_teaching_repository.py','test_teaching_recovery.py',
+              'test_task100_integration.py','test_task100_repair.py']]
+    relevant+=['backend/tests/fixtures/task100/'+p for p in ['support.py','seed_helpers.py','repair_cases.py','activity.synthetic.json']]
+    assert all(native[p]==current[p] for p in relevant)
+    atomic_json(EVIDENCE/'first-PG-fixture-applicability.json',{'first_batch':B1,'not_a_new_PG_run':True,
+        'actual_fixture_constant_change':changed,'normalized_whole_module_AST_equal_after_this_constant':True,
+        'selected_PG_exercise_domain':'n1 calculation; plan includes all nodes without exercise stem; n2 is only inspected as a next-node id',
+        'selected_support_test_dependencies_identical':{p:current[p] for p in relevant},
+        'originals_root_change':'new data/originals instead of parent-root store; affected numeric/source/seed methods actually rerun in B3',
+        'B3_actual_PG_methods':[r['method'] for r in method_runs(B3,'repository-raw')]})
+
+
+def bindings(full):
+    pg=method_runs(B1,'repository-raw')+method_runs(B3,'repository-raw')
+    http=method_runs(B3,'http-raw')
+    assert len(pg)==32 and len(http)==3 and all(r['verdict']=='ok' for r in pg+http)
+    native=[r['method'] for r in pg+http]
+    old=load(ROOT/'DocuN/evidence/TASK-101/database-http-method-runs.json')
+    aliases={
+      'test_teaching_records_are_immutable_at_database_level':('unchanged_009_existing_A_plus_current_readonly_ACL_trigger_B',
+        'DELETE negative attempt prohibited; no rerun. Unchanged exact 009 guard body/trigger and all-column minimum ACL reverified in every native entry.'),
+      'test_each_public_read_uses_one_select_snapshot':('new_equivalent_native_PG_assertions',
+        'RepairPGTests.test_original_sources_single_snapshot_new_scope_cannot_restore_old_bodies counts exactly one business SELECT for workspace/history/record/command in three source-state cases; B1 and B3.'),
+      'test_reference_requires_write_exposure_and_get_does_not_write':('new_equivalent_native_HTTP_PG',
+        'RepairHttpTests.test_actual_citations_history_cursor_and_original_source_invalidation: real hidden-reference 404/zero effects, post-feedback reference/citation success; RepairPG F02 old-hidden exposure refuses with zero rows.'),
+      'test_other_activity_cannot_read_record':('new_equivalent_native_HTTP_app_role_PG',
+        'RepairHttpTests.test_actual_citations_history_cursor_and_original_source_invalidation requests another existing activity/record and asserts 404.'),
+      'test_final009_preserves_legacy_model_tool_unknown_and_missing_body':('unchanged_dependency_existing_A_no_rebuild',
+        'Exact 009 and old G7 model/tool repositories/stopping authority unchanged; previous final009 native evidence retained. Existing schema/owners/ACL and guard identities read anew; no migrations or new compatibility execution.'),
+    }
+    rows=[]
+    for name,runs in old.items():
+        current_runs=[r for r in pg+http if r['method']==name]
+        suffix=name.rsplit('.',1)[-1]
+        if current_runs:status='new_native_same_method';explanation='Exact current backend product bytes; raw individual ok lines and complete as-run copies retained.'
+        elif suffix in aliases:status,explanation=aliases[suffix]
+        elif '.HttpTests.' in name:
+            status='not_rerun_old_HTTP_method_new_affected_HTTP_suite'
+            explanation='Old method result retained without upgrading. Three new existing-activity native HTTP methods cover strict inputs/auth/zero effects, citation/hidden-reference/history/cross-activity/source and seed/current-identity writes; unknown-activity schema/invalid DTO setup not repeated.'
+        else:raise AssertionError('unclassified old method: '+name)
+        rows.append({'method':name,'old_runs':runs,'classification':status,'same_method_current_runs':current_runs,'applicability':explanation})
+    result={'PG_executions':32,'distinct_current_PG_methods':29,'current_HTTP_executions':3,
+            'actual_runs':pg+http,'original_method_bindings':rows,
+            'complete_old_module_reconstruction':'not possible per 101 exact-hash search; not repeated or invented',
+            'current_backend_dependencies':{p:h for p,h in full.items() if p.startswith('backend/app/') or p=='backend/migrations/009_teaching.sql'},
+            'fixture_applicability_file':'first-PG-fixture-applicability.json',
+            'no_blanket_final_29_PG_or_original_4_HTTP_claim':True}
+    atomic_json(EVIDENCE/'method-bindings-final.json',result)
+    lines=['# 审计修复03逐方法绑定\n\n','本轮32次PG执行（29个定向方法，另3次受影响补验）及3个新HTTP方法均逐行ok；旧“29PG/4HTTP”不整体升级。\n\n',
+      '| 原方法 | 本轮分类 | 范围说明 |\n|---|---|---|\n']
+    for row in rows:lines.append('| `'+row['method']+'` | '+row['classification']+' | '+row['applicability']+' |\n')
+    lines+=['\n各新方法的真实批ID、完整stderr行号、最终后端哈希和旧所有失败见 '+link('DocuN/evidence/TASK-100/audit-repair-03/method-bindings-final.json')+'。\n',
+       '\n首批夹具后续只缩短n2题干；完整AST及直接依赖核对见 '+link('DocuN/evidence/TASK-100/audit-repair-03/first-PG-fixture-applicability.json')+'，这不是额外PG运行。\n']
+    (EVIDENCE/'method-bindings-final.md').write_text(''.join(lines),encoding='utf-8',newline='')
+
+
+def content_review():
+    original=load(EVIDENCE/B3/'content-oracle.json')
+    notes={
+     ('calculation','p1'):'120/(2×60)=1，180/(3×60)=1；参考单位m/s。核的是给定两题，不推到任意自然语言。',
+     ('calculation','p2'):'源明说分钟换秒乘60。',
+     ('calculation','p3'):'120/2=60把分钟当秒，较1m/s大60倍；源明确列60m/s反例。',
+     ('calculation','p4'):'源明说先统一单位并核数量级。',
+     ('concept','p1'):'同一事务整体不生效，初始A100/B50保持；不把扣款中间态A90当最终。',
+     ('concept','p2'):'源明确全部成功或全部不生效。',
+     ('concept','p3'):'源明确原子性不能单独保证隔离性；未混同两个属性。',
+     ('concept','p4'):'源未给隔离级别，保留unknown，不猜具体级别。',
+     ('program','p1'):'固定列表手推严格正数3/5两项，返回2；未运行代码。',
+     ('program','p2'):'严格比较0>0为假，与源的0不满足相同。',
+     ('program','p3'):'按-2/0/3/5手推count=0/0/1/2。',
+     ('program','p4'):'源把return置于循环后；不称函数在循环中提前返回。',
+     ('calculation','correct_parts0'):'实际出站作答1m/s且解释分钟到秒，资料和固定运算支持该正确部分；不是只根据模型met。',
+     ('concept','correct_parts0'):'实际出站作答保留A100/B50、整体事务、属性区分及资料未给级别，源分别支持。',
+     ('program','correct_parts0'):'实际作答返回2正确，可与其错误条件解释分开保留。',
+     ('program','errors0'):'作答说0也满足value>0，与源严格正数冲突；源支持0不计入、状态序列和return位置的纠正。',
+     ('program','evidence_gaps0'):'实际作答没有逐次状态或return位置，故只能记录说明不足；不是证明用户不会。',
+     ('calculation','n1'):'资料的换秒、速度单位与数量级支持该节点目标；独立复测是099推进政策，不能把政策归因为资料事实。',
+     ('concept','n2'):'资料的事务整体生效与属性区分支持该节点；独立复测依据099政策。',
+     ('program','n3'):'资料的严格正数、逐次count、循环后return支持该节点；独立复测依据099政策。',
+    }
+    reviews=[]
+    for record in original['actual_records']:
+        for claim in record['claims']:
+            reason=notes[(claim['supports_kind'],claim['claim_key'])]
+            reviews.append({**claim,'activity_id':record['activity_id'],'record_id':record['record_id'],
+                'operation_id':record['operation_id'],'payload_sha256':record['payload_sha256'],
+                'verdict':'supported_in_this_fixed_example','reason':reason,
+                'review_grade':'implementer_finite_reference_review_not_101_independent_audit'})
+    assert len(reviews)==24
+    obs=[]
+    for p in (EVIDENCE/B3/'observations').glob('*provider_started.json'):
+        item=load(p);doc=json.loads(item['value']['payload']['messages'][-1]['content'])
+        returned=next(load(q) for q in (EVIDENCE/B3/'observations').glob('*provider_returned.json') if load(q)['pid']==item['pid'])
+        obs.append({'request_artifact':str(p),'worker_pid':item['pid'],'mode':item['value']['mode'],
+                    'task_kind':doc['task']['kind'],'result_type':returned['value']['content']['result_type'],
+                    'content_verdict':'intentional_false_model_met_negative_F01' if item['value']['mode']=='false_met' else 'normal_fixed_synthetic_return',
+                    'all_model_returns_are_real_provider_quality':False})
+    assert len(obs)==11 and sum(r['mode']=='false_met' for r in obs)==2
+    atomic_json(EVIDENCE/'content-review.json',{'source':str(EVIDENCE/B3/'content-oracle.json'),'source_sha256':sha(EVIDENCE/B3/'content-oracle.json'),
+        'actual_records_reviewed':8,'actual_claim_citation_pairs_reviewed':24,'reviews':reviews,'model_sample_index':obs,
+        'independent_selector_logic':'no synthetic_content import or regenerated output_for comparison; source premises and fixed hand derivations reviewed separately',
+        'oracle_limit':'eight selected actual stored records have native PG/HTTP citation crosschecks; additional normal retest feedback is a real window/progress fact, not an additional reread oracle row',
+        'real_provider_quality':'not_run','user_code_executed':False})
+
+
+def attempts():
+    rows=[]
+    for directory in sorted(EVIDENCE.iterdir()):
+        if not directory.is_dir() or not (directory/'summary.json').is_file():continue
+        summary=load(directory/'summary.json')
+        rows.append({'batch':directory.name,'summary_status':summary['status'],
+            'segments':[{'name':s['name'],'status':s['status'],'elapsed':s.get('elapsed',0),'exit_code':s.get('exit_code')}
+                        for s in summary['segments']]})
+    observation_counts=Counter(load(p)['kind'] for p in (EVIDENCE/B3/'observations').glob('*.json'))
+    windows=load(EVIDENCE/B3/'repair-windows-facts.json')
+    assert len(windows['session_outcomes'])==12
+    assert all(o['state']=='settled' and not o['cleanup_incomplete'] and o['active_processes_at_end']==0 for o in windows['session_outcomes'])
+    ledger=Ledger().checkpoint_active()
+    atomic_json(EVIDENCE/'attempts-and-resources.json',{'at':utc(),'batches':rows,'ledger_counts':ledger['counts'],
+        'ledger_limits':ledger['limits'],'seconds_at_index':ledger['seconds'],'time_limits':ledger['time_limits'],'old_usage':ledger['old_usage'],
+        'actual_SUP_outcomes':windows['session_outcomes'],'observation_counts':dict(observation_counts),
+        'all_four_real_batch_cleanup_results':{b:load(EVIDENCE/b/'cleanup.json') for b in (B1,B2,B3,B4)},
+        'real_time_first_batch_note':'77.094 seconds conservatively includes 5.188s child cleanup; a separate 5.172s cleanup charge also remains. No refund. Later outer real elapsed subtracts charged child cleanup.',
+        'native_data_retained':True,'no_business_actions_outside_entries':True})
+
+
+if __name__=='__main__':
+    begun=time.monotonic()
+    try:
+        full,changes=identities();selected_fixture_applicability();bindings(full);content_review();attempts()
+        print(json.dumps({'status':'pass','final_files':len(full),'changed_or_new_files':len(changes),'old_PG_HTTP_methods_classified':len(load(EVIDENCE/'method-bindings-final.json')['original_method_bindings'])}))
+    finally:
+        Ledger().charge('offline',time.monotonic()-begun,{'mode':'delivery_identity_method_index_no_business_resources'})
+        Ledger().checkpoint_active()

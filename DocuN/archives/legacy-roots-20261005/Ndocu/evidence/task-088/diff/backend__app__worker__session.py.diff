@@ -1,0 +1,13 @@
+--- pre/backend/app/worker/session.py
++++ post/backend/app/worker/session.py
+@@ -145,6 +145,10 @@
+                 raise ValueError("one_call requires explicit data")
+             validate_identity(activity_id, executor_id, one_call.operation_id, run_tag)
+             one_call.to_wire()
++            # N1：claim 前早拒绝超 120 秒配置（idle 配置域不收紧）；防止 SUP
++            # 先 claim 预扣、worker 侧才解码失败关闭造成全额预扣。
++            if self.config.request_timeout_seconds > 120:
++                raise ValueError("one_call request timeout exceeds 120s limit")
+             if one_call.service.timeout_seconds > self.config.request_timeout_seconds:
+                 raise ValueError("model timeout exceeds session")
+         elif one_call is not None:

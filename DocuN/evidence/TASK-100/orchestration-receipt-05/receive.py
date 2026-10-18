@@ -1,0 +1,197 @@
+"""Orchestration receipt and neutral audit identities. No product imports."""
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+sys.stdout.reconfigure(encoding="utf-8")
+ROOT = Path(__file__).resolve().parents[4]
+OUT = Path(__file__).resolve().parent
+SOURCE = ROOT / "DocuN/evidence/TASK-100/audit-repair-03"
+STAMP = datetime.now(timezone(timedelta(hours=8))).isoformat()
+
+
+def digest(p):
+    return hashlib.sha256(p.read_bytes()).hexdigest()
+
+
+def save(name, data):
+    (OUT / name).write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+if (OUT / "receipt.json").exists():
+    raise SystemExit("Receipt already exists; preserve previous observations.")
+identity = json.loads((SOURCE / "final-identity.json").read_text(encoding="utf-8"))
+freeze = json.loads((SOURCE / "final-freeze-and-usage.json").read_text(encoding="utf-8"))
+report = ROOT / "DocuN/results/TASK-100-result.md"
+assert digest(report) == freeze["report_sha256"]
+assert digest(SOURCE / "final-identity.json") == freeze["final_identity_sha256"]
+checks = []
+for rel, expected in identity["post_files"].items():
+    p = ROOT / rel
+    actual = digest(p) if p.is_file() else None
+    checks.append({"group": "current_source_dist", "path": rel, "expected": expected,
+                   "actual": actual, "match": expected == actual})
+for rel, expected in identity["pre_files"].items():
+    p = SOURCE / "pre" / rel
+    actual = digest(p) if p.is_file() else None
+    checks.append({"group": "pre", "path": str(p), "expected": expected,
+                   "actual": actual, "match": expected == actual})
+for change in identity["changes"]:
+    p = Path(change["diff"])
+    actual = digest(p) if p.is_file() else None
+    checks.append({"group": "diff_final", "path": str(p), "expected": change["diff_sha256"],
+                   "actual": actual, "match": actual == change["diff_sha256"]})
+    if change["kind"] == "removed":
+        assert not (ROOT / change["path"]).exists()
+
+rules = json.loads((ROOT / "DocuN/evidence/v4-migration-20260930/rules-snapshot.json").read_text(encoding="utf-8"))
+for obj in rules:
+    p = Path(obj["absolute_path"])
+    actual = digest(p) if p.is_file() else None
+    checks.append({"group": "rules", "path": str(p), "expected": obj["sha256"],
+                   "actual": actual, "match": actual == obj["sha256"]})
+for obj in identity["baseline_input_objects"]:
+    if obj["group"] == "protected_product_files":
+        p = Path(obj["path"])
+        actual = digest(p)
+        checks.append({"group": "protected_product", "path": str(p), "expected": obj["actual"],
+                       "actual": actual, "match": actual == obj["actual"]})
+mismatches = [x for x in checks if not x["match"]]
+save("current-pre-diff-rule-checks.json", checks)
+if mismatches:
+    save("blocked-identity.json", mismatches)
+    raise SystemExit("Current/source/pre/diff/rule drift; stop dependent registration.")
+
+file_index = json.loads((SOURCE / "evidence-file-index.json").read_text(encoding="utf-8"))
+raw_checks = []
+for rel, obj in file_index["files"].items():
+    p = SOURCE / rel
+    actual = digest(p) if p.is_file() else None
+    raw_checks.append({"path": str(p), "expected": obj["sha256"], "actual": actual,
+                       "bytes": p.stat().st_size if p.is_file() else None,
+                       "match": actual == obj["sha256"]})
+save("raw-index-checks.json", raw_checks)
+raw_mismatches = [x for x in raw_checks if not x["match"]]
+save("raw-index-mismatches.json", raw_mismatches)
+
+batch_names = (
+    "2026-10-05T101329.428351-0000-repair-combo",
+    "2026-10-05T103020.095611-0000-repair-combo",
+    "2026-10-05T110007.993696-0000-readonly-browser-combo",
+)
+as_run = []
+for batch in batch_names:
+    manifest = json.loads((SOURCE / batch / "as-run-files.json").read_text(encoding="utf-8"))
+    for rel, expected in manifest.items():
+        if not rel.startswith("backend/app/"):
+            continue
+        actual = digest(SOURCE / batch / "as-run" / rel)
+        current = digest(ROOT / rel)
+        as_run.append({"batch": batch, "path": rel, "expected": expected, "as_run": actual,
+                       "current": current, "match": expected == actual == current})
+save("backend-as-run-checks.json", as_run)
+assert all(x["match"] for x in as_run)
+
+logs = [
+    (batch_names[0], "repository-raw", 29),
+    (batch_names[1], "repository-raw", 3),
+    (batch_names[1], "http-raw", 3),
+    ("2026-10-05T105948.833483-0000-offline", "common-raw", 58),
+    ("2026-10-05T105948.833483-0000-offline", "repair-raw", 18),
+]
+method_logs = []
+for batch, segment, count in logs:
+    p = SOURCE / batch / segment / "stderr.txt"
+    txt = p.read_text(encoding="utf-8")
+    # unittest may print warnings or deliberately tested fail-closed output between
+    # the method header and its verdict. Preserve and count standalone ok lines.
+    ok_lines = [i for i, line in enumerate(txt.splitlines(), 1)
+                if re.search(r"\.\.\. ok\s*$", line) or line.strip() == "ok"]
+    method_logs.append({"batch": batch, "segment": segment, "path": str(p), "sha256": digest(p),
+                        "individual_ok_lines": ok_lines, "expected_count": count,
+                        "actual_count": len(ok_lines), "summary_OK_present": "\nOK" in txt,
+                        "note": "Log verdict identity/count only; assertions and environment require independent audit."})
+save("raw-method-log-receipt.json", method_logs)
+assert all(x["actual_count"] == x["expected_count"] and x["summary_OK_present"] for x in method_logs)
+
+before = []
+for rel in (
+    "DocuS/执行动态文档.MD", "DocuS/架构动态文档.MD", "DocuS/文档变更记录.MD",
+    "DocuN/tasks/TASK-100.md", "DocuN/tasks/TASK-101.md",
+    "DocuN/results/TASK-100-work-decision.md", "DocuN/results/TASK-101-work-decision.md",
+):
+    p = ROOT / rel
+    dst = OUT / "before" / rel
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.exists():
+        raise SystemExit(f"Do not overwrite old backup: {dst}")
+    dst.write_bytes(p.read_bytes())
+    before.append({"path": rel, "sha256": digest(p), "backup": str(dst)})
+save("before-manifest.json", before)
+for src_rel, name in (
+    ("DocuN/tasks/TASK-100.md", "TASK-100-card-as-returned.md"),
+    ("DocuN/results/TASK-101-result.md", "TASK-101-first-audit-as-returned.md"),
+):
+    (OUT / name).write_bytes((ROOT / src_rel).read_bytes())
+
+native = json.loads((SOURCE / batch_names[1] / "repair-windows-facts.json").read_text(encoding="utf-8"))
+browser = json.loads((SOURCE / batch_names[2] / "readonly-browser/facts.json").read_text(encoding="utf-8"))
+save("receipt.json", {
+    "at": STAMP, "TASK": "TASK-100", "R": "R-094", "round": "audit-repair-03",
+    "dispatch": "returned", "acceptance": "partial_candidate_pending_TASK101_incremental_review",
+    "report_sha256": digest(report), "report_bytes": report.stat().st_size,
+    "identity_check_count": len(checks), "identity_mismatches": 0,
+    "raw_index_count": len(raw_checks), "raw_index_mismatches": len(raw_mismatches),
+    "backend_as_run_matches": len(as_run),
+    "method_log_counts": [x["actual_count"] for x in method_logs],
+    "counts": freeze["counts"], "limits": freeze["limits"], "seconds_at_freeze": freeze["seconds_at_freeze"],
+    "old_result_suffix_preserved": report.read_bytes().endswith((SOURCE / "pre" / "DocuN/results/TASK-100-result.md").read_bytes())
+        if (SOURCE / "pre" / "DocuN/results/TASK-100-result.md").is_file() else
+        hashlib.sha256(report.read_bytes()[-freeze["old_result_bytes"]:]).hexdigest() == freeze["old_result_sha256"],
+    "new_native_outcomes": len(native["session_outcomes"]),
+    "new_readonly_browser": {k: browser[k] for k in ("status", "requests", "POSTs", "application_starts", "SUP_calls", "business_writes", "grade")},
+    "browser_checks": len(browser["checks"]),
+    "resource_observation": {"at": "2026-10-05T19:43:39.5771908+08:00", "container_state": "exited",
+        "Running": False, "Pid": 0, "ExitCode": 0, "ports_18100_55442": [], "task100_runtime_processes": [],
+        "method": "Read-only exact Docker State and filtered TCP/process metadata."},
+    "root_product_import_test_build_PG_Job_browser_resource_mutation": 0,
+    "root_metadata_correction": "The first receipt parser missed two standalone unittest ok verdicts after warnings/tested fail-closed output. Original parser/index preserved; no product or business rerun.",
+    "F_E_status": "candidate_fixes_not_independently_closed", "all_three_initial_native_FAILs_preserved": True,
+})
+
+neutral = {
+    "at": STAMP, "project_root": str(ROOT), "TASK": "TASK-101", "R": "R-095", "round": "review-02",
+    "purpose": "Neutral object identity and original evidence paths; no implementation self-assessment or root acceptance conclusions.",
+    "contracts": [
+        {"path": str(ROOT / "DocuN/results/TASK-099-result.md"), "sha256": digest(ROOT / "DocuN/results/TASK-099-result.md")},
+        {"path": str(OUT / "TASK-100-card-as-returned.md"), "sha256": digest(OUT / "TASK-100-card-as-returned.md")},
+        {"path": str(ROOT / "DocuN/results/TASK-101-result.md"), "sha256": digest(ROOT / "DocuN/results/TASK-101-result.md"),
+         "role": "Own prior audit scope and F/E identifiers; current judgment must use code/raw evidence."},
+    ],
+    "rules": rules,
+    "current_objects": [x for x in checks if x["group"] in ("current_source_dist", "protected_product")],
+    "pre_objects": [x for x in checks if x["group"] == "pre"],
+    "diff_objects": [x for x in checks if x["group"] == "diff_final"],
+    "changes": identity["changes"],
+    "raw_files": raw_checks,
+    "raw_index_discrepancies": raw_mismatches,
+    "raw_root": str(SOURCE),
+    "author_indexes_for_navigation_only": [
+        "final-identity.json", "method-bindings-final.json", "first-PG-fixture-applicability.json",
+        "execution-plan.json", "attempt-ledger.json", "attempts-and-resources.json", "content-review.json",
+    ],
+    "raw_batch_paths": list(batch_names),
+    "excluded_inputs": ["TASK-100-result.md", "implementation chats/reasoning/client implementation memory", "orchestration receipt verdicts"],
+}
+review_input = ROOT / "DocuN/evidence/TASK-101/review-02-input.json"
+if review_input.exists():
+    raise SystemExit("A review-02 input already exists; inspect active review before continuing.")
+review_input.write_text(json.dumps(neutral, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+print(json.dumps({"identity_checks": len(checks), "mismatches": 0, "raw_files": len(raw_checks),
+                  "raw_mismatches": raw_mismatches, "backend_as_run": len(as_run),
+                  "neutral_input_sha256": digest(review_input)}, ensure_ascii=False))

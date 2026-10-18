@@ -1,0 +1,20 @@
+Traceback (most recent call last):
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task111\c03_step.py", line 87, in main
+    finish(resource,built,folder)
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task111\c03_independent_finish.py", line 42, in run
+    with asyncio.Runner(loop_factory=psycopg_compatible_loop_factory) as runner:runner.run(checks(resource,built,out))
+                                                                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task111\c03_independent_finish.py", line 22, in checks
+    row=conn.execute('SELECT document_body::jsonb->>\'profile\' FROM teaching_records WHERE record_id=%s',(str(head['exercise_record_id']),)).fetchone()
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\.venv\Lib\site-packages\psycopg\connection.py", line 300, in execute
+    raise ex.with_traceback(None)
+psycopg.errors.UndefinedColumn: column "document_body" does not exist
+LINE 1: SELECT document_body::jsonb->>'profile' FROM teaching_record...
+               ^

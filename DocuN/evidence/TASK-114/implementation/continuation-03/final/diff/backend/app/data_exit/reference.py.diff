@@ -1,0 +1,27 @@
+--- pre/backend/app/data_exit/reference.py
++++ final/backend/app/data_exit/reference.py
+@@ -42,15 +42,21 @@
+ 
+ class LoadingReferencePin:
+     """工厂 loading 权经真实专用连接核对后保护目标原件发布。"""
+-    def __init__(self,factory,target,lease,prepared):
++    def __init__(self,factory,target,lease,prepared,*,operation):
+         self.factory,self.target,self.lease,self.prepared=factory,target,lease,prepared
+-        import psycopg
+-        with psycopg.connect(factory.loader_dsn(target),connect_timeout=3) as connection:
++        self.operation=operation
++        if operation.hub is not factory.hub or operation.job_id!=target.job_id:
++            raise DataError('reference_pin_invalid')
++        self.check()
++        with operation.connection(factory.loader_dsn(target)) as connection:
+             row=connection.execute('SELECT public.data_loading_allowed(),public.data_state()').fetchone()
++            operation.check()
++        self.check()
+         if row is None or row[0] is not True or tuple(str(row[1][key]) for key in ('dataset_id','instance_id','originals_root_id'))!=(target.dataset_id,target.instance_id,target.root_id):
+             raise DataError('target_loading_identity_unknown',503)
+ 
+     def check(self,root=None,prepared=None):
++        self.operation.check()
+         self.lease.check()
+         expected=self.target.data_root/'originals'
+         state=self.factory.hub.state()

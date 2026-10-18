@@ -1,0 +1,77 @@
+--- first-pre/frontend/src/activities/ActivityWorkspace.tsx
++++ current/frontend/src/activities/ActivityWorkspace.tsx
+@@ -145,7 +145,7 @@
+   return status === "running" ? "运行中" : status === "cancelled" ? "已取消" : "空闲";
+ }
+ 
+-export function ActivityWorkspace({ token, variant = "learning" }: { token: string; variant?: "learning" | "interview" }) {
++export function ActivityWorkspace({ token, variant = "learning",scopeDraft=[] }: { token: string; variant?: "learning" | "interview";scopeDraft?:{source_id:string;version_id:string;revision:number}[] }) {
+   const [caps, setCaps] = useState<Capabilities | null>(null);
+   const [capsError, setCapsError] = useState("");
+   const [items, setItems] = useState<ActivityFacts[]>([]);
+@@ -162,7 +162,7 @@
+   const [intents, setIntents] = useState<PendingIntent[]>([]);
+   const [intentsOk, setIntentsOk] = useState(true);
+   const [materials, setMaterials] = useState<MaterialOption[]>([]);
+-  const [picked, setPicked] = useState<string[]>([]);
++  const [picked, setPicked] = useState<string[]>(()=>scopeDraft.map(s=>s.source_id));
+   const [memoryChoices, setMemoryChoices] = useState<MemoryChoice[]>([]);
+   const [followup, setFollowup] = useState("");
+   const [goal, setGoal] = useState("");
+@@ -421,7 +421,7 @@
+       await api("/api/activities", {
+         method: "POST",
+         headers: { "Content-Type": "application/json" },
+-        body: JSON.stringify({ activity_id: intent.activity_id, source_ids: intent.source_ids }),
++        body: JSON.stringify({ activity_id: intent.activity_id, source_ids: intent.source_ids,...(intent.expected_sources?{expected_sources:intent.expected_sources}:{}) }),
+       });
+       removeIntent(intent.intent_id); reloadIntents();
+       setPicked([]);
+@@ -446,12 +446,17 @@
+   }
+ 
+   async function createActivity() {
++    const selectedMaterials=materials.filter(m=>picked.includes(m.id));
++    if(selectedMaterials.length!==picked.length){setError('当前资料仍在加载，请核对后再创建。');return;}
++    if(scopeDraft.some(s=>picked.includes(s.source_id)&&!selectedMaterials.some(m=>m.id===s.source_id&&m.version_id===s.version_id&&m.revision===s.revision))){setError('带入的资料版本已变化，请返回原文重新核对范围草案。');return;}
+     if (memoryChoices.length) {
+       if (busy || !picked.length) return;
+       setBusy("create-memory"); setError("");
+       try {
+         const activityId=crypto.randomUUID();
+-        await submitTrackedMemoryCreate(activityId,normalizeSourceIds(picked),memoryChoices,token);
++        const selected=materials.filter(m=>picked.includes(m.id));
++        if(selected.length!==picked.length)throw new Error('当前资料未全部加载，请先核对');
++        await submitTrackedMemoryCreate(activityId,normalizeSourceIds(picked),memoryChoices,token,selected.map(m=>({source_id:m.id,version_id:m.version_id,revision:m.revision})));
+         setMemoryChoices([]);setPicked([]);setNotice("活动已创建，学习背景固定为明确选择的版本。");
+         await refreshList(true);await selectActivity(activityId);
+       } catch(reason) { setError(reason instanceof Error?reason.message:"创建未确认，请先核对"); }
+@@ -466,6 +471,7 @@
+     const intent: PendingIntent = {
+       intent_id: crypto.randomUUID(), kind: "create", state: "pending",
+       created_at: new Date().toISOString(), activity_id: newActivityId(), source_ids: sourceIds,
++      expected_sources:selectedMaterials.map(m=>({source_id:m.id,version_id:m.version_id,revision:m.revision})),
+     };
+     if (!appendIntent(intent)) {
+       setError("恢复记录写入失败：为避免重复动作，新建已暂停。");
+@@ -749,9 +755,10 @@
+ 
+       {caps?.storage_ready && (
+         <>
+-        {variant === "learning" && <MemoryWorkspace token={token} choices={memoryChoices} onChoicesChange={setMemoryChoices} />}
++        <MemoryWorkspace token={token} choices={memoryChoices} onChoicesChange={setMemoryChoices} />
+         <section className="ws-create">
+           <h2>新建活动</h2>
++          {scopeDraft.length>0&&<p>已带入资料范围草案；请核对下列版本、用途与额度后明确创建。</p>}
+           <p className="quiet">新建只确定资料范围与有限预算，不会立即产生模型调用。创建后确认目标并显式开始学习。</p>
+           {caps.create.available ? (
+             <>
+@@ -782,7 +789,7 @@
+                 </dl>
+               )}
+               <p className="quiet">额度来自本地服务端配置，界面不可修改；达到上限会拒绝新动作。</p>
+-              <button className="primary" disabled={busy !== "" || !picked.length} onClick={() => void createActivity()}>
++              <button className="primary" disabled={busy !== "" || !picked.length||picked.some(id=>!materials.some(m=>m.id===id))} onClick={() => void createActivity()}>
+                 {busy === "create" ? "正在创建…" : "创建活动"}
+               </button>
+             </>

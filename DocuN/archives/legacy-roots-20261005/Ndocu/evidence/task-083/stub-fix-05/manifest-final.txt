@@ -1,0 +1,19 @@
+TASK-083 stub-fix-05 final targeted offline batch; pure substitutes only; no real event/Job/spawn/subprocess/PG/Docker/network/model/config.
+Python: backend/.venv/Scripts/python.exe -B. Per-command <=60s, total <=120s. Stop on first failed command; no retry, no recheck.
+Working directory for both commands: D:/shspic/project_NO3_RetroLume-agent
+Source hashes: focused_unit.py new=4a633aff536f833cdbf3a266be2d44de70b8e01105a204b68d7947995627a1ca (pre=1e58eb03…8ce08, only StartLifecycleTests docstring note + Kernel.__init__ partial wraps + functools import); job_control.py=5bc35bf1…3980d2 and offline_unit.py=3029a709…4c5c unchanged (see final-hashes.txt).
+
+Command 1 (2 test methods, failfast):
+  backend/.venv/Scripts/python.exe -B backend/tests/fixtures/task083/focused_unit.py --failfast -v StartLifecycleTests.test_04_start_handle_closes_after_identity_receipt StartLifecycleTests.test_04_start_handle_release_exactly_once_on_failure
+  Expected: 2 ok, exit 0. Real verify_last_handle flow, OS fully stubbed (ctypes.WinDLL both loads -> partial-wrapped Kernel; create_subprocess_exec -> FakeProc; NamedJob -> FakeNamedJob). Success asserts: suspended identity receipt (first readline) strictly precedes starter.CloseHandle(start_event); exactly one SetEvent and one CloseHandle on parent Start handle; OpenProcess/open_existing only after release; worker_signaled_after_last_job_handle_closed=True. Failure branch A (spawn RuntimeError): Start handle released exactly once in finally, no readline/open_process/kill. Failure branch B (empty receipt AssertionError): released exactly once, kill present, no open_process/open_existing, readline precedes release.
+
+Command 2 (only if command 1 passes; 1 test method):
+  backend/.venv/Scripts/python.exe -B backend/tests/fixtures/task083/offline_unit.py -v OfflineRepairTests.test_05_early_success_uses_tree_zero_close_then_same_g_settle_retry
+  Expected: ok, exit 0. Deterministic local clock (_TestClock patched into app.worker.session.time and test-module time): t1>t0, delta=400000000ns, observed ceil=1, W=6; ledger.events == [inspect, claim, job_closed, close_db, settle, settle] (tree-zero close_job precedes close_db, same-G settle retry x2); (settled,reserved,pending)=(1,0,0); active_processes_at_end=0.
+
+OS-substitute coverage confirmation (gate before running):
+- StartLifecycleTests patches job_control.ctypes.WinDLL (both kernel32 loads), job_control.asyncio.create_subprocess_exec, job_control.NamedJob; Kernel APIs partial-wrapped so job_control.py:49-71 argtypes/restype assignments are accepted (root cause of round-04 AttributeError fixed).
+- Disclosed non-object ctypes bookkeeping inside job_control (frozen, by design): ctypes.set_last_error(0)/get_last_error() in _new_event_or_reject — deterministic 0 after set(0) because the pure-Python stub call never touches the ctypes-private error copy; creates no OS object/handle/process; ctypes._FILETIME()/byref are pure struct construction. No other real OS call is reachable on the stub path.
+- offline test_05 patches app.worker.session.time and test-module time to _TestClock; ActivityMutex/NamedJob.create patched; Ledger/Owner/FakeJob in-memory; no DB/DSN connect.
+Old PASS evidence carried over by local invariance (no rerun, per card): EventControlTests collision pair and LauncherTests D1 deadline — test methods AST-identical to the 04-round PASS snapshot, direct dependencies frozen (job_control.py, launcher.py, session.py, command.py, worker_main.py, gate.py, supervisor_*, repository, 005, fixture.py, scenario_child.py, job_batch.py all FROZEN_OK), import delta functools.partial only (no global state change).
+Item 12 and the other 9 items reused per 084; no rerun. Static: stub_fix_05.py ALL_PASS (attempt-03; attempt-01/02 failed on checker-script defects only, archived as static-attempt-0{1,2}-fail.log; no test run consumed).

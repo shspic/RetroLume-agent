@@ -1,0 +1,591 @@
+
+DocuN/evidence/TASK-118/audit/diffs/backend__app__preview__production_supervisor.py.diff
+1: --- first-pre/backend/app/preview/production_supervisor.py
+2: +++ current/backend/app/preview/production_supervisor.py
+3: @@ -74,6 +74,7 @@
+4:                          status=birth(owned["pid"])
+5:                          if status["state"]=="unknown" or status["state"]=="running" and status["birth"]==owned["birth"]:
+6:                              raise OwnershipUnknown("settled_owned_process_not_ended")
+7: +                    self._end_recovered_owned(registry,saved)
+8:                      self.blocked=False;return
+9:                  if settled["state"]=="stopped":
+10:                      saved=await self.ledger._read_html_stop_confirmation(registry["activity_id"],registry["preview_id"])
+11: @@ -100,6 +101,7 @@
+12:                              raise OwnershipUnknown("settled_owned_process_not_ended")
+13:                      atomic_json(folder/("recovery-reused-"+self.boot_id+".json"),{"tree_confirmation":saved["tree_confirmation"],"cid":registry["cid"],
+14:                        "source_receipt_sha256":digest(saved),"same_started_finished_identity":True,"current_owned_instances_ended":True,"current_inspect":actual})
+15: +                    self._end_recovered_owned(registry,saved)
+16:                      self.blocked=False;return
+17:              recovery_stage="parent";old_parent=birth(registry["parent"]["pid"])
+18:              if old_parent["state"]=="unknown" or (old_parent["state"]=="running" and old_parent["birth"]==registry["parent"]["birth"]):
+19: @@ -183,11 +185,33 @@
+20:                  await self.ledger.update_html_preview(registry["preview_id"],key,"failed_unstarted" if proof["tree_confirmation"]=="never_started" else "stopped",
+21:                      confirmation=proof,elapsed=row["reserve_seconds"])
+22:              registry["complete"]=True;atomic_json(folder/"registry.json",registry);atomic_json(folder/"recovery-proof.json",proof)
+23: +            self._end_recovered_owned(registry,proof)
+24:              atomic_json(self.current_file,{"folder":str(folder),"preview_id":registry["preview_id"],"complete":True});self.blocked=False
+25:          except Exception as error:
+26:              self.blocked=True
+27:              code=str(error)[:128] if isinstance(error,(OwnershipUnknown,DockerUnknown,HtmlRefusal)) else "bounded_recovery_error"
+28:              atomic_json(self.root/("recovery-error-"+self.boot_id+".json"),{"stage":recovery_stage,"error_type":type(error).__name__,"code":code})
+29: +
+30: +    def _end_recovered_owned(self,registry,proof):
+31: +        """Only a verified normal recovery can close its exact durable data work."""
+32: +        gate=getattr(self,'mutation_gate',None)
+33: +        if gate is None:return
+34: +        if (registry.get('complete') is not True or proof.get('tree_confirmation') not in ('never_started','private_pid_init_terminated')
+35: +            or proof.get('cid')!=registry.get('cid') or proof.get('image_id')!=registry['intent']['image_id']
+36: +            or proof.get('nonce')!=registry['intent']['nonce']
+37: +            or registry.get('cid') is None and (proof.get('parent_lifetime_ended') is not True
+38: +                or not (proof.get('owned_reaper_ended') is True or proof.get('reaper_never_registered') is True and proof.get('registered_launcher_ended') is True))):
+39: +            raise OwnershipUnknown('recovery_data_owned_proof')
+40: +        matches=[r for r in gate.hub.state()['owned'].values() if r.get('kind')=='preview'
+41: +                 and r.get('identity',{}).get('preview_id')==registry['preview_id']]
+42: +        if not matches:return
+43: +        if len(matches)!=1:raise OwnershipUnknown('recovery_data_owned_ambiguous')
+44: +        row=matches[0];identity=row['identity']
+45: +        if (identity.get('native_registry_id')!=registry['preview_id'] or identity.get('parent')!=registry['parent']
+46: +            or identity.get('generation')!=registry['generation']
+47: +            or identity.get('boot_id')!=registry['intent']['labels'].get('retrolume.boot')):
+48: +            raise OwnershipUnknown('recovery_data_owned_identity')
+49: +        if row.get('state')!='ended':gate.end_owned(row['owned_id'],confirmed=True,proof_sha256=digest(proof))
+50:  
+51:      def _event(self,kind,value):
+52:          if self._event_sink:self._event_sink(kind,value)
+53: @@ -225,10 +249,12 @@
+54:          reserve=min(60,180-budget["settled_seconds"]-budget["reserved_seconds"])
+55:          if reserve<30 or budget["starts_used"]>=3:raise HtmlRefusal("html_preview_budget_exhausted")
+56:          now=time.monotonic_ns();pid=str(uuid4());control_key=secrets.token_hex(32)
+57: +        stages=[{'stage':'t0_reserve_begin','at_ns':now}]
+58:          identity={"preview_id":pid,"owner_id":str(uuid4()),"boot_id":self.boot_id,"nonce":secrets.token_hex(32),
+59:            "control_key":control_key,"image_id":self.policy.image_id,"config_sha256":self.config_sha256,"t0_ns":now,
+60:            "deadline_at":datetime.now(timezone.utc)+timedelta(seconds=reserve)}
+61:          row,created=await self.ledger.reserve_html_preview(aid,artifact_id,command,identity,reserve)
+62: +        stages.append({'stage':'reserve_end','at_ns':time.monotonic_ns()})
+63:          if not created:return await self.status(aid,row["preview_id"])
+64:          name=self._name_supplier(pid,row["generation"]) if self._name_supplier else "retrolume-preview-v2-"+pid.replace("-","")
+65:          parent=birth(os.getpid())
+66: @@ -244,7 +270,7 @@
+67:             "kernel_ready":None,"received_ready":None,"ready_received_ns":None,"ready_accepted_ns":None,
+68:             "pipe_eof":False,"stderr_eof":False,"stdout_read_error":None,"stderr_read_error":None,
+69:             "stderr_observed_bytes":0,"stderr_captured_bytes":0,"stderr_overflow":False,
+70: -           "error_code":None,"last_contact_ns":now,"reaper_owner":None}
+71: +           "error_code":None,"last_contact_ns":now,"reaper_owner":None,"stage_times":stages}
+72:          current["input_times"]=deque();current["rate_exceeded_since"]=None
+73:          current["intent"]={"name":name,"image_id":self.policy.image_id,"nonce":identity["nonce"],"docker":self.policy.docker,
+74:            "kernel_release":self.policy.kernel_release,"created_unix":str(int(time.time())-1),
+75: @@ -255,10 +281,12 @@
+76:                    "intent":current["intent"],"cid":None,"complete":False,"control_key_blob":protect_control_key(control_key),
+77:                    "activity_id":aid,"preview_id":pid,"generation":row["generation"],"attach_pid":None,"attach_birth":None}
+78:          current["registry"]=registry;atomic_json(folder/"registry.json",registry);atomic_json(self.current_file,{"folder":str(folder),"preview_id":pid})
+79: +        stages.append({'stage':'registry_end','at_ns':time.monotonic_ns()})
+80:          gate=getattr(self,'mutation_gate',None)
+81:          if gate is not None:
+82:              current['data_owned_id']=gate.register_owned('preview',{'parent':registry['parent'],'preview_id':pid,
+83:                  'boot_id':self.boot_id,'generation':row['generation'],'native_registry_id':pid})
+84: +        stages.append({'stage':'data_owned_end','at_ns':time.monotonic_ns()})
+85:          with self._lock:
+86:              if self.current is not None:raise OwnershipUnknown("physical_owner_conflict")
+87:              self.current=current
+88: @@ -394,6 +422,7 @@
+89:          if gate is not None:
+90:              with gate.close_lane(c['data_owned_id']):
+91:                  with gate.acquire():
+92: +                    c['stage_times'].append({'stage':'supervisor_gate_acquired','at_ns':time.monotonic_ns()})
+93:                      try:self._run_data_owned(c)
+94:                      finally:
+95:                          gate.end_owned(c['data_owned_id'],confirmed=c['registry'].get('complete') is True,
+96: @@ -403,12 +432,14 @@
+97:  
+98:      def _run_data_owned(self,c):
+99:          with HostJob(job_name(c["preview_id"],c["nonce"],"SUP")) as job:
+100: +            c['stage_times'].append({'stage':'SUP_job_created','at_ns':time.monotonic_ns()})
+101:              c["host_job"]=job;c["reaper_job"]=None
+102:              with scope(job):self._run_owned(c)
+103:  
+104:      def _run_owned(self,c):
+105:          proof=None;started=False;registry=c["folder"]/"registry.json";stage="reaper_start"
+106:          try:
+107: +            c['stage_times'].append({'stage':'reaper_Popen_begin','at_ns':time.monotonic_ns()})
+108:              reaper=subprocess.Popen([str(BACKEND/".venv"/"Scripts"/"python.exe"),"-B","-m","app.preview.production_reaper",str(registry)],
+109:                  cwd=BACKEND,env=clean_env(),stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,creationflags=subprocess.CREATE_NO_WINDOW)
+110:              c["reaper"]=reaper
+111: @@ -419,6 +450,7 @@
+112:                  if reaper.poll() is not None or time.monotonic_ns()>min(c["t0_ns"]+3000000000,c["deadline_ns"]-10000000000):raise OwnershipUnknown("reaper_not_ready")
+113:                  time.sleep(.02)
+114:              ready_owner=json.loads((c["folder"]/"reaper-ready.json").read_text(encoding="utf-8"))
+115: +            c['stage_times'].append({'stage':'reaper_ready_observed','at_ns':time.monotonic_ns()})
+116:              expected_job=job_name(c["preview_id"],c["nonce"],"REAP")
+117:              if ready_owner.get("job_name")!=expected_job:raise OwnershipUnknown("reaper_job_identity")
+118:              lineage=child_lineage(ready_owner["pid"],ready_owner["birth"],reaper.pid,launcher["birth"])
+119: @@ -549,6 +581,7 @@
+120:                           "ready_received_ns":c.get("ready_received_ns"),"ready_accepted_ns":c.get("ready_accepted_ns"),
+121:                           "pipe_observation":self._pipe_observation(c),"at_ns":time.monotonic_ns()})
+122:              self._observe(c,"finished",{"preview_id":c["preview_id"],"state":c["state"],"confirmed":confirmed,"error_code":c["error_code"]})
+123: +            self._save_observation(c,c['folder']/'stage-times.json',{'t0_ns':c['t0_ns'],'deadline_ns':c['deadline_ns'],'stages':c['stage_times']})
+124:              if not published:self.blocked=True;confirmed=False
+125:              if confirmed:
+126:                  if not self._save_observation(c,self.current_file,{"folder":str(c["folder"]),"preview_id":c["preview_id"],"complete":True}):
+
+DocuN/evidence/TASK-118/audit/diffs/deploy__start_local.py.diff
+1: --- first-pre/deploy/start_local.py
+2: +++ current/deploy/start_local.py
+3: @@ -6,6 +6,8 @@
+4:  import subprocess
+5: 
+6:  import time
+7: 
+8:  import sys
+9: 
+10: +import argparse
+11: 
+12: +import threading
+13: 
+14:  
+15: 
+16:  ROOT=Path(__file__).resolve().parents[1]
+17: 
+18:  NAME="retrolume-local-pg"
+19: 
+20: @@ -16,7 +18,28 @@
+21:      if result.returncode:raise RuntimeError("Docker操作未完成，请检查Docker Desktop是否已启动")
+22: 
+23:      return result.stdout.strip()
+24: 
+25:  
+26: 
+27: +def serve_owned(port):
+28: 
+29: +    """本机启动器的精确stdin生命周期；仍由正常app/lifespan收尾。"""
+30: 
+31: +    sys.path.insert(0,str(ROOT/'backend'))
+32: 
+33: +    import asyncio,uvicorn
+34: 
+35: +    from app.main import create_app
+36: 
+37: +    from app.runtime import psycopg_compatible_loop_factory
+38: 
+39: +    server=uvicorn.Server(uvicorn.Config(create_app(),host='127.0.0.1',port=port,timeout_graceful_shutdown=150))
+40: 
+41: +    def close_on_owner_end():
+42: 
+43: +        sys.stdin.readline()
+44: 
+45: +        server.should_exit=True
+46: 
+47: +    threading.Thread(target=close_on_owner_end,name='local-launcher-owned-input',daemon=True).start()
+48: 
+49: +    with asyncio.Runner(loop_factory=psycopg_compatible_loop_factory) as runner:runner.run(server.serve())
+50: 
+51: +
+52: 
+53:  def main():
+54: +    parser=argparse.ArgumentParser()
+55: 
+56: +    parser.add_argument('--port',type=int,default=8000)
+57: 
+58: +    parser.add_argument('--container',default=NAME)
+59: 
+60: +    parser.add_argument('--shutdown-stdin',action='store_true',help='由当前启动句柄的stdin一行或EOF触发正常关闭')
+61: 
+62: +    parser.add_argument('--serve-owned',action='store_true',help=argparse.SUPPRESS)
+63: 
+64: +    args=parser.parse_args()
+65: 
+66: +    if not 1024<=args.port<=65535:raise RuntimeError('端口无效')
+67: 
+68: +    if args.serve_owned:return serve_owned(args.port)
+69: 
+70:      config=ROOT/"config/database.local.json"
+71:      data_dir=os.environ.get("RETROLUME_DATA_DIR")
+72:      backup_dir=os.environ.get("RETROLUME_BACKUP_DIR")
+73: @@ -43,7 +66,7 @@
+74:          if not config.is_file():raise RuntimeError("缺少本地数据库配置；请设置RETROLUME_DATABASE_URL或创建受忽略的私有配置，切勿把密码发送到对话")
+75:          dsn=json.loads(config.read_text(encoding="utf-8"))["url"]
+76:      # 不启动同名但来源不一致的容器。
+77: 
+78: -    selected_name=selected_target.name if selected_target is not None else NAME
+79: 
+80: +    selected_name=selected_target.name if selected_target is not None else args.container
+81: 
+82:      selected_image=factory.profile['image_id'] if factory is not None else IMAGE
+83: 
+84:      if docker("inspect","--format","{{.Image}}",selected_name)!=selected_image:
+85: 
+86:          raise RuntimeError("数据库容器与已配置镜像不一致，请先检查")
+87: @@ -62,45 +85,57 @@
+88:              if factory is not None:
+89: 
+90:                  factory._wait_pg(dsn)
+91: 
+92:                  break
+93: 
+94: -            status=subprocess.run(["docker","exec",own_cid,"pg_isready","-U","retrolume","-d","retrolume"],capture_output=True,timeout=3)
+95: 
+96: -            if status.returncode==0:break
+97: 
+98: +            import psycopg
+99: 
+100: +            try:
+101: 
+102: +                with psycopg.connect(dsn,connect_timeout=3):pass
+103: 
+104: +                break
+105: 
+106: +            except psycopg.Error:pass
+107: 
+108:              if time.monotonic()>=deadline:raise RuntimeError("数据库启动超时；保留数据，不自动重建")
+109: 
+110:              time.sleep(.3)
+111: 
+112: +        # 按实际数据库/登录就绪核对，不假定retrolume用户名；重开不迁移、不更换正常库。
+113: 
+114: +        sys.path.insert(0,str(ROOT/'backend'))
+115: 
+116: +        from app.data_exit.schema_checks import assert_data_schema_sync
+117: 
+118: +        from psycopg.rows import dict_row
+119: 
+120: +        with psycopg.connect(dsn,row_factory=dict_row) as application:
+121: 
+122: +            assert_data_schema_sync(application)
+123: 
+124: +            if application.execute('SELECT rolsuper FROM pg_roles WHERE rolname=current_user').fetchone()['rolsuper']:
+125: 
+126: +                raise RuntimeError('业务进程不能使用superuser连接')
+127: 
+128:          env=os.environ.copy()
+129: 
+130:          env.update(RETROLUME_DATA_DIR=data_dir,RETROLUME_BACKUP_DIR=backup_dir)
+131: 
+132:          # 目标连接仅用于其就绪检查；源旁证连接保留原身份，不冒目标为源。
+133: 
+134:          application_dsn=original_dsn if selected_target is not None else dsn
+135: 
+136:          if application_dsn:env['RETROLUME_DATABASE_URL']=application_dsn
+137: 
+138:          else:env.pop('RETROLUME_DATABASE_URL',None)
+139: 
+140: -        print("Open http://127.0.0.1:8000 - Ctrl+C to stop.",flush=True)
+141: 
+142: +        print(f"Open http://127.0.0.1:{args.port} - Ctrl+C to stop.",flush=True)
+143: 
+144:          process=subprocess.Popen(
+145:              [
+146:                  str(ROOT/"backend/.venv/Scripts/python.exe"),
+147: -                "-m",
+148: -                "uvicorn",
+149: -                "app.main:create_app",
+150: -                "--factory",
+151: -                "--loop",
+152: -                "app.runtime:psycopg_compatible_loop_factory",
+153: -                "--host",
+154: -                "127.0.0.1",
+155: +                str(Path(__file__).resolve()),
+156: 
+157: +                "--serve-owned",
+158: 
+159:                  "--port",
+160: -                "8000",
+161: +                str(args.port),
+162: 
+163:              ],
+164:              cwd=ROOT/"backend",
+165:              env=env,
+166: +            stdin=subprocess.PIPE,
+167: 
+168:              creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP|subprocess.CREATE_NO_WINDOW) if os.name=="nt" else 0,
+169: 
+170:          )
+171: +        if args.shutdown_stdin:
+172: 
+173: +            def close_from_owner():
+174: 
+175: +                sys.stdin.readline()
+176: 
+177: +                if process.poll() is None:
+178: 
+179: +                    try:process.stdin.write(b'stop\n');process.stdin.flush()
+180: 
+181: +                    except (OSError,ValueError):pass
+182: 
+183: +            threading.Thread(target=close_from_owner,name='local-launcher-owner',daemon=True).start()
+184: 
+185:          process.wait()
+186: 
+187:      except KeyboardInterrupt:
+188: 
+189:          pass
+190: 
+191:      finally:
+192: 
+193:          if process is not None and process.poll() is None:
+194:              try:
+195: -                # 先让uvicorn执行lifespan，关闭预览监督链；只向本次创建的进程组发送。
+196: -                if os.name=="nt":process.send_signal(signal.CTRL_BREAK_EVENT)
+197: -                else:process.terminate()
+198: -                process.wait(timeout=20)
+199: +                # 独占匿名输入管道优先请求正常lifespan；无控制HTTP或全局进程操作。
+200: 
+201: +                process.stdin.write(b'stop\n');process.stdin.flush()
+202: 
+203: +                process.wait(timeout=170)
+204: 
+205:              except (OSError,subprocess.TimeoutExpired):
+206:                  process.terminate()
+207:                  try:process.wait(timeout=5)
+
+backend/app/pdf_import/supervisor.py
+1: """PDF bytes 到待人工核对分页文字的失败关闭监督器。"""
+2: from __future__ import annotations
+3: 
+4: import json
+5: import os
+6: from pathlib import Path
+7: import sys
+8: import tempfile
+9: 
+10: from ._windows_job import JobSetupError, JobTimeout, run_in_job
+11: from .contracts import PdfImportLimits, PdfImportResult, PdfPage
+12: from .errors import (
+13:     PdfEncryptedError,
+14:     PdfImportError,
+15:     PdfInputTooLargeError,
+16:     PdfInvalidError,
+17:     PdfNoExtractableTextError,
+18:     PdfPageLimitError,
+19:     PdfProtocolError,
+20:     PdfSandboxSetupError,
+21:     PdfTextLimitError,
+22:     PdfTimeoutError,
+23:     PdfUnsupportedPlatformError,
+24:     PdfWorkerError,
+25: )
+26: 
+27: 
+28: _ERROR_TYPES: dict[str, type[PdfImportError]] = {
+29:     error.code: error for error in (
+30:         PdfEncryptedError,
+31:         PdfInvalidError,
+32:         PdfNoExtractableTextError,
+33:         PdfPageLimitError,
+34:         PdfTextLimitError,
+35:         PdfWorkerError,
+36:     )
+37: }
+38: 
+39: 
+40: def parse_pdf_bytes(data: bytes, *, limits: PdfImportLimits | None = None) -> PdfImportResult:
+41:     """提取物理分页文字；结果始终为待人工核对，不能直接批准学习使用。"""
+42:     if not isinstance(data, bytes):
+43:         raise TypeError("data must be bytes")
+44:     selected = limits or PdfImportLimits()
+45:     selected.validate()
+46:     if len(data) > selected.max_input_bytes:
+47:         raise PdfInputTooLargeError(
+48:             f"PDF is {len(data)} bytes; limit is {selected.max_input_bytes}"
+49:         )
+50:     if not data:
+51:         raise PdfInvalidError("The file is not a readable PDF")
+52:     if os.name != "nt":
+53:         raise PdfUnsupportedPlatformError("This PDF worker currently requires Windows Job Objects")
+54: 
+55:     backend_root = Path(__file__).resolve().parents[2]
+56:     with tempfile.TemporaryDirectory(prefix="retrolume-pdf-") as temporary:
+57:         temp_root = Path(temporary)
+58:         input_path = temp_root / "input.pdf"
+59:         output_path = temp_root / "output.json"
+60:         input_path.write_bytes(data)
+61:         command = _build_worker_command(input_path, output_path, selected)
+62:         try:
+63:             completed = run_in_job(
+64:                 command,
+65:                 cwd=str(backend_root),
+66:                 timeout_seconds=selected.timeout_seconds,
+67:                 memory_bytes=selected.process_memory_bytes,
+68:             )
+69:         except JobTimeout as exc:
+70:             raise PdfTimeoutError(str(exc)) from None
+71:         except JobSetupError as exc:
+72:             raise PdfSandboxSetupError(str(exc)) from None
+73: 
+74:         if completed.exit_code != 0:
+75:             raise PdfWorkerError(f"PDF worker exited with code {completed.exit_code}")
+76:         if not output_path.is_file():
+77:             raise PdfProtocolError("PDF worker returned no result")
+78:         output_size = output_path.stat().st_size
+79:         if output_size > selected.max_output_bytes:
+80:             raise PdfProtocolError("PDF worker result exceeded its protocol limit")
+81:         try:
+82:             payload = json.loads(output_path.read_text(encoding="utf-8"))
+83:         except (OSError, UnicodeError, json.JSONDecodeError):
+84:             raise PdfProtocolError("PDF worker returned invalid JSON") from None
+85:     return _decode_payload(payload, selected)
+86: 
+87: 
+88: def _build_worker_command(input_path: Path, output_path: Path, limits: PdfImportLimits) -> list[str]:
+89:     return [
+90:         sys.executable,
+91:         "-m",
+92:         "app.pdf_import.worker",
+93:         "--input",
+94:         str(input_path),
+95:         "--output",
+96:         str(output_path),
+97:         "--max-pages",
+98:         str(limits.max_pages),
+99:         "--max-text-bytes",
+100:         str(limits.max_text_bytes),
+101:         "--max-output-bytes",
+102:         str(limits.max_output_bytes),
+103:     ]
+104: 
+105: 
+106: def _decode_payload(payload: object, limits: PdfImportLimits) -> PdfImportResult:
+107:     if not isinstance(payload, dict) or not isinstance(payload.get("ok"), bool):
+108:         raise PdfProtocolError("PDF worker result has an invalid envelope")
+109:     if payload["ok"] is False:
+110:         error = payload.get("error")
+111:         if not isinstance(error, dict) or not isinstance(error.get("code"), str) or not isinstance(error.get("message"), str):
+112:             raise PdfProtocolError("PDF worker error has an invalid shape")
+113:         error_type = _ERROR_TYPES.get(error["code"])
+114:         if error_type is None:
+115:             raise PdfProtocolError(f"PDF worker returned unknown error code {error['code']!r}")
+116:         raise error_type(error["message"][:500])
+117: 
+118:     page_count = payload.get("page_count")
+119:     raw_pages = payload.get("pages")
+120:     raw_warnings = payload.get("warnings")
+121:     if (
+122:         isinstance(page_count, bool)
+123:         or not isinstance(page_count, int)
+124:         or not 1 <= page_count <= limits.max_pages
+125:         or not isinstance(raw_pages, list)
+126:         or len(raw_pages) != page_count
+127:     ):
+128:         raise PdfProtocolError("PDF worker returned an invalid page count")
+129:     warnings = _decode_warnings(raw_warnings)
+130:     pages: list[PdfPage] = []
+131:     total_text_bytes = 0
+132:     for expected_page, raw_page in enumerate(raw_pages, start=1):
+133:         if (
+134:             not isinstance(raw_page, dict)
+135:             or raw_page.get("physical_page") != expected_page
+136:             or not isinstance(raw_page.get("text"), str)
+137:         ):
+138:             raise PdfProtocolError("PDF worker returned an invalid physical page")
+139:         page_warnings = _decode_warnings(raw_page.get("warnings"))
+140:         text = raw_page["text"]
+141:         total_text_bytes += len(text.encode("utf-8"))
+142:         if total_text_bytes > limits.max_text_bytes:
+143:             raise PdfProtocolError("PDF worker returned text beyond the configured limit")
+144:         pages.append(PdfPage(expected_page, text, page_warnings))
+145:     if not any(page.text.strip() for page in pages):
+146:         raise PdfProtocolError("PDF worker returned no extractable text as success")
+147:     return PdfImportResult(page_count, tuple(pages), warnings)
+148: 
+149: 
+150: def _decode_warnings(value: object) -> tuple[str, ...]:
+151:     if not isinstance(value, list) or len(value) > 100 or any(not isinstance(item, str) or len(item) > 200 for item in value):
+152:         raise PdfProtocolError("PDF worker returned invalid warnings")
+153:     return tuple(value)
+
+backend/app/pdf_import/worker.py
+1: """仅由监督器启动的 PDF 提取子进程。"""
+2: from __future__ import annotations
+3: 
+4: import argparse
+5: from io import BytesIO
+6: import json
+7: from pathlib import Path
+8: import sys
+9: 
+10: 
+11: def main() -> int:
+12:     parser = argparse.ArgumentParser(add_help=False)
+13:     parser.add_argument("--input", required=True)
+14:     parser.add_argument("--output", required=True)
+15:     parser.add_argument("--max-pages", required=True, type=int)
+16:     parser.add_argument("--max-text-bytes", required=True, type=int)
+17:     parser.add_argument("--max-output-bytes", required=True, type=int)
+18:     args = parser.parse_args()
+19: 
+20:     try:
+21:         payload = _extract(Path(args.input).read_bytes(), args.max_pages, args.max_text_bytes)
+22:     except _ExpectedFailure as exc:
+23:         payload = {"ok": False, "error": {"code": exc.code, "message": exc.message}}
+24:     except Exception:
+25:         payload = {
+26:             "ok": False,
+27:             "error": {"code": "pdf_worker_failed", "message": "PDF extraction failed unexpectedly"},
+28:         }
+29: 
+30:     encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+31:     if len(encoded) > args.max_output_bytes:
+32:         encoded = json.dumps({
+33:             "ok": False,
+34:             "error": {"code": "pdf_worker_protocol_too_large", "message": "PDF worker output exceeded its limit"},
+35:         }, separators=(",", ":")).encode("utf-8")
+36:     Path(args.output).write_bytes(encoded)
+37:     return 0
+38: 
+39: 
+40: def _extract(data: bytes, max_pages: int, max_text_bytes: int) -> dict[str, object]:
+41:     try:
+42:         from pypdf import PdfReader
+43:         reader = PdfReader(BytesIO(data), strict=False)
+44:         if reader.is_encrypted:
+45:             raise _ExpectedFailure("pdf_encrypted", "Encrypted PDFs are not supported")
+46:         page_count = len(reader.pages)
+47:     except _ExpectedFailure:
+48:         raise
+49:     except Exception:
+50:         raise _ExpectedFailure("pdf_invalid", "The file is not a readable PDF")
+51: 
+52:     if page_count > max_pages:
+53:         raise _ExpectedFailure("pdf_page_limit_exceeded", f"PDF has {page_count} pages; limit is {max_pages}")
+54: 
+55:     pages: list[dict[str, object]] = []
+56:     total_text_bytes = 0
+57:     has_visible_text = False
+58:     for index, page in enumerate(reader.pages, start=1):
+59:         try:
+60:             text = page.extract_text() or ""
+61:         except Exception:
+62:             raise _ExpectedFailure("pdf_invalid", f"Text extraction failed on physical page {index}")
+63:         encoded_length = len(text.encode("utf-8"))
+64:         total_text_bytes += encoded_length
+65:         if total_text_bytes > max_text_bytes:
+66:             raise _ExpectedFailure("pdf_text_limit_exceeded", f"Extracted text exceeds {max_text_bytes} UTF-8 bytes")
+67:         page_warnings: list[str] = []
+68:         if not text.strip():
+69:             page_warnings.append("NO_EXTRACTABLE_TEXT_ON_PAGE")
+70:         else:
+71:             has_visible_text = True
+72:         pages.append({"physical_page": index, "text": text, "warnings": page_warnings})
+73: 
+74:     if not has_visible_text:
+75:         raise _ExpectedFailure(
+76:             "pdf_no_extractable_text",
+77:             "PDF has no extractable text; it may be scanned or image-only",
+78:         )
+79:     return {
+80:         "ok": True,
+81:         "page_count": page_count,
+82:         "pages": pages,
+83:         "warnings": [
+84:             "PYPDF_TEXT_HAS_NO_LAYOUT_FIDELITY_GUARANTEE",
+85:             "HUMAN_REVIEW_REQUIRED_BEFORE_LEARNING_USE",
+86:         ],
+87:     }
+88: 
+89: 
+90: class _ExpectedFailure(Exception):
+91:     def __init__(self, code: str, message: str):
+92:         self.code = code
+93:         self.message = message
+94: 
+95: 
+96: if __name__ == "__main__":
+97:     sys.exit(main())

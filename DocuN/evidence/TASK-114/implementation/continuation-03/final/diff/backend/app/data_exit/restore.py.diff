@@ -1,0 +1,11 @@
+--- pre/backend/app/data_exit/restore.py
++++ final/backend/app/data_exit/restore.py
+@@ -442,7 +442,7 @@
+                 if entry["path"].startswith("originals/") and entry["path"].split("/")[1] in eligible_hashes:
+                     from .reference import LoadingReferencePin,PreparedReference
+                     version=next(r for r in rowset['material_versions'] if r['sha256']==entry['path'].split('/')[1] and r['source_id'] not in deleted_sources)
+-                    pin=LoadingReferencePin(self.factory,target,held,PreparedReference(version['source_id'],version['id'],None,version['sha256'],int(version['size'])))
++                    pin=LoadingReferencePin(self.factory,target,held,PreparedReference(version['source_id'],version['id'],None,version['sha256'],int(version['size'])),operation=operation)
+                     with reader.archive.open(entry["path"]) as stream:
+                         store.put(stream, max_bytes=self.limits.original_bytes,reference_pin=pin)
+                     counts["files"] += 1

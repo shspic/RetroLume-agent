@@ -1,0 +1,12 @@
+--- as-run/backend/app/data_exit/api.py
++++ final/backend/app/data_exit/api.py
+@@ -164,7 +164,8 @@
+ @router.get("/packages")
+ def packages(request: Request):
+     value = runtime(request)
+-    return {"items": [value.hub.receipt(j) for j in value.hub.state()["jobs"].values()
++    state=value.hub.state()
++    return {"items": [value.hub.current_receipt(state,j) for j in state["jobs"].values()
+                       if j["kind"] in ("portable_export", "restore_checkpoint") and j["state"] in ("published", "published_unconfirmed")]}
+ 
+ 

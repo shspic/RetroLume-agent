@@ -1,0 +1,186 @@
+DocuN/evidence/TASK-117/execution/continuation-07/control.py
+1: """S08独立许可、同宿主时钟域及准确自有进程闭包；不调用旧控制器。"""
+2: from pathlib import Path
+3: from datetime import datetime, timezone
+4: import ctypes
+5: from ctypes import wintypes
+6: import hashlib
+7: import json
+8: import os
+9: import subprocess
+10: import sys
+11: import time
+12: import uuid
+13: 
+14: N=Path(__file__).resolve().parent; E=N.parent; ROOT=E.parents[3]
+15: PERMIT='TASK-117-STEP018-AUDIT-REPAIR-S08-20261017'
+16: INSTANCE=str(uuid.uuid4())
+17: K=ctypes.WinDLL('kernel32',use_last_error=True)
+18: K.GetTickCount64.restype=ctypes.c_ulonglong
+19: 
+20: def sample():
+21:     now=datetime.now(timezone.utc)
+22:     uptime=K.GetTickCount64()
+23:     return {'utc':now.isoformat(),'mono_ns':time.monotonic_ns(),'boot_epoch_seconds':now.timestamp()-uptime/1000,'instance':INSTANCE,'pid':os.getpid()}
+24: def sha(raw):return hashlib.sha256(raw).hexdigest()
+25: def write(path,value):Path(path).write_text(json.dumps(value,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+26: def state():return json.loads((E/'budget.json').read_text(encoding='utf-8'))
+27: def segment(b):
+28:     if b['active_segment']!=PERMIT:raise RuntimeError('S08许可身份不符')
+29:     return next(s for s in b['segments'] if s['permit']==PERMIT)
+30: def event(kind,**fields):
+31:     with (E/'events.jsonl').open('a',encoding='utf-8') as stream:stream.write(json.dumps({'kind':kind,**sample(),**fields},ensure_ascii=False)+'\n')
+32: def limits(b,now,*,allow_running=False):
+33:     s=segment(b)
+34:     if s['status']!='active':raise RuntimeError('S08未激活')
+35:     old=s['last_clock']
+36:     if abs(old['boot_epoch_seconds']-now['boot_epoch_seconds'])>2 or now['mono_ns']<old['mono_ns']:raise RuntimeError('S08时钟域不可续用，先核资源再重锚')
+37:     if datetime.fromisoformat(now['utc']).timestamp()<datetime.fromisoformat(old['utc']).timestamp()-2:raise RuntimeError('S08 UTC倒退')
+38:     calendar=(datetime.fromisoformat(s['calendar_deadline_utc'])-datetime.fromisoformat(now['utc'])).total_seconds()-1200
+39:     external=N/'tool-receipts.json'
+40:     upper=json.loads(external.read_text(encoding='utf-8'))['command_wall_upper_seconds'] if external.exists() else 10.7
+41:     offline=3600-s['offline_process_run_seconds']-upper
+42:     active=s.get('offline_process_run_active')
+43:     if active and not allow_running:raise RuntimeError('S08上一命令未结束')
+44:     if active:offline-=(now['mono_ns']-active['start_mono_ns'])/1e9
+45:     held=sum(x['seconds'] for x in b['runtime_intervals'] if x.get('segment')==PERMIT)
+46:     if s.get('holding_start_mono_ns') is not None:held+=(now['mono_ns']-s['holding_start_mono_ns'])/1e9
+47:     remaining=[calendar,offline,3600-held]
+48:     if b['active_root'] is not None:
+49:         root=next(r for r in b['roots'] if r['id']==b['active_root'])
+50:         if root.get('segment')!=PERMIT:raise RuntimeError('S08不能沿用旧根')
+51:         remaining.append((root['business_deadline_mono_ns']-now['mono_ns'])/1e9)
+52:     if min(remaining)<=0:raise RuntimeError('S08日历/进程/持有/根硬门关闭')
+53:     return min(remaining)
+54: def guard():
+55:     b=state();now=sample();limits(b,now);segment(b)['last_clock']=now;write(E/'budget.json',b);return b
+56: def check_count(b,name,number=1):
+57:     s=segment(b)
+58:     if type(number) is not int or number<1 or name not in s['cumulative_caps'] or b['counts'][name]+number>s['cumulative_caps'][name]:raise RuntimeError('S08累计次数门关闭 '+name)
+59: def count(name,number=1):
+60:     b=guard();check_count(b,name,number)
+61:     b['counts'][name]+=number;write(E/'budget.json',b);event('S08_attempt_reserved',counter=name,total=b['counts'][name])
+62: def pre(relative,defect):
+63:     guard();p=(ROOT/relative).resolve();p.relative_to(ROOT)
+64:     index=N/'changes.json';rows=json.loads(index.read_text(encoding='utf-8')) if index.exists() else {}
+65:     if relative not in rows:
+66:         raw=p.read_bytes() if p.exists() else b'';backup=N/'preimages'/relative;backup.parent.mkdir(parents=True,exist_ok=True)
+67:         if p.exists():backup.write_bytes(raw)
+68:         rows[relative]={'exists':p.exists(),'bytes':len(raw),'sha256':sha(raw) if p.exists() else None,'backup':str(backup.relative_to(ROOT)) if p.exists() else None,'D':defect,'sample':sample()};write(index,rows)
+69: def failure(label,error):
+70:     b=state();row={'label':label,'reason':str(error),'segment':PERMIT,**sample()};b['failures'].append(row);write(E/'budget.json',b);event('failure',**row)
+71: 
+72: class Job:
+73:     """句柄关闭即终止本次准确子树，子进程先挂起再加入，避免逃逸窗口。"""
+74:     def __init__(self):
+75:         class Basic(ctypes.Structure):_fields_=[('PerProcessUserTimeLimit',ctypes.c_longlong),('PerJobUserTimeLimit',ctypes.c_longlong),('LimitFlags',wintypes.DWORD),('MinimumWorkingSetSize',ctypes.c_size_t),('MaximumWorkingSetSize',ctypes.c_size_t),('ActiveProcessLimit',wintypes.DWORD),('Affinity',ctypes.c_size_t),('PriorityClass',wintypes.DWORD),('SchedulingClass',wintypes.DWORD)]
+76:         class IO(ctypes.Structure):_fields_=[(n,ctypes.c_ulonglong) for n in ('ReadOperationCount','WriteOperationCount','OtherOperationCount','ReadTransferCount','WriteTransferCount','OtherTransferCount')]
+77:         class Extended(ctypes.Structure):_fields_=[('BasicLimitInformation',Basic),('IoInfo',IO),('ProcessMemoryLimit',ctypes.c_size_t),('JobMemoryLimit',ctypes.c_size_t),('PeakProcessMemoryUsed',ctypes.c_size_t),('PeakJobMemoryUsed',ctypes.c_size_t)]
+78:         K.CreateJobObjectW.restype=wintypes.HANDLE;K.CreateJobObjectW.argtypes=[ctypes.c_void_p,wintypes.LPCWSTR]
+79:         K.SetInformationJobObject.argtypes=[wintypes.HANDLE,ctypes.c_int,ctypes.c_void_p,wintypes.DWORD]
+80:         K.AssignProcessToJobObject.argtypes=[wintypes.HANDLE,wintypes.HANDLE]
+81:         K.CloseHandle.argtypes=[wintypes.HANDLE]
+82:         self.handle=K.CreateJobObjectW(None,None)
+83:         info=Extended();info.BasicLimitInformation.LimitFlags=0x2000
+84:         if not self.handle or not K.SetInformationJobObject(self.handle,9,ctypes.byref(info),ctypes.sizeof(info)):raise ctypes.WinError(ctypes.get_last_error())
+85:     def spawn(self,command,**kwargs):
+86:         child=subprocess.Popen(command,creationflags=0x00000004|0x08000000,**kwargs)
+87:         if not K.AssignProcessToJobObject(self.handle,wintypes.HANDLE(int(child._handle))):
+88:             child.kill();child.wait();raise ctypes.WinError(ctypes.get_last_error())
+89:         resume=ctypes.WinDLL('ntdll').NtResumeProcess;resume.argtypes=[wintypes.HANDLE];resume.restype=ctypes.c_long
+90:         if resume(wintypes.HANDLE(int(child._handle)))!=0:
+91:             child.kill();child.wait();raise RuntimeError('准确子进程无法恢复')
+92:         return child
+93:     def close(self):
+94:         if self.handle:K.CloseHandle(self.handle);self.handle=None
+95: def birth(handle):
+96:     K.GetProcessTimes.argtypes=[wintypes.HANDLE,*([ctypes.POINTER(wintypes.FILETIME)]*4)]
+97:     values=[wintypes.FILETIME() for _ in range(4)]
+98:     if not K.GetProcessTimes(wintypes.HANDLE(int(handle)),*(ctypes.byref(x) for x in values)):raise ctypes.WinError(ctypes.get_last_error())
+99:     return (values[0].dwHighDateTime<<32)|values[0].dwLowDateTime
+100: def available_mib():
+101:     class Memory(ctypes.Structure):_fields_=[('length',wintypes.DWORD),('load',wintypes.DWORD),*[(x,ctypes.c_ulonglong) for x in ('total_phys','avail_phys','total_page','avail_page','total_virtual','avail_virtual','avail_extended')]]
+102:     memory=Memory();memory.length=ctypes.sizeof(memory)
+103:     if not K.GlobalMemoryStatusEx(ctypes.byref(memory)):raise ctypes.WinError(ctypes.get_last_error())
+104:     return memory.avail_phys/1024**2
+105: def run(command,label,*,timeout=120,cwd=None):
+106:     b=guard();s=segment(b);start=sample();timeout=min(timeout,limits(b,start))
+107:     env=dict(os.environ);temp=N/'temp';temp.mkdir(exist_ok=True)
+108:     env.update(TEMP=str(temp),TMP=str(temp),S08_EVIDENCE=str(N),PYTHONPATH=os.pathsep.join([str(ROOT/'backend'),str(ROOT/'backend/.venv/Lib/site-packages'),str(ROOT/'backend/tests')]))
+109:     s['offline_process_run_active']={'start_mono_ns':start['mono_ns'],'label':label,'timeout':timeout};write(E/'budget.json',b)
+110:     job=Job();child=None
+111:     try:
+112:         child=job.spawn(command,cwd=cwd or ROOT,env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,stdin=subprocess.DEVNULL)
+113:         write(N/(label+'-pid.json'),{'pid':child.pid,'birth_filetime':birth(child._handle),'deadline_utc':datetime.fromtimestamp(datetime.now(timezone.utc).timestamp()+timeout,timezone.utc).isoformat(),'command':command})
+114:         output,_=child.communicate(timeout=timeout);(N/(label+'.log')).write_bytes(output)
+115:         if child.returncode:failure(label,'退出码'+str(child.returncode))
+116:         return child.returncode
+117:     except subprocess.TimeoutExpired as error:
+118:         job.close();output,_=child.communicate(timeout=10);(N/(label+'.log')).write_bytes(output);failure(label,'超时，关闭准确Job子树');raise
+119:     finally:
+120:         job.close()
+121:         if child is not None and child.poll() is None:child.wait(timeout=10)
+122:         end=sample();b=state();s=segment(b);seconds=(end['mono_ns']-start['mono_ns'])/1e9
+123:         s['offline_process_run_seconds']+=seconds;s['offline_process_run_active']=None;s['last_clock']=end;write(E/'budget.json',b);event('S08_offline_process_end',label=label,seconds=seconds)
+124: def py():return [sys._base_executable,'-X','utf8']
+125: 
+126: if __name__=='__main__':
+127:     import argparse
+128:     parser=argparse.ArgumentParser();parser.add_argument('label');parser.add_argument('--timeout',type=float,default=120);parser.add_argument('command',nargs=argparse.REMAINDER)
+129:     args=parser.parse_args();command=args.command
+130:     if command and command[0]=='--':command=command[1:]
+131:     raise SystemExit(run(command,args.label,timeout=args.timeout))
+
+DocuN/evidence/TASK-117/execution/continuation-07/check_control.py
+1: """有限纯时钟反例与准确关闭闭包自检；不修改系统时间或旧许可。"""
+2: import copy
+3: from datetime import datetime,timedelta
+4: import subprocess
+5: from unittest.mock import patch
+6: import control as c
+7: 
+8: b=c.state();now=c.sample();checked=[]
+9: # 外层受控命令正是本自检进程；纯替身基准须显式剥离这一在途事实。
+10: c.segment(b)['offline_process_run_active']=None
+11: def refusal(name,change,clock=None):
+12:     candidate=copy.deepcopy(b);change(candidate)
+13:     try:c.limits(candidate,clock or now)
+14:     except RuntimeError:checked.append(name)
+15:     else:raise AssertionError(name+'没有拒绝')
+16: def seg(x):return c.segment(x)
+17: assert c.limits(b,now)>0;checked.append('S08正常剩余')
+18: refusal('许可身份',lambda x:x.update(active_segment='旧S07'))
+19: refusal('日历仅收口',lambda x:seg(x).update(calendar_deadline_utc=(datetime.fromisoformat(now['utc'])+timedelta(seconds=1199)).isoformat()))
+20: refusal('单调倒退',lambda x:seg(x)['last_clock'].update(mono_ns=now['mono_ns']+1))
+21: refusal('跨宿主域',lambda x:seg(x)['last_clock'].update(boot_epoch_seconds=now['boot_epoch_seconds']-10))
+22: refusal('UTC倒退',lambda x:seg(x)['last_clock'].update(utc=(datetime.fromisoformat(now['utc'])+timedelta(seconds=10)).isoformat()))
+23: refusal('上个命令未结束',lambda x:seg(x).update(offline_process_run_active={'start_mono_ns':now['mono_ns']}))
+24: refusal('实际命令总额',lambda x:seg(x).update(offline_process_run_seconds=3600))
+25: refusal('持有总额',lambda x:x['runtime_intervals'].append({'segment':c.PERMIT,'seconds':3600}))
+26: for counter in ('browser_starts','frontend_builds','fixture_server_starts','http','pg_starts','api_starts','provider_calls','actual_fee_microunits'):
+27:     candidate=copy.deepcopy(b);candidate['counts'][counter]=c.segment(candidate)['cumulative_caps'][counter]
+28:     try:c.check_count(candidate,counter)
+29:     except RuntimeError:checked.append('次数门 '+counter)
+30:     else:raise AssertionError(counter)
+31: candidate=copy.deepcopy(b);candidate['active_root']=25;candidate['roots'].append({'id':25,'segment':c.PERMIT,'business_deadline_mono_ns':now['mono_ns']-1})
+32: try:c.limits(candidate,now)
+33: except RuntimeError:checked.append('原根截止不延长')
+34: else:raise AssertionError('根已到期仍放行')
+35: closed=[];failures=[]
+36: class Child:
+37:     _handle=1;pid=123;returncode=0;calls=0
+38:     def communicate(self,timeout):
+39:         self.calls+=1
+40:         if self.calls==1:raise subprocess.TimeoutExpired(['纯替身'],timeout)
+41:         return b'expected finite closure',None
+42:     def poll(self):return 0
+43: class FakeJob:
+44:     def spawn(self,*args,**kwargs):return Child()
+45:     def close(self):closed.append(True)
+46: with patch.object(c,'guard',return_value=copy.deepcopy(b)),patch.object(c,'state',side_effect=lambda:copy.deepcopy(b)),patch.object(c,'limits',return_value=.1),patch.object(c,'write'),patch.object(c,'event'),patch.object(c,'birth',return_value=1),patch.object(c,'failure',side_effect=lambda *args:failures.append(args)),patch.object(c,'Job',FakeJob):
+47:     try:c.run(['纯替身'],'expected-close-proof',timeout=.1)
+48:     except subprocess.TimeoutExpired:pass
+49:     else:raise AssertionError('模拟超时未返回')
+50: assert closed and len(failures)==1;checked.append('超时准确关闭闭包')
+51: c.write(c.N/'control-selfcheck.json',{'sample':c.sample(),'cases':checked,'passed':len(checked),'system_clock_changed':False,'scope':'本卡控制层纯替身，不是产品安全结论'})
+52: print('有限控制自检通过',len(checked))

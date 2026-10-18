@@ -1,0 +1,31 @@
+Traceback (most recent call last):
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task111\c02_step.py", line 46, in main
+    with asyncio.Runner(loop_factory=psycopg_compatible_loop_factory) as runner:runner.run(native(resource,built,folder))
+                                                                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task111\c02_step.py", line 26, in native
+    receipt,command=await h.generate(aid,parent,"C01 边界 二项概率 n0到20" if kind=="binomial" else "C01 机械能参数与图形")
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task111\core.py", line 87, in generate
+    result=await HtmlGenerationService(self.ledger,self.controller).generate(aid,command,self.config,run_tag="task111-"+secrets.token_hex(12))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\preview\generation.py", line 20, in generate
+    row = await self.ledger.accept_html_command(aid,command,runtime_identity()["renderer_sha256"],self.controller.config_sha256)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\preview\repository.py", line 180, in accept_html_command
+    return await self._transaction(transaction)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\activities\repository.py", line 339, in _transaction
+    return await operation(connection)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\preview\repository.py", line 158, in transaction
+    parent = await self._html_parent_locked(connection, activity, request["parent"])
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\preview\repository.py", line 120, in _html_parent_locked
+    raise HtmlRefusal("source_invalid")
+app.preview.business_contracts.HtmlRefusal: source_invalid

@@ -1,0 +1,91 @@
+--- first-pre/backend/app/capabilities/gateway.py
++++ current/backend/app/capabilities/gateway.py
+@@ -30,7 +30,7 @@
+     Usage,
+     build_business_payload,
+ )
+-from app.learning.teaching_contracts import TeachingCallBinding, TeachingMemoryCallBinding
++from app.learning.teaching_contracts import TeachingCallBinding, TeachingMemoryCallBinding,TeachingHybridCallBinding
+ from .tools import ToolRegistry, ToolValidationError
+ from .transport import DeliveryUnknown, HttpxModelTransport, ModelTransport, RequestNotSent, TransportResponse
+ 
+@@ -108,7 +108,7 @@
+         if request.learning_profile is None and request.teaching_profile is None \
+                 and context.operation_id.startswith(("learn-first-v1.", "learn-next-v1.")):
+             return self._result(context, CallStatus.REJECTED, "invalid_learning_profile")
+-        if context.operation_id.startswith("int10m.") and request.interview_profile is None:
++        if context.operation_id.startswith(("int10m.",'int18m.')) and request.interview_profile is None:
+             return self._result(context, CallStatus.REJECTED, "interview_profile_required")
+         if request.interview_profile is not None:
+             from app.interview.policy import validate_request
+@@ -144,6 +144,23 @@
+         if len(encoded) > self._config.max_request_bytes:
+             return self._result(context, CallStatus.REJECTED, "context_limit")
+ 
++        approved_grant = None
++        approved_manifest=None
++        if getattr(self._transport, 'is_external', True) or self._config.outbound_grant is not None:
++            from .embedding import OutboundGrant,OutboundSourceManifest
++            if self._config.outbound_grant is None:
++                return self._result(context, CallStatus.REJECTED, 'outbound_not_authorized')
++            try:
++                grant = OutboundGrant.from_wire(self._config.outbound_grant)
++                grant.check(context.activity_id,self._config.provider.value,self._config.model,len(encoded),request.max_output_tokens)
++                manifest=OutboundSourceManifest.from_wire(self._config.outbound_source_manifest)
++                if manifest.sha256!=grant.source_manifest_sha256:raise AdmissionDenied('outbound_manifest_mismatch')
++                manifest.check_model(request)
++                approved_grant = grant.model_dump(mode='json')
++                approved_manifest=manifest.model_dump(mode='json')
++            except (ValueError,AdmissionDenied):
++                return self._result(context,CallStatus.REJECTED,'outbound_conditions_unverified')
++
+         intent = AdmissionIntent(
+             context=context,
+             provider=self._config.provider,
+@@ -152,21 +169,23 @@
+             max_output_tokens=request.max_output_tokens,
+             tool_names=tuple(sorted(request.allowed_tools)),
+             input_result=request.input_result,
+-            teaching_binding=((TeachingMemoryCallBinding if request.teaching_profile.profile=='teaching.v2' else TeachingCallBinding)(
++            teaching_binding=((TeachingHybridCallBinding if request.teaching_profile.profile=='teaching.v3' else TeachingMemoryCallBinding if request.teaching_profile.profile=='teaching.v2' else TeachingCallBinding)(
+                 command_key=request.teaching_profile.command_key,
+                 request_sha256=request.teaching_profile.request_sha256,
+                 context_sha256=request.teaching_profile.context_sha256,
+                 expected_revision=request.teaching_profile.expected_revision,
+                 goal_version=request.teaching_profile.goal_version,
+-                **({'memory_selection_sha256':request.teaching_profile.memory_selection_sha256,'assembled_messages_sha256':request.teaching_profile.assembled_messages_sha256} if request.teaching_profile.profile=='teaching.v2' else {}),
++                **({'memory_selection_sha256':request.teaching_profile.memory_selection_sha256,'assembled_messages_sha256':request.teaching_profile.assembled_messages_sha256} if request.teaching_profile.profile in ('teaching.v2','teaching.v3') else {}),
++                **({'memory_dependency_sha256':request.teaching_profile.memory_dependency_sha256,'retrieval_ref':request.teaching_profile.retrieval_ref} if request.teaching_profile.profile=='teaching.v3' else {}),
+             ) if request.teaching_profile is not None else None),
+         )
+         if request.interview_profile is not None:
+-            from app.interview.contracts import InterviewCallBinding
++            from app.interview.contracts import InterviewCallBinding,InterviewHybridCallBinding
+             p=request.interview_profile
+             intent=AdmissionIntent(context=intent.context,provider=intent.provider,configured_model=intent.configured_model,request_bytes=intent.request_bytes,
+-                max_output_tokens=intent.max_output_tokens,tool_names=intent.tool_names,interview_binding=InterviewCallBinding(
+-                    business_key=p.business_key,request_sha256=p.request_sha256,context_sha256=p.context_sha256,expected_head_revision=p.expected_head_revision,goal_version=p.goal_version))
++                max_output_tokens=intent.max_output_tokens,tool_names=intent.tool_names,interview_binding=(InterviewHybridCallBinding if p.schema_id=='interview.v2' else InterviewCallBinding)(
++                    business_key=p.business_key,request_sha256=p.request_sha256,context_sha256=p.context_sha256,expected_head_revision=p.expected_head_revision,goal_version=p.goal_version,
++                    **({'retrieval_ref':p.retrieval_ref,'memory_selection_sha256':p.memory_selection_sha256,'memory_dependency_sha256':p.memory_dependency_sha256} if p.schema_id=='interview.v2' else {})))
+         if request.html_profile is not None:
+             from app.preview.business_contracts import HtmlCallBinding
+             from app.preview.description import load_json
+@@ -177,13 +196,16 @@
+                 html_binding=HtmlCallBinding(business_key=p.business_key, request_sha256=p.request_sha256,
+                     context_sha256=p.context_sha256, renderer_sha256=p.renderer_sha256,
+                     memory_selection_sha256=frozen.get("memory_selection_sha256")))
++        intent = replace(intent,retrieval_ref=request.retrieval_ref,outbound_grant=approved_grant,outbound_source_manifest=approved_manifest)
+         stage = "admit"
+         try:
+             permit = await self._ledger.admit(intent)
+             stage = "permit_check"
+             self._validate_permit(permit, context)
+             stage = "mark_dispatch"
+-            await self._ledger.mark_dispatch_started(permit)
++            if approved_grant is not None:grant.check(context.activity_id,self._config.provider.value,self._config.model,len(encoded),request.max_output_tokens)
++            if request.retrieval_ref is not None:await self._ledger.mark_dispatch_started(permit,retrieval_ref=request.retrieval_ref)
++            else:await self._ledger.mark_dispatch_started(permit)
+         except AdmissionDenied as exc:
+             code = str(exc)
+             if not code.startswith("interview_") and code not in {"scope_conflict","source_invalid","result_invalidated","cancelled","budget_exhausted","integrity_error","invalid_input"}:

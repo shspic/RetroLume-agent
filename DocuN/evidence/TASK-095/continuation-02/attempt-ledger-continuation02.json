@@ -1,0 +1,72 @@
+[
+  {
+    "at": "2026-10-01T22:39:21+0800",
+    "batch": "c02-merged",
+    "phase": "new-permission",
+    "identity": "WorkBuddy（GLM-5.3-Flash）续作01 同一实际修复窗口延续，非 096 审计窗口，如实登记",
+    "plan": "PG: ReadProjectionTests.test_activity_list_pagination_cursor only; Browser: task095-continuation01-browser.mjs s0—s8; fixture browser script 5e541e22 with pre/diff/post in continuation-02",
+    "budget": {
+      "entries": 1,
+      "container_starts": 1,
+      "browser_starts": 1,
+      "business_seconds": 300,
+      "cleanup_seconds": 120,
+      "pg_target_seconds": 60
+    }
+  },
+  {
+    "at": "2026-10-01T22:39:22+0800",
+    "batch": "c02-merged",
+    "phase": "start",
+    "guard": {
+      "id": "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4",
+      "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+      "state_running": false,
+      "pid": 0,
+      "port": "127.0.0.1:55441",
+      "volume": "retrolume-task-088-g3-w1-data"
+    },
+    "note": "single real entry; prior 9 entries/8 starts preserved"
+  },
+  {
+    "at": "2026-10-01T22:40:37+0800",
+    "batch": "c02-merged",
+    "phase": "end",
+    "container_starts": 1,
+    "browser_started": true,
+    "pg_ok": true,
+    "browser_ok": false,
+    "resource_ok": true,
+    "pg_seconds": 11.713,
+    "browser_seconds": 62.727,
+    "cleanup_seconds": 0.69,
+    "total_seconds": 75.679,
+    "container_after": {
+      "running": false,
+      "pid": 0
+    },
+    "result": "fail"
+  },
+  {
+    "at": "2026-10-01T22:42:41+0800",
+    "batch": "c02-merged",
+    "phase": "failure-analysis-and-close",
+    "pg_segment": "PASS：分页单方法实跑通过（11.713 秒），身份核验（admin+task095 库 schema）全过，口令 stdin 重置，as-run 字节绑定 import/final hash",
+    "browser_segment_fail": {
+      "observed": "steps s0—s8 全部执行；checks 全部 true；blocked 空；console/page errors 空；唯一 failure=\"s3 after-action slice contains POST\"",
+      "root_cause": "夹具观察窗定义错误：beforeS3b 记录于显式点击之前，切片必然包含显式 POST 请求自身；全局计数 postTotal=1 已由 s3_explicit_post_exactly_one=true 证明显式动作恰一次，无任何额外自动 POST",
+      "secondary": "summary.post_total 报告字段未同步全局计数变量（runner 侧读到 0 与实际 1 不符）",
+      "fix_not_run": "s3 窗口断言改为\"窗口内 POST 恰 1（显式动作本身）且其余全 GET\"+post_total 同步；node --check 通过；按卡预算到限不重跑，diff 与 pre/post 已存"
+    },
+    "budget_close": {
+      "entry_used": "1/1（累计 10/10）",
+      "container_start_used": "1/1（累计 9/9）",
+      "browser_start_used": "1/1（本轮；续作01 另计 1）",
+      "business_seconds": "PG 11.713 + 浏览器 62.727 = 74.440 / 300 上限",
+      "cleanup_seconds": "容器 stop 约 3 秒内含于 pg_seconds 后收尾；端口 18095 释放核过，资源无异常",
+      "offline_prep_seconds": "冻结核验+diff+node --check+py_compile 远低于 60 秒",
+      "stop_rule": "按卡\"一次运行失败即收尾交回\"，不暗开续作03"
+    },
+    "reusable_evidence": "PG 分页 PASS 原始输出 final-run/unittest-pagination.out.txt；浏览器 9 场景时间线 final-run/browser-report.json（全 checks true 快照）；26 项复用依据 orchestration-reuse-02/reuse-binding.json"
+  }
+]

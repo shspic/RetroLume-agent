@@ -1,0 +1,28 @@
+Traceback (most recent call last):
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task111\c02_step.py", line 46, in main
+    with asyncio.Runner(loop_factory=psycopg_compatible_loop_factory) as runner:runner.run(native(resource,built,folder))
+                                                                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task111\c02_step.py", line 23, in native
+    aid,parent=await teaching_parent(h,kind,feedback)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task111\c01_seeds.py", line 63, in teaching_parent
+    eid,sha=await record("evaluate",{"confirmed":True,"exercise_record_id":eid,"answer_record_id":aid_record,"retry_of":None})
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task111\c01_seeds.py", line 31, in record
+    cmd=await command(action,body);frozen,identity=await service._freeze_model_context(aid,cmd,config);profile=service._build_profile(aid,cmd,frozen,identity)
+                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\learning\teaching_service.py", line 261, in _freeze_model_context
+    catalog = assemble_teaching_catalog(query, units, request_sha)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\learning\teaching_evidence.py", line 27, in assemble_teaching_catalog
+    candidates = rank_term_candidates(query, tuple(fragments),
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\retrieval\evidence.py", line 112, in rank_term_candidates
+    raise ValueError("查询词项数量超过上限")
+ValueError: 查询词项数量超过上限

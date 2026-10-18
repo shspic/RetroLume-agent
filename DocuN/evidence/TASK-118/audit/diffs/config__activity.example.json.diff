@@ -1,0 +1,24 @@
+--- first-pre/config/activity.example.json
++++ current/config/activity.example.json
+@@ -25,11 +25,11 @@
+   },
+   "api_key_env": "RETROLUME_MODEL_API_KEY",
+   "learning": {
+-    "profile": "learning.v1",
++    "profile": "learning.v2",
+     "max_output_tokens": 0
+   },
+   "interview": {
+-    "profile": "interview.v1",
++    "profile": "interview.v2",
+     "max_output_tokens": 0,
+     "max_followups_per_round": 2
+   },
+@@ -38,5 +38,6 @@
+     "max_output_tokens": 0
+   },
+   "memory_context": null,
+-  "_memory_context_readme": "默认关闭学习背景消费；显式配置需绑定当前模型、4项/4096字节/2048字符及有限输入估算/输出/安全预留。010与最小权限由受控迁移采用，不由启动器执行，真实用户库迁移另授权。"
++  "teaching": {"profile": "teaching.v3", "max_output_tokens": 0, "enable_calculation": false},
++  "_memory_context_readme": "默认关闭背景消费；显式配置需绑定当前模型、至多4项/4096字节/2048字符及有限输入估算/输出/安全预留。teaching.v3与interview.v2按当前记忆身份消费；记忆不作为资料证据。混合检索须另配RETROLUME_INTEGRATION_CONFIG及014/R02；真实外发还需已采用的Q激活、grant、实际source/version/片段白名单和价格原件，密钥本身不放行。启动器不迁移用户库。"
+ }

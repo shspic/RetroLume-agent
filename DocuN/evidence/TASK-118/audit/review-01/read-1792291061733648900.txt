@@ -1,0 +1,172 @@
+backend/app/capabilities/embedding.py
+125:       'end_codepoint':v.get('end_codepoint',v.get('end_offset')),'text_sha256':v.get('text_sha256',v.get('fragment_sha256')),
+126:       'unit_sha256':v['unit_sha256'],'original_sha256':v['original_sha256']})
+127: 
+128: 
+129: class OutboundModelApproval(BaseModel):
+130:     """受信离线清单逐动作批准完整发送对象及其原请求身份。"""
+131:     model_config=ConfigDict(extra='forbid',frozen=True,strict=True)
+132:     payload_sha256:str=Field(pattern=HEX)
+133:     request_sha256:str=Field(pattern=HEX)
+134: 
+135: 
+136: class OutboundSourceManifest(BaseModel):
+137:     """operator采用的有限实际版本/片段，不把样本文件hash冒实际外发范围。"""
+138:     model_config=ConfigDict(extra='forbid',frozen=True,strict=True)
+139:     schema:Literal['retrolume.outbound-sources.v1']='retrolume.outbound-sources.v1'
+140:     frozen_samples_sha256:Literal[FROZEN_SAMPLE_SHA]
+141:     sources:tuple[dict,...]=Field(min_length=1,max_length=128)
+142:     fragments:tuple[dict,...]=Field(min_length=1,max_length=512)
+143:     query_input_sha256:tuple[str,...]=Field(min_length=1,max_length=128)
+144:     model_requests:tuple[OutboundModelApproval,...]=Field(default=(),max_length=128)
+145: 
+146:     @model_validator(mode='after')
+147:     def closed(self):
+148:         identities=set()
+149:         for row in self.sources:
+150:             if set(row)!={'source_id','source_version_id','source_revision','original_sha256'}:raise ValueError('outbound_source_shape')
+151:             if any(str(UUID(row[k]))!=row[k] for k in ('source_id','source_version_id')) or type(row['source_revision']) is not int or row['source_revision']<1 or not re.fullmatch(HEX,row['original_sha256']):raise ValueError('outbound_source_shape')
+152:             identity=(row['source_id'],row['source_version_id'],row['source_revision'])
+153:             if identity in identities:raise ValueError('outbound_source_duplicate')
+154:             identities.add(identity)
+155:         ids=set()
+156:         for row in self.fragments:
+157:             if set(row)!={'identity_sha256','input_sha256'} or any(not isinstance(v,str) or not re.fullmatch(HEX,v) for v in row.values()) or row['identity_sha256'] in ids:raise ValueError('outbound_fragment_shape')
+158:             ids.add(row['identity_sha256'])
+159:         if len(set(self.query_input_sha256))!=len(self.query_input_sha256) or any(not re.fullmatch(HEX,x) for x in self.query_input_sha256):raise ValueError('outbound_query_shape')
+160:         pairs=[(row.payload_sha256,row.request_sha256) for row in self.model_requests]
+161:         if len(set(pairs))!=len(pairs):raise ValueError('outbound_model_approval_duplicate')
+162:         return self
+163: 
+164:     @property
+165:     def sha256(self):
+166:         # 空新增字段保留原Embedding清单身份；模型没有完整批准仍失败关闭。
+167:         return digest(self.model_dump(mode='json',exclude={'model_requests'} if not self.model_requests else set()))
+168:     @classmethod
+169:     def from_wire(cls,value):return cls.model_validate_json(json.dumps(value,ensure_ascii=False,separators=(',',':')))
+170: 
+171:     def check_sources(self,rows):
+172:         allowed={(r['source_id'],r['source_version_id'],r['source_revision'],r['original_sha256']) for r in self.sources}
+173:         if not rows or any((str(r['source_id']),str(r.get('source_version_id',r.get('version_id'))),r['source_revision'],r.get('original_sha256',r.get('sha256'))) not in allowed for r in rows):raise AdmissionDenied('outbound_source_not_approved')
+174: 
+175:     def check_embedding(self,request):
+176:         approved={r['identity_sha256']:r['input_sha256'] for r in self.fragments}
+177:         for item in request.inputs:
+178:             if request.binding.purpose=='source_index':
+179:                 valid=approved.get(item.identity_sha256)==digest(item.text)
+180:             else:valid=digest(item.text) in self.query_input_sha256
+181:             if not valid:raise AdmissionDenied('outbound_input_not_approved')
+182: 
+183:     def check_model(self,request,payload=None):
+184:         if payload is None or not any(row.payload_sha256==digest(payload) and row.request_sha256==digest(request.model_dump(mode='json')) for row in self.model_requests):
+185:             raise AdmissionDenied('outbound_model_payload_not_approved')
+186:         profile=request.learning_profile or request.teaching_profile or request.interview_profile
+187:         if profile is not None:catalog=profile.catalog
+188:         elif request.html_profile is not None:catalog=json.loads(request.html_profile.context_json).get('catalog',[])
+189:         else:raise AdmissionDenied('outbound_profile_required')
+190:         allowed={r['identity_sha256'] for r in self.fragments}
+191:         if not catalog:raise AdmissionDenied('outbound_source_not_approved')
+192:         for entry in catalog:
+193:             row=entry.model_dump() if hasattr(entry,'model_dump') else entry
+194:             if not isinstance(row.get('text'),str) or hashlib.sha256(row['text'].encode('utf-8')).hexdigest()!=row.get('fragment_sha256'):raise AdmissionDenied('outbound_fragment_not_approved')
+195:             if approved_fragment_identity(row) not in allowed:raise AdmissionDenied('outbound_fragment_not_approved')
+196:             self.check_sources([{'source_id':row['source_id'],'source_version_id':row['version_id'],'source_revision':row['source_revision'],'original_sha256':row['original_sha256']}])
+197: 
+198: 
+
+backend/app/capabilities/gateway.py
+208:                     memory_selection_sha256=frozen.get("memory_selection_sha256")))
+209:         intent = replace(intent,retrieval_ref=request.retrieval_ref,outbound_grant=approved_grant,outbound_source_manifest=approved_manifest)
+210:         approved_wire = json.dumps([approved_grant,approved_manifest],sort_keys=True,separators=(',',':'))
+211:         def check_approved_scope():
+212:             if approved_grant is None:return
+213:             if not original_scope_unchanged() or json.dumps([intent.outbound_grant,intent.outbound_source_manifest],sort_keys=True,separators=(',',':'))!=approved_wire:
+214:                 raise AdmissionDenied('outbound_scope_changed')
+215:             grant.check(context.activity_id,config.provider.value,config.model,len(encoded),request.max_output_tokens)
+216:             manifest.check_model(request,json.loads(encoded))
+217:         stage = "admit"
+218:         try:
+219:             check_approved_scope()
+220:             permit = await self._ledger.admit(intent)
+221:             stage = "permit_check"
+222:             self._validate_permit(permit, context)
+223:             stage = "mark_dispatch"
+224:             check_approved_scope()
+225:             if request.retrieval_ref is not None:await self._ledger.mark_dispatch_started(permit,retrieval_ref=request.retrieval_ref)
+226:             else:await self._ledger.mark_dispatch_started(permit)
+227:             stage = "dispatch_scope_check"
+228:             check_approved_scope()
+229:         except AdmissionDenied as exc:
+230:             code = str(exc)
+231:             if stage=="dispatch_scope_check":
+232:                 # 已预扣/登记dispatch但尚未调用transport，明确未发送且不退款。
+233:                 return await self._finish(permit,context,LedgerOutcome(LedgerDisposition.NOT_SENT,error_code='outbound_scope_changed'),CallStatus.NOT_SENT)
+234:             if not code.startswith("interview_") and code not in {"scope_conflict","source_invalid","result_invalidated","cancelled","budget_exhausted","integrity_error","invalid_input","outbound_scope_changed"}:
+235:                 code = "admission_denied"
+236:             return self._result(context, CallStatus.REJECTED, code)
+237:         except AdmissionUnavailable:
+238:             return self._result(context, CallStatus.REJECTED, "admission_unavailable")
+239:         except Exception as exc:
+240:             # 意外异常：稳定独立错误码，保持 REJECTED 且不发送；保守账本语义不变
+241:             #（已预留不退款、不重发、不假记业务成功）。
+242:             _logger.warning(
+243:                 "admission_internal_error stage=%s correlation_id=%s exception_type=%s",
+244:                 stage,
+245:                 uuid4().hex,
+246:                 type(exc).__name__,
+247:             )
+248:             return self._result(context, CallStatus.REJECTED, "admission_internal_error")
+249: 
+250:         try:
+251:             async with asyncio.timeout(config.timeout_seconds):
+252:                 response = await self._transport.send(
+253:                     endpoint=f"{config.base_url}/chat/completions",
+254:                     api_key=config.api_key.get_secret_value(),
+255:                     payload=json.loads(encoded),
+256:                     timeout_seconds=config.timeout_seconds,
+257:                     max_response_bytes=config.max_response_bytes,
+258:                 )
+259:         except RequestNotSent:
+260:             outcome = LedgerOutcome(LedgerDisposition.NOT_SENT, error_code="request_not_sent")
+261:             return await self._finish(permit, context, outcome, CallStatus.NOT_SENT)
+262:         except asyncio.CancelledError:
+263:             await self._record_unknown_best_effort(permit, "cancelled")
+264:             raise
+265:         except TimeoutError:
+266:             outcome = LedgerOutcome(LedgerDisposition.UNKNOWN, error_code="deadline_exceeded")
+267:             return await self._finish(permit, context, outcome, CallStatus.UNKNOWN)
+268:         except DeliveryUnknown:
+269:             outcome = LedgerOutcome(LedgerDisposition.UNKNOWN, error_code="delivery_unknown")
+270:             return await self._finish(permit, context, outcome, CallStatus.UNKNOWN)
+271:         except Exception:
+272:             outcome = LedgerOutcome(LedgerDisposition.UNKNOWN, error_code="transport_unknown")
+273:             return await self._finish(permit, context, outcome, CallStatus.UNKNOWN)
+274: 
+275:         return await self._handle_response(permit, context, request, response)
+276: 
+277:     def _build_payload(self, request: ModelCallRequest, *, config: ModelServiceConfig | None = None) -> dict[str, Any]:
+278:         config = config or self._config
+279:         self._validate_conversation(request)
+280:         payload: dict[str, Any] = {
+281:             "model": config.model,
+282:             "messages": [message.model_dump(exclude_none=True) for message in request.messages],
+283:             "max_tokens": request.max_output_tokens,
+284:             "stream": False,
+285:             "thinking": {"type": config.thinking.value},
+
+backend/app/data_exit/control.py
+72:                 events.append(event)
+73: 
+74:     def _append(self, events, kind, payload):
+75:         event = {"format": "data.control.v1", "seq": len(events) + 1,
+76:                  "prev_hash": "0" * 64 if not events else digest(canonical(events[-1])),
+77:                  "event_id": str(uuid4()), "kind": kind, "payload": payload,
+78:                  "body_hash": digest(canonical(payload)), "utc": datetime.now(timezone.utc).isoformat()}
+79:         raw = canonical(event).encode("utf-8")
+80:         frame = struct.pack("!I", len(raw)) + raw + TAIL + digest(raw).encode("ascii") + b"\n"
+81:         if len(raw) > MAX_FRAME or self.path.stat().st_size + len(frame) > MAX_JOURNAL:
+82:             raise DataError("capacity_exceeded", 413)
+83:         with self.path.open("ab") as stream:
+84:             stream.write(frame); stream.flush(); os.fsync(stream.fileno())
+85:         return event
+86: 

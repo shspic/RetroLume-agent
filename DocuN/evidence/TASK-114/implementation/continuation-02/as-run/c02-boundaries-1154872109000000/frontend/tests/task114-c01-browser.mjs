@@ -1,0 +1,33 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import cp from 'node:child_process';
+import assert from 'node:assert/strict';
+const [out,profile,key]=process.argv.slice(2);
+const spawn=cp.spawn;
+cp.spawn=function(command,args,options){const child=spawn(command,args,options);if(/chrome|chromium/i.test(command))process.stdout.write(JSON.stringify({event:'browser_spawn',pid:child.pid,executable:command})+'\n');return child;};
+const {chromium}=await import('playwright');
+if(!fs.existsSync(chromium.executablePath()))throw new Error('已有Chromium不可访问，禁止下载');
+const context=await chromium.launchPersistentContext(profile,{headless:true,viewport:{width:1365,height:1000},acceptDownloads:true,downloadsPath:out});
+const requests=[],errors=[];
+try{
+ const page=context.pages()[0];page.on('request',r=>requests.push({method:r.method(),path:new URL(r.url()).pathname}));page.on('pageerror',e=>errors.push(e.message));
+ await page.goto('http://127.0.0.1:18114/',{waitUntil:'networkidle'});
+ fs.writeFileSync(path.join(out,'01-dom-before.txt'),await page.locator('body').innerText());
+ await page.getByRole('button',{name:'数据与备份',exact:true}).click();
+ await page.getByRole('heading',{name:'数据与备份',exact:true}).waitFor();
+ await page.screenshot({path:path.join(out,'02-unavailable.png'),fullPage:true});
+ assert.equal(await page.getByRole('button',{name:'保存当前时点的恢复备份',exact:true}).isDisabled(),true);
+ await page.getByLabel('原操作编号',{exact:true}).fill(key);
+ await page.getByRole('button',{name:'核对原操作',exact:true}).click();
+ await page.getByRole('button',{name:'下载已保存文件',exact:true}).waitFor();
+ const packageDownload=page.waitForEvent('download');await page.getByRole('button',{name:'下载已保存文件',exact:true}).click();
+ await (await packageDownload).saveAs(path.join(out,'downloaded.rldata'));
+ await page.evaluate(()=>localStorage.setItem('retrolume.pending-intents.c01-synthetic',JSON.stringify({draft:'仅合成未提交草稿'})));
+ const draftDownload=page.waitForEvent('download');await page.getByRole('button',{name:'单独下载未提交浏览器草稿',exact:true}).click();
+ await (await draftDownload).saveAs(path.join(out,'drafts.json'));
+ const draft=JSON.parse(fs.readFileSync(path.join(out,'drafts.json'),'utf8'));assert.equal(draft.submitted,false);assert.equal(draft.restores_execution_authority,false);
+ assert.ok(draft.local['retrolume.pending-intents.c01-synthetic']);
+ await page.getByRole('button',{name:'只读刷新进度',exact:true}).click();await page.reload({waitUntil:'networkidle'});
+ assert.deepEqual(requests.filter(r=>!['GET','HEAD','OPTIONS'].includes(r.method)),[]);assert.deepEqual(errors,[]);
+ fs.writeFileSync(path.join(out,'result.json'),JSON.stringify({state:'passed',scope:'actual browser unavailable-source flow, old-key download, synthetic draft export, refresh GET-only',requests,errors},null,2));
+}finally{await context.close();}

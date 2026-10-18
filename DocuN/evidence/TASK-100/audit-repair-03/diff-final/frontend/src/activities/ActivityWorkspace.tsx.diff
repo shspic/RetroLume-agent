@@ -1,0 +1,42 @@
+--- pre/frontend/src/activities/ActivityWorkspace.tsx
++++ post/frontend/src/activities/ActivityWorkspace.tsx
+@@ -3,6 +3,7 @@
+ import { isLearningDocument, LearningResult } from "./LearningResult";
+ import { compareLearningIntent } from "./learningIntentMatch";
+ import { TeachingWorkspace } from "./TeachingWorkspace";
++import { getTeachingSeed, type TeachingSeed } from "./teachingApi";
+ import {
+   appendIntent, clearIntents, loadIntents, newActivityId, newOperationKey,
+   normalizeSourceIds, removeIntent, updateIntent, type PendingIntent,
+@@ -141,6 +142,8 @@
+   const [listCursor, setListCursor] = useState<string | null>(null);
+   const [listError, setListError] = useState("");
+   const [selectedId, setSelectedId] = useState<string | null>(null);
++  const [teachingSeed,setTeachingSeed] = useState<TeachingSeed|null>(null);
++  useEffect(() => setTeachingSeed(null), [selectedId]);
+   const [detail, setDetail] = useState<ActivityFacts | null>(null);
+   const [operations, setOperations] = useState<OperationRow[]>([]);
+   const [opsCursor, setOpsCursor] = useState<string | null>(null);
+@@ -875,6 +878,7 @@
+                   scopeRevision={detail.scope_revision}
+                   teachingAvailable={Boolean(caps?.teaching?.available)}
+                   calculationAvailable={Boolean(caps?.teaching_calculation?.available)}
++                  seed={teachingSeed?.activity_id===detail.activity_id?teachingSeed:null}
+                 />
+                 {!caps?.teaching?.available && (
+                   <p className="quiet">
+@@ -909,7 +913,13 @@
+                             {op.payload
+                               ? isLearningDocument(op.payload.value, op.operation_id)
+                                 ? <LearningResult key={`${detail.activity_id}:${op.operation_id}`} document={op.payload.value}
+-                                  activityId={detail.activity_id} operationId={op.operation_id} token={token} />
++                                  activityId={detail.activity_id} operationId={op.operation_id} token={token}
++                                  onUseGoal={op.kind==='model'&&op.read_status==='committed_current'?()=>{
++                                    const aid=detail.activity_id;
++                                    void getTeachingSeed(aid,op.operation_id,token).then(value=>{
++                                      if (mountedRef.current&&selectedRef.current===aid) setTeachingSeed(value);
++                                    }).catch(reason=>{ if(mountedRef.current&&selectedRef.current===aid) setError(reason instanceof Error?reason.message:"G7目标未确认"); });
++                                  }:undefined} />
+                                 : <pre>{op.payload.format === "json" ? JSON.stringify(op.payload.value, null, 2) : String(op.payload.value)}</pre>
+                               : op.read_status === "invalidated_scope_changed" || op.read_status === "invalidated_source"
+                                 ? <p className="quiet">正文已失效（活动范围或资料已变化），不再提供。</p>

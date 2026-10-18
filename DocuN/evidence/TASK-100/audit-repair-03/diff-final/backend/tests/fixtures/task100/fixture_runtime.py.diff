@@ -1,0 +1,46 @@
+--- pre/backend/tests/fixtures/task100/fixture_runtime.py
++++ post/backend/tests/fixtures/task100/fixture_runtime.py
+@@ -41,7 +41,10 @@
+         while not release.exists():
+             if time.monotonic()>=end: raise DeliveryUnknown('合成延迟未释放')
+             await asyncio.sleep(.02)
+-    content=output_for(document)
++    content=output_for(document)
++    if selected=='false_met' and content.get('result_type')=='feedback':
++        for observation in content['dimension_observations']: observation['observation']='met'
++        content.update(errors=[],evidence_gaps=[],cause_hypotheses=[])
+     if selected=='invalid': content['passed']=True
+     raw=json.dumps({'id':'task100-'+uuid.uuid4().hex,'object':'chat.completion','model':'synthetic-model-100',
+         'choices':[{'index':0,'message':{'role':'assistant','content':json.dumps(content,ensure_ascii=False)},'finish_reason':'stop'}],
+@@ -103,6 +106,29 @@
+         try: return await original_execute(self,query,*args,**kwargs)
+         except psycopg.Error as exc:
+             observe('pg_error',{'sql':str(query),'sqlstate':exc.sqlstate,'message':exc.diag.message_primary}); raise
+-    psycopg.AsyncConnection.execute=execute
++    psycopg.AsyncConnection.execute=execute
++    # Observe lengths at the actual HTTP stream reader; never retain body/auth bytes.
++    from app.learning import teaching_api
++    original_read=teaching_api._read_bounded_body
++    async def bounded_read(request):
++        lengths=[]
++        class ObservedRequest:
++            async def stream(self):
++                async for chunk in request.stream():
++                    lengths.append(len(chunk));yield chunk
++        status=200
++        try: return await original_read(ObservedRequest())
++        except BaseException as exc:
++            status=getattr(exc,'status_code',500);raise
++        finally: observe('http_body_stream',{'chunk_lengths':lengths,'bytes_seen':sum(lengths),'status':status,'url_path':request.url.path})
++    teaching_api._read_bounded_body=bounded_read
+     INSTALLED=True
+-    event('fixture_ready',{'argv':sys.argv,'external_network_blocked':True,'transport_only':True})
++    import hashlib
++    modules={}
++    for name in ('app.activities.teaching_repository','app.learning.teaching_service','app.learning.teaching_views',
++                 'app.learning.teaching_policy','app.learning.teaching_progress','app.learning.teaching_contracts',
++                 'app.learning.teaching_api','tests.fixtures.task100.synthetic_content'):
++        module=__import__(name,fromlist=['__file__']);file=Path(module.__file__)
++        modules[name]={'path':str(file),'sha256':hashlib.sha256(file.read_bytes()).hexdigest()}
++    event('fixture_ready',{'argv':sys.argv,'external_network_blocked':True,'transport_only':True,'loaded_modules':modules,
++                          'injections':['provider_return','supervisor_job_observation','sql_error_observation','http_stream_lengths']})

@@ -1,0 +1,18 @@
+--- before/backend/app/learning/service.py
++++ final/backend/app/learning/service.py
+@@ -14,6 +14,7 @@
+ from .contracts import FIRST_PREFIX, NEXT_PREFIX, LearningProfile, canonical, normalize_input, read_document, request_fingerprint
+ from .evidence import LearningRefusal, assemble_catalog, load_units, query_check, validate_snapshot
+ from .prompt import messages_for
++from app.data_exit.maintenance import owned_service
+ 
+ 
+ class LearningService:
+@@ -27,6 +28,7 @@
+         operation_id = await self.ledger.find_learning_operation(activity_id, prefix)
+         return None if operation_id is None else await self.ledger.read_operation(activity_id, operation_id)
+ 
++    @owned_service
+     async def execute(self, activity_id, business_key, text, config, *, parent_operation_id=None, run_tag):
+         from app.interview.contracts import InterviewRefusal
+         try: await self.ledger.require_non_interview(activity_id)

@@ -1,0 +1,22 @@
+--- before/backend/app/pdf_review/api.py
++++ final/backend/app/pdf_review/api.py
+@@ -89,6 +89,19 @@
+     repo = repository(request)
+     reviews = [ReviewPage(page.physical_page, page.reviewed, page.supplement) for page in body.pages]
+     try:
++        if getattr(repo, 'data_enabled', False):
++            def fenced_confirm():
++                from app.data_exit.contracts import DataError
++                references = repo.reference_coordinator
++                if references is None:raise DataError('data_readonly')
++                candidate = repo.get_pdf_candidate(valid_id(candidate_id))
++                if candidate is None:raise KeyError(candidate_id)
++                prepared = references.prepare_reference(candidate['sha256'],candidate['size'],source_id=candidate['source_id'],
++                    version_id=candidate['version_id'],candidate_id=candidate['candidate_id'])
++                with references.acquire_shared(prepared) as pin:
++                    request.app.state.originals.verify(Original(candidate['sha256'],candidate['size']),reference_pin=pin)
++                    return repo.confirm_pdf_candidate(candidate_id=valid_id(candidate_id),version_id=valid_id(body.version_id),pages=reviews,reference_pin=pin)
++            return {'material':await run_in_threadpool(fenced_confirm),'query_ready':True}
+         material = await run_in_threadpool(
+             repo.confirm_pdf_candidate,
+             candidate_id=valid_id(candidate_id),

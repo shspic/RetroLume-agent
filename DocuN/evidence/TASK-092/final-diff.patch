@@ -1,0 +1,1602 @@
+# TASK-092 最终差异补丁（utf-8）：pre原件 vs 当前工作树；新文件见 final-product-hashes.json
+--- pre/app_activities_repository.py
++++ backend/app/activities/repository.py
+@@ -8,6 +8,7 @@
+ 
+ from dataclasses import dataclass, field
+ from datetime import datetime, timedelta, timezone
++from decimal import Decimal, InvalidOperation
+ import enum
+ import json
+ import math
+@@ -20,17 +21,24 @@
+     AdmissionIntent,
+     AdmissionPermit,
+     AdmissionUnavailable,
++    CallContext,
+     LedgerDisposition,
+     LedgerOutcome,
+     RecordOutcome,
+     ResultConsumptionRef,
++    ToolAdmissionPermit,
++    ToolExecutionInput,
++    ToolIntent,
+     validate_business_payload,
+ )
++from app.capabilities.tools import MAX_ABS_RESULT as _MAX_ABS_TOOL_RESULT
+ 
+ 
+ _T = TypeVar("_T")
+ _SAFE_FACT = re.compile(r"^[A-Za-z0-9._:/-]+$")
++_HEX64 = re.compile(r"^[0-9a-f]{64}$")
+ _MAX_USAGE = 2_147_483_647
++_MAX_TOOL_CALLS = 2_147_483_647
+ _MAX_RESPONSE_BYTES = 67_108_864
+ # 时间账本（TASK-077）：M/R/S 计数上限与 004 迁移的 BIGINT CHECK 上界一致。
+ _MAX_RUNNING_SECONDS = 2_147_483_647
+@@ -40,6 +48,33 @@
+ 
+ class ActivityLedgerConflict(RuntimeError):
+     """活动状态或调用方提供的版本已不再适用。"""
++
++
++def _tool_payload_semantics_ok(payload_format: str | None, payload: str | None) -> bool:
++    """工具成功正文必须是 text 封套内原精度 50 规范有限十进制字符串。
++
++    除通用封套校验外的应用层 kind 条件校验：合法 JSON 形态、有限数值域
++    （绝对值不超过工具原上限）、且重新规范化后逐字节等于存储值。007 的
++    通用格式 CHECK 不冒充跨表工具约束；同表的 model json 许可不自动给 tool。
++    """
++    if payload_format != "text" or not isinstance(payload, str):
++        return False
++    try:
++        parsed = json.loads(payload, parse_constant=lambda _: (_ for _ in ()).throw(ValueError("nonfinite")))
++    except (json.JSONDecodeError, ValueError, RecursionError):
++        return False
++    if not isinstance(parsed, dict) or set(parsed) != {"format", "value"} or parsed["format"] != "text":
++        return False
++    value = parsed["value"]
++    if not isinstance(value, str) or not value:
++        return False
++    try:
++        number = Decimal(value)
++        if not number.is_finite() or abs(number) > _MAX_ABS_TOOL_RESULT:
++            return False
++        return format(number.normalize(), "f") == value
++    except (InvalidOperation, ValueError, ArithmeticError):
++        return False
+ 
+ 
+ class ResultIntegrityError(RuntimeError):
+@@ -82,6 +117,11 @@
+     committed_at: datetime | None = None
+     activity_status_now: str | None = None
+     activity_scope_revision_now: int | None = None
++    # G5 轻量类型元数据：NO_OPERATION 全为 None，不伪造 model。
++    kind: str | None = None
++    tool_call_id: str | None = None
++    arguments_sha256: str | None = None
++    tool_names: tuple[str, ...] | None = None
+ 
+ 
+ class SettleResult(enum.Enum):
+@@ -139,6 +179,8 @@
+     allowed_models: tuple[tuple[str, str], ...]
+     allowed_tools: tuple[str, ...] = ()
+     scope_revision: int = 1
++    # G5：独立工具次数上限；None=未配置（必须已用 0），0=明确禁用。
++    max_tool_calls: int | None = None
+ 
+ 
+ @dataclass(frozen=True)
+@@ -276,6 +318,12 @@
+             raise ValueError("允许工具数量或唯一性非法")
+         for tool in spec.allowed_tools:
+             cls._bounded_name(tool, "tool", maximum=64)
++        if spec.max_tool_calls is not None and (
++            isinstance(spec.max_tool_calls, bool)
++            or not isinstance(spec.max_tool_calls, int)
++            or not 0 <= spec.max_tool_calls <= _MAX_TOOL_CALLS
++        ):
++            raise ValueError("工具次数上限必须是 0 到 2147483647 之间的整数或 None")
+         return activity_id, normalized_sources
+ 
+     async def _source_rows(self, connection: object, activity_id: str) -> list[dict]:
+@@ -392,8 +440,8 @@
+                        max_requests, max_cost_microunits, reserve_cost_microunits,
+                        max_request_bytes, max_output_tokens,
+                        max_running_seconds, running_reserved_seconds, running_settled_seconds,
+-                       allowed_tools)
+-                     VALUES (%s, 'pending', %s, 0, %s, %s, %s, %s, %s, %s, %s, 0, 0, %s)""",
++                       allowed_tools, max_tool_calls)
++                     VALUES (%s, 'pending', %s, 0, %s, %s, %s, %s, %s, %s, %s, 0, 0, %s, %s)""",
+                 (
+                     activity_id,
+                     spec.scope_revision,
+@@ -405,6 +453,7 @@
+                     spec.max_output_tokens,
+                     spec.max_running_seconds,
+                     list(spec.allowed_tools),
++                    spec.max_tool_calls,
+                 ),
+             )
+             for source in sources:
+@@ -974,6 +1023,9 @@
+             if operation_id in calls:raise AdmissionDenied("操作键已经占用，不能获得第二次发送资格")
+             if ref:
+                 parent=calls.get(ref.operation_id)
++                if parent is not None and parent["kind"]!="model":
++                    # 工具结果不得成为模型父输入，即使引用结构完整、allowed_tools 为空。
++                    raise AdmissionDenied("result_kind_not_consumable")
+                 if parent is None or parent["state"]!="received" or parent["scope_revision"]!=ref.scope_revision:
+                     raise AdmissionDenied("result_invalidated")
+                 try:payload=await self._stored_payload_row(connection,parent)
+@@ -994,8 +1046,9 @@
+                 """INSERT INTO activity_operations(
+                        activity_id, operation_id, admission_id, executor_id,
+                        execution_generation, scope_revision, provider, configured_model,
+-                       request_bytes, max_output_tokens, tool_names, reserved_cost_microunits)
+-                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
++                       request_bytes, max_output_tokens, tool_names, reserved_cost_microunits,
++                       kind)
++                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'model')""",
+                 (
+                     activity_id,
+                     operation_id,
+@@ -1015,7 +1068,267 @@
+ 
+         return await self._transaction(operation)
+ 
+-    async def _locked_operation(self, connection: object, permit: AdmissionPermit) -> tuple[dict, dict, bool]:
++    # --- G5 受控工具仓储接口：专用凭证；kind 与参数身份在锁内由 DB 行权威复核。
++
++    @classmethod
++    def _tool_permit_fields(cls, permit: ToolAdmissionPermit) -> tuple:
++        if type(permit) is not ToolAdmissionPermit:
++            raise AdmissionDenied("invalid_input")
++        try:
++            admission_id = cls._uuid(permit.admission_id, "admission_id")
++            operation_id = cls._bounded_name(permit.operation_id, "operation_id")
++            executor_id = cls._bounded_name(permit.executor_id, "executor_id")
++            activity_id = cls._uuid(permit.activity_id, "activity_id")
++            tool_name = cls._bounded_name(permit.tool_name, "tool_name", maximum=64)
++            tool_call_id = cls._bounded_name(permit.tool_call_id, "tool_call_id")
++        except ValueError as exc:
++            raise AdmissionDenied(str(exc)) from None
++        if type(permit.execution_generation) is not int or permit.execution_generation < 0:
++            raise AdmissionDenied("execution_generation 非法")
++        if type(permit.scope_revision) is not int or permit.scope_revision < 1:
++            raise AdmissionDenied("scope_revision 非法")
++        if type(permit.arguments_sha256) is not str or _HEX64.fullmatch(permit.arguments_sha256) is None:
++            raise AdmissionDenied("arguments_sha256 非法")
++        return (
++            admission_id, operation_id, executor_id, activity_id,
++            permit.execution_generation, permit.scope_revision,
++            tool_name, tool_call_id, permit.arguments_sha256,
++        )
++
++    @staticmethod
++    def _tool_identity_matches(operation: dict, fields: tuple) -> bool:
++        (_, operation_id, executor_id, _, generation, scope, tool_name, tool_call_id, digest) = fields
++        return (
++            operation["kind"] == "tool"
++            and operation["operation_id"] == operation_id
++            and operation["executor_id"] == executor_id
++            and operation["execution_generation"] == generation
++            and operation["scope_revision"] == scope
++            and list(operation["tool_names"]) == [tool_name]
++            and operation["tool_call_id"] == tool_call_id
++            and operation["arguments_sha256"] == digest
++        )
++
++    async def admit_tool_operation(self, intent: ToolIntent) -> ToolAdmissionPermit:
++        """工具专用准入：来源→活动→操作键锁序；通过才同事务预留一次并＋1。
++
++        准入提交即计一次工具尝试；响应丢失不假定 DB 无行、不重新 admit。
++        上限未配置/已满、键被占用、白名单缺名、来源或租约失效一律拒绝且
++        零持久副作用。工具动作不查模型 provider 白名单，也不预留模型请求
++        或费用；模型与工具计数互相独立。
++        """
++        if type(intent) is not ToolIntent:
++            raise AdmissionDenied("invalid_input")
++        call = intent.call
++        context = intent.context
++        if type(call) is not ToolExecutionInput or type(context) is not CallContext:
++            raise AdmissionDenied("invalid_input")
++        try:
++            context = CallContext.model_validate(context.model_dump(), strict=True)
++            wire = call.to_wire()
++            activity_id = self._uuid(context.activity_id, "activity_id")
++            operation_id = self._bounded_name(context.operation_id, "operation_id")
++            executor_id = self._bounded_name(context.executor_id, "executor_id")
++        except (ValueError, TypeError, AttributeError):
++            raise AdmissionDenied("invalid_input") from None
++        if call.operation_id != operation_id:
++            raise AdmissionDenied("invalid_input")
++
++        async def operation(connection: object) -> ToolAdmissionPermit:
++            snapshots = await self._source_rows(connection, activity_id)
++            sources_valid = bool(snapshots) and await self._lock_sources(connection, snapshots)
++            cursor = await connection.execute("SELECT * FROM activities WHERE id = %s FOR UPDATE", (activity_id,))
++            activity = await cursor.fetchone()
++            await self._verify_scope_hint(connection, activity_id, snapshots)
++            now = datetime.now(timezone.utc)  # 来源与活动锁均已取得。
++            if activity is None or not sources_valid:
++                raise AdmissionDenied("source_invalid")
++            if activity["status"] == "cancelled":
++                raise AdmissionDenied("cancelled")
++            if activity["deadline_at"] <= now:
++                raise AdmissionDenied("activity_expired")
++            if (
++                activity["status"] != "running"
++                or activity["dispatch_closed"]
++                or activity["executor_id"] != executor_id
++                or activity["execution_generation"] != context.execution_generation
++                or activity["lease_expires_at"] is None
++                or activity["lease_expires_at"] <= now
++            ):
++                raise AdmissionDenied("lease_invalid")
++            if activity["scope_revision"] != context.scope_revision:
++                raise AdmissionDenied("scope_changed")
++            if call.name not in set(activity["allowed_tools"]):
++                raise AdmissionDenied("tool_not_allowed")
++            maximum = activity["max_tool_calls"]
++            if maximum is None:
++                raise AdmissionDenied("tool_limit_unconfigured")
++            if activity["tools_reserved"] >= maximum:
++                # 先比较上限再 +1；不先算可能溢出的加法。
++                raise AdmissionDenied("tool_limit_exhausted")
++            cursor = await connection.execute(
++                "SELECT * FROM activity_operations WHERE activity_id = %s AND operation_id = %s FOR UPDATE",
++                (activity_id, operation_id),
++            )
++            existing = await cursor.fetchone()
++            if existing is not None:
++                if existing["kind"] != "tool":
++                    raise AdmissionDenied("operation_key_conflict")
++                same = (
++                    list(existing["tool_names"]) == [call.name]
++                    and existing["tool_call_id"] == call.call_id
++                    and existing["arguments_sha256"] == wire["arguments_sha256"]
++                )
++                raise AdmissionDenied("operation_already_exists" if same else "tool_input_conflict")
++            admission_id = str(uuid4())
++            await connection.execute(
++                """UPDATE activities
++                      SET tools_reserved = tools_reserved + 1, updated_at = CURRENT_TIMESTAMP
++                    WHERE id = %s""",
++                (activity_id,),
++            )
++            await connection.execute(
++                """INSERT INTO activity_operations(
++                       activity_id, operation_id, admission_id, executor_id,
++                       execution_generation, scope_revision, kind, tool_names,
++                       reserved_cost_microunits, arguments_sha256, tool_call_id)
++                     VALUES (%s, %s, %s, %s, %s, %s, 'tool', %s, 0, %s, %s)""",
++                (
++                    activity_id, operation_id, admission_id, executor_id,
++                    context.execution_generation, context.scope_revision,
++                    [call.name], wire["arguments_sha256"], call.call_id,
++                ),
++            )
++            return ToolAdmissionPermit(
++                admission_id, operation_id, executor_id, activity_id,
++                context.execution_generation, context.scope_revision,
++                call.name, call.call_id, wire["arguments_sha256"],
++            )
++
++        return await self._transaction(operation)
++
++    async def mark_tool_started(self, permit: ToolAdmissionPermit, call: ToolExecutionInput) -> None:
++        """把工具操作从 reserved 推进为 dispatched；提交确认后允许唯一执行。
++
++        同一凭证第二次 mark 即拒绝，不返回 ALREADY_STARTED 给再次执行；
++        凭证、参数身份与锁内 DB 行完整对齐（不信客户端自称 kind）。
++        """
++        fields = self._tool_permit_fields(permit)
++        try:
++            wire = call.to_wire()
++        except (ValueError, TypeError, AttributeError):
++            raise AdmissionDenied("invalid_input") from None
++        (admission_id, operation_id, executor_id, activity_id, _, _, tool_name, tool_call_id, digest) = fields
++        if (
++            call.operation_id != operation_id or call.name != tool_name
++            or call.call_id != tool_call_id or wire["arguments_sha256"] != digest
++        ):
++            raise AdmissionDenied("admission_permit_mismatch")
++
++        async def operation(connection: object) -> None:
++            cursor = await connection.execute(
++                "SELECT activity_id FROM activity_operations WHERE admission_id = %s",
++                (admission_id,),
++            )
++            locator = await cursor.fetchone()
++            if locator is None:
++                raise AdmissionDenied("admission_permit_unknown")
++            if str(locator["activity_id"]) != activity_id:
++                raise AdmissionDenied("admission_permit_mismatch")
++            snapshots = await self._source_rows(connection, activity_id)
++            sources_valid = bool(snapshots) and await self._lock_sources(connection, snapshots)
++            cursor = await connection.execute("SELECT * FROM activities WHERE id = %s FOR UPDATE", (activity_id,))
++            activity = await cursor.fetchone()
++            await self._verify_scope_hint(connection, activity_id, snapshots)
++            cursor = await connection.execute(
++                "SELECT * FROM activity_operations WHERE admission_id = %s FOR UPDATE",
++                (admission_id,),
++            )
++            row = await cursor.fetchone()
++            if activity is None or row is None or not self._tool_identity_matches(row, fields):
++                raise AdmissionDenied("admission_permit_mismatch")
++            if row["state"] != "reserved":
++                raise AdmissionDenied("start_qualification_consumed")
++            if activity["dispatch_closed"] or not self._operation_is_current(activity, row, sources_valid):
++                raise AdmissionDenied("qualification_invalid")
++            await connection.execute(
++                """UPDATE activity_operations
++                      SET state = 'dispatched', dispatch_started_at = CURRENT_TIMESTAMP
++                    WHERE admission_id = %s AND state = 'reserved'""",
++                (admission_id,),
++            )
++
++        await self._transaction(operation)
++
++    async def record_tool_outcome(
++        self, permit: ToolAdmissionPermit, call: ToolExecutionInput, outcome: LedgerOutcome,
++    ) -> RecordOutcome:
++        """工具终态与（成功）正文的原子提交；与模型共用受控核心但不共用凭证。
++
++        工具行不携带任何模型元数据，也不接受 not_sent；成功正文额外复查
++        text 封套内的原精度 50 规范有限十进制字符串。终态严格等值幂等、
++        正文三字段同存同缺、关门拒绝正文新写等纪律与模型路径一致。
++        """
++        fields = self._tool_permit_fields(permit)
++        try:
++            wire = call.to_wire()
++        except (ValueError, TypeError, AttributeError):
++            raise AdmissionDenied("invalid_input") from None
++        (admission_id, operation_id, executor_id, activity_id, _, _, tool_name, tool_call_id, digest) = fields
++        if (
++            call.operation_id != operation_id or call.name != tool_name
++            or call.call_id != tool_call_id or wire["arguments_sha256"] != digest
++        ):
++            raise AdmissionDenied("admission_permit_mismatch")
++        values = self._outcome_values(outcome)
++        if outcome.disposition is LedgerDisposition.NOT_SENT:
++            raise AdmissionDenied("工具结果不接受 not_sent 终态")
++        if any(value is not None for value in values[2:]):
++            raise AdmissionDenied("工具行不携带模型元数据")
++        payload_triple = self._payload_values(outcome)
++        if payload_triple is not None and not _tool_payload_semantics_ok(payload_triple[0], payload_triple[1]):
++            raise AdmissionDenied("invalid_tool_payload")
++
++        async def operation(connection: object) -> RecordOutcome:
++            cursor = await connection.execute(
++                "SELECT activity_id FROM activity_operations WHERE admission_id = %s",
++                (admission_id,),
++            )
++            locator = await cursor.fetchone()
++            if locator is None:
++                raise AdmissionDenied("admission_permit_unknown")
++            if str(locator["activity_id"]) != activity_id:
++                raise AdmissionDenied("admission_permit_mismatch")
++            snapshots = await self._source_rows(connection, activity_id)
++            sources_valid = bool(snapshots) and await self._lock_sources(connection, snapshots)
++            cursor = await connection.execute("SELECT * FROM activities WHERE id = %s FOR UPDATE", (activity_id,))
++            activity = await cursor.fetchone()
++            await self._verify_scope_hint(connection, activity_id, snapshots)
++            cursor = await connection.execute(
++                "SELECT * FROM activity_operations WHERE admission_id = %s FOR UPDATE",
++                (admission_id,),
++            )
++            row = await cursor.fetchone()
++            if activity is None or row is None or not self._tool_identity_matches(row, fields):
++                raise AdmissionDenied("admission_permit_mismatch")
++            confirmed = await self._terminal_confirmation(connection, row, values, payload_triple)
++            if confirmed is not None:
++                return confirmed
++            current = self._operation_is_current(activity, row, sources_valid)
++            if not current and outcome.disposition is not LedgerDisposition.UNKNOWN:
++                raise AdmissionDenied("失效或过期执行只能登记 unknown 诊断")
++            if row["state"] == "reserved" and outcome.disposition is not LedgerDisposition.UNKNOWN:
++                raise AdmissionDenied("尚未越过发送边界的调用不能登记该结果")
++            if payload_triple is not None and activity["dispatch_closed"]:
++                raise AdmissionDenied("关闭门后不接受正文新写")
++            await self._write_outcome(connection, row, values, payload_triple)
++            return RecordOutcome.RECORDED
++
++        return await self._transaction(operation)
++
++    async def _locked_operation(
++        self, connection: object, permit: AdmissionPermit, *, kind: str = "model",
++    ) -> tuple[dict, dict, bool]:
+         try:
+             admission_id = self._uuid(permit.admission_id, "admission_id")
+             operation_id = self._bounded_name(permit.operation_id, "operation_id")
+@@ -1045,6 +1358,7 @@
+             or operation is None
+             or operation["operation_id"] != operation_id
+             or operation["executor_id"] != executor_id
++            or operation["kind"] != kind
+         ):
+             raise AdmissionDenied("准入凭证与操作或执行者不匹配")
+         return activity, operation, sources_valid
+@@ -1169,6 +1483,60 @@
+             raise AdmissionDenied("历史正文与操作权威绑定不一致")
+         return (row["payload_format"], row["payload"], row["payload_sha256"])
+ 
++    @staticmethod
++    async def _terminal_confirmation(
++        connection: object, call: dict, values: tuple, payload_triple: tuple[str, str, str] | None,
++    ) -> RecordOutcome | None:
++        """已终结行的严格等值无写幂等确认；语义冲突抛拒绝，未终结返回 None。
++
++        带正文与无正文不等价，旧 received 无正文不能补写，异文冲突保留已有；
++        该确认先于任何当前资格/关门检查。
++        """
++        if call["state"] not in {"not_sent", "received", "unknown"}:
++            return None
++        if PostgresAdmissionLedger._stored_outcome(call) == values:
++            stored_payload = await PostgresAdmissionLedger._stored_payload_row(connection, call)
++            if payload_triple is None and stored_payload is None:
++                return RecordOutcome.ALREADY_PRESENT
++            if payload_triple is not None and stored_payload is not None and stored_payload == payload_triple:
++                return RecordOutcome.ALREADY_PRESENT
++            if stored_payload is None:
++                raise AdmissionDenied("已终结无正文状态不能补写正文")
++            raise AdmissionDenied("已终结正文与提交不一致")
++        raise AdmissionDenied("已终结调用不能覆盖为不同结果")
++
++    @staticmethod
++    async def _write_outcome(
++        connection: object, call: dict, values: tuple, payload_triple: tuple[str, str, str] | None,
++    ) -> None:
++        """写入终态与（可缺省的）正文，同一事务；身份冗余值取锁内权威操作行。"""
++        await connection.execute(
++            """UPDATE activity_operations
++                  SET state = %s, disposition = %s, error_code = %s,
++                      remote_request_id = %s, returned_model = %s, finish_reason = %s,
++                      prompt_tokens = %s, completion_tokens = %s, response_bytes = %s,
++                      recorded_at = CURRENT_TIMESTAMP
++                WHERE admission_id = %s""",
++            (values[0], *values, call["admission_id"]),
++        )
++        if payload_triple is not None:
++            await connection.execute(
++                """INSERT INTO activity_operation_results(
++                       activity_id, operation_id, admission_id, execution_generation,
++                       scope_revision, payload_format, payload, payload_sha256)
++                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
++                (
++                    call["activity_id"],
++                    call["operation_id"],
++                    call["admission_id"],
++                    call["execution_generation"],
++                    call["scope_revision"],
++                    payload_triple[0],
++                    payload_triple[1],
++                    payload_triple[2],
++                ),
++            )
++
+     async def record_outcome(self, permit: AdmissionPermit, outcome: LedgerOutcome) -> RecordOutcome:
+         """原子登记终态与（可缺省的）业务正文；返回持久提交确认枚举。
+ 
+@@ -1178,24 +1546,16 @@
+         带正文与无正文不等价，旧 received 无正文不能补写，异文冲突保留已有）
+         先于失效/未发送新写资格拒绝；正文新写额外显式检查 dispatch_closed
+         （_operation_is_current 本身不含关门）。诊断/UNKNOWN 记录合同不变，
+-        不扩展为正文授权。
++        不扩展为正文授权。凭证仅接受 kind=model 行。
+         """
+         values = self._outcome_values(outcome)
+         payload_triple = self._payload_values(outcome)
+ 
+         async def operation(connection: object) -> RecordOutcome:
+             activity, call, sources_valid = await self._locked_operation(connection, permit)
+-            if call["state"] in {"not_sent", "received", "unknown"}:
+-                if self._stored_outcome(call) == values:
+-                    stored_payload = await self._stored_payload_row(connection, call)
+-                    if payload_triple is None and stored_payload is None:
+-                        return RecordOutcome.ALREADY_PRESENT
+-                    if payload_triple is not None and stored_payload is not None and stored_payload == payload_triple:
+-                        return RecordOutcome.ALREADY_PRESENT
+-                    if stored_payload is None:
+-                        raise AdmissionDenied("已终结无正文状态不能补写正文")
+-                    raise AdmissionDenied("已终结正文与提交不一致")
+-                raise AdmissionDenied("已终结调用不能覆盖为不同结果")
++            confirmed = await self._terminal_confirmation(connection, call, values, payload_triple)
++            if confirmed is not None:
++                return confirmed
+             current = self._operation_is_current(activity, call, sources_valid)
+             if not current and outcome.disposition is not LedgerDisposition.UNKNOWN:
+                 raise AdmissionDenied("失效或过期执行只能登记 unknown 诊断")
+@@ -1203,33 +1563,7 @@
+                 raise AdmissionDenied("尚未越过发送边界的调用不能登记该结果")
+             if payload_triple is not None and activity["dispatch_closed"]:
+                 raise AdmissionDenied("关闭门后不接受正文新写")
+-            await connection.execute(
+-                """UPDATE activity_operations
+-                      SET state = %s, disposition = %s, error_code = %s,
+-                          remote_request_id = %s, returned_model = %s, finish_reason = %s,
+-                          prompt_tokens = %s, completion_tokens = %s, response_bytes = %s,
+-                          recorded_at = CURRENT_TIMESTAMP
+-                    WHERE admission_id = %s""",
+-                (values[0], *values, permit.admission_id),
+-            )
+-            if payload_triple is not None:
+-                # 身份冗余值取锁内权威操作行，不直接相信调用参数。
+-                await connection.execute(
+-                    """INSERT INTO activity_operation_results(
+-                           activity_id, operation_id, admission_id, execution_generation,
+-                           scope_revision, payload_format, payload, payload_sha256)
+-                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+-                    (
+-                        call["activity_id"],
+-                        call["operation_id"],
+-                        call["admission_id"],
+-                        call["execution_generation"],
+-                        call["scope_revision"],
+-                        payload_triple[0],
+-                        payload_triple[1],
+-                        payload_triple[2],
+-                    ),
+-                )
++            await self._write_outcome(connection, call, values, payload_triple)
+             return RecordOutcome.RECORDED
+ 
+         return await self._transaction(operation)
+@@ -1242,6 +1576,7 @@
+        o.scope_revision AS op_scope, o.provider, o.configured_model,
+        o.finish_reason, o.returned_model, o.remote_request_id,
+        o.prompt_tokens, o.completion_tokens, o.response_bytes,
++       o.kind, o.tool_call_id, o.arguments_sha256, o.tool_names,
+        r.admission_id AS result_admission_id, r.execution_generation AS result_generation,
+        r.scope_revision AS result_scope, r.payload_format, r.payload_sha256, r.committed_at,
+        a.status AS activity_status_now, a.scope_revision AS activity_scope_revision_now,
+@@ -1299,6 +1634,10 @@
+             committed_at=row["committed_at"],
+             activity_status_now=row["activity_status_now"],
+             activity_scope_revision_now=row["activity_scope_revision_now"],
++            kind=row["kind"],
++            tool_call_id=row["tool_call_id"],
++            arguments_sha256=row["arguments_sha256"],
++            tool_names=tuple(row["tool_names"]) if row["tool_names"] is not None else None,
+         )
+ 
+     async def read_committed_result(self, activity_id: str, operation_id: str) -> CommittedResultSnapshot:
+@@ -1364,6 +1703,9 @@
+                     validate_business_payload(payload, row["payload_format"], row["payload_sha256"])
+                 except ValueError:
+                     raise ResultIntegrityError("payload_integrity") from None
++                if row["kind"] == "tool" and not _tool_payload_semantics_ok(row["payload_format"], payload):
++                    # 工具结果语义复查；同表 model json 许可不自动给 tool。
++                    raise ResultIntegrityError("payload_integrity")
+             return self._snapshot_from_row(row, status, payload)
+ 
+         return await self._transaction(operation)
+@@ -1395,6 +1737,20 @@
+         async def operation(connection: object) -> tuple[CommittedResultSnapshot, ...]:
+             cursor = await connection.execute(
+                 f"""{self._RESULT_READ_SQL},
++       CASE WHEN r.payload_sha256 IS NOT NULL
++             AND r.admission_id = o.admission_id
++             AND r.execution_generation = o.execution_generation
++             AND r.scope_revision = o.scope_revision
++             AND a.scope_revision = r.scope_revision
++             AND EXISTS (SELECT 1 FROM activity_scope_sources s WHERE s.activity_id = o.activity_id)
++             AND NOT EXISTS (
++                 SELECT 1 FROM activity_scope_sources s
++                   LEFT JOIN material_sources m ON m.id = s.source_id
++                  WHERE s.activity_id = o.activity_id
++                    AND (m.id IS NULL OR m.current_version IS NULL
++                         OR m.current_version <> s.version_id
++                         OR m.revision <> s.source_revision))
++            THEN r.payload ELSE NULL END AS payload,
+        o.activity_id
+   FROM activity_operation_results r
+   JOIN activity_operations o
+@@ -1406,10 +1762,18 @@
+                 tuple(params),
+             )
+             rows = list(await cursor.fetchall())
+-            snapshots = tuple(
+-                self._snapshot_from_row(row, self._read_status(row, has_result=True), None)
+-                for row in rows
+-            )
++            snapshots = []
++            for row in rows:
++                if row["kind"] == "tool" and row["payload"] is not None:
++                    # 与 read 一致：SQL 资格成立且 kind=tool 时复查工具结果语义。
++                    try:
++                        validate_business_payload(row["payload"], row["payload_format"], row["payload_sha256"])
++                    except ValueError:
++                        raise ResultIntegrityError("payload_integrity") from None
++                    if not _tool_payload_semantics_ok(row["payload_format"], row["payload"]):
++                        raise ResultIntegrityError("payload_integrity")
++                snapshots.append(self._snapshot_from_row(row, self._read_status(row, has_result=True), None))
++            snapshots = tuple(snapshots)
+             encoded = json.dumps(
+                 [
+                     {
+@@ -1432,6 +1796,10 @@
+                         "committed_at": item.committed_at.isoformat() if item.committed_at else None,
+                         "activity_status_now": item.activity_status_now,
+                         "activity_scope_revision_now": item.activity_scope_revision_now,
++                        "kind": item.kind,
++                        "tool_call_id": item.tool_call_id,
++                        "arguments_sha256": item.arguments_sha256,
++                        "tool_names": list(item.tool_names) if item.tool_names is not None else None,
+                     }
+                     for item in snapshots
+                 ],
+--- pre/app_activities_service.py
++++ backend/app/activities/service.py
+@@ -6,10 +6,20 @@
+ from __future__ import annotations
+ 
+ import asyncio
++from collections.abc import Mapping
+ from dataclasses import dataclass
+ import json
+ from pydantic import ValidationError
+-from app.capabilities.contracts import AdmissionUnavailable, ModelCallRequest, ModelServiceConfig, ResultConsumptionRef, validate_business_payload
++from app.capabilities.contracts import (
++    AdmissionUnavailable,
++    ModelCallRequest,
++    ModelServiceConfig,
++    ResultConsumptionRef,
++    ToolCallPlan,
++    ToolExecutionInput,
++    canonical_tool_arguments,
++    validate_business_payload,
++)
+ from .repository import PostgresAdmissionLedger, CommittedResultSnapshot, ResultReadStatus, ResultIntegrityError
+ 
+ 
+@@ -33,6 +43,37 @@
+     business: ReadOutcome | None = None
+     supervision: object | None = None
+     settlement: SettlementFacts | None = None
++
++
++@dataclass(frozen=True)
++class ToolActionOutcome:
++    """一次显式工具动作的结果；业务读、监督与结算事实互相独立。"""
++
++    status: str
++    business: ReadOutcome | None = None
++    supervision: object | None = None
++    settlement: SettlementFacts | None = None
++
++
++def _canonical_tool_execution_input(operation_id, plan) -> ToolExecutionInput | None:
++    """把受信调用方计划一次性转换为私有规范输入；失败返回 None。
++
++    只读取调用方 Mapping 一次到私有浅拷贝；之后解析、Schema 校验与规范
++    编码全部作用于私有值，不再触碰原 Mapping，也不为其内容变化背书。
++    """
++    if type(plan) is not ToolCallPlan or not isinstance(plan.arguments, Mapping):
++        return None
++    try:
++        snapshot = dict(plan.arguments)
++    except (TypeError, ValueError, RuntimeError):
++        return None
++    try:
++        arguments_json, arguments_sha256 = canonical_tool_arguments(snapshot)
++        call = ToolExecutionInput(operation_id, plan.call_id, plan.name, arguments_json, arguments_sha256)
++        call.to_wire()
++    except (ValueError, TypeError, AttributeError, RecursionError):
++        return None
++    return call
+ 
+ 
+ class ActivityService:
+@@ -79,6 +120,9 @@
+         if parent.status != ResultReadStatus.COMMITTED_CURRENT.value:
+             mapping={"committed_history_cancelled":"cancelled","invalidated_scope_changed":"result_invalidated","invalidated_source":"source_invalid"}
+             return ContinuationOutcome(mapping.get(parent.status,parent.status),parent)
++        if parent.snapshot.kind != "model":
++            # 工具结果仅可只读；不作为模型父输入，也不启动任何监督。
++            return ContinuationOutcome("result_kind_not_consumable",parent)
+         if type(service) is not ModelServiceConfig or type(config) is not SessionConfig:
+             return ContinuationOutcome("invalid_input")
+         # 确定的 one_call 配置冲突在监督线程及任何 launcher 副作用之前拒绝。
+@@ -133,3 +177,67 @@
+             if receipt and receipt["result"].get("error_code"):
+                 status=receipt["result"]["error_code"]
+         return ContinuationOutcome(status,business,supervision,settlement)
++
++    async def execute_tool_action(self, activity_id, operation_id, plan, config,
++                                  executor_id, run_tag) -> ToolActionOutcome:
++        """显式一次工具动作；唯一finite_calculate，经固定受控worker执行。
++
++        工具次数在准入提交时持久耗用；同键同身份只读返回已知事实，同键异
++        身份或模型占键明确冲突且零监督；UNKNOWN/无正文/暂不可读都不启动
++        新监督、不生成替代键。服务不claim、不execute、不settle。
++        """
++        from app.worker.one_call import validate_identity
++        from app.worker.one_tool import run_one_tool
++        from app.worker.session import SessionConfig
++        try:
++            validate_identity(activity_id,executor_id,operation_id,run_tag)
++        except (ValueError,TypeError,AttributeError):
++            return ToolActionOutcome("invalid_input")
++        call=_canonical_tool_execution_input(operation_id,plan)
++        if call is None:
++            return ToolActionOutcome("invalid_input")
++        # 同键只核事实；任何既存状态都不在此获得第二次执行资格。
++        existing=await self.read_result(activity_id,operation_id)
++        if existing.status != ResultReadStatus.NO_OPERATION.value:
++            snapshot=existing.snapshot
++            if snapshot is None:
++                # 读取不可用或完整性错误：原样返回只读状态，不冲突定性、不监督。
++                return ToolActionOutcome(existing.status,existing)
++            if snapshot.kind != "tool":
++                return ToolActionOutcome("operation_key_conflict",existing)
++            if (snapshot.tool_call_id != call.call_id
++                    or snapshot.arguments_sha256 != call.arguments_sha256):
++                return ToolActionOutcome("tool_input_conflict",existing)
++            return ToolActionOutcome(existing.status,existing)
++        if type(config) is not SessionConfig:
++            return ToolActionOutcome("invalid_input")
++        # 确定的工具配置冲突在监督线程及任何launcher副作用之前拒绝。
++        if config.request_timeout_seconds > 120:
++            return ToolActionOutcome("invalid_input")
++        task=asyncio.create_task(asyncio.to_thread(run_one_tool,self.ledger,config,activity_id,
++            executor_id,call,run_tag=run_tag))
++        cancelled=False
++        # shield只隔离调用方取消；监督线程由既有deadline/自有Job收尾。
++        while True:
++            try:
++                supervision=await asyncio.shield(task)
++                break
++            except Exception:
++                if cancelled:raise asyncio.CancelledError
++                return ToolActionOutcome("supervision_unknown",await self.read_result(activity_id,operation_id))
++            except asyncio.CancelledError:
++                cancelled=True
++                if task.done():
++                    supervision=task.result()
++                    break
++        if cancelled:raise asyncio.CancelledError
++        business=await self.read_result(activity_id,operation_id)
++        settlement=SettlementFacts(supervision.settled_seconds,supervision.reserved_seconds,
++            supervision.pending_fold_seconds,supervision.cleanup_incomplete)
++        status=business.status
++        if business.status in ("no_operation","unresolved"):
++            status=supervision.state if supervision.state in {"cancelled","budget_exhausted"} else "supervision_unknown"
++            receipt=supervision.tool_receipt
++            if receipt and receipt["result"].get("error_code"):
++                status=receipt["result"]["error_code"]
++        return ToolActionOutcome(status,business,supervision,settlement)
+--- pre/app_capabilities___init__.py
++++ backend/app/capabilities/__init__.py
+@@ -2,6 +2,7 @@
+ 
+ from .contracts import (
+     BUSINESS_PAYLOAD_MAX_BYTES,
++    MAX_TOOL_ARGUMENT_BYTES,
+     AdmissionDenied,
+     AdmissionIntent,
+     AdmissionLedger,
+@@ -20,17 +21,26 @@
+     Provider,
+     RecordOutcome,
+     RejectingAdmissionLedger,
++    RejectingToolAdmissionLedger,
+     ResponseMode,
+     ThinkingMode,
++    ToolAdmissionLedger,
++    ToolAdmissionPermit,
+     ToolCallPlan,
++    ToolCallResult,
++    ToolCallStatus,
++    ToolExecutionInput,
+     ToolFunctionCall,
++    ToolIntent,
+     Usage,
+     build_business_payload,
+     canonical_payload_bytes,
++    canonical_tool_arguments,
+     payload_digest,
+     validate_business_payload,
+ )
+ from .gateway import ControlledModelGateway
++from .tool_execution import ControlledToolExecutor
+ from .tools import TOOL_NAME, ToolRegistry, ToolValidationError
+ from .transport import (
+     DeliveryUnknown,
+@@ -42,6 +52,7 @@
+ 
+ __all__ = [
+     "BUSINESS_PAYLOAD_MAX_BYTES",
++    "MAX_TOOL_ARGUMENT_BYTES",
+     "AdmissionDenied",
+     "AdmissionIntent",
+     "AdmissionLedger",
+@@ -51,6 +62,7 @@
+     "CallContext",
+     "CallStatus",
+     "ControlledModelGateway",
++    "ControlledToolExecutor",
+     "DeliveryUnknown",
+     "HttpxModelTransport",
+     "LedgerDisposition",
+@@ -64,18 +76,26 @@
+     "Provider",
+     "RecordOutcome",
+     "RejectingAdmissionLedger",
++    "RejectingToolAdmissionLedger",
+     "RequestNotSent",
+     "ResponseMode",
+     "TOOL_NAME",
+     "ThinkingMode",
++    "ToolAdmissionLedger",
++    "ToolAdmissionPermit",
+     "ToolCallPlan",
++    "ToolCallResult",
++    "ToolCallStatus",
++    "ToolExecutionInput",
+     "ToolFunctionCall",
++    "ToolIntent",
+     "ToolRegistry",
+     "ToolValidationError",
+     "TransportResponse",
+     "Usage",
+     "build_business_payload",
+     "canonical_payload_bytes",
++    "canonical_tool_arguments",
+     "payload_digest",
+     "validate_business_payload",
+ ]
+--- pre/app_capabilities_contracts.py
++++ backend/app/capabilities/contracts.py
+@@ -411,3 +411,187 @@
+     remote_request_id: str | None = None
+     # G3：仅 SUCCEEDED 且已获持久提交确认时携带；repr 不展示（内部直接访问）。
+     payload_sha256: str | None = field(default=None, repr=False)
++
++
++# --- G5 受控工具执行专用契约（TASK-092）。旧模型凭证与引用结构不改。 ---
++
++MAX_TOOL_ARGUMENT_BYTES = 2048
++_TOOL_ID_RE = re.compile(r"[A-Za-z0-9._:/-]{1,128}\Z")
++_TOOL_HEX64_RE = re.compile(r"[0-9a-f]{64}\Z")
++
++
++def _tool_names():
++    from .tools import TOOL_NAME  # 延迟导入避免与 tools 的模块环。
++
++    return TOOL_NAME
++
++
++def _unique_pairs(pairs):
++    result = {}
++    for key, value in pairs:
++        if key in result:
++            raise ValueError("duplicate key")
++        result[key] = value
++    return result
++
++
++def parse_tool_arguments(text: str) -> Any:
++    """严格解析工具规范参数字符串；拒绝重复键与非有限常量。"""
++    return json.loads(
++        text,
++        object_pairs_hook=_unique_pairs,
++        parse_constant=lambda _: (_ for _ in ()).throw(ValueError("nonfinite")),
++    )
++
++
++def canonical_tool_arguments(parsed: Mapping[str, Any]) -> tuple[str, str]:
++    """对（私有拷贝后的）调用方参数做原 Schema 校验并生成规范字节与摘要。
++
++    规范参数 = 校验后对象 json.dumps(sort_keys=True, ensure_ascii=False,
++    separators=(",", ":"), allow_nan=False) 的 UTF-8；长度 1..2048；
++    摘要为 64 位小写十六进制。保留校验后 int/float 域表示，不引入数值舍入。
++    """
++    from .tools import CalculationArguments  # 延迟导入避免模块环。
++
++    if not isinstance(parsed, Mapping):
++        raise ValueError("invalid_tool_arguments")
++    validated = CalculationArguments.model_validate(dict(parsed))
++    raw = json.dumps(
++        validated.model_dump(), sort_keys=True, ensure_ascii=False,
++        separators=(",", ":"), allow_nan=False,
++    )
++    encoded = raw.encode("utf-8")
++    if not 1 <= len(encoded) <= MAX_TOOL_ARGUMENT_BYTES:
++        raise ValueError("tool_arguments_limit")
++    return raw, hashlib.sha256(encoded).hexdigest()
++
++
++@dataclass(frozen=True)
++class ToolExecutionInput:
++    """一次工具动作的不可变规范输入；arguments_json 隐藏 repr。
++
++    冻结与私有拷贝不替代内容验证：to_wire/from_wire 在每个边界重新解析、
++    原 Schema 校验、规范编码并要求逐字节与摘要相等；不能用 dataclass
++    构造或 model_copy 绕过。
++    """
++
++    operation_id: str
++    call_id: str
++    name: str
++    arguments_json: str = field(repr=False)
++    arguments_sha256: str = field(repr=False)
++
++    def to_wire(self) -> dict[str, Any]:
++        if type(self.operation_id) is not str or _TOOL_ID_RE.fullmatch(self.operation_id) is None:
++            raise ValueError("invalid tool operation identity")
++        if type(self.call_id) is not str or _TOOL_ID_RE.fullmatch(self.call_id) is None:
++            raise ValueError("invalid tool call identity")
++        if type(self.name) is not str or self.name != _tool_names():
++            raise ValueError("invalid tool name")
++        if type(self.arguments_json) is not str or not self.arguments_json:
++            raise ValueError("invalid tool arguments")
++        if len(self.arguments_json.encode("utf-8")) > MAX_TOOL_ARGUMENT_BYTES:
++            raise ValueError("tool arguments exceed limit")
++        if type(self.arguments_sha256) is not str or _TOOL_HEX64_RE.fullmatch(self.arguments_sha256) is None:
++            raise ValueError("invalid tool arguments digest")
++        try:
++            parsed = parse_tool_arguments(self.arguments_json)
++        except (json.JSONDecodeError, UnicodeError, ValueError, RecursionError):
++            raise ValueError("invalid tool arguments") from None
++        canonical, digest = canonical_tool_arguments(parsed)
++        if canonical != self.arguments_json or digest != self.arguments_sha256:
++            raise ValueError("tool arguments not canonical")
++        return {
++            "operation_id": self.operation_id,
++            "call_id": self.call_id,
++            "name": self.name,
++            "arguments_json": canonical,
++            "arguments_sha256": digest,
++        }
++
++    @classmethod
++    def from_wire(cls, value) -> "ToolExecutionInput":
++        names = ("operation_id", "call_id", "name", "arguments_json", "arguments_sha256")
++        if type(value) is not dict or set(value) != set(names):
++            raise ValueError("tool input schema mismatch")
++        result = cls(*(value[name] for name in names))
++        result.to_wire()
++        return result
++
++
++@dataclass(frozen=True)
++class ToolIntent:
++    """专用工具准入意图；context 与 input 均须在锁内复核。"""
++
++    context: CallContext
++    call: ToolExecutionInput
++
++
++@dataclass(frozen=True)
++class ToolAdmissionPermit:
++    """工具操作专用凭证；kind 由独立类型与数据库行共同限定为 tool。
++
++    它不复用旧三字段模型凭证，也不为原 AdmissionPermit 虚构参数摘要字段。
++    """
++
++    admission_id: str
++    operation_id: str
++    executor_id: str
++    activity_id: str
++    execution_generation: int
++    scope_revision: int
++    tool_name: str
++    tool_call_id: str
++    arguments_sha256: str = field(repr=False)
++
++
++class ToolCallStatus(StrEnum):
++    """工具回执状态；不接受 TOOL_PLAN，也不冒充模型调用状态。"""
++
++    SUCCEEDED = "succeeded"
++    REJECTED = "rejected"
++    NOT_SENT = "not_sent"
++    FAILED = "failed"
++    UNKNOWN = "unknown"
++
++
++@dataclass(frozen=True)
++class ToolCallResult:
++    """工具动作的纯数据结果；无模型 provider/usage 字段，不拿模型结果填充。"""
++
++    status: ToolCallStatus
++    name: str
++    call_id: str
++    arguments_sha256: str = field(repr=False)
++    error_code: str | None = None
++    payload_sha256: str | None = field(default=None, repr=False)
++
++
++class ToolAdmissionLedger(Protocol):
++    """工具持久账本边界；无持久实现时由 RejectingToolAdmissionLedger 失败关闭。"""
++
++    async def admit_tool_operation(self, intent: ToolIntent) -> ToolAdmissionPermit: ...
++
++    async def mark_tool_started(self, permit: ToolAdmissionPermit, call: ToolExecutionInput) -> None: ...
++
++    async def record_tool_outcome(
++        self, permit: ToolAdmissionPermit, call: ToolExecutionInput, outcome: LedgerOutcome,
++    ) -> RecordOutcome: ...
++
++
++class RejectingToolAdmissionLedger:
++    """工具持久账本未接入时的默认失败关闭实现；不提供进程内计数替代。"""
++
++    async def admit_tool_operation(self, intent: ToolIntent) -> ToolAdmissionPermit:
++        del intent
++        raise AdmissionUnavailable("工具持久准入账本尚未接入")
++
++    async def mark_tool_started(self, permit: ToolAdmissionPermit, call: ToolExecutionInput) -> None:
++        del permit, call
++        raise AdmissionUnavailable("工具持久准入账本尚未接入")
++
++    async def record_tool_outcome(
++        self, permit: ToolAdmissionPermit, call: ToolExecutionInput, outcome: LedgerOutcome,
++    ) -> RecordOutcome:
++        del permit, call, outcome
++        raise AdmissionUnavailable("工具持久准入账本尚未接入")
+--- pre/app_worker_command.py
++++ backend/app/worker/command.py
+@@ -18,7 +18,7 @@
+     task: str = "idle"
+ 
+     def __post_init__(self) -> None:
+-        if type(self.task) is not str or self.task not in ("idle", "one_call"):
++        if type(self.task) is not str or self.task not in ("idle", "one_call", "one_tool"):
+             raise ValueError("unsupported internal worker task")
+ 
+     @property
+@@ -27,7 +27,7 @@
+ 
+     def argv(self, mapping_name: str | None = None) -> list[str]:
+         result = [str(_INTERPRETER), "-B", "-m", "app.worker.worker_main", self.task]
+-        if self.task == "one_call":
++        if self.task in ("one_call", "one_tool"):
+             from .supervisor_ipc import validate_name
+             result.append(validate_name(mapping_name))
+         elif mapping_name is not None:
+--- pre/app_worker_launcher.py
++++ backend/app/worker/launcher.py
+@@ -5,7 +5,7 @@
+ import asyncio
+ import ctypes
+ from ctypes import wintypes
+-from dataclasses import asdict, fields, replace
++from dataclasses import asdict, replace
+ import os
+ import secrets
+ import subprocess
+@@ -19,7 +19,8 @@
+ from .session import SessionConfig, SessionOutcome
+ from .supervisor_ipc import NamedMapping
+ from .one_call import OneCallInput, decode_receipt, validate_identity
+-from app.capabilities.contracts import CallContext
++from .one_tool import decode_tool_receipt
++from app.capabilities.contracts import CallContext, ToolExecutionInput
+ from .windows_job import (_FILETIME, _PROCESS_INFORMATION, _STARTUPINFOW,
+                           CREATE_NO_WINDOW, CREATE_SUSPENDED, WAIT_OBJECT_0,
+                           WAIT_TIMEOUT)
+@@ -27,6 +28,17 @@
+ 
+ CREATE_UNICODE_ENVIRONMENT = 0x00000400
+ STILL_ACTIVE = 259
++
++# 外2/外3回执的冻结字段集：不依赖动态fields同时接收两个版本。
++_OUTER2_OUTCOME_FIELDS = (
++    "run_tag", "state", "activity_id", "generation", "job_name", "pid",
++    "active_processes_at_end", "settled_seconds", "reserved_seconds",
++    "pending_fold_seconds", "elapsed_seconds", "cleanup_incomplete",
++    "error_type", "cleanup_errors", "timing_diagnostic", "manager_pid",
++    "manager_created_100ns", "running_owner_session_id", "worker_created_100ns",
++    "model_receipt",
++)
++_OUTER3_OUTCOME_FIELDS = _OUTER2_OUTCOME_FIELDS + ("tool_receipt",)
+ 
+ 
+ class ManagerControlError(RuntimeError):
+@@ -169,7 +181,8 @@
+             raise ManagerControlError("CloseHandle(SUP): " + ",".join(errors))
+ 
+ 
+-def _request(ledger, config, activity_id, executor_id, command, run_tag, mapping_name, deadline_ns, one_call=None) -> dict:
++def _request(ledger, config, activity_id, executor_id, command, run_tag, mapping_name, deadline_ns,
++             one_call=None, tool_action=None) -> dict:
+     if type(ledger) is not PostgresAdmissionLedger or type(config) is not SessionConfig or type(command) is not WorkerCommand:
+         raise TypeError("fixed ledger, config and command required")
+     if type(ledger._dsn) is not str or not 1 <= len(ledger._dsn.encode("utf-8")) <= 4096 or "\x00" in ledger._dsn:
+@@ -181,15 +194,39 @@
+     if type(run_tag) is not str or not 1 <= len(run_tag) <= 64 or not run_tag.isascii() or not run_tag.replace("-", "").replace("_", "").isalnum():
+         raise ValueError("runTag invalid")
+     if command.task == "one_call":
+-        if type(one_call) is not OneCallInput:
++        if type(one_call) is not OneCallInput or tool_action is not None:
+             raise ValueError("one_call requires explicit input")
+         validate_identity(activity_id, executor_id, one_call.operation_id, run_tag)
+         if one_call.request.input_result is not None and one_call.request.input_result.activity_id != activity_id:
+             raise ValueError("input result activity mismatch")
+         if one_call.service.timeout_seconds > config.request_timeout_seconds:
+             raise ValueError("model timeout exceeds session")
+-    elif one_call is not None:
++    elif command.task == "one_tool":
++        if type(tool_action) is not ToolExecutionInput or one_call is not None:
++            raise ValueError("one_tool requires explicit input")
++        validate_identity(activity_id, executor_id, tool_action.operation_id, run_tag)
++        tool_action.to_wire()
++        if config.request_timeout_seconds > 120:
++            raise ValueError("tool request timeout exceeds 120s limit")
++    elif one_call is not None or tool_action is not None:
+         raise ValueError("idle cannot carry business data")
++    ledger_data = {
++        "dsn": ledger._dsn,
++        "connect_timeout_seconds": ledger._connect_timeout,
++        "statement_timeout_ms": ledger._statement_timeout_ms,
++        "lock_timeout_ms": ledger._lock_timeout_ms,
++    }
++    if command.task == "one_tool":
++        # 工具外请求（协议3）精确字段：不带one_call/model service/API key。
++        return {
++            "protocol": 3, "mapping_name": mapping_name,
++            "activity_id": activity_id, "executor_id": executor_id,
++            "run_tag": run_tag, "deadline_ns": deadline_ns,
++            "command": {"task": command.task},
++            "config": asdict(config),
++            "tool_action": tool_action.to_wire(),
++            "ledger": ledger_data,
++        }
+     return {
+         "protocol": 2, "mapping_name": mapping_name,
+         "activity_id": activity_id, "executor_id": executor_id,
+@@ -197,20 +234,22 @@
+         "command": {"task": command.task},
+         "config": asdict(config),
+         "one_call": one_call.to_wire() if one_call is not None else None,
+-        "ledger": {
+-            "dsn": ledger._dsn,
+-            "connect_timeout_seconds": ledger._connect_timeout,
+-            "statement_timeout_ms": ledger._statement_timeout_ms,
+-            "lock_timeout_ms": ledger._lock_timeout_ms,
+-        },
++        "ledger": ledger_data,
+     }
+ 
+ 
+ def _decode_outcome(frame: dict, run_tag: str, activity_id: str) -> SessionOutcome:
+-    if type(frame) is not dict or set(frame) != {"protocol", "run_tag", "activity_id", "outcome"} or frame.get("protocol") != 2 or frame.get("run_tag") != run_tag or frame.get("activity_id") != activity_id:
++    if type(frame) is not dict or set(frame) != {"protocol", "run_tag", "activity_id", "outcome"}:
++        raise ManagerControlError("SUP response identity mismatch")
++    protocol = frame.get("protocol")
++    if (
++        type(protocol) is not int or protocol not in (2, 3)
++        or frame.get("run_tag") != run_tag or frame.get("activity_id") != activity_id
++    ):
+         raise ManagerControlError("SUP response identity mismatch")
+     data = frame.get("outcome")
+-    if type(data) is not dict or set(data) != {f.name for f in fields(SessionOutcome)}:
++    expected = _OUTER3_OUTCOME_FIELDS if protocol == 3 else _OUTER2_OUTCOME_FIELDS
++    if type(data) is not dict or set(data) != set(expected):
+         raise ManagerControlError("SUP response shape invalid")
+     if data.get("run_tag") != run_tag or data.get("activity_id") != activity_id:
+         raise ManagerControlError("SUP outcome identity mismatch")
+@@ -222,6 +261,13 @@
+         raise ManagerControlError("SUP timing field invalid")
+     data["cleanup_errors"] = tuple(errors)
+     data["timing_diagnostic"] = tuple(timing) if timing is not None else None
++    if protocol == 2:
++        # 外2精确旧字段集：排除新tool_receipt并补默认。
++        data["tool_receipt"] = None
++    else:
++        receipt = data.get("tool_receipt")
++        if receipt is not None and type(receipt) is not dict:
++            raise ManagerControlError("SUP tool receipt field invalid")
+     return SessionOutcome(**data)
+ 
+ 
+@@ -234,6 +280,7 @@
+     *,
+     run_tag: str,
+     one_call: OneCallInput | None = None,
++    tool_action: ToolExecutionInput | None = None,
+ ) -> SessionOutcome:
+     """Blocking internal entry; no application event-loop or business grant."""
+     if os.name != "nt":
+@@ -249,7 +296,8 @@
+     deadline_ns = started_ns + int(config.manager_total_seconds * 1e9)
+     run_deadline_ns = deadline_ns - int(config.cleanup_seconds * 1e9)
+     mapping_name = "Local\\RetroLume.SUP." + secrets.token_hex(16)
+-    request = _request(ledger, config, activity_id, executor_id, command, run_tag, mapping_name, deadline_ns, one_call)
++    request = _request(ledger, config, activity_id, executor_id, command, run_tag, mapping_name, deadline_ns,
++                       one_call, tool_action)
+     mapping = None
+     process = None
+     outcome = None
+@@ -296,7 +344,16 @@
+                             result = decode_receipt(outcome.model_receipt, context, run_tag)
+                             if result.provider != one_call.service.provider or result.configured_model != one_call.service.model:
+                                 raise ManagerControlError("business model mismatch")
+-                        elif one_call is not None and outcome.state == "settled":
++                        elif outcome.tool_receipt is not None:
++                            if tool_action is None or outcome.generation is None:
++                                raise ManagerControlError("unexpected business receipt")
++                            context = CallContext.model_validate(outcome.tool_receipt.get("context"), strict=True)
++                            if (context.activity_id != activity_id or context.executor_id != executor_id
++                                    or context.operation_id != tool_action.operation_id
++                                    or context.execution_generation != outcome.generation):
++                                raise ManagerControlError("business identity mismatch")
++                            decode_tool_receipt(outcome.tool_receipt, context, run_tag, tool_action)
++                        elif (one_call is not None or tool_action is not None) and outcome.state == "settled":
+                             raise ManagerControlError("missing business receipt")
+     except BaseException as exc:
+         outcome = None
+--- pre/app_worker_session.py
++++ backend/app/worker/session.py
+@@ -14,8 +14,9 @@
+ 
+ from .command import WorkerCommand
+ from .one_call import OneCallInput, decode_receipt, validate_identity, worker_request
++from .one_tool import decode_tool_receipt, worker_request_tool
+ from .supervisor_ipc import NamedMapping
+-from app.capabilities.contracts import CallContext
++from app.capabilities.contracts import CallContext, ToolExecutionInput
+ from .windows_job import (
+     ActivityMutex, ERROR_FILE_NOT_FOUND, JobOpenError, JobUnknown,
+     NamedJob, current_process_session_id, job_name,
+@@ -94,6 +95,8 @@
+     running_owner_session_id: int | None = None
+     worker_created_100ns: int | None = None
+     model_receipt: dict | None = field(default=None, repr=False)
++    # G5：工具回执默认 None 且 repr 隐藏；model_receipt 在工具路径必须 None。
++    tool_receipt: dict | None = field(default=None, repr=False)
+ 
+ 
+ class _StopSession(Exception):
+@@ -136,12 +139,13 @@
+         run_tag: str,
+         manager_deadline_ns: int,
+         one_call: OneCallInput | None = None,
++        tool_action: ToolExecutionInput | None = None,
+     ) -> SessionOutcome:
+         # 产品调用只经 launcher.run_supervised_window；此方法供子进程与纯替身测试。
+         if type(command) is not WorkerCommand:
+             raise TypeError("SUP只接受已校验的WorkerCommand纯数据")
+         if command.task == "one_call":
+-            if type(one_call) is not OneCallInput:
++            if type(one_call) is not OneCallInput or tool_action is not None:
+                 raise ValueError("one_call requires explicit data")
+             validate_identity(activity_id, executor_id, one_call.operation_id, run_tag)
+             if one_call.request.input_result is not None and one_call.request.input_result.activity_id != activity_id:
+@@ -153,8 +157,17 @@
+                 raise ValueError("one_call request timeout exceeds 120s limit")
+             if one_call.service.timeout_seconds > self.config.request_timeout_seconds:
+                 raise ValueError("model timeout exceeds session")
+-        elif one_call is not None:
+-            raise ValueError("idle cannot carry one_call data")
++        elif command.task == "one_tool":
++            if type(tool_action) is not ToolExecutionInput or one_call is not None:
++                raise ValueError("one_tool requires explicit data")
++            validate_identity(activity_id, executor_id, tool_action.operation_id, run_tag)
++            tool_action.to_wire()
++            # 工具配置在 claim 前早拒：超 120 秒或无法满足原余量不等式不进入
++            # 预扣；纯参数/协议非法同样在 launcher/SUP 早拒，无工具执行。
++            if self.config.request_timeout_seconds > 120:
++                raise ValueError("tool request timeout exceeds 120s limit")
++        elif one_call is not None or tool_action is not None:
++            raise ValueError("idle cannot carry business data")
+         if not run_tag or len(run_tag) > 64 or not run_tag.isascii() or not run_tag.replace("-", "").replace("_", "").isalnum():
+             raise ValueError("run_tag须是受限非空ASCII标识")
+         identity_name = job_name(activity_id, 0)  # 在任何副作用前验证 UUID。
+@@ -187,6 +200,7 @@
+         interrupted: BaseException | None = None
+         exchange = None
+         model_receipt = None
++        tool_receipt = None
+ 
+         local_owner = _local_lock(activity_id)
+         if not local_owner.acquire(blocking=False):
+@@ -271,14 +285,22 @@
+                 raise _StopSession
+ 
+             self._remaining(manager_deadline_ns)
+-            if one_call is not None:
++            if one_call is not None or tool_action is not None:
+                 exchange = NamedMapping.create("Local\\RetroLume.SUP." + secrets.token_hex(16))
+-                exchange.write_request(worker_request(one_call, {
++                ledger_data = {
+                     "dsn": self.ledger._dsn,
+                     "connect_timeout_seconds": self.ledger._connect_timeout,
+                     "statement_timeout_ms": self.ledger._statement_timeout_ms,
+                     "lock_timeout_ms": self.ledger._lock_timeout_ms,
+-                }, lease, run_tag, stop_ns, config.request_timeout_seconds))
++                }
++                if tool_action is not None:
++                    exchange.write_request(worker_request_tool(
++                        tool_action, ledger_data, lease, run_tag, stop_ns,
++                        config.request_timeout_seconds))
++                else:
++                    exchange.write_request(worker_request(
++                        one_call, ledger_data, lease, run_tag, stop_ns,
++                        config.request_timeout_seconds))
+             job = NamedJob.create(activity_id, lease.execution_generation)
+             created_job = True
+             name = job.name
+@@ -310,14 +332,22 @@
+                 raise _StopSession
+             if exchange is not None:
+                 candidate = exchange.read_result()
+-                context = CallContext(activity_id=activity_id, executor_id=executor_id,
+-                                      operation_id=one_call.operation_id,
+-                                      execution_generation=lease.execution_generation,
+-                                      scope_revision=lease.scope_revision)
+-                decoded = decode_receipt(candidate, context, run_tag)
+-                if decoded.provider != one_call.service.provider or decoded.configured_model != one_call.service.model:
+-                    raise ValueError("model configuration receipt mismatch")
+-                model_receipt = candidate
++                if tool_action is not None:
++                    context = CallContext(activity_id=activity_id, executor_id=executor_id,
++                                          operation_id=tool_action.operation_id,
++                                          execution_generation=lease.execution_generation,
++                                          scope_revision=lease.scope_revision)
++                    decode_tool_receipt(candidate, context, run_tag, tool_action)
++                    tool_receipt = candidate
++                else:
++                    context = CallContext(activity_id=activity_id, executor_id=executor_id,
++                                          operation_id=one_call.operation_id,
++                                          execution_generation=lease.execution_generation,
++                                          scope_revision=lease.scope_revision)
++                    decoded = decode_receipt(candidate, context, run_tag)
++                    if decoded.provider != one_call.service.provider or decoded.configured_model != one_call.service.model:
++                        raise ValueError("model configuration receipt mismatch")
++                    model_receipt = candidate
+                 exchange.close()
+                 exchange = None
+             # 树已确认0且主进程成功；先关闭自身全部Job/进程句柄，避免
+@@ -402,6 +432,7 @@
+             running_owner_session_id=session_id if lease is not None else None,
+             worker_created_100ns=worker_created_100ns,
+             model_receipt=model_receipt,
++            tool_receipt=tool_receipt,
+         )
+         if interrupted is not None:
+             interrupted.session_outcome = result
+--- pre/app_worker_supervisor_main.py
++++ backend/app/worker/supervisor_main.py
+@@ -16,15 +16,24 @@
+ from .session import SessionConfig, SingleWindowSupervisor
+ from .supervisor_ipc import NamedMapping
+ from .one_call import OneCallInput, validate_identity
++from app.capabilities.contracts import ToolExecutionInput
+ 
+ 
+ _RUN_TAG = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
+ 
++_OUTER2_REQUEST_FIELDS = {"protocol", "mapping_name", "activity_id", "executor_id",
++                          "run_tag", "deadline_ns", "command", "config", "ledger", "one_call"}
++_OUTER3_REQUEST_FIELDS = {"protocol", "mapping_name", "activity_id", "executor_id",
++                          "run_tag", "deadline_ns", "command", "config", "ledger", "tool_action"}
++
+ 
+ def _validated_request(value: dict, mapping_name: str):
+-    if (type(value) is not dict or set(value) != {"protocol", "mapping_name", "activity_id", "executor_id",
+-            "run_tag", "deadline_ns", "command", "config", "ledger", "one_call"}
+-            or value.get("protocol") != 2 or value.get("mapping_name") != mapping_name):
++    if type(value) is not dict or value.get("mapping_name") != mapping_name:
++        raise ValueError("SUP request identity mismatch")
++    protocol = value.get("protocol")
++    if type(protocol) is not int or protocol not in (2, 3):
++        raise ValueError("SUP request identity mismatch")
++    if set(value) != (_OUTER2_REQUEST_FIELDS if protocol == 2 else _OUTER3_REQUEST_FIELDS):
+         raise ValueError("SUP request identity mismatch")
+     activity_id = value.get("activity_id")
+     executor_id = value.get("executor_id")
+@@ -55,6 +64,14 @@
+     ledger = PostgresAdmissionLedger(**ledger_data)
+     config = SessionConfig(**config_data)
+     command = WorkerCommand(**command_data)
++    if protocol == 2 and command.task not in ("idle", "one_call"):
++        raise ValueError("protocol/command mismatch")
++    if protocol == 3 and command.task != "one_tool":
++        raise ValueError("protocol/command mismatch")
++    if protocol == 3:
++        tool_action = ToolExecutionInput.from_wire(value["tool_action"])
++        validate_identity(activity_id, executor_id, tool_action.operation_id, run_tag)
++        return ledger, config, activity_id, executor_id, command, run_tag, deadline_ns, None, tool_action
+     one_call = OneCallInput.from_wire(value["one_call"]) if value["one_call"] is not None else None
+     if command.task == "one_call":
+         if one_call is None:
+@@ -64,7 +81,7 @@
+             raise ValueError("input result activity mismatch")
+     elif one_call is not None:
+         raise ValueError("unexpected business data")
+-    return ledger, config, activity_id, executor_id, command, run_tag, deadline_ns, one_call
++    return ledger, config, activity_id, executor_id, command, run_tag, deadline_ns, one_call, None
+ 
+ 
+ def main() -> int:
+@@ -73,7 +90,7 @@
+     mapping = None
+     try:
+         mapping = NamedMapping.open_existing(sys.argv[1])
+-        ledger, config, activity_id, executor_id, command, run_tag, deadline_ns, one_call = _validated_request(
++        ledger, config, activity_id, executor_id, command, run_tag, deadline_ns, one_call, tool_action = _validated_request(
+             mapping.read_request(), sys.argv[1],
+         )
+         with asyncio.Runner(loop_factory=psycopg_compatible_loop_factory) as runner:
+@@ -81,9 +98,16 @@
+                 activity_id, executor_id, command, run_tag=run_tag,
+                 manager_deadline_ns=deadline_ns,
+                 one_call=one_call,
++                tool_action=tool_action,
+             ))
+-        mapping.write_result({"protocol": 2, "run_tag": run_tag, "activity_id": activity_id,
+-                              "outcome": asdict(outcome)})
++        protocol = 3 if command.task == "one_tool" else 2
++        data = asdict(outcome)
++        if protocol == 2:
++            # 外2精确旧字段集：排除新tool_receipt。
++            if data.pop("tool_receipt") is not None:
++                raise ValueError("protocol 2 outcome carries tool receipt")
++        mapping.write_result({"protocol": protocol, "run_tag": run_tag, "activity_id": activity_id,
++                              "outcome": data})
+         return 0
+     except BaseException:
+         # No traceback containing a DSN; the parent reports unknown and stops work.
+--- pre/app_worker_worker_main.py
++++ backend/app/worker/worker_main.py
+@@ -17,6 +17,7 @@
+ from .supervisor_ipc import NamedMapping
+ from app.activities import PostgresAdmissionLedger
+ from app.capabilities.gateway import ControlledModelGateway
++from app.capabilities.tool_execution import ControlledToolExecutor
+ from app.runtime import psycopg_compatible_loop_factory
+ 
+ 
+@@ -34,9 +35,9 @@
+         await gate.close(timeout_seconds=drain_timeout_seconds)
+ 
+ 
+-async def run_internal_task(gateway: Any, task: str, context=None, request=None, *, call_seconds=1.0):
++async def run_internal_task(gateway: Any, task: str, context=None, request=None, *, call_seconds=1.0, tool_call=None):
+     """The injected gateway is only handed to work through ClosingCallGate."""
+-    if task not in ("idle", "one_call"):
++    if task not in ("idle", "one_call", "one_tool"):
+         raise ValueError("unsupported internal worker task")
+ 
+     async def idle(_gate: ClosingCallGate) -> None:
+@@ -49,8 +50,16 @@
+         async with asyncio.timeout(call_seconds):
+             result = await gate.call(context, request)
+ 
++    async def one_tool(gate: ClosingCallGate) -> None:
++        nonlocal result
++        if context is None or tool_call is None:
++            raise ValueError("one_tool requires context and input")
++        async with asyncio.timeout(call_seconds):
++            result = await gate.call(context, tool_call)
++
+     result = None
+-    await run_controlled_worker(gateway, one_call if task == "one_call" else idle, drain_timeout_seconds=1.0)
++    work = {"one_call": one_call, "one_tool": one_tool}.get(task, idle)
++    await run_controlled_worker(gateway, work, drain_timeout_seconds=1.0)
+     return result
+ 
+ 
+@@ -66,17 +75,33 @@
+     return receipt(result, context, value["run_tag"])
+ 
+ 
++async def execute_one_tool(value):
++    from .one_tool import decode_tool_worker_request, tool_receipt
++    call, context = decode_tool_worker_request(value)
++    ledger = PostgresAdmissionLedger(**value["ledger"])
++    executor = ControlledToolExecutor(ledger)
++    # 整体工具call（准入/执行/记账）受同一单调截止；不含网络或子进程。
++    seconds = min(value["call_seconds"], (value["stop_ns"] - time.monotonic_ns()) / 1e9 - 0.25)
++    if seconds <= 0:
++        raise ValueError("tool call window expired")
++    result = await run_internal_task(executor, "one_tool", context, tool_call=call, call_seconds=seconds)
++    return tool_receipt(result, context, value["run_tag"])
++
++
+ def main() -> int:
+     mapping = None
+     try:
+         if sys.argv[1:] == ["idle"]:
+             return 0
+-        if len(sys.argv) != 3 or sys.argv[1] != "one_call":
++        if len(sys.argv) != 3 or sys.argv[1] not in ("one_call", "one_tool"):
+             return 2
+         mapping = NamedMapping.open_existing(sys.argv[2])
+         value = mapping.read_request()
+         with asyncio.Runner(loop_factory=psycopg_compatible_loop_factory) as runner:
+-            result = runner.run(execute_one_call(value))
++            if sys.argv[1] == "one_tool":
++                result = runner.run(execute_one_tool(value))
++            else:
++                result = runner.run(execute_one_call(value))
+         mapping.write_result(result)
+         return 0
+     except BaseException:
+--- pre/tests_test_activity_continuation.py
++++ backend/tests/test_activity_continuation.py
+@@ -65,7 +65,8 @@
+         svc=ActivityService(Broken());self.assertEqual((await svc.resume_result(str(uuid4()),'P')).status,'read_unavailable')
+     async def test_service_composes_assistant_user_and_waits_cancelled_thread(self):
+         fmt,payload,sha=build_business_payload(json_object={'parent':'低信任历史'})
+-        a=str(uuid4());snap=CommittedResultSnapshot(a,'P',ResultReadStatus.COMMITTED_CURRENT,scope_revision=1,payload_format=fmt,payload=payload,payload_sha256=sha)
++        # kind由权威投影携带（TASK-092）；合成model父快照必须如实带model。
++        a=str(uuid4());snap=CommittedResultSnapshot(a,'P',ResultReadStatus.COMMITTED_CURRENT,scope_revision=1,payload_format=fmt,payload=payload,payload_sha256=sha,kind='model')
+         class ReadLedger:
+             _bounded_name=staticmethod(PostgresAdmissionLedger._bounded_name)
+             async def read_committed_result(self,activity,key):
+@@ -87,7 +88,7 @@
+         req=captured[0];self.assertEqual([m.role for m in req.messages],['assistant','user']);self.assertEqual(req.messages[0].content,'{"parent":"低信任历史"}');self.assertFalse(req.allowed_tools)
+     def current_parent_ledger(self):
+         a=str(uuid4());fmt,payload,sha=build_business_payload(json_object={'parent':'low trust'})
+-        snap=CommittedResultSnapshot(a,'P',ResultReadStatus.COMMITTED_CURRENT,scope_revision=1,payload_format=fmt,payload=payload,payload_sha256=sha)
++        snap=CommittedResultSnapshot(a,'P',ResultReadStatus.COMMITTED_CURRENT,scope_revision=1,payload_format=fmt,payload=payload,payload_sha256=sha,kind='model')
+         class ReadLedger:
+             _bounded_name=staticmethod(PostgresAdmissionLedger._bounded_name)
+             def __init__(self):self.reads=[]
+@@ -146,7 +147,7 @@
+         class ReadLedger:
+             _bounded_name=staticmethod(PostgresAdmissionLedger._bounded_name)
+             async def read_committed_result(self,activity,key):
+-                return CommittedResultSnapshot(a,key,ResultReadStatus.COMMITTED_CURRENT if key=='P' else ResultReadStatus.NO_OPERATION,scope_revision=1,payload_format=fmt,payload=payload,payload_sha256=sha)
++                return CommittedResultSnapshot(a,key,ResultReadStatus.COMMITTED_CURRENT if key=='P' else ResultReadStatus.NO_OPERATION,scope_revision=1,payload_format=fmt,payload=payload,payload_sha256=sha,kind='model' if key=='P' else None)
+         with patch('app.worker.one_call.run_one_call') as invoke:
+             outcome=await ActivityService(ReadLedger()).continue_from_result(a,'P','Q','followup',service(max_request_bytes=65536),SessionConfig(),'executor','run090')
+             self.assertEqual(outcome.status,'input_too_large');invoke.assert_not_called()
+--- pre/tests_test_activity_results.py
++++ backend/tests/test_activity_results.py
+@@ -357,6 +357,8 @@
+                    returned_model="m" * 128, remote_request_id="r" * 128,
+                    prompt_tokens=1, completion_tokens=1, response_bytes=1,
+                    payload_format="text", payload_sha256="a" * 64,
++                   kind="model", tool_call_id=None, arguments_sha256=None, tool_names=[],
++                   payload=None,
+                    committed_at=datetime(2026, 9, 29, tzinfo=timezone.utc),
+                    activity_status_now="pending", activity_scope_revision_now=1,
+                    binding_consistent=True, scope_current=True, sources_valid=True)
+@@ -432,9 +434,12 @@
+                 for commit in ("committed", "unconfirmed", "not_committed"):
+                     item = json.loads(json.dumps(good))
+                     item["business_commit"] = commit
++                    data = asdict(SessionOutcome("run-089", "settled", _context().activity_id,
++                                generation=2, model_receipt=item))
++                    # 外2精确旧字段集：排除新tool_receipt（TASK-092）。
++                    data.pop("tool_receipt")
+                     outer = {"protocol": 2, "run_tag": "run-089", "activity_id": _context().activity_id,
+-                             "outcome": asdict(SessionOutcome("run-089", "settled", _context().activity_id,
+-                                generation=2, model_receipt=item))}
++                             "outcome": data}
+                     recovered = _decode_outcome(json.loads(json.dumps(outer)), "run-089", _context().activity_id)
+                     if commit == expected:
+                         decode_receipt(item, _context(), "run-089")
+--- pre/tests_test_worker_one_call.py
++++ backend/tests/test_worker_one_call.py
+@@ -137,8 +137,10 @@
+             outcome=SessionOutcome("run","settled",ctx.activity_id,generation=ctx.execution_generation,model_receipt=original)
+             self.assertNotIn("synthetic-answer",repr(outcome))
+             self.assertNotIn("answer",repr(outcome))
++            # 外2使用冻结旧字段集：序列化排除新tool_receipt并补默认（TASK-092）。
++            outer=json.loads(json.dumps(asdict(outcome)));outer.pop("tool_receipt")
+             recovered=_decode_outcome(json.loads(json.dumps({"protocol":2,"run_tag":"run",
+-                "activity_id":ctx.activity_id,"outcome":asdict(outcome)})),"run",ctx.activity_id)
++                "activity_id":ctx.activity_id,"outcome":outer})),"run",ctx.activity_id)
+             self.assertEqual(json.loads(json.dumps(asdict(recovered))),json.loads(json.dumps(asdict(outcome))))
+ 
+     def test_new_sources_compile_without_pyc(self):
+@@ -264,7 +266,9 @@
+         cfg=SessionConfig()
+         call=OneCallInput("op",request(),service())
+         value=_request(ledger,cfg,str(uuid4()),"executor",WorkerCommand("one_call"),"run",name,time.monotonic_ns()+10**10,call)
+-        self.assertEqual(_validated_request(value,name)[-1].operation_id,"op")
++        decoded=_validated_request(value,name)
++        self.assertEqual(decoded[7].operation_id,"op")
++        self.assertIsNone(decoded[8])
+         for mutate in (lambda x:x.update(protocol=1),lambda x:x.update(extra=1),lambda x:x.update(one_call=None)):
+             item=json.loads(json.dumps(value));mutate(item)
+             with self.assertRaises(ValueError): _validated_request(item,name)

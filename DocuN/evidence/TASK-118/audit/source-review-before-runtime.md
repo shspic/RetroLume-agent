@@ -1,0 +1,14 @@
+# TASK-118 原始运行证据读取前的源码事实
+
+记录于独审 2026-10-17 首活动段。先读取116原始合同、有效需求、X02更正，再据184份匹配preimage与当前原文件重建差异。未读取TASK117结果正文、聊天、记忆或自评。本文件只是独立观察，不预先判断运行通过。
+
+- 256组冻结身份匹配。初次元数据程序将不存在文件的bytes表示为null，与原件0造成8个假不匹配；改为相同0语义后重核零差异，首轮输出留存read文本。
+- Embedding在独立typed配置、wire4、凭证kind、007封闭值和canonical float32上有明确分流。当前014 SHA256为3a919b2562ded5765de132519b841c1d1439c65c001795cfbd608cbc03586e78，与registry一致。
+- 两provider实际生产准入均先进入_outbound_lock，固定全局锁及真实activities SUM在同一事务内先于source/memory/activity，再完成原子预扣。后续运行证据不能仅因使用同一函数就称真实PG写账组合已证。
+- ControlHub._current_snapshot读取完整当前字节、文件身份和digest，防止缓存掩盖同size/mtime篡改，且返回JSON副本。commit、create_or_get_job、change_job仍直接_read/replay，无首hub.init的control_id与当前实例身份检查。需区别快照查询正确与持锁写入口的身份复核缺口；不运行产品验证。
+- OutboundSourceManifest.check_model只核catalog中的资料片段和源身份，不核实际模型消息里的目标、作答、历史或learning_background是否属于已批准合成内容。后续Q条件配置不等于该生产路径已覆盖synthetic-only边界；需沿真实消息装配确认具体触发。
+- RetrievalPanel只显示向量用途/次数/费用，没有显示status提供的provider/model；两领域组件也无供应商字段展示。活动旧learning框显示DeepSeek，不覆盖新索引和两域向量动作的供应商告知。
+- TeachingWorkspace新增query→domain链的stillCurrent只含mounted/activity/contextKey，contextKey不含view_token或scope/head revision；InterviewWorkspace对新增链明确绑定view_token。需核旧U证据实际覆盖哪一分支，不能把服务端拒绝等同客户端不发下一POST。
+- 新_end_recovered_owned严格比对preview/native registry/parent birth/generation/boot和proof的CID/image/nonce，但未直接比较owned.origin与原数据scope。由原登记与正常recover调用链能否充分推导原scope需要进一步核证，当前仅记录边界，不把假设写成已发生误杀。
+- 隔离reader从受信本地配置接目标，无HTTP任意DSN入口；先核只读角色、目标dataset/instance/profile、真实写拒绝，再装配无source/factory/maintenance/preview的壳。正式selector和隔离reader不混称。
+- start_local实现正常重开、精确CID和自有stdin关闭，没有原116设计建议的--profile/--initialize/--migrate及启动前端口分类代码。应结合实际后续合同/明确非自动迁移边界判断交付缺口，不把合成runner的前置门冒产品能力。

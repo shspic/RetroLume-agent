@@ -1,0 +1,12 @@
+--- pre/backend/app/worker/worker_main.py
++++ post/backend/app/worker/worker_main.py
+@@ -1,4 +1,8 @@
+-"""固定worker入口；一次模型调用，正文回执不提交业务成果。"""
++"""固定worker入口；一次模型调用，正文与 received 终态在 record_outcome 同事务提交。
++
++G3 协议3：回执仅身份/状态/hash（text/json_object 恒 None），正文从持久层读取；
++business_commit 三值 committed/unconfirmed/not_committed。
++"""
+ 
+ from __future__ import annotations
+ 

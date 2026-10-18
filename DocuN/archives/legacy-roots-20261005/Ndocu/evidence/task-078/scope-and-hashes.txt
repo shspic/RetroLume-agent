@@ -1,0 +1,43 @@
+TASK-078 / R-072 独立审计证据记录（读取范围、hash、diff 清单、独立性）
+
+日期：2026-09-22
+审计者：独立审计 Agent（Work Buddy，全新隔离会话，未参与 TASK-077 实现）
+
+一、冻结 hash 核验（全部一致，无漂移）
+backend/app/activities/repository.py
+33b733e66fcabb7a86edf9c6080051c55ecb1294042d60b6afa176a13dffa57e 一致
+backend/app/activities/__init__.py
+6bdb960912ea3fc7ddd8730f37a44e580b73768e1067d23facc9983ca04a46dd 一致
+backend/migrations/004_activities_time_budget.sql
+1501e1f1dd38770eceaf26430882a62e9bac8fdfec41d6303c8531ef0654db6b 一致
+backend/tests/test_activity_time_budget.py
+a4e3070eb2137da8feb28a67161f391bd9568264189410cf97c52f966bea5ab4 一致
+backend/tests/test_activity_ledger.py
+fb174d4c29355bb0e57ac013d4e8555ef9ac342e9be804e0edbf732112de63da 一致
+backend/tests/test_activity_recovery.py
+93ab4e2c5a481dc7b880ef7c8e696b9ac4981e7e52938b095f12a8fb8ebd3cba 一致
+
+二、旁证（只读）
+backend/migrations/001_materials.sql mtime 2026-09-12 00:22:07，sha256 前缀 767f47c331ba1e03
+backend/migrations/002_activities.sql mtime 2026-09-14 04:47:42，sha256 前缀 3a9c5855aa9ddc54
+backend/migrations/003_pdf_review.sql mtime 2026-09-14 13:00:16，sha256 前缀 1ac29bafe58348a0
+仅 004_activities_time_budget.sql 为 2026-09-22 09:26:27 新增；001/002/003 未改动。
+全仓 grep（backend/app）：ActivitySpec( / claim_lease( / ActivityLease( / settle_execution_window( 仅出现在 activities/repository.py；签名变化仅影响测试调用方，无生产接线。
+
+三、读取范围
+1. 根 AGENTS.md（入口注入）、docu/AGENTS.MD（入口注入）。
+2. Ndocu/tasks/TASK-077.md 完整原合同。
+3. docu/PROJECT_ARCHITECTURE.MD 第 44–63 行（FLOW-005 与 2026-09-22 时间账本批准增量、R-071 候选段）。
+4. 当前源码：repository.py 全文、__init__.py 全文、004 迁移全文、三个测试文件全文。
+5. 前置副本：Ndocu/evidence/task-077/pre/ 四个文件。
+6. 未读：Ndocu/results/TASK-077-result.md、077 自评、执行聊天、077 推理记录。
+
+四、生成物（本目录内，只读 diff + hash）
+diff-repository.txt（282 行统一 diff）
+diff-init.txt（18 行）
+diff-ledger.txt（30 行）
+diff-recovery.txt（33 行）
+
+五、独立性披露
+会话为全新隔离会话，未参与 077 实现。审计中按卡内授权读取了 PROJECT_ARCHITECTURE.MD 批准边界段，其中包含 Work 对 R-071 候选状态的简要记录（非 077 自评原文、非 077 结果文档）；该段仅用于确认批准边界，全部审查结论均基于源码与 004 独立复核，未受其影响。除此之外无偶然暴露。
+未运行任何代码、compile、unittest、PG、Docker、EXPLAIN；未联网、未装依赖、未 Git 提交、未修改产品/测试/迁移/正式 docu/旧证据。

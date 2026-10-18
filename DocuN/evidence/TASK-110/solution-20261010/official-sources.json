@@ -1,0 +1,105 @@
+{
+  "task": "TASK-110",
+  "round": "R-104",
+  "date_local": "2026-10-10",
+  "read_only": true,
+  "unique_official_resources_attempted": 8,
+  "successful_resources": 7,
+  "failed_resources": 1,
+  "official_source_files_attempted": 4,
+  "official_source_files_read": 3,
+  "native_candidates": 2,
+  "output_contract_directions": 1,
+  "web_tool_calls": 4,
+  "finds_within_already_read_resources": 9,
+  "research_first_clock_utc": "2026-10-09 17:17:35 UTC",
+  "research_end_clock_utc": "2026-10-09 17:21:48 UTC",
+  "research_wall_seconds_conservative": 253,
+  "research_cap_seconds": 2400,
+  "commit_boundary": "未获取这些移动分支的 commit；公开源只支持 API 范围判别，不用作将来构建身份或固定151已验证声明",
+  "sources": [
+    {
+      "id": "S1",
+      "url": "https://raw.githubusercontent.com/chromiumembedded/cef/master/include/cef_request_handler.h",
+      "kind": "官方源码文件1",
+      "status": "read",
+      "version": "CEF master 在线快照，commit未核",
+      "scope": "第2—28行许可，第74—115行导航回调，第118—142行资源入口",
+      "api": "CefRequestHandler::OnBeforeBrowse；CefRequestHandler::OnOpenURLFromTab",
+      "short_excerpt": "Return true to cancel the navigation",
+      "facts": "UI线程同步bool决定；OnBeforeBrowse true取消、false继续；另有有限场景OnOpenURLFromTab。头文件没有全体同文档fragment和动态frame创建前覆盖保证。",
+      "license": "头部为BSD三条款式许可；未核全部CEF/Chromium第三方许可证"
+    },
+    {
+      "id": "S2",
+      "url": "https://raw.githubusercontent.com/chromiumembedded/cef/master/include/cef_life_span_handler.h",
+      "kind": "官方源码文件2",
+      "status": "read",
+      "version": "CEF master 在线快照，commit未核",
+      "scope": "第53—110行；第149—162行用于区分通知和不同入口",
+      "api": "CefLifeSpanHandler::OnBeforePopup",
+      "short_excerpt": "To cancel creation of the popup browser return true.",
+      "facts": "UI线程、新popup browser创建前同步bool；true取消、false允许。它不是所有renderer子frame创建的回调，也不等于OnAfterCreated通知。"
+    },
+    {
+      "id": "S3",
+      "url": "https://doc.qt.io/qt-6/qwebenginepage.html",
+      "resolved_url": "https://doc-snapshots.qt.io/qtwebengine/qwebenginepage.html",
+      "kind": "官方文档页",
+      "status": "read",
+      "version": "页面报告Qt WebEngine 6.140.0 / 6.140 branch在线快照；不冒充项目已安装版本",
+      "scope": "acceptNavigationRequest第582—589行、createWindow第623—633行、newWindowRequested第811—818行",
+      "api": "QWebEnginePage::acceptNavigationRequest；QWebEnginePage::createWindow",
+      "short_excerpt": "This function is not called for fragment navigation on the same page.",
+      "facts": "acceptNavigationRequest同步bool，false拒绝该导航请求，含main/child标志，但同页fragment明确不调用。createWindow返回QWebEnginePage指针或null，null并不单独禁止newWindowRequested后续处理；应用还须不调用openIn。没有全体dynamic child创建前覆盖证明。"
+    },
+    {
+      "id": "S4",
+      "url": "https://raw.githubusercontent.com/chromiumembedded/cef/master/libcef/browser/navigation_throttle.cc",
+      "kind": "官方源码文件3尝试",
+      "status": "failed",
+      "failure": "web工具返回Internal Error；计入页数和源码文件额度；没有重试或采用替代源码",
+      "facts": "未读正文，不能声称CEF当前内部调用链已核"
+    },
+    {
+      "id": "S5",
+      "url": "https://raw.githubusercontent.com/chromium/chromium/main/content/public/browser/navigation_throttle.h",
+      "kind": "官方源码文件4",
+      "status": "read",
+      "version": "Chromium main在线快照，commit未核；不是固定151源码",
+      "scope": "第18—23、29—71、136—196行",
+      "api": "content::NavigationThrottle::WillStartRequest；WillCommitWithoutUrlLoader",
+      "short_excerpt": "Renderer-initiated non-history same-document navigations do NOT go through this path",
+      "facts": "UI线程ThrottleCheckResult有取消/忽略或延迟决定。WillCommitWithoutUrlLoader需单独注册且明确排除renderer发起的非history同文档路径，该路径在renderer同步完成后才通知browser。单加browser-process throttle不支持本卡全部前置承诺。",
+      "limits": "不能据此证明CEF具体版本必然沿同一实现；CEF内部锚仍未核"
+    },
+    {
+      "id": "S6",
+      "url": "https://doc.qt.io/qt-6/qtwebengine-licensing.html",
+      "resolved_url": "https://doc-snapshots.qt.io/qtwebengine/qtwebengine-licensing.html",
+      "kind": "官方许可文档页",
+      "status": "read",
+      "version": "Qt WebEngine 6.140.0在线快照",
+      "scope": "第16—23行",
+      "facts": "须同时遵守Qt部分和Chromium部分许可。页面列商业或LGPLv3/GPLv3/GPLv2等Qt许可选择及Chromium第三方义务。没有作具体发行合规裁定。"
+    },
+    {
+      "id": "S7",
+      "url": "https://html.spec.whatwg.org/multipage/browsing-the-web.html",
+      "kind": "官方规范页",
+      "status": "read",
+      "version": "WHATWG HTML Living Standard在线快照",
+      "scope": "第352、935—940、1229—1245行同文档/URL与历史更新说明",
+      "facts": "URL/历史更新和fragment存在同步同文档路径；不把不换loader或不请求网络当作未发生URL变化。规范术语与本项目更广禁止项分别记录。"
+    },
+    {
+      "id": "S8",
+      "url": "https://dom.spec.whatwg.org/",
+      "kind": "官方规范页",
+      "status": "read",
+      "version": "WHATWG DOM Living Standard在线快照",
+      "scope": "第2552—2565行string replace all及textContent",
+      "facts": "对普通Element设置textContent时创建文本节点而不是HTML解析。方案仍须固定非script/nonstyle节点及禁止动态危险属性；仅引用该规范不构成整个编译器安全证明。"
+    }
+  ]
+}

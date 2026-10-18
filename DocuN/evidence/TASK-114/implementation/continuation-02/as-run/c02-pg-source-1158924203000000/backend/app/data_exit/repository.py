@@ -1,0 +1,65 @@
+"""源控制元数据的固定函数适配，不维护长期操作权威。"""
+from contextlib import contextmanager
+from .contracts import DataError, VIEWS
+
+
+class DataRepository:
+    def __init__(self, dsn):
+        if not dsn: raise DataError("storage_unavailable", 503)
+        self._dsn = dsn
+
+    @contextmanager
+    def connection(self, *, readonly=False, repeatable=False, operation=None):
+        import psycopg
+        from psycopg.rows import dict_row
+        try:
+            manager = operation.connection(self._dsn, row_factory=dict_row) if operation is not None else psycopg.connect(self._dsn, connect_timeout=3, row_factory=dict_row)
+            with manager as connection:
+                if readonly:
+                    connection.execute("BEGIN ISOLATION LEVEL " + ("REPEATABLE READ" if repeatable else "READ COMMITTED") + " READ ONLY")
+                if operation is None:
+                    connection.execute("SET LOCAL statement_timeout='30s'")
+                    connection.execute("SET LOCAL lock_timeout='3s'")
+                connection.execute("SET LOCAL idle_in_transaction_session_timeout='60s'")
+                from .schema_checks import assert_data_schema_sync
+                assert_data_schema_sync(connection)
+                yield connection
+        except psycopg.Error:
+            raise DataError("storage_unavailable", 503) from None
+
+    def state(self):
+        with self.connection(readonly=True) as connection:
+            state = connection.execute("SELECT public.data_state() AS value").fetchone()["value"]
+        if not isinstance(state, dict): raise DataError("mode_unknown", 503)
+        return state
+
+    def safe_state(self):
+        with self.connection(readonly=True) as connection:
+            row = connection.execute("SELECT * FROM public.data_export_control_v1").fetchone()
+        if row is None: raise DataError("mode_unknown", 503)
+        return row
+
+    def observe_job(self, receipt):
+        from psycopg.types.json import Jsonb
+        with self.connection() as connection:
+            connection.execute("SELECT public.data_observe_job(%s)", (Jsonb(receipt),))
+
+    def latest(self, operation=None):
+        from .codec import plain
+        try:
+            with self.connection(readonly=True, repeatable=True, operation=operation) as connection:
+                point = connection.execute("SELECT CURRENT_TIMESTAMP AS utc,pg_current_snapshot()::text AS snapshot").fetchone()
+                control=plain(connection.execute('SELECT * FROM public.data_export_control_v1').fetchone())
+                tombstones = plain(connection.execute("SELECT * FROM public.data_export_tombstones_v1 ORDER BY entity_kind,entity_id,effective_revision").fetchall())
+                accounting = plain(connection.execute("""SELECT id,status,execution_generation,requests_reserved,cost_reserved_microunits,
+                    tools_reserved,running_reserved_seconds,running_settled_seconds,last_settled_generation,last_settled_seconds
+                    FROM public.activities ORDER BY id""").fetchall())
+                for row in accounting:
+                    for column in ('cost_reserved_microunits','running_reserved_seconds','running_settled_seconds','last_settled_seconds'):
+                        if row[column] is not None:row[column]=str(row[column])
+                previews = plain(connection.execute("SELECT activity_id,starts_used,settled_seconds,reserved_seconds FROM public.html_preview_budgets ORDER BY activity_id").fetchall())
+            return {"status": "known", "point": plain(point), 'source_control':control,"tombstones": tombstones,
+                    "accounting": accounting, "preview_accounting": previews}
+        except DataError:
+            if operation is not None: operation.check()
+            return {"status": "unknown", "tombstones": [], "accounting": None, "preview_accounting": None}

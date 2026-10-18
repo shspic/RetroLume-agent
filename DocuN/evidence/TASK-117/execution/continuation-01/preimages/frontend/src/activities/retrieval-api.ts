@@ -1,0 +1,31 @@
+import {canonical,dataFetch,dataNamespace} from '../data/context';
+
+export type RetrievalRef={business_key:string;query_sha256:string;space_id:string;result_sha256:string};
+export type RetrievalCommand={business_key:string;action:'source_index'|'query';expected_scope_revision:number;expected_domain_revision:number;query:string|null;confirmed:true};
+export type RetrievalReceipt={business_key:string;action:string;status:string;current:boolean;terminal_disposition:string|null;error_code:string|null;retrieval_ref?:RetrievalRef};
+export type RetrievalStatus={available:boolean;reason:string|null;ready?:boolean;fragments?:number;cached_fragments?:number;index_batches?:number;domain_revision?:number;purpose:string;reserve_cost_microunits:number};
+export type RetrievalChain={key:string;namespace:string;activity_id:string;owner:string;domain:'teaching'|'interview'|'index';domain_input:Record<string,unknown>;query:RetrievalCommand;domain_sent:boolean;receipt?:RetrievalReceipt;created_at:string};
+const base=(aid:string)=>`/api/activities/${encodeURIComponent(aid)}/retrieval`;
+export async function retrievalRequest<T>(token:string,aid:string,suffix:string,body?:unknown,guard=()=>true):Promise<T>{
+  if(!guard())throw new Error('页面身份已变化，未提交');
+  const response=await dataFetch(base(aid)+suffix,{method:body===undefined?'GET':'POST',headers:{'X-RetroLume-Session':token,...(body===undefined?{}:{'Content-Type':'application/json'})},body:body===undefined?undefined:canonical(body),cache:'no-store'});
+  if(!guard())throw new Error('页面身份已变化，保留原意图');
+  const value=await response.json();if(!guard())throw new Error('页面身份已变化，保留原意图');
+  if(!response.ok)throw new Error(value.detail?.message??'资料检索未完成，请核对原操作');return value;
+}
+async function database(){return new Promise<IDBDatabase>((resolve,reject)=>{const r=indexedDB.open(`retrolume-teaching:retrieval:${dataNamespace()}`,1);r.onupgradeneeded=()=>r.result.createObjectStore('chains',{keyPath:'key'});r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(new Error('本机意图不可写，未提交'));});}
+export async function storeRetrievalChain(row:RetrievalChain){
+  if(row.namespace!==dataNamespace())throw new Error('数据已切换，原意图保留');
+  const db=await database();try{await new Promise<void>((resolve,reject)=>{const tx=db.transaction('chains','readwrite');tx.objectStore('chains').put(row);tx.oncomplete=()=>resolve();tx.onabort=tx.onerror=()=>reject(new Error('本机意图不可写，未提交'));});}finally{db.close();}
+}
+export async function retrievalChains(aid:string){const db=await database();try{return await new Promise<RetrievalChain[]>((resolve,reject)=>{const r=db.transaction('chains').objectStore('chains').getAll();r.onsuccess=()=>resolve((r.result as RetrievalChain[]).filter(x=>x.activity_id===aid&&x.namespace===dataNamespace()));r.onerror=()=>reject(new Error('本机检索意图无法读取'));});}finally{db.close();}}
+export async function retrieveForCommand(token:string,aid:string,owner:string,domain:RetrievalChain['domain'],input:Record<string,unknown>,scope:number,revision:number,query:string,guard:()=>boolean,recovered?:RetrievalChain){
+  const row:RetrievalChain=recovered??{key:crypto.randomUUID(),namespace:dataNamespace(),activity_id:aid,owner,domain,domain_input:input,query:{business_key:crypto.randomUUID(),action:domain==='index'?'source_index':'query',expected_scope_revision:scope,expected_domain_revision:revision,query:domain==='index'?null:query.trim(),confirmed:true},domain_sent:false,created_at:new Date().toISOString()};
+  const live=()=>guard()&&row.namespace===dataNamespace();
+  if(!live()||row.owner!==owner||row.domain!==domain||row.domain_sent||row.query.expected_scope_revision!==scope||row.query.expected_domain_revision!==revision)throw new Error('原动作资格已变化，请只读核对');
+  await storeRetrievalChain(row);if(!live())throw new Error('页面身份已变化，未提交');
+  const receipt=await retrievalRequest<RetrievalReceipt>(token,aid,recovered?`/commands/${row.query.business_key}`:'/commands',recovered?undefined:row.query,live);
+  if(receipt.business_key!==row.query.business_key)throw new Error('检索回执身份不同');row.receipt=receipt;await storeRetrievalChain(row);
+  if(!live()||(domain==='index'?!['received','cache_ready'].includes(receipt.terminal_disposition??''):receipt.terminal_disposition!=='received'||!receipt.current||!receipt.retrieval_ref))throw new Error('检索尚无当前合格结果，后续动作未发送；请按原键核对');
+  return {row,ref:receipt.retrieval_ref};
+}

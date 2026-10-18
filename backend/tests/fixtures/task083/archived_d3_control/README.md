@@ -1,0 +1,7 @@
+# D3 回归测试夹具来源
+
+本目录三份 Python 文件原字节来自已归档的 TASK-083 d3-repair-11 证据，仅供 backend/tests/test_d3_runner_control.py 的既有替身、导入无资源副作用及重试判断检查使用。逐文件 SHA-256 见 DocuN/evidence/root-archive-20261005/asset-relocations.json。
+
+runner.py 保留原文、原资源身份与原预算，作为回归被测输入。它不是当前资源执行入口，不准因复制而重启历史容器或重新使用旧运行许可。其他已完结 TASK-083—090 runner 同样只作历史资料；需要重新执行时应由新有效合同单独处理实际路径与权限。
+
+归档原件在 D:/shspic/project_NO3_RetroLume-agent/DocuN/archives/legacy-roots-20261005/Ndocu/evidence/task-083/d3-repair-11/，没有改写。

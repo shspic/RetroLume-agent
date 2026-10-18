@@ -1,0 +1,10 @@
+--- first-pre/frontend/src/activities/teachingDrafts.ts
++++ current/frontend/src/activities/teachingDrafts.ts
+@@ -43,6 +43,7 @@
+     expected_goal_version: input.expected_goal_version,
+     expected_scope_revision: input.expected_scope_revision,
+     body: input.body,
++    ...(input.retrieval_ref?{retrieval_ref:input.retrieval_ref}:{}),
+   };
+   const request_body = canonical(requestBody);
+   const request_sha256 = await sha256Hex(request_body);

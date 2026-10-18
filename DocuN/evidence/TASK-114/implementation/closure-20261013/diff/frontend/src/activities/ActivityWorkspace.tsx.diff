@@ -1,0 +1,47 @@
+--- before/frontend/src/activities/ActivityWorkspace.tsx
++++ final/frontend/src/activities/ActivityWorkspace.tsx
+@@ -1,3 +1,4 @@
++import {dataFetch} from "../data/context";
+ import { useCallback, useEffect, useRef, useState } from "react";
+ import "./activity-workspace.css";
+ import { isLearningDocument, LearningResult } from "./LearningResult";
+@@ -50,8 +51,8 @@
+   recorded_at: string | null; prompt_tokens: number | null; completion_tokens: number | null;
+   finish_reason: string | null; returned_model: string | null; committed_at: string | null;
+   read_status: string; payload_available: boolean;
+-  payload: { format: string; value: unknown } | null;
+-  payload_sha256?: string | null;
++  payload: { format: string; value: unknown } | null;
++  payload_sha256?: string | null;
+ };
+ 
+ type MaterialOption = { id: string; title: string; version_id: string; revision: number; format: string };
+@@ -191,7 +192,7 @@
+   const api = useCallback(async (path: string, init: RequestInit = {}) => {
+     let response: Response;
+     try {
+-      response = await fetch(path, { ...init, headers: { ...init.headers, "X-RetroLume-Session": token } });
++      response = await dataFetch(path, { ...init, headers: { ...init.headers, "X-RetroLume-Session": token } });
+     } catch {
+       throw new ApiError(0, "network", "连接中断，结果未确认；刷新只重读，不会自动重发");
+     }
+@@ -843,7 +844,7 @@
+                 </div>
+               )}
+ 
+-              {(variant === "interview" || detail.business_domain === "interview") ? detail.activity_id === selectedId ? <InterviewWorkspace key={detail.activity_id} activityId={detail.activity_id} token={token} scopeRevision={detail.scope_revision} onChanged={() => { void refreshDetail(detail.activity_id, true); }}/> : <p role="status">正在读取选中的面试活动…</p> : detail.business_domain === "unknown" ? <p role="alert">活动领域资格不可核对，保持只读；请核对服务状态。</p> : <>
++              {(variant === "interview" || detail.business_domain === "interview") ? detail.activity_id === selectedId ? <InterviewWorkspace key={detail.activity_id} activityId={detail.activity_id} token={token} scopeRevision={detail.scope_revision} onChanged={() => { void refreshDetail(detail.activity_id, true); }}/> : <p role="status">正在读取选中的面试活动…</p> : detail.business_domain === "unknown" ? <p role="alert">活动领域资格不可核对，保持只读；请核对服务状态。</p> : <>
+               <div className="ws-block">
+                 <h4>资料范围 · 范围修订 {detail.scope_revision}</h4>
+                 {(detail.sources ?? []).map(source => (
+@@ -939,8 +940,8 @@
+                             </p>
+                             {op.payload
+                               ? isLearningDocument(op.payload.value, op.operation_id)
+-                                ? <LearningResult key={`${detail.activity_id}:${op.operation_id}`} document={op.payload.value}
+-                                  activityId={detail.activity_id} operationId={op.operation_id} token={token} payloadSha256={op.payload_sha256}
++                                ? <LearningResult key={`${detail.activity_id}:${op.operation_id}`} document={op.payload.value}
++                                  activityId={detail.activity_id} operationId={op.operation_id} token={token} payloadSha256={op.payload_sha256}
+                                   onUseGoal={op.kind==='model'&&op.read_status==='committed_current'?()=>{
+                                     const aid=detail.activity_id;
+                                     void getTeachingSeed(aid,op.operation_id,token).then(value=>{

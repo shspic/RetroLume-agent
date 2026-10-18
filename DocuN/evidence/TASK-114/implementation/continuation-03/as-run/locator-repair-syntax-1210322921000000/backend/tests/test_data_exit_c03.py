@@ -1,0 +1,165 @@
+"""真实pin/Operation/_load原件子路径；仅原始PG连接返回受控身份和时钟推进。"""
+import hashlib
+import io
+import json
+import os
+from pathlib import Path
+import sys
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+from uuid import uuid4
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent / 'fixtures/task114'))
+from app.data_exit.control import ControlHub
+from app.data_exit.contracts import DataContext, DataJobCommand, DataError, Limits
+from app.data_exit.files import RootLease
+from app.data_exit.operations import Operation, CLOCK_DOMAIN
+from app.data_exit.reference import LoadingReferencePin, PreparedReference
+from app.data_exit.restore import RestoreController
+from c03_support import EVIDENCE, save
+
+OUT = EVIDENCE / 'offline/cases' / os.environ['C03_CASE_ATTEMPT']
+
+
+class Clock:
+    def __init__(self): self.ns = 10_000_000_000
+    def advance(self, seconds): self.ns += int(seconds * 1e9)
+    def __call__(self): return self.ns
+
+
+class StopAfterOriginal(Exception): pass
+
+
+class RawBoundary:
+    """libpq没有被调用；记录实际产品传入的参数与每条限制/身份查询。"""
+    def __init__(self, clock, target, phase='normal', identity='valid'):
+        self.clock, self.target, self.phase, self.identity = clock, target, phase, identity
+        self.calls, self.statements = [], []
+        self.autocommit = False
+        self.info = SimpleNamespace(transaction_status=0)
+    def connect(self, dsn, **kwargs):
+        self.calls.append({'dsn': dsn, 'kwargs': kwargs, 'at_ns': self.clock.ns})
+        if self.phase == 'connect_late': self.clock.advance(3)
+        else: self.clock.advance(.25)
+        return self
+    def __enter__(self): return self
+    def __exit__(self, *args):
+        if self.phase == 'commit_late': self.clock.advance(3)
+    def execute(self, statement, *args, **kwargs):
+        self.statements.append({'sql': str(statement), 'at_ns': self.clock.ns})
+        if 'data_loading_allowed' in str(statement) and self.phase == 'query_late': self.clock.advance(3)
+        return self
+    def fetchone(self):
+        if self.phase == 'fetch_late': self.clock.advance(3)
+        state = {'dataset_id': self.target.dataset_id, 'instance_id': self.target.instance_id,
+                 'originals_root_id': self.target.root_id}
+        if self.identity == 'wrong_instance': state['instance_id'] = str(uuid4())
+        return self.identity != 'not_loading', state
+
+
+def fixture(name, seconds=2.8):
+    root = EVIDENCE / 'synthetic/scratch' / (name + '-' + str(uuid4())); root.mkdir(parents=True)
+    (root / 'hub').mkdir()
+    hub = ControlHub(root / 'hub')
+    context = DataContext(hub.control_id, 0, str(uuid4()), str(uuid4()), 'normal')
+    job = hub.create_or_get_job(DataJobCommand('restore', name, {'plan_id': str(uuid4()), 'plan_sha256': 'a' * 64}), context)
+    target = SimpleNamespace(target_id=str(uuid4()), job_id=job['job_id'], dataset_id=str(uuid4()),
+                             instance_id=str(uuid4()), root_id=str(uuid4()), data_root=root / 'target')
+    (target.data_root / 'originals').mkdir(parents=True)
+    hub.commit('target.register', {'target_id': target.target_id, 'job_id': target.job_id, 'state': 'allocated'})
+    factory = SimpleNamespace(hub=hub, _ephemeral={target.target_id: {}}, loader_dsn=lambda actual: 'c03-controlled-loader-only')
+    payload = b'C03 synthetic original\n'
+    prepared = PreparedReference(str(uuid4()), str(uuid4()), None, hashlib.sha256(payload).hexdigest(), len(payload))
+    operation = Operation(hub, job['job_id'], seconds, 'loading')
+    return hub, target, factory, prepared, payload, operation
+
+
+class LoadingPinDeadline(unittest.TestCase):
+    def test_01_same_operation_parameters_identity_and_live_pin(self):
+        clock = Clock()
+        with patch('app.data_exit.operations.time.monotonic_ns', clock):
+            hub, target, factory, prepared, payload, operation = fixture('normal')
+            before = dict(hub.state()['jobs'][operation.job_id]['execution'])
+            raw = RawBoundary(clock, target)
+            lease = RootLease(target.data_root / 'originals')
+            try:
+                with lease.acquire(timeout=1) as held, patch('psycopg.connect', raw.connect):
+                    pin = LoadingReferencePin(factory, target, held, prepared, operation=operation)
+                    self.assertIs(pin.operation, operation)
+                    pin.check(target.data_root / 'originals', prepared)
+                    self.assertEqual(raw.calls[0]['kwargs']['connect_timeout'], 2)
+                    self.assertEqual(raw.calls[0]['kwargs']['options'], '-c statement_timeout=2800 -c lock_timeout=2800 ')
+                    self.assertEqual([s['sql'] for s in raw.statements[:2]], ["SET LOCAL statement_timeout='2550ms'", "SET LOCAL lock_timeout='2550ms'"])
+                    with self.assertRaises(DataError): pin.check(root=target.data_root)
+                    with self.assertRaises(DataError): pin.check(prepared=PreparedReference(prepared.source_id, str(uuid4()), None, prepared.sha256, prepared.size))
+                    clock.advance(3)
+                    with self.assertRaises(DataError) as caught: pin.check()
+                    self.assertEqual(caught.exception.code, 'operation_timeout')
+                with self.assertRaises(DataError): pin.check()
+            finally: lease.close()
+            self.assertEqual(hub.state()['jobs'][operation.job_id]['execution'], before)
+            save(OUT / '01-same-operation.json', {'layer': '真实Hub/Operation/LoadingReferencePin/BoundedConnection，原始psycopg.connect替身；不代表PG等待上界',
+                'same_object': True, 'execution_before_after': before, 'clock_domain': CLOCK_DOMAIN, 'connections': raw.calls,
+                'statements': raw.statements, 'after_deadline_pin': 'operation_timeout', 'verified': False})
+
+    def test_02_no_connect_without_time_or_exact_lease(self):
+        results = []
+        for mode in ('subsecond', 'expired', 'exclusive', 'wrong_operation', 'wrong_root', 'not_allocated'):
+            clock = Clock()
+            with patch('app.data_exit.operations.time.monotonic_ns', clock):
+                hub, target, factory, prepared, payload, operation = fixture(mode)
+                raw = RawBoundary(clock, target)
+                if mode == 'subsecond': clock.advance(2.05)
+                if mode == 'expired': clock.advance(2.8)
+                if mode == 'wrong_operation': target.job_id = str(uuid4())
+                if mode == 'not_allocated': hub.commit('target.register', {'target_id': target.target_id, 'state': 'failed'})
+                root = target.data_root / 'originals'
+                if mode == 'wrong_root': root = target.data_root / 'other'; root.mkdir()
+                lease = RootLease(root)
+                try:
+                    with lease.acquire(mode == 'exclusive', timeout=1) as held, patch('psycopg.connect', raw.connect):
+                        with self.assertRaises(DataError) as caught:
+                            LoadingReferencePin(factory, target, held, prepared, operation=operation)
+                        self.assertEqual(raw.calls, [])
+                        results.append({'case': mode, 'error': caught.exception.code, 'connections': 0,
+                                        'execution': hub.state()['jobs'][operation.job_id]['execution']})
+                finally: lease.close()
+        save(OUT / '02-no-connect.json', {'layer': '受控时钟/原始连接边界，真实lease/Operation/pin', 'cases': results})
+
+    def test_03_actual_load_propagates_and_never_publishes_after_late_identity(self):
+        results = []
+        for phase in ('normal', 'connect_late', 'query_late', 'fetch_late', 'commit_late', 'wrong_instance', 'not_loading'):
+            clock = Clock()
+            with patch('app.data_exit.operations.time.monotonic_ns', clock):
+                hub, target, factory, prepared, payload, operation = fixture('load-' + phase)
+                before = dict(hub.state()['jobs'][operation.job_id]['execution'])
+                raw = RawBoundary(clock, target, phase=phase, identity=phase)
+                opened = []
+                class Archive:
+                    def open(self, name):
+                        opened.append(name)
+                        if name.startswith('originals/'): return io.BytesIO(payload)
+                        raise StopAfterOriginal('合成rowset仅测实际_load原件子路径；到元数据边界停止，不模拟完整恢复/verified')
+                version = {'id': prepared.version_id, 'source_id': prepared.source_id, 'sha256': prepared.sha256, 'size': str(prepared.size)}
+                reader = SimpleNamespace(archive=Archive(), manifest={'contents': [{'path': 'originals/' + prepared.sha256}]},
+                                         rows=lambda table: [version] if table == 'material_versions' else [])
+                controller = RestoreController.__new__(RestoreController); controller.factory = factory; controller.limits = Limits()
+                with patch('psycopg.connect', raw.connect):
+                    with self.assertRaises(StopAfterOriginal if phase == 'normal' else DataError) as caught:
+                        controller._load(reader, target, {'overlay': []}, operation)
+                published = (target.data_root / 'originals' / prepared.sha256).exists()
+                self.assertEqual(published, phase == 'normal')
+                self.assertEqual(any(name.startswith('originals/') for name in opened), phase == 'normal')
+                if phase == 'normal': self.assertEqual((target.data_root / 'originals' / prepared.sha256).read_bytes(), payload)
+                else: self.assertEqual(list((target.data_root / 'originals').glob('.incoming-*')), [])
+                self.assertEqual(hub.state()['jobs'][operation.job_id]['execution'], before)
+                self.assertNotEqual(hub.get(operation.job_id)['state'], 'verified')
+                results.append({'case': phase, 'error': caught.exception.code if isinstance(caught.exception, DataError) else 'fixture_stop_after_original',
+                    'execution': before, 'raw_calls': raw.calls, 'statements': raw.statements, 'archive_open': opened,
+                    'original_published': published, 'verified': False, 'same_deadline_unchanged': True})
+        save(OUT / '03-actual-load.json', {'layer': '实际_load/PackageRows/pin/Operation/OriginalStore，合成rowset及原始连接；正常原件路径后明确停止，不是完整恢复', 'cases': results})
+
+
+if __name__ == '__main__': unittest.main(verbosity=2)

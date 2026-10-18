@@ -1,0 +1,104 @@
+"""Owned serial roots; hard child deadlines and exact finally cleanup."""
+import json,os,subprocess,sys,time
+from pathlib import Path
+from .control import ROOT,EVIDENCE,PERMIT,batch,atomic_json,reserve
+from .resources import start,stop,runtime,inspect,public
+from .http import birth,Server,environment
+
+def cleanup_children(out):
+    for path in out.glob('owned-api-*.json'):
+        x=json.loads(path.read_text(encoding='utf-8'))
+        try:same=birth(x['pid'])==x['birth_100ns']
+        except RuntimeError:same=False
+        if same:
+            query="Get-CimInstance Win32_Process -Filter 'ProcessId="+str(x['pid'])+"' | Where-Object { $_.CommandLine.Contains('tests.fixtures.task106.c01.server') } | Select-Object -ExpandProperty ProcessId"
+            p=subprocess.run(['powershell','-NoProfile','-Command',query],capture_output=True,text=True,timeout=10,creationflags=subprocess.CREATE_NO_WINDOW)
+            if p.stdout.strip()==str(x['pid']):
+                subprocess.run(['powershell','-NoProfile','-Command','Stop-Process -Id '+str(x['pid'])+' -Force'],timeout=10,creationflags=subprocess.CREATE_NO_WINDOW)
+
+def child(module,admin,app,out):
+    env=environment(app,out);env.update(C01_OUT=str(out),C01_ADMIN_DSN=admin,C01_APP_DSN=app)
+    with (out/'driver.log').open('w',encoding='utf-8') as stream:
+        p=subprocess.Popen([sys.executable,'-m','tests.fixtures.task106.c01.'+module],cwd=ROOT/'backend',env=env,stdout=stream,stderr=stream,creationflags=subprocess.CREATE_NO_WINDOW)
+        identity=dict(pid=p.pid,birth_100ns=birth(p.pid),command='tests.fixtures.task106.c01.'+module);atomic_json(out/'owned-root-child.json',identity)
+        try:
+            code=p.wait(timeout=530)
+            if code:print((out/'driver.log').read_text(encoding='utf-8')[-6500:]);raise RuntimeError('C01 real '+module+' failed; original log/effects retained')
+        except subprocess.TimeoutExpired:
+            assert identity['birth_100ns']==birth(p.pid);p.terminate();p.wait(timeout=10);raise RuntimeError('C01 root hard deadline')
+        finally:
+            if p.poll() is None:
+                assert identity['birth_100ns']==birth(p.pid);p.terminate();p.wait(timeout=10)
+            cleanup_children(out);atomic_json(out/'root-child-stop.json',dict(identity=identity,exit_code=p.returncode,stopped=p.poll() is not None))
+
+def browser(app,out,seed_path):
+    with Server(app,out) as server:
+        reserve('driver',dict(script='task106-continuation01.mjs'));reserve('browser',dict(engine='cached chromium'))
+        env=server.env.copy();env.update(C01_BROWSER_OUTPUT=str(out),C01_BROWSER_SEED=str(seed_path))
+        with (out/'browser-driver.log').open('w',encoding='utf-8') as stream:
+            p=subprocess.Popen(['node',str(ROOT/'frontend/tests/task106-continuation01.mjs')],cwd=ROOT/'frontend',env=env,stdout=stream,stderr=stream,creationflags=subprocess.CREATE_NO_WINDOW)
+            identity=dict(pid=p.pid,birth_100ns=birth(p.pid),command='frontend/tests/task106-continuation01.mjs');atomic_json(out/'owned-browser-driver.json',identity)
+            try:
+                code=p.wait(timeout=480)
+                if code:print((out/'browser-driver.log').read_text(encoding='utf-8')[-6000:]);raise RuntimeError('C01 actual browser failed; DOM/network saved')
+            finally:
+                if p.poll() is None:
+                    assert identity['birth_100ns']==birth(p.pid);p.terminate();p.wait(timeout=10)
+        assert json.loads((out/'browser-result.json').read_text(encoding='utf-8'))['passed']
+
+def main():
+    if os.environ.get('C01_CHECKPOINT_RESUME'):
+        return checkpoint()
+    app1=None
+    with batch('P01-core-remaining-PG-HTTP-native') as out:
+        try:admin=start(1);app1=runtime(admin,1);child('core',admin,app1,out)
+        finally:stop(1)
+    with batch('P02-M6-unreliable-ordinary-refusal') as out:
+        try:admin=start(3);app3=runtime(admin,3);child('fault',admin,app3,out)
+        finally:stop(3)
+    with batch('P03-final-browser-history-reconcile-response') as out:
+        try:
+            start(1);browser(app1,out,EVIDENCE/'runs/P01-core-remaining-PG-HTTP-native/browser-seed.json')
+        finally:stop(1)
+    print('C01 core, fault and browser groups completed; owned PG stopped')
+
+def checkpoint():
+    app=None;seed=EVIDENCE/'runs/P04-resume-real-cancel-and-config/browser-seed.json'
+    next_action=dict(command='resume',name='P04-resume-real-cancel-and-config')
+    seen=set()
+    try:
+        while True:
+            action=next_action;next_action=None
+            if action:
+                name=action['name'];command=action['command']
+                try:
+                    with batch(name) as out:
+                        try:
+                            admin=start(1)
+                            if app is None:app=runtime(admin,1)
+                            if command=='browser':browser(app,out,Path(action.get('seed',str(seed))))
+                            else:child('fault' if command=='fault' else action.get('module','resume'),admin,app,out)
+                        finally:stop(1)
+                    atomic_json(EVIDENCE/'driver-status.json',dict(state='completed_phase',name=name,credential_in_RAM_only=True))
+                    if command=='resume':next_action=dict(command='fault',name='P02-M6-unreliable-ordinary-refusal-main-namespace')
+                    elif command=='fault':next_action=dict(command='browser',name='P03-final-browser-history-reconcile-response')
+                    elif command=='browser':print('C01 resumed core/M6/browser complete');return
+                    if next_action:continue
+                except Exception as exc:
+                    atomic_json(EVIDENCE/'driver-status.json',dict(state='waiting_after_failure',name=name,error_type=type(exc).__name__,message=str(exc),credential_in_RAM_only=True))
+                    print('C01 phase failed and stopped; credential retained in bounded controller RAM',flush=True)
+            until=time.perf_counter()+900
+            while time.perf_counter()<until:
+                path=EVIDENCE/'driver-control.json'
+                if path.exists():
+                    value=json.loads(path.read_text(encoding='utf-8'));nonce=value.get('nonce')
+                    if nonce and nonce not in seen:
+                        seen.add(nonce)
+                        if value['command']=='stop':return
+                        assert value['command'] in ('resume','fault','browser');next_action=value;break
+                time.sleep(.2)
+            if next_action is None:raise RuntimeError('C01 bounded credential controller wait exhausted')
+    finally:
+        stop(1)
+
+if __name__=='__main__':main()

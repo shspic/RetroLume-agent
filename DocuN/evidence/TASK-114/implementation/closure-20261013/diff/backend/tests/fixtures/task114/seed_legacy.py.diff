@@ -1,0 +1,69 @@
+--- /dev/null
++++ final/backend/tests/fixtures/task114/seed_legacy.py
+@@ -0,0 +1,66 @@
++"""本卡新 source 的十二版合法非空样本；不借用旧 runner 或资源。"""
++import asyncio
++from datetime import datetime,timedelta,timezone
++import io
++import json
++from uuid import uuid4
++from pathlib import Path
++
++from budget import ROOT,CONTROL
++from app.activities import ActivitySpec,SourceSnapshot,PostgresAdmissionLedger
++from app.materials.repository import PostgresMaterials
++from app.storage.originals import OriginalStore
++from app.runtime import psycopg_compatible_loop_factory
++from app.learning.teaching_contracts import TeachingCommandInput
++from app.data_exit.codec import encode_row
++from app.data_exit.contracts import TABLES,canonical,digest
++from app.data_exit.schema import COLUMNS
++
++
++def business_rows(dsn):
++    import psycopg
++    from psycopg.rows import dict_row
++    result={}
++    with psycopg.connect(dsn,connect_timeout=3,row_factory=dict_row) as connection:
++        for table in TABLES:
++            columns=','.join(COLUMNS[table])
++            values=[encode_row(table,row) for row in connection.execute('SELECT '+columns+' FROM public.'+table)]
++            result[table]={'count':len(values),'sha256':digest(canonical(sorted(values,key=canonical)))}
++    return result
++
++
++async def seed(dsn,store):
++    repository=PostgresMaterials(dsn)
++    sources=[]
++    for name,content in [('旧版资料.md','原始资料\r\n保留独立原字节。\n'),('共同原件甲.md','共同原件\n'),('共同原件乙.md','共同原件\n')]:
++        original=store.put(io.BytesIO(content.encode('utf-8')),max_bytes=5*1024**2)
++        sources.append(repository.save(source_id=None,expected_version=None,filename=name,format='md',sha256=original.sha256,size=original.size))
++    source=sources[0]
++    original=store.put(io.BytesIO('当前资料\r\n旧版本保留。\n'.encode('utf-8')),max_bytes=5*1024**2)
++    current=repository.save(source_id=source['id'],expected_version=source['version_id'],filename='当前资料.md',format='md',sha256=original.sha256,size=original.size)
++    sources[0]=current
++    ledger=PostgresAdmissionLedger(dsn)
++    aid=str(uuid4())
++    await ledger.create_activity(ActivitySpec(activity_id=aid,sources=(SourceSnapshot(current['id'],current['version_id'],current['revision']),),
++        deadline_at=datetime.now(timezone.utc)+timedelta(hours=6),max_requests=16,max_cost_microunits=100000,
++        reserve_cost_microunits=100,max_request_bytes=65536,max_output_tokens=2048,max_running_seconds=240,
++        allowed_models=(('deepseek_chat_completions','task114-synthetic'),),allowed_tools=('finite_calculate',),max_tool_calls=4))
++    for revision,goal in enumerate(('旧教学目标','新的教学目标')):
++        await ledger.apply_teaching_local(aid,TeachingCommandInput(business_key=str(uuid4()),expected_revision=revision,
++            expected_goal_version=revision,expected_scope_revision=1,action='goal',body={'goal':goal}))
++    return {'sources':sources,'teaching_activity_id':aid}
++
++
++def seed_before_013(dsn):
++    proof=CONTROL/'source-012-before-013.json'
++    if proof.exists():
++        before=json.loads(proof.read_text(encoding='utf-8'))
++        if business_rows(dsn)!=before['business_rows']:raise RuntimeError('十二版已登记样本发生漂移')
++        return before
++    root=ROOT/'DocuN/evidence/TASK-114/synthetic/source-root/originals'
++    root.mkdir(exist_ok=True)
++    with asyncio.Runner(loop_factory=psycopg_compatible_loop_factory) as runner:
++        identities=runner.run(seed(dsn,OriginalStore(root)))
++    before={'identities':identities,'business_rows':business_rows(dsn),'method':'产品十二版仓储合法提交，随后仅安装十三版'}
++    proof.write_text(json.dumps(before,ensure_ascii=False,indent=2),encoding='utf-8')
++    return before

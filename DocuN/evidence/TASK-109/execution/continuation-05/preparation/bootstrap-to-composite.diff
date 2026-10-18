@@ -1,0 +1,262 @@
+--- original/runtime-bootstrap.cjs
++++ C05/composite-as-prepared.cjs
+@@ -40,8 +40,257 @@
+     if (!allowed.includes(followup_parent_dir)) throw new Error("复验目录不在固定白名单");
+     host.emit("runtime_directory_followup", inspectDirectory(followup_parent_dir, 0o700, true));
+   }
+-  host.emit("bootstrap_ready", { original_counter: "/opt/preview/h0-counter.cjs", image_bytes_changed: false, no_probe_file_delete: true });
+-  require("/opt/preview/h0-counter.cjs");
++  host.emit("bootstrap_ready", { actual_navigation_fixture: "navigation-tail.cjs", fixture_sha256: "fa2d405c4ee34a965554b0349ca7f690726d7ed64f9d8ddea3668cee5a9b3bc3", runtime_source_changed: true, image_bytes_changed: false, no_probe_file_delete: true });
++  (() => {
++"use strict";
++// 仅原109最后导航尾段，固定源码、只读取证、首反证或异常停止。
++const fs = require("node:fs");
++const host = require("/opt/preview/host.cjs");
++const pageHtml = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><style>button,a{display:inline-block;margin:8px;padding:8px}</style></head><body>
++<p id="h0_ready">关口合成页</p><button id="h0_open">新页</button><a id="h0_blank" href="about:blank" target="_blank">空白新页</a><a id="h0_named" href="about:blank" target="h0_new_target">新命名页</a>
++<form action="about:blank" target="_blank"><button id="h0_form">表单新页</button></form>
++<button id="h0_data">自身data</button><button id="h0_blob">自身blob</button><button id="h0_hash">同文档导航</button><button id="h0_child">动态frame</button>
++<script>window.h0_script_ready=true;window.h0_handlers=[];window.h0_gestures=[];function h0_signal(data){console.info('TASK109_SIGNAL:'+JSON.stringify(data))}function h0_handler(id){window.h0_handlers.push(id);h0_signal({kind:'handler',id})}document.addEventListener('click',e=>{const row={id:e.target.id,trusted:e.isTrusted,active:navigator.userActivation.isActive};window.h0_gestures.push(row);h0_signal({kind:'gesture',...row})},true);
++document.addEventListener('submit',e=>window.h0_handlers.push('submit:'+e.target.id),true);
++document.getElementById('h0_open').onclick=()=>{h0_handler('h0_open');window.h0_opened=window.open('about:blank','_blank')!==null};
++document.getElementById('h0_data').onclick=()=>{h0_handler('h0_data');location.href='data:text/html,<p id="h0_nav_marker">H0_DATA_COMMITTED</p>'};
++document.getElementById('h0_blob').onclick=()=>{h0_handler('h0_blob');location.href=URL.createObjectURL(new Blob(['<p id="h0_nav_marker">H0_BLOB_COMMITTED</p>'],{type:'text/html'}))};
++document.getElementById('h0_hash').onclick=()=>{h0_handler('h0_hash');location.hash='H0_SAME_DOCUMENT_COMMITTED'};
++document.getElementById('h0_child').onclick=()=>{h0_handler('h0_child');const f=document.createElement('iframe');f.id='H0_NEW_CHILD';document.body.appendChild(f)};
++</script></body></html>`;
++const order = ["h0_hash", "h0_child", "h0_blob", "h0_data"];
++const events = [];
++const signals = [];
++const contexts = new Map();
++let binding = null;
++let currentCase = null;
++let phase = "launch";
++let fault = null;
++let sampler = null;
++let resourceGroups = 0;
++const startClock = () => process.hrtime.bigint().toString();
++
++async function bounded(promise, label, milliseconds = 2000) {
++  let timer;
++  try {
++    return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(label + "固定调用截止")), milliseconds); })]);
++  } finally { clearTimeout(timer); }
++}
++const send = (session, method, params = {}) => bounded(session.send(method, params), method);
++
++function markFault(kind, details) {
++  if (fault) return;
++  fault = { kind, phase, case: currentCase, at_ns: startClock(), ...details };
++  host.emit("tail_engine_error", fault);
++}
++function smallRead(path, limit = 8192) {
++  let fd;
++  try {
++    fd = fs.openSync(path, "r");
++    const buffer = Buffer.alloc(limit + 1);
++    const bytes = fs.readSync(fd, buffer, 0, buffer.length, null);
++    return { ok: true, text: buffer.subarray(0, Math.min(bytes, limit)).toString("utf8"), truncated: bytes > limit };
++  } catch (error) {
++    return { ok: false, code: error.code ?? null, message: String(error.message).slice(0, 200) };
++  } finally { if (fd !== undefined) fs.closeSync(fd); }
++}
++function resources(reason) {
++  if (resourceGroups >= 40) return;
++  resourceGroups++;
++  const cgroup = {};
++  for (const name of ["pids.current", "pids.max", "pids.events", "memory.current", "memory.max", "memory.events"]) cgroup[name] = smallRead("/sys/fs/cgroup/" + name, 2048);
++  let names;
++  try { names = fs.readdirSync("/proc").filter(name => /^[0-9]+$/.test(name)); }
++  catch (error) { host.emit("tail_resources", { reason, group: resourceGroups, at_ns: startClock(), cgroup, proc_error: { code: error.code ?? null, message: String(error.message).slice(0, 200) } }); return; }
++  const rows = [];
++  let threadsSeen = 0;
++  let threadFailures = 0;
++  for (const name of names.slice(0, 128)) {
++    const status = smallRead("/proc/" + name + "/status");
++    if (!status.ok || status.truncated) { rows.push({ pid: Number(name), error: { ok: status.ok, code: status.code ?? null, message: status.message ?? null, truncated: status.truncated ?? null } }); threadFailures++; continue; }
++    const count = /^Threads:\s*(\d+)$/m.exec(status.text);
++    const state = /^State:\s*(.+)$/m.exec(status.text);
++    if (!count) threadFailures++;
++    else threadsSeen += Number(count[1]);
++    rows.push({ pid: Number(name), threads: count ? Number(count[1]) : null, state: state ? state[1] : null });
++  }
++  host.emit("tail_resources", { reason, group: resourceGroups, at_ns: startClock(), cgroup, process_entries: names.length, rows, proc_truncated: names.length > 128, threads_seen: threadsSeen, thread_failures: threadFailures, threads_complete: names.length <= 128 && threadFailures === 0 });
++}
++
++function observe(session, scope) {
++  for (const name of ["Page.frameAttached", "Page.frameNavigated", "Page.navigatedWithinDocument", "Page.frameDetached", "Page.frameRequestedNavigation", "Page.frameScheduledNavigation"]) session.on(name, event => {
++    if (events.length >= 128) { markFault("observer_limit", { scope }); return; }
++    const row = { scope, name, case: currentCase, at_ns: startClock(), frameId: event.frameId ?? event.frame?.id ?? null, parentId: event.parentFrameId ?? event.frame?.parentId ?? null, loaderId: event.frame?.loaderId ?? null, url: (event.url ?? event.frame?.url ?? "").slice(0, 512), reason: event.reason ?? null };
++    events.push(row);
++    host.emit("tail_event", row);
++  });
++  session.on("Runtime.executionContextCreated", event => {
++    const value = event.context;
++    const row = { scope, id: value.id, uniqueId: value.uniqueId ?? null, frameId: value.auxData?.frameId ?? null, isDefault: value.auxData?.isDefault ?? null, origin: value.origin, name: value.name };
++    contexts.set(scope + ":" + value.id, row);
++    host.emit("tail_context", { ...row, case: currentCase, at_ns: startClock() });
++  });
++  session.on("Runtime.executionContextDestroyed", event => {
++    const row = contexts.get(scope + ":" + event.executionContextId);
++    host.emit("tail_context_destroyed", { scope, context: row ?? null, event, case: currentCase, at_ns: startClock() });
++    contexts.delete(scope + ":" + event.executionContextId);
++  });
++  session.on("Runtime.consoleAPICalled", event => {
++    const text = event.args?.[0]?.value;
++    if (typeof text !== "string" || !text.startsWith("TASK109_SIGNAL:")) return;
++    if (text.length > 1024 || signals.length >= 64) { markFault("signal_limit", { scope }); return; }
++    try {
++      const data = JSON.parse(text.slice("TASK109_SIGNAL:".length));
++      const context = contexts.get(scope + ":" + event.executionContextId) ?? null;
++      const row = { scope, case: currentCase, at_ns: startClock(), executionContextId: event.executionContextId, context, context_matches_subject: Boolean(binding && context?.frameId === binding.frameId && context?.isDefault === true), data, original_text: text };
++      signals.push(row);
++      host.emit("tail_signal", row);
++    } catch (error) { markFault("signal_schema", { scope, message: String(error.message) }); }
++  });
++  session.on("Runtime.exceptionThrown", event => {
++    const value = event.exceptionDetails;
++    markFault("runtime_exception", { scope, text: value.text, executionContextId: value.executionContextId ?? null, description: value.exception?.description?.slice(0, 2000) ?? null });
++  });
++  session.on("Disconnected", () => markFault("frame_session_disconnected", { scope }));
++}
++
++function flatten(tree) {
++  const rows = [];
++  function visit(value) { rows.push(value.frame); for (const child of value.childFrames ?? []) visit(child); }
++  visit(tree.frameTree);
++  return rows;
++}
++async function projection(session) {
++  const frameTree = await send(session, "Page.getFrameTree");
++  const snapshot = await send(session, "DOMSnapshot.captureSnapshot", { computedStyles: [] });
++  if (!Array.isArray(snapshot.documents) || !Array.isArray(snapshot.strings)) throw new Error("实际DOMSnapshot字段不符");
++  const documents = snapshot.documents.map(document => ({ frameId: snapshot.strings[document.frameId], url: snapshot.strings[document.documentURL], backendNodeId: document.nodes.backendNodeId[0] }));
++  return { frameTree, documents };
++}
++async function ownerNode(session) {
++  const document = await send(session, "DOM.getDocument", { depth: 0 });
++  const found = await send(session, "DOM.querySelector", { nodeId: document.root.nodeId, selector: "#h0_frame" });
++  if (!found.nodeId) throw new Error("根DOM没有固定#h0_frame");
++  const described = await send(session, "DOM.describeNode", { nodeId: found.nodeId, depth: 0 });
++  const attrs = {};
++  for (let index = 0; index < (described.node.attributes ?? []).length; index += 2) attrs[described.node.attributes[index]] = described.node.attributes[index + 1];
++  if (described.node.nodeName !== "IFRAME" || attrs.id !== "h0_frame" || attrs.sandbox !== "allow-scripts" || attrs.srcdoc !== pageHtml) throw new Error("实际固定iframe、sandbox或srcdoc字节不符");
++  return { backendNodeId: described.node.backendNodeId, nodeId: found.nodeId, frameId: described.node.frameId ?? null, sandbox: attrs.sandbox, srcdoc_sha256: host.sha(Buffer.from(attrs.srcdoc)), srcdoc_bytes: Buffer.byteLength(attrs.srcdoc) };
++}
++async function bindFrame(context, page, frame) {
++  if (frame.parentFrame() !== page.mainFrame()) throw new Error("固定Frame不是根的直接子frame");
++  const rootSession = await host.observerReady(page);
++  observe(rootSession, "root");
++  await send(rootSession, "Page.enable");
++  await send(rootSession, "DOM.enable");
++  await send(rootSession, "Runtime.enable");
++  const root = await projection(rootSession);
++  const owner = await ownerNode(rootSession);
++  const inRoot = owner.frameId ? flatten(root.frameTree).find(row => row.id === owner.frameId) : null;
++  let childSession = rootSession;
++  let mode = "root_tree_exact_frame";
++  if (!inRoot) {
++    mode = "public_Frame_CDP_OOPIF";
++    childSession = await bounded(context.newCDPSession(frame), "公开Frame CDP创建");
++    observe(childSession, "child");
++    await send(childSession, "Page.enable");
++    await send(childSession, "DOM.enable");
++    await send(childSession, "Runtime.enable");
++  }
++  const child = childSession === rootSession ? root : await projection(childSession);
++  const subject = inRoot ?? child.frameTree.frameTree.frame;
++  const actualOwner = await send(rootSession, "DOM.getFrameOwner", { frameId: subject.id });
++  const rootTarget = (await send(rootSession, "Target.getTargetInfo")).targetInfo;
++  const childTarget = (await send(childSession, "Target.getTargetInfo")).targetInfo;
++  if (actualOwner.backendNodeId !== owner.backendNodeId || !subject.loaderId || !subject.url || !child.documents.some(row => row.frameId === subject.id && row.backendNodeId && row.url === subject.url)) throw new Error("真实owner/frame/loader/document不能准确绑定");
++  if (owner.frameId && owner.frameId !== subject.id) throw new Error("根iframe引用与子session Frame ID不符");
++  if (inRoot && inRoot.parentId !== root.frameTree.frameTree.frame.id) throw new Error("根tree中的直属父关系不符");
++  if (!inRoot && (childTarget.type !== "iframe" || childTarget.targetId !== subject.id || rootTarget.targetId !== root.frameTree.frameTree.frame.id)) throw new Error("真实OOPIF/根Target绑定不符");
++  binding = { mode, frameId: subject.id, rootFrameId: root.frameTree.frameTree.frame.id, owner, actualOwner, rootTarget, childTarget, subject, ready_domains: ["Page", "DOM", "Runtime"], direct_child: true };
++  const mainContexts = [...contexts.values()].filter(row => row.frameId === subject.id && row.isDefault === true);
++  if (!mainContexts.length || !await bounded(frame.evaluate(() => window.h0_script_ready === true), "固定子frame脚本就绪")) throw new Error("主体运行上下文或固定脚本未就绪");
++  host.emit("tail_binding", { ...binding, mainContexts, root_projection: root, child_projection: child });
++  return { rootSession, childSession };
++}
++async function capture(rootSession, childSession, cdp) {
++  const root = await projection(rootSession);
++  const child = childSession === rootSession ? root : await projection(childSession);
++  const targets = (await send(cdp, "Target.getTargets")).targetInfos.filter(row => ["page", "iframe"].includes(row.type)).map(row => ({ id: row.targetId, type: row.type, url: row.url.slice(0, 512), browserContextId: row.browserContextId ?? null, openerId: row.openerId ?? null }));
++  return { root, child, targets, owner: await ownerNode(rootSession) };
++}
++function violation(before, after, delta, targets) {
++  const previous = flatten(before.child.frameTree).find(row => row.id === binding.frameId);
++  const current = after ? flatten(after.child.frameTree).find(row => row.id === binding.frameId) : null;
++  const frameIds = new Set([...flatten(before.root.frameTree), ...flatten(before.child.frameTree)].map(row => row.id));
++  const targetIds = new Set(before.targets.map(row => row.id));
++  const commit = delta.find(row => row.frameId === binding.frameId && ["Page.frameNavigated", "Page.navigatedWithinDocument"].includes(row.name) && row.url && row.url !== previous.url);
++  const newFrame = delta.find(row => row.name === "Page.frameAttached" && row.frameId && !frameIds.has(row.frameId));
++  const newTarget = targets.find(row => row.kind === "created" && ["page", "iframe"].includes(row.type) && !targetIds.has(row.id));
++  const newFrameAfter = after ? [...flatten(after.root.frameTree), ...flatten(after.child.frameTree)].find(row => !frameIds.has(row.id)) : null;
++  const beforeDocument = before.child.documents.find(row => row.frameId === binding.frameId);
++  const afterDocument = after?.child.documents.find(row => row.frameId === binding.frameId);
++  const documentChanged = Boolean(afterDocument && beforeDocument && afterDocument.backendNodeId !== beforeDocument.backendNodeId);
++  const urlChanged = Boolean(current && current.url !== previous.url);
++  const loaderChanged = Boolean(current && current.loaderId !== previous.loaderId);
++  return { found: Boolean(commit || newFrame || newTarget || newFrameAfter || documentChanged || urlChanged || loaderChanged), commit: commit ?? null, newFrame: newFrame ?? null, newTarget: newTarget ?? null, newFrameAfter: newFrameAfter ?? null, documentChanged, urlChanged, loaderChanged };
++}
++
++async function main() {
++  resources("before_launch");
++  host.emit("processes_before_launch", host.processFacts());
++  const { browser, cdp, targetEvents } = await bounded(host.launch(), "原宿主启动与实际身份", 10000);
++  browser.on("disconnected", () => markFault("browser_disconnected", {}));
++  host.emit("processes_with_browser", host.processFacts());
++  phase = "frame_binding";
++  const context = await bounded(host.context(browser), "原受限context创建");
++  const { page, frame } = await bounded(host.loadFrame(context, pageHtml), "原固定iframe加载", 8000);
++  page.on("crash", () => markFault("page_crashed", {}));
++  const { rootSession, childSession } = await bindFrame(context, page, frame);
++  if (fault) throw new Error("准备阶段观察器或引擎异常");
++  phase = "navigation_tail";
++  host.emit("diagnostic_begin", { limit_seconds: 20, each_observation_ms: 2000, order, begin_ns: startClock(), frame_binding_complete: true });
++  sampler = setInterval(() => resources("periodic_500ms"), 500);
++  for (const id of order) {
++    currentCase = id;
++    const before = await capture(rootSession, childSession, cdp);
++    host.emit("tail_before", { id, frameId: binding.frameId, snapshot: before });
++    resources("before_" + id);
++    const eventIndex = events.length;
++    const targetIndex = targetEvents.length;
++    const signalIndex = signals.length;
++    const started = process.hrtime.bigint();
++    let callError = null;
++    try { await bounded(host.trustedClick(page, frame, id), "真实鼠标和完整2秒观察", 5000); }
++    catch (error) { callError = String(error.message); }
++    let after = null;
++    let captureError = null;
++    try { after = await capture(rootSession, childSession, cdp); }
++    catch (error) { captureError = String(error.message); }
++    resources("after_" + id);
++    const retained = signals.slice(signalIndex);
++    const acknowledged = retained.some(row => row.context_matches_subject && row.data.kind === "gesture" && row.data.id === id && row.data.trusted === true && row.data.active === true) && retained.some(row => row.context_matches_subject && row.data.kind === "handler" && row.data.id === id);
++    const delta = events.slice(eventIndex);
++    const targetDelta = targetEvents.slice(targetIndex);
++    const evidence = violation(before, after, delta, targetDelta);
++    const elapsed = Number(process.hrtime.bigint() - started) / 1000000000;
++    const verdict = acknowledged && evidence.found ? "FAIL" : !acknowledged || fault || callError || captureError || elapsed < 2 ? "UNCONFIRMED" : "BLOCKED_IN_THIS_PROBE";
++    host.emit("H0_NAVIGATION", { id, verdict, acknowledged, actual_observation_seconds: elapsed, before, after, events: delta, target_events: targetDelta, retained_signals: retained, violation: evidence, engine_fault: fault, call_error: callError, capture_error: captureError });
++    if (verdict === "FAIL") return { verdict: "FAIL", blocking: id, stop_remaining: true, security_axis: "可裁导航或新frame反证", engine_axis: fault ? "另有异常" : "未见异常", gate: "NOT_FULL_H0" };
++    if (verdict === "UNCONFIRMED") return { verdict: "ERROR", blocking: id, stop_remaining: true, security_axis: "未确认", engine_axis: fault ?? callError ?? captureError ?? "ACK或完整观察不足", gate: "NOT_FULL_H0" };
++  }
++  return { verdict: "NOT_FULL_H0", samples: order, blocking: "四个有限样本不能替代尚未关闭的原生同步NavigationGate", stop_remaining: true };
++}
++main().then(result => {
++  clearInterval(sampler);
++  host.emit("terminal", result);
++  setInterval(() => {}, 1000);
++}).catch(error => {
++  clearInterval(sampler);
++  host.emit("terminal", { verdict: "ERROR", phase, case: currentCase, engine_fault: fault, message: String(error.message).slice(0, 4000), stack: String(error.stack).slice(0, 4000), gate: "NOT_FULL_H0", stop_remaining: true });
++  setInterval(() => {}, 1000);
++});
++
++})();
+ } catch (error) {
+   host.emit("terminal", { verdict: "ERROR", phase: "runtime_directory_bootstrap", message: String(error.message).slice(0, 1000), code: error.code ?? null, directory: error.directory ?? null, observed: error.observed ?? null });
+   setInterval(() => {}, 1000);

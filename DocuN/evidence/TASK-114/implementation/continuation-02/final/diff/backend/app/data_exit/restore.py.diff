@@ -1,0 +1,475 @@
+--- pre/backend/app/data_exit/restore.py
++++ final/backend/app/data_exit/restore.py
+@@ -17,6 +17,16 @@
+ from .files import safe_root, regular, RootLease
+ from .packages import PackageReader, hash_file
+ from .schema import MIGRATIONS
++from .operations import Operation, acknowledge_unstarted
++
++
++def checked(operation):
++    if operation is not None: operation.check()
++
++
++def connect(dsn, operation=None, **kwargs):
++    import psycopg
++    return operation.connection(dsn, **kwargs) if operation is not None else psycopg.connect(dsn, connect_timeout=3, **kwargs)
+ 
+ 
+ @dataclass(frozen=True)
+@@ -59,7 +69,8 @@
+         or len(mount) != 1 or mount[0]["Type"] != "volume" or mount[0]["Name"] != target.volume
+         or mount[0]["Destination"] != "/var/lib/postgresql/data" or not mount[0]["RW"]
+         or ports != {"5432/tcp": [{"HostIp": "127.0.0.1", "HostPort": str(target.port)}]}
+-        or labels.get("retrolume.data.job") != target.job_id):
++        or labels.get("retrolume.data.job") != target.job_id or labels.get('retrolume.data.profile') != target.profile_id
++        or labels.get('retrolume.data.target',target.target_id) != target.target_id):
+         raise DataError("target_identity_unknown", 503)
+     return {"cid": target.cid, "name": target.name, "image_id": value["Image"], "volume": target.volume,
+             "port": target.port, "running": value["State"]["Running"], "status": value["State"]["Status"],
+@@ -83,7 +94,8 @@
+     def _hook(self, name, *args):
+         if self.hooks is not None: getattr(self.hooks, name)(*args)
+ 
+-    def allocate(self, job_id, accepted_profile_id):
++    def allocate(self, job_id, accepted_profile_id, operation=None):
++        checked(operation)
+         if accepted_profile_id != self.profile["id"]: raise DataError("restore_executor_missing", 503)
+         state = self.hub.state()
+         used = {v["slot_id"] for v in state["targets"].values()}
+@@ -93,16 +105,22 @@
+         intent = {"target_id": target_id, "job_id": uuid(job_id), "slot_id": slot["id"], "profile_id": accepted_profile_id,
+                   "state": "allocating", "dataset_id": dataset_id, "instance_id": instance_id, "root_id": root_id}
+         # 名字、卷、端口碰撞停止此 slot，不改名或清理旧对象绕过。
+-        if docker_call(["ps", "-aq", "--filter", "name=^/" + slot["name"] + "$"]): raise DataError("target_collision", 503)
+-        volumes = docker_call(["volume", "ls", "--format", "{{.Name}}"])
++        def call(arguments, **kwargs):
++            checked(operation)
++            value = docker_call(arguments, timeout=operation.remaining(30) if operation else 30, **kwargs)
++            checked(operation)
++            return value
++        if call(["ps", "-aq", "--filter", "name=^/" + slot["name"] + "$"]): raise DataError("target_collision", 503)
++        volumes = call(["volume", "ls", "--format", "{{.Name}}"])
+         if slot["volume"] in volumes.splitlines(): raise DataError("target_collision", 503)
+         with socket.socket() as probe:
+             try: probe.bind(("127.0.0.1", slot["port"]))
+             except OSError: raise DataError("target_collision", 503) from None
+-        image = json.loads(docker_call(["image", "inspect", self.profile["image_id"]]))[0]
++        image = json.loads(call(["image", "inspect", self.profile["image_id"]]))[0]
+         if image["Id"] != self.profile["image_id"] or image["Os"] != "linux" or image["Architecture"] != "amd64":
+             raise DataError("target_identity_unknown", 503)
+         self._hook("before_create", slot)
++        checked(operation)
+         # 先完成host准入/内存门，再持久登记意图；仍先于实际资源创建。
+         self.hub.commit("target.register", intent)
+         prefix = self.profile["login_prefix"]
+@@ -111,11 +129,15 @@
+                        "maintenance_key": secrets.token_hex(32)}
+         environment = dict(os.environ)
+         environment.update(POSTGRES_USER=prefix + "admin", POSTGRES_PASSWORD=credentials["admin_password"], POSTGRES_DB=slot["database"])
++        # create的返回用于准确收尾，已创建的CID即使D刚过也不能丢弃。
++        checked(operation)
+         cid = docker_call(["create", "--name", slot["name"], "--label", "retrolume.data.job=" + job_id,
+                            "--label", "retrolume.data.profile=" + accepted_profile_id,
++                           "--label", "retrolume.data.target=" + target_id, "--label", "retrolume.data.purpose=restore-readonly",
+                            "--cpus", "1", "--memory", "512m", "--pids-limit", "128", "--restart", "no",
+                            "--publish", f"127.0.0.1:{slot['port']}:5432", "--mount", f"type=volume,src={slot['volume']},dst=/var/lib/postgresql/data",
+-                           "--env", "POSTGRES_USER", "--env", "POSTGRES_PASSWORD", "--env", "POSTGRES_DB", self.profile["image_id"]], environment=environment)
++                           "--env", "POSTGRES_USER", "--env", "POSTGRES_PASSWORD", "--env", "POSTGRES_DB", self.profile["image_id"]], environment=environment,
++                           timeout=operation.remaining(30) if operation else 30)
+         if re.fullmatch(r"[0-9a-f]{64}", cid) is None: raise DataError("target_identity_unknown", 503)
+         data_root = self.root / job_id
+         target = TargetRef(target_id, job_id, accepted_profile_id, cid, slot["name"], slot["volume"], slot["port"], dataset_id, instance_id, root_id, data_root)
+@@ -125,14 +147,16 @@
+                                           "volume": target.volume, "port": target.port, "database": slot["database"]})
+         self._ephemeral[target_id] = credentials
+         try:
++            checked(operation)
+             safe_root(self.root)
+             data_root.mkdir()
+             originals = data_root / "originals"; originals.mkdir()
+-            self.start(target)
++            self.start(target, operation)
+             from psycopg.conninfo import make_conninfo
+             credentials["admin_dsn"] = make_conninfo(host="127.0.0.1", port=target.port, dbname=slot["database"], user=prefix + "admin", password=credentials["admin_password"])
+-            self._wait_pg(credentials["admin_dsn"])
+-            self._initialize(target, credentials, slot)
++            self._wait_pg(credentials["admin_dsn"], operation)
++            self._initialize(target, credentials, slot, operation)
++            checked(operation)
+             return target
+         except BaseException:
+             self.abandon(target)
+@@ -142,8 +166,8 @@
+     def abandon(self,target):
+         """失败目标失去临时加载身份；未知撤销仍记录失败，目标不再使用。"""
+         credentials=self._ephemeral.pop(target.target_id,None)
+-        revoked=False
+-        if credentials and credentials.get('admin_dsn'):
++        revoked=bool(credentials and credentials.get('temporary_credentials_revoked'))
++        if credentials and credentials.get('admin_dsn') and not revoked:
+             try:
+                 import psycopg
+                 from psycopg import sql
+@@ -157,18 +181,24 @@
+                         connection.execute(sql.SQL('REVOKE retrolume_data_restore_loader FROM {}').format(sql.Identifier(self.profile['login_prefix']+'loader')))
+                 revoked=True
+             except Exception:pass
+-        self.hub.commit('target.register',{'target_id':target.target_id,'state':'failed','temporary_credentials_revoked':revoked})
+-
+-    def start(self, target):
++        old = self.hub.state()['targets'].get(target.target_id, {})
++        if old.get('state') != 'sealed':
++            self.hub.commit('target.register',{'target_id':target.target_id,'state':'failed','temporary_credentials_revoked':revoked})
++        return revoked
++
++    def start(self, target, operation=None):
++        checked(operation)
+         identity = inspect_target(target, self.profile["image_id"])
+         if identity["running"]: return
+         running = docker_call(["ps", "--format", "{{.Names}}"])
+         own_names = {v["name"] for v in self.profile["slots"]} | {self.profile.get("source_name", "")}
+         if len(set(running.splitlines()) & own_names) >= 2: raise DataError("resource_concurrency_exceeded", 503)
+         self._hook("before_start", target)
+-        docker_call(["start", target.cid])
++        checked(operation)
++        docker_call(["start", target.cid], timeout=operation.remaining(30) if operation else 30)
+         identity = inspect_target(target, self.profile["image_id"])
+         self._hook("started", target, identity)
++        checked(operation)
+ 
+     def stop(self, target):
+         identity = inspect_target(target, self.profile["image_id"])
+@@ -179,22 +209,23 @@
+         self._hook("stopped", target, identity)
+ 
+     @staticmethod
+-    def _wait_pg(dsn):
++    def _wait_pg(dsn, operation=None):
+         import psycopg
+         end = time.monotonic() + 30
+         while True:
++            checked(operation)
+             try:
+-                with psycopg.connect(dsn, connect_timeout=1): return
++                with connect(dsn, operation): return
+             except psycopg.Error:
+                 if time.monotonic() >= end: raise DataError("restore_resource_failed", 503) from None
+                 time.sleep(0.1)
+ 
+-    def _initialize(self, target, credentials, slot):
++    def _initialize(self, target, credentials, slot, operation=None):
+         import psycopg
+         from psycopg import sql
+         from psycopg.conninfo import make_conninfo
+         prefix = self.profile["login_prefix"]
+-        with psycopg.connect(credentials["admin_dsn"], autocommit=True, connect_timeout=3) as connection:
++        with connect(credentials["admin_dsn"], operation, autocommit=True) as connection:
+             if connection.execute("SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='r'").fetchone()[0] != 0:
+                 raise DataError("target_not_empty", 503)
+             directory = Path(__file__).resolve().parents[2] / "migrations"
+@@ -224,13 +255,14 @@
+ 
+     def loader_dsn(self, target): return self._ephemeral[target.target_id]["loader_dsn"]
+ 
+-    def seal_readonly(self, target, verification_sha, source_root_sha, restore_manifest_sha):
++    def seal_readonly(self, target, verification_sha, source_root_sha, restore_manifest_sha, operation=None):
++        checked(operation)
+         import psycopg
+         from psycopg import sql
+         credentials = self._ephemeral[target.target_id]
+         prefix = self.profile["login_prefix"]
+         try:
+-            with psycopg.connect(credentials["admin_dsn"], connect_timeout=3) as connection:
++            with connect(credentials["admin_dsn"], operation) as connection:
+                 for table in TABLES:
+                     # 目标内只存在失去执行权的归档占位，普通读取需要旧仓储的固定形状。
+                     connection.execute(sql.SQL("GRANT SELECT ON public.{} TO retrolume_data_snapshot").format(sql.Identifier(table)))
+@@ -239,26 +271,31 @@
+                 connection.execute(sql.SQL("REVOKE retrolume_data_restore_loader FROM {}").format(sql.Identifier(prefix + "loader")))
+                 connection.execute(sql.SQL("ALTER ROLE {} NOLOGIN PASSWORD NULL").format(sql.Identifier(prefix + "loader")))
+                 connection.execute(sql.SQL("ALTER ROLE {} NOLOGIN PASSWORD NULL").format(sql.Identifier(prefix + "admin")))
+-            readonly = self._probe_readonly(credentials["readonly_dsn"], target)
++            credentials['temporary_credentials_revoked'] = True
++            readonly = self._probe_readonly(credentials["readonly_dsn"], target, operation)
+             binding=target.data_root/'originals/.reference.binding.json'
+-            with RootLease(target.data_root/'originals').acquire(True):
++            with RootLease(target.data_root/'originals').acquire(True, timeout=operation.remaining(30) if operation else 30):
++                checked(operation)
+                 with binding.open('xb') as stream:
+                     stream.write(canonical({'profile':PROFILE,'dataset_id':target.dataset_id,'instance_id':target.instance_id,
+                                             'root_id':target.root_id,'mode':'restored_readonly'}).encode('utf-8'))
+                     stream.flush();os.fsync(stream.fileno())
++            checked(operation)
+             reference = self.vault.save({"readonly_dsn": credentials["readonly_dsn"], "snapshot_dsn": credentials["snapshot_dsn"]})
+             receipt = {"target_id": target.target_id, "state": "sealed", "verification_sha256": verification_sha,
+                        "restore_manifest_sha256": restore_manifest_sha, "credential_ref": reference,
+                        "readonly_probe": readonly}
+             self.hub.commit("target.seal", receipt)
++            checked(operation)
+             return {"target_id": target.target_id, "state": "sealed", "verification_sha256": verification_sha}
+         finally:
+-            self._ephemeral.pop(target.target_id, None)
++            if credentials.get('temporary_credentials_revoked'):
++                self._ephemeral.pop(target.target_id, None)
+ 
+     @staticmethod
+-    def _probe_readonly(dsn, target):
++    def _probe_readonly(dsn, target, operation=None):
+         import psycopg
+-        with psycopg.connect(dsn, connect_timeout=3) as connection:
++        with connect(dsn, operation) as connection:
+             state = connection.execute("SELECT dataset_id,source_instance_observed,mode_observed FROM public.data_export_control_v1").fetchone()
+             if tuple(map(str, state)) != (target.dataset_id, target.instance_id, "restored_readonly"):
+                 raise DataError("target_seal_unconfirmed", 503)
+@@ -269,11 +306,12 @@
+         for statement in ("DELETE FROM public.activities", "UPDATE public.material_sources SET current_version=NULL",
+                           "SELECT public.html_update_preview('00000000-0000-0000-0000-000000000001','x','stopped',NULL,NULL,NULL,0)"):
+             try:
+-                with psycopg.connect(dsn, connect_timeout=3) as connection: connection.execute(statement)
++                with connect(dsn, operation) as connection: connection.execute(statement)
+             except psycopg.Error as error:
+                 if error.sqlstate != "42501": raise DataError("target_seal_unconfirmed", 503) from None
+                 rejected.append(error.sqlstate)
+             else: raise DataError("target_seal_unconfirmed", 503)
++        checked(operation)
+         return {"reads": 31, "writes_rejected": rejected}
+ 
+     def target(self, target_id):
+@@ -332,34 +370,57 @@
+         if self.factory is None: raise DataError("restore_executor_missing", 503)
+         job = self.hub.state()["jobs"].get(uuid(job_id))
+         if job is None or job["kind"] != "restore": raise DataError("not_found", 404)
++        if job['state'] == 'cancel_requested': return acknowledge_unstarted(self.hub, job_id)
+         if job["state"] != "prepared": return self.hub.reconcile(job_id)
+         plan = self.plan(job["scope"]["plan_id"], expected_plan_sha)
+-        target = None
++        target, operation, error, proof = None, None, None, None
++        cleanup_complete = True
+         with self.hub.operation_lock.acquire(True, timeout=1):
+             try:
+-                self.hub.update_job(job_id, job["revision"], state="running", stage="allocating", plan_id=plan["plan_id"], latest_status=plan["latest_status"])
+-                target = self.factory.allocate(job_id, plan["resource_profile_id"])
++                operation = Operation(self.hub, job_id, self.limits.operation_seconds, 'allocating', plan_id=plan['plan_id'], latest_status=plan['latest_status'])
++                target = self.factory.allocate(job_id, plan["resource_profile_id"], operation)
++                operation.stage('loading', target_id=target.target_id)
+                 path = self.incoming / (plan["upload_id"] + ".rldata")
+-                if hash_file(path, self.limits.package_bytes)[0] != plan["package_sha256"]: raise DataError("integrity_failed", 422)
+-                with PackageReader(path, self.limits) as reader:
+-                    proof = self._load(reader, target, plan)
++                if hash_file(path, self.limits.package_bytes, operation.check)[0] != plan["package_sha256"]: raise DataError("integrity_failed", 422)
++                with PackageReader(path, self.limits, operation.check) as reader:
++                    proof = self._load(reader, target, plan, operation)
++                operation.stage('loaded')
+                 raw = canonical(proof).encode("utf-8")
+-                proof_sha = self.hub.save_artifact("receipts", job_id, raw)
+-                self.factory.seal_readonly(target, proof_sha, plan["package_root_sha256"], proof_sha)
+-                current = self.hub.get(job_id)
+-                return self.hub.update_job(job_id, current["revision"], state="verified", stage="verified",
+-                                           target_id=target.target_id, root_sha256=plan["package_root_sha256"], counts=proof["counts"])
+-            except BaseException as error:
+-                if target is not None:self.factory.abandon(target)
+-                current = self.hub.get(job_id)
+-                if current['state']!='cancelled':
+-                    self.hub.update_job(job_id, current["revision"], state="failed", stage="failed",
+-                                        error_code=error.code if isinstance(error, DataError) else "restore_failed")
++                proof_sha = self.hub.save_artifact("receipts", job_id, raw, operation.check)
++                operation.admit('readonly_seal')
++                self.factory.seal_readonly(target, proof_sha, plan["package_root_sha256"], proof_sha, operation)
++            except BaseException as caught:
++                error = caught
++            finally:
++                if target is not None:
++                    if error is not None:
++                        try:
++                            sealed = self.hub.state()['targets'][target.target_id].get('state') == 'sealed'
++                            cleanup_complete = sealed or self.factory.abandon(target)
++                        except Exception: cleanup_complete = False
++                    try: self.factory.stop(target)
++                    except Exception as caught:
++                        cleanup_complete = False
++                        if error is None: error = caught
++                else:
++                    # 半注册或创建响应未知不能把停止/撤权签为已确认。
++                    owned = [v for v in self.hub.state()['targets'].values() if v.get('job_id') == job_id]
++                    cleanup_complete = all(v.get('state') == 'failed' and v.get('temporary_credentials_revoked') for v in owned)
++            if error is not None:
++                if operation is not None:
++                    operation.fail(error, cleanup_complete=cleanup_complete,
++                                   state='restore_unconfirmed' if operation.admission or not cleanup_complete else 'failed')
++                elif isinstance(error, DataError) and error.code == 'operation_cancelled':
++                    acknowledge_unstarted(self.hub, job_id)
++                raise error
++            try:
++                return operation.finish('verified', target_id=target.target_id,
++                    root_sha256=plan['package_root_sha256'], counts=proof['counts'])
++            except BaseException as caught:
++                operation.fail(caught, cleanup_complete=cleanup_complete, state='restore_unconfirmed')
+                 raise
+-            finally:
+-                if target is not None: self.factory.stop(target)
+-
+-    def _load(self, reader, target, plan):
++
++    def _load(self, reader, target, plan, operation):
+         import psycopg
+         from psycopg import sql
+         from psycopg.types.json import Jsonb
+@@ -367,10 +428,7 @@
+         store = OriginalStore(target.data_root / "originals")
+         lease = RootLease(store.root)
+         from .spool import PackageRows
+-        started=time.monotonic()
+-        def bounded():
+-            if self.hub.get(target.job_id)['state']=='cancelled':raise DataError('operation_cancelled')
+-            if time.monotonic()-started>self.limits.operation_seconds:raise DataError('operation_timeout',504)
++        bounded = operation.check
+         rowset = {table:PackageRows(reader,table,bounded) for table in TABLES}
+         deleted_sources = {r["entity_id"] for r in plan["overlay"] if r["entity_kind"] == "source"}
+         deleted_memories = {r["entity_id"] for r in plan["overlay"] if r["entity_kind"] == "memory"}
+@@ -378,7 +436,7 @@
+             if head["state"] == "revoked": deleted_memories.add(head["memory_id"])
+         eligible_hashes = {r["sha256"] for r in rowset["material_versions"] if r["source_id"] not in deleted_sources}
+         counts = {"files": 0, "rows": 0, "components": 0}
+-        with lease.acquire() as held:
++        with lease.acquire(timeout=operation.remaining(30)) as held:
+             for entry in reader.manifest["contents"]:
+                 bounded()
+                 if entry["path"].startswith("originals/") and entry["path"].split("/")[1] in eligible_hashes:
+@@ -389,15 +447,9 @@
+                         store.put(stream, max_bytes=self.limits.original_bytes,reference_pin=pin)
+                     counts["files"] += 1
+             for component in self._components(rowset):
+-                raw_bytes,count=0,0
+-                for values in component.values():
+-                    for row in values:
+-                        raw_bytes+=len(canonical(row).encode('utf-8'));count+=1
+-                        if raw_bytes>self.limits.component_bytes or count>self.limits.component_rows:raise DataError('capacity_exceeded',413)
++                self._bound_component(component, bounded)
+                 begin = time.monotonic()
+-                with psycopg.connect(self.factory.loader_dsn(target), connect_timeout=3) as connection:
+-                    connection.execute("SET LOCAL statement_timeout='30s'")
+-                    connection.execute("SET LOCAL lock_timeout='3s'")
++                with operation.connection(self.factory.loader_dsn(target)) as connection:
+                     connection.execute("SET CONSTRAINTS ALL DEFERRED")
+                     pointers = []
+                     for table in TABLES:
+@@ -405,7 +457,7 @@
+                         if table in ("teaching_records", "interview_records"): values = sorted(values, key=lambda r: (r["activity_id"], r["seq"]))
+                         if table in ("interview_commands", "html_commands"): values = sorted(values, key=lambda r: r["created_at"])
+                         for row in values:
+-                            if self.hub.get(target.job_id)["state"] == "cancelled": raise DataError("operation_cancelled")
++                            bounded()
+                             if table == "learning_memory_bodies" and row["memory_id"] in deleted_memories: continue
+                             decoded = decode_row(table, row)
+                             if table == "material_sources":
+@@ -421,13 +473,13 @@
+                         if vid is not None and sid not in deleted_sources:
+                             connection.execute("UPDATE public.material_sources SET current_version=%s WHERE id=%s", (vid, sid))
+                 counts["components"] += 1
+-            with psycopg.connect(self.factory.loader_dsn(target), connect_timeout=3) as connection:
++            with operation.connection(self.factory.loader_dsn(target)) as connection:
+                 for row in lines(reader.archive.open("metadata/operation_history.jsonl"), self.limits):
+                     connection.execute("SELECT public.data_archive_history(%s)", (Jsonb(row),))
+                 for row in plan["overlay"]:
+                     connection.execute("SELECT public.data_archive_tombstone(%s)", (Jsonb(row),))
+         lease.close()
+-        with psycopg.connect(self.factory.loader_dsn(target), connect_timeout=3) as connection:
++        with operation.connection(self.factory.loader_dsn(target)) as connection:
+             actual = {table: connection.execute("SELECT count(*) FROM public." + table).fetchone()[0] for table in TABLES}
+             for table, values in rowset.items():
+                 expected = len(values) if table != "learning_memory_bodies" else sum(r["memory_id"] not in deleted_memories for r in values)
+@@ -446,11 +498,22 @@
+                     for row in expected:
+                         if row["id"] in deleted_sources: row["current_version"] = None
+                 if sorted(map(canonical, restored)) != sorted(map(canonical, expected)): raise DataError("restore_content_mismatch", 422)
++        bounded()
+         return {"profile": PROFILE, "target_id": target.target_id, "package_root_sha256": plan["package_root_sha256"],
+                 "counts": counts, "actual_rows": actual, "deletion_policy": plan["deletion_policy"], "latest_status": plan["latest_status"],
+                 "deleted_sources": sorted(deleted_sources), "deleted_memories": sorted(deleted_memories),
+                 "transformations": {**TRANSFORMS, "material_sources.current_version": "删除覆盖命中时 NULL；快照原值仍在包内"},
+                 "clock_origin": "archive_placeholder", "execution_authority": False}
++
++    def _bound_component(self, component, check):
++        raw_bytes, count = 0, 0
++        for values in component.values():
++            for row in values:
++                check()
++                raw_bytes += len(canonical(row).encode('utf-8')); count += 1
++                if raw_bytes > self.limits.component_bytes or count > self.limits.component_rows:
++                    raise DataError('capacity_exceeded', 413)
++        return {'bytes': raw_bytes, 'rows': count}
+ 
+     @staticmethod
+     def _components(rows):
+@@ -495,38 +558,59 @@
+ 
+     async def _activate_readonly(self, job_id, plan_sha, confirmation_key, expected_generation):
+         restore_job = self.hub.state()["jobs"].get(uuid(job_id))
+-        if restore_job is None or restore_job["state"] != "verified": raise DataError("target_not_verified")
++        if restore_job is None or self.hub.get(job_id)['state'] != 'verified': raise DataError("target_not_verified")
+         plan = self.plan(restore_job["scope"]["plan_id"], plan_sha)
+         origin = self.maintenance.gate.context()
+         command = DataJobCommand("activate", confirmation_key, {"restore_job_id": job_id, "plan_sha256": plan_sha, "expected_generation": expected_generation})
+         activation = self.hub.create_or_get_job(command, origin)
++        if activation['state'] == 'cancel_requested': return acknowledge_unstarted(self.hub, activation['job_id'])
+         if activation["state"] != "prepared": return self.hub.reconcile(activation["job_id"])
+         target = self.factory.target(restore_job["target_id"])
+-        lease = await self.maintenance.drain_for_readonly_switch(expected_generation, time.monotonic() + 30)
++        lease, operation, started = None, None, False
+         try:
+-            latest = self.source.latest()
++            operation = Operation(self.hub, activation['job_id'], self.limits.operation_seconds, 'checking_selection')
++            operation.admit('readonly_maintenance_selector')
++            lease = await self.maintenance.drain_for_readonly_switch(expected_generation,
++                min(operation.deadline_ns/1e9, time.monotonic()+30), operation)
++            latest = self.source.latest(operation)
+             if plan['deletion_policy']=='respect_current_deletions':
+                 if latest['status']!='known':raise DataError('deletion_history_unknown')
+                 covered={(r['entity_kind'],r['entity_id'],r['effective_revision']) for r in plan['overlay']}
+                 if any((r['entity_kind'],r['entity_id'],r['effective_revision']) not in covered for r in latest['tombstones']):
+                     raise DataError('plan_changed')
+             sidecar_id = str(uuid4())
+-            sha = self.hub.save_artifact("overlays", sidecar_id, canonical(latest).encode("utf-8"))
+-            self.factory.start(target)
++            sha = self.hub.save_artifact("overlays", sidecar_id, canonical(latest).encode("utf-8"), operation.check)
++            started = True
++            self.factory.start(target, operation)
+             credentials = self.factory.readonly_credentials(target.target_id)
+-            self.factory._wait_pg(credentials["readonly_dsn"])
+-            self.factory._probe_readonly(credentials["readonly_dsn"], target)
++            self.factory._wait_pg(credentials["readonly_dsn"], operation)
++            self.factory._probe_readonly(credentials["readonly_dsn"], target, operation)
+             selection = {"generation": expected_generation + 1, "target_id": target.target_id, "dataset_id": target.dataset_id,
+                          "instance_id": target.instance_id, "mode": "restored_readonly", "activation_job_id": activation["job_id"],
+                          "latest_status": latest["status"], "latest_artifact_id": sidecar_id, "latest_sha256": sha}
+             def check(state):
++                job = state['jobs'][activation['job_id']]
++                if job['revision'] != operation.revision: raise DataError('request_conflict')
++                operation.validate_admission(job)
+                 current = state["selection"]
+                 if (current["generation"] if current else 0) != expected_generation or state["fence"] is None or state["fence"]["state"] != "frozen":
+                     raise DataError("selection_changed")
+             self.hub.commit("selector_commit", selection, validate=check)
+             if self.rebind is not None: self.rebind(target, credentials, selection)
+-            current = self.hub.get(activation["job_id"])
+-            return self.hub.update_job(activation["job_id"], current["revision"], state="active_readonly", stage="active_readonly",
+-                                       target_id=target.target_id, selection_generation=selection["generation"], latest_status=latest["status"])
++            return operation.finish('active_readonly', target_id=target.target_id,
++                selection_generation=selection['generation'], latest_status=latest['status'])
++        except BaseException as error:
++            selected = self.hub.state()['selection']
++            if started and (selected is None or selected.get('activation_job_id') != activation['job_id']):
++                try: self.factory.stop(target)
++                except Exception: pass
++            if operation is not None:
++                operation.fail(error, cleanup_complete=operation.admission is None,
++                               state='activation_unconfirmed' if operation.admission else 'failed')
++            elif isinstance(error, DataError) and error.code == 'operation_cancelled':
++                acknowledge_unstarted(self.hub, activation['job_id'])
++            if isinstance(error, Exception) and not isinstance(error, DataError):
++                raise DataError('storage_unavailable', 503) from None
++            raise
+         finally:
+-            lease.close()
++            if lease is not None: lease.close()

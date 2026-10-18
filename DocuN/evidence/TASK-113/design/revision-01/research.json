@@ -1,0 +1,35 @@
+{
+  "pages_read": 6,
+  "page_limit": 6,
+  "product_probe_or_download": false,
+  "references": [
+    {
+      "url": "https://www.postgresql.org/docs/16/transaction-iso.html",
+      "use": "同一REPEATABLE READ只读事务中读取关系数据，时点为首个非事务控制语句；不把多个READ COMMITTED读当数据库一致快照",
+      "version_boundary": "仅核稳定事务语义，不据文档16推断当前现场主版本"
+    },
+    {
+      "url": "https://www.postgresql.org/docs/16/ddl-constraints.html",
+      "use": "FK和约束恢复顺序；不能以SQL表名相同代替实际约束及角色核对"
+    },
+    {
+      "url": "https://www.postgresql.org/docs/16/sql-set-constraints.html",
+      "use": "只允许已明确DEFERRABLE的约束在合法事务内延后，不关闭CHECK/NOT NULL/FK/触发器"
+    },
+    {
+      "url": "https://docs.python.org/3.12/library/zipfile.html",
+      "use": "标准库ZIP容器，逐成员显式验证与流式复制，不直接extractall不可信包",
+      "version_boundary": "工程保存的Python312身份及现有代码，不安装新Python或库"
+    },
+    {
+      "url": "https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-lockfileex",
+      "use": "同一文件范围共享/排他跨进程锁及退出释放可能延迟；未执行API探针"
+    },
+    {
+      "url": "https://www.postgresql.org/docs/16/explicit-locking.html",
+      "use": "事务级advisory shared/exclusive等待DB引用事务，配合持久取消epoch，不假租约TTL或现场PG版本"
+    }
+  ],
+  "new_pages": 2,
+  "new_product_probes": 0
+}

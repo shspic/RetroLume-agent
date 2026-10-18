@@ -1,0 +1,46 @@
+--- pre/frontend/src/activities/TeachingFeedback.tsx
++++ post/frontend/src/activities/TeachingFeedback.tsx
+@@ -1,11 +1,12 @@
+ // 四类反馈分开展示：正确部分 / 实际错误 / 缺证据 / 原因假设，
+ // 逐维度观察与下一步建议；不显示长期掌握，不把假设写成确定缺陷。
+ import type { TeachingWorkspace } from "./teachingApi";
++import { TeachingCitations } from "./TeachingCitations";
+ 
+ export type FeedbackView = {
+-  correctParts: { answer_excerpt: string; explanation: string }[];
+-  errors: { answer_excerpt: string; explanation: string }[];
+-  evidenceGaps: { answer_excerpt: string; explanation: string }[];
++  correctParts: { answer_excerpt: string; explanation: string; citations: string[] }[];
++  errors: { answer_excerpt: string; explanation: string; citations: string[] }[];
++  evidenceGaps: { answer_excerpt: string; explanation: string; citations: string[] }[];
+   causeHypotheses: { hypothesis: string; evidence_for: string; confidence: string }[];
+   observations: { id: string; observation: string; reason: string }[];
+   nextFocus: { focus_dimension: string; reason: string; suggested_mode: string } | null;
+@@ -17,10 +18,11 @@
+ };
+ 
+ export function TeachingFeedback({
+-  workspace, feedback,
++  workspace, feedback, token,
+ }: {
+   workspace: TeachingWorkspace | null;
+   feedback: FeedbackView | null;
++  token: string;
+ }) {
+   if (!workspace || !feedback) {
+     return <p className="quiet">当前没有评价结果。保存作答后可显式请求评价（1 次模型）。</p>;
+@@ -37,9 +39,11 @@
+           <h5>{group.title}</h5>
+           {group.items.length === 0 && <p className="quiet">本次未记录。</p>}
+           {group.items.map((item, index) => (
+-            <p key={`${group.title}-${index}`}>
+-              「{item.answer_excerpt}」——{item.explanation}
+-            </p>
++            <div key={`${group.title}-${index}`}>
++              <p>「{item.answer_excerpt}」——{item.explanation}</p>
++              <TeachingCitations activityId={workspace.activity_id} recordId={workspace.feedback?.record_id}
++                ids={item.citations} token={token} label={`${group.title} ${index + 1}`} />
++            </div>
+           ))}
+         </div>
+       ))}

@@ -1,0 +1,72 @@
+
+DocuN/evidence/TASK-117/execution/continuation-05/selector_browser.mjs
+1: import fs from 'node:fs';import path from 'node:path';import {createRequire} from 'node:module';import {randomUUID,createHash} from 'node:crypto';
+2: const require=createRequire(path.join(process.cwd(),'package.json'));const {chromium}=require('playwright');
+3: const dir=path.join(process.env.RETROLUME_TASK117_EVIDENCE,`browser-${process.env.RETROLUME_TASK117_BROWSER_ATTEMPT}`);fs.mkdirSync(dir);
+4: const proof={status:'running',observed_requests:0,posts:[],responses:[],assets:[],real_backend:true,provider_calls:0};
+5: const save=()=>fs.writeFileSync(path.join(dir,'proof.json'),JSON.stringify(proof,null,2));
+6: let browser,context,release;let armed=false,held=false,closing=false;const pending=new Set();
+7: try{
+8:  browser=await chromium.launch({headless:true});process.stdin.on('data',()=>void browser.close());process.stdin.on('end',()=>void browser.close());process.stdin.resume();
+9:  context=await browser.newContext({viewport:{width:1440,height:1000}});const page=await context.newPage();page.setDefaultTimeout(20000);
+10:  context.on('request',r=>{if(new URL(r.url()).pathname.startsWith('/api/')){proof.observed_requests++;if(r.method()==='POST')proof.posts.push(new URL(r.url()).pathname);}});
+11:  context.on('response',r=>{const u=new URL(r.url());if(u.pathname.includes('saved-records')||/\/assets\/.*\.js$/.test(u.pathname)){
+12:   const work=(async()=>{if(u.pathname.includes('saved-records'))proof.responses.push({path:u.pathname,category:u.searchParams.get('category'),http:r.status(),value:await r.json()});else proof.assets.push({path:u.pathname,sha256:createHash('sha256').update(await r.body()).digest('hex')});})().catch(e=>{if(!closing)proof.observer_error=String(e);}).finally(()=>pending.delete(work));pending.add(work);
+13:  }});
+14:  await page.goto('http://127.0.0.1:18118',{waitUntil:'networkidle'});
+15:  const originalSession=await context.request.get('http://127.0.0.1:18118/api/session');proof.observed_requests++;const oldSession=await originalSession.json();
+16:  proof.origin_context=oldSession.data_context;if(proof.origin_context.read_only)throw new Error('origin_not_normal');
+17:  const barrier=new Promise(r=>release=r);
+18:  await page.route('**/api/materials',async route=>{
+19:   if(!armed||held||route.request().method()!=='GET')return route.continue();
+20:   const actual=await route.fetch();const body=await actual.body();held=true;
+21:   proof.held_actual_response={http:actual.status(),sha256:createHash('sha256').update(body).digest('hex'),context:actual.headers()['x-retrolume-data-context'],source_ids:JSON.parse(body).items.map(x=>x.id),actual_backend_bytes:true};save();
+22:   await barrier;
+23:   try{await route.fulfill({response:actual,body});proof.old_delivery='actual original bytes released to the original request';}catch(e){proof.old_delivery='original request aborted by normal document transition';proof.old_delivery_error=String(e).slice(0,180);}
+24:  });
+25:  armed=true;await page.getByRole('button',{name:'数据与备份',exact:true}).click();
+26:  const until=Date.now()+15000;while(!held){if(Date.now()>until)throw new Error('old_material_response_not_held');await page.waitForTimeout(40);}
+27:  const body={expected_plan_sha256:'06926cbd4ee118f4d41a14497ad97c19aad8cf38c5f36dd40fd5edef690d0ec3',business_key:randomUUID(),expected_selection_generation:0,confirm:true};
+28:  proof.observed_requests++;const activated=await context.request.post('http://127.0.0.1:18118/api/data/restore-jobs/55957ddd-20dc-498b-972f-66f3805679cb/activate-readonly',{headers:{'X-RetroLume-Session':oldSession.token,'X-RetroLume-Data-Context':JSON.stringify(oldSession.data_context)},data:body,timeout:60000});
+29:  proof.activation={request:body,http:activated.status(),receipt:await activated.json()};save();
+30:  if(activated.status()!==200||proof.activation.receipt.state!=='active_readonly')throw new Error('formal_activation_not_confirmed');
+31:  await page.reload({waitUntil:'domcontentloaded'});await page.getByRole('button',{name:'数据与备份',exact:true}).click();
+32:  await page.getByText('当前仅供只读查看',{exact:false}).waitFor();await page.getByRole('heading',{name:'已保存记录',exact:true}).waitFor();
+33:  const nextSessionResponse=await context.request.get('http://127.0.0.1:18118/api/session');proof.observed_requests++;const next=await nextSessionResponse.json();proof.selected_context=next.data_context;
+34:  if(!next.data_context.read_only||next.data_context.selection_generation!==1||next.data_context.instance_id===oldSession.data_context.instance_id)throw new Error('selector_identity_not_advanced');
+35:  const headers={'X-RetroLume-Session':next.token,'X-RetroLume-Data-Context':JSON.stringify(next.data_context)};
+36:  proof.observed_requests++;const caps=await context.request.get('http://127.0.0.1:18118/api/data/capabilities',{headers});proof.selected_caps=await caps.json();
+37:  if(proof.selected_caps.format!=='data_exit.v1.r02'||!proof.selected_caps.read_only)throw new Error('selected_caps_profile');
+38:  const postsBefore=proof.posts.length;release();await page.waitForTimeout(400);
+39:  if(proof.posts.length!==postsBefore)throw new Error('old_response_triggered_new_mutation');
+40:  proof.old_response_granted_no_next_action=true;
+41:  proof.observed_requests++;const denied=await context.request.post('http://127.0.0.1:18118/api/activities',{headers,data:{}});proof.write_refusal={http:denied.status(),value:await denied.json()};
+42:  if(denied.status()!==409||!JSON.stringify(proof.write_refusal.value).includes('data_readonly'))throw new Error('readonly_write_gate');
+43:  await page.getByLabel('记录类型').selectOption('memories');await page.waitForTimeout(350);
+44:  await page.screenshot({path:path.join(dir,'R02-selected-readonly-history.png'),fullPage:true});
+45:  if(!proof.assets.some(x=>x.sha256==='58a87abf5ff4b02b33aab5dc3735507f4f097791e021aeb4ddfbf0b62ac115e8'))throw new Error('wrong_bundle');
+46:  proof.status='passed';
+47: }catch(e){proof.status='failed';proof.error=String(e);save();throw e;}
+48: finally{release?.();closing=true;await Promise.race([Promise.allSettled([...pending]),new Promise(r=>setTimeout(r,3000))]);if(context)await context.close();if(browser)await browser.close();proof.browser_closed=true;save();process.stdin.removeAllListeners();process.stdin.pause();process.stdin.unref?.();}
+
+DocuN/evidence/TASK-117/execution/continuation-05/selected_reader.mjs
+1: import fs from 'node:fs';import path from 'node:path';import {createRequire} from 'node:module';import {createHash} from 'node:crypto';
+2: const {chromium}=createRequire(path.join(process.cwd(),'package.json'))('playwright');
+3: const dir=path.join(process.env.RETROLUME_TASK117_EVIDENCE,`browser-${process.env.RETROLUME_TASK117_BROWSER_ATTEMPT}`);fs.mkdirSync(dir);
+4: const proof={status:'running',observed_requests:0,posts:[],records:[],assets:[],real_backend:true};const save=()=>fs.writeFileSync(path.join(dir,'proof.json'),JSON.stringify(proof,null,2));
+5: const canonical=v=>v===null||typeof v!=='object'?JSON.stringify(v):Array.isArray(v)?'['+v.map(canonical).join(',')+']':'{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canonical(v[k])).join(',')+'}';
+6: let browser,context;const pending=new Set();let closing=false;
+7: try{
+8:  browser=await chromium.launch({headless:true});process.stdin.on('data',()=>void browser.close());process.stdin.on('end',()=>void browser.close());process.stdin.resume();context=await browser.newContext({viewport:{width:1440,height:1000}});const page=await context.newPage();page.setDefaultTimeout(20000);
+9:  context.on('request',r=>{if(new URL(r.url()).pathname.startsWith('/api/')){proof.observed_requests++;if(r.method()==='POST')proof.posts.push(new URL(r.url()).pathname);}});
+10:  context.on('response',r=>{const u=new URL(r.url());if(u.pathname.includes('saved-records')||/\/assets\/.*\.js$/.test(u.pathname)){const work=(async()=>{if(u.pathname.includes('saved-records'))proof.records.push({category:u.searchParams.get('category'),http:r.status(),value:await r.json()});else proof.assets.push({path:u.pathname,sha256:createHash('sha256').update(await r.body()).digest('hex')});})().catch(e=>{if(!closing)proof.observer_error=String(e);}).finally(()=>pending.delete(work));pending.add(work);}});
+11:  await page.goto('http://127.0.0.1:18118',{waitUntil:'networkidle'});await page.getByRole('button',{name:'数据与备份',exact:true}).click();await page.getByText('当前仅供只读查看',{exact:false}).waitFor();await page.getByRole('heading',{name:'已保存记录',exact:true}).waitFor();
+12:  const sessionResponse=await context.request.get('http://127.0.0.1:18118/api/session');proof.observed_requests++;const session=await sessionResponse.json();proof.data_context=session.data_context;
+13:  const headers={'X-RetroLume-Session':session.token,'X-RetroLume-Data-Context':canonical(session.data_context)};
+14:  proof.observed_requests++;const denied=await context.request.post('http://127.0.0.1:18118/api/activities',{headers,data:{}});proof.write_refusal={http:denied.status(),value:await denied.json()};if(denied.status()!==409||!JSON.stringify(proof.write_refusal.value).includes('data_readonly'))throw new Error('write_not_refused_by_readonly_gate');
+15:  await page.getByLabel('记录类型').selectOption('memories');const until=Date.now()+12000;while(!proof.records.some(x=>x.category==='memories'&&x.http===200)){if(Date.now()>until)throw new Error('readonly_history_not_received');await page.waitForTimeout(40);}
+16:  if(!proof.data_context.read_only||proof.data_context.selection_generation!==1||proof.posts.length)throw new Error('current_readonly_UI_granted_mutation');
+17:  if(!proof.assets.some(x=>x.sha256==='58a87abf5ff4b02b33aab5dc3735507f4f097791e021aeb4ddfbf0b62ac115e8'))throw new Error('wrong_bundle');
+18:  await page.screenshot({path:path.join(dir,'R02-normal-reopen-readonly-history.png'),fullPage:true});proof.status='passed';
+19: }catch(e){proof.status='failed';proof.error=String(e);save();throw e;}
+20: finally{closing=true;await Promise.race([Promise.allSettled([...pending]),new Promise(r=>setTimeout(r,3000))]);if(context)await context.close();if(browser)await browser.close();proof.browser_closed=true;save();process.stdin.removeAllListeners();process.stdin.pause();process.stdin.unref?.();}

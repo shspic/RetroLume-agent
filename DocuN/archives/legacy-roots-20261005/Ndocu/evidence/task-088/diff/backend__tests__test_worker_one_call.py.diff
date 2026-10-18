@@ -1,0 +1,52 @@
+--- pre/backend/tests/test_worker_one_call.py
++++ post/backend/tests/test_worker_one_call.py
+@@ -64,6 +64,7 @@
+ 
+     async def record_outcome(self, permit, outcome):
+         self.events.append(outcome.disposition.value)
++        return RecordOutcome.RECORDED
+ 
+ 
+ class Transport:
+@@ -111,18 +112,28 @@
+             with self.assertRaises(ValueError):
+                 run_one_call(ledger,SessionConfig(),ctx.activity_id,ctx.executor_id,"op",request(),
+                              service(timeout_seconds=20),run_tag="run")
++        digest = "a" * 64
+         for result in (
+             ModelCallResult(CallStatus.SUCCEEDED,ctx.operation_id,call.service.provider,call.service.model,
+-                            text="synthetic-answer-085",usage=Usage(2,1,3)),
++                            text="synthetic-answer-085",usage=Usage(2,1,3),payload_sha256=digest),
+             ModelCallResult(CallStatus.SUCCEEDED,ctx.operation_id,call.service.provider,call.service.model,
+-                            json_object={"answer":42},usage=Usage(2,1,3)),
++                            json_object={"answer":42},usage=Usage(2,1,3),payload_sha256=digest),
+             ModelCallResult(CallStatus.TOOL_PLAN,ctx.operation_id,call.service.provider,call.service.model,
+                             tool_plans=(ToolCallPlan("calc","finite_calculate",{"operation":"add","left":1,"right":2}),)),
+         ):
+             original=receipt(result,ctx,"run")
+             raw=pack_frame(original).ljust(SLOT_SIZE,b"\0")
+             decoded=decode_receipt(unpack_frame(raw),ctx,"run")
+-            self.assertEqual(json.loads(json.dumps(asdict(decoded))),json.loads(json.dumps(asdict(result))))
++            # 协议3 回执去正文副本：text/json_object 恒为 None，其余字段一致。
++            expected=json.loads(json.dumps(asdict(result)))
++            expected["text"]=None
++            expected["json_object"]=None
++            self.assertEqual(json.loads(json.dumps(asdict(decoded))),expected)
++            if result.status is CallStatus.SUCCEEDED:
++                self.assertEqual(original["business_commit"],"committed")
++                self.assertEqual(decoded.payload_sha256,digest)
++            else:
++                self.assertEqual(original["business_commit"],"not_committed")
+             outcome=SessionOutcome("run","settled",ctx.activity_id,generation=ctx.execution_generation,model_receipt=original)
+             self.assertNotIn("synthetic-answer",repr(outcome))
+             self.assertNotIn("answer",repr(outcome))
+@@ -168,7 +179,8 @@
+         self.assertNotIn("synthetic-answer", repr(parsed))
+         self.assertNotIn("synthetic-body", repr(OneCallInput.from_wire(value["call"])))
+         self.assertNotIn("synthetic-secret", repr(OneCallInput.from_wire(value["call"])))
+-        self.assertEqual(result["business_commit"], "not_committed")
++        self.assertEqual(result["business_commit"], "committed")
++        self.assertRegex(parsed.payload_sha256 or "", r"^[0-9a-f]{64}$")
+ 
+     async def test_unknown_timeout_failure_denial_and_no_operation_retry(self):
+         for mode, status in (("unknown",CallStatus.UNKNOWN),("timeout",CallStatus.UNKNOWN),

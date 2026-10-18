@@ -1,0 +1,287 @@
+{
+  "case_id": "complex",
+  "source_path": "fixtures/two_columns_table.pdf",
+  "source_sha256": "437dfdd7299467a21116c56a3924ee6b191538a2eec34ff4e2967f18fbcbf2d6",
+  "basename": "two_columns_table.pdf",
+  "mode": "plain",
+  "adapter": "pypdf",
+  "status": "success",
+  "pages": [
+    {
+      "physical_page": 1,
+      "text": "双栏与表格 / Two columns and table\nRead LEFT top-to-bottom, then RIGHT, then TABLE by rows.\n先左栏、后右栏；表格逐行从左向右。\nL1 左栏一：先理解概念。\nR1 右栏一：开始另一道题。\nL2 Left two: connect the evidence.\nR2 Right two: compare two attempts.\nL3 左栏三：最后给出解释。\nR3 右栏三：更新复习计划。\nTABLE: each value belongs to the topic on the same row.\nT-H1 Topic\nT-1A Energy\nT-2A Time\nT-H2 Value\nT-1B 12 joules\nT-2B 3 seconds\nPhysical page 1; synthetic counterexample\n"
+    }
+  ],
+  "evaluation": {
+    "fragments": [
+      {
+        "id": "L1",
+        "expected": {
+          "id": "L1",
+          "text": "L1 左栏一：先理解概念。",
+          "physical_page": 1
+        },
+        "hits": [
+          {
+            "physical_page": 1,
+            "extracted_offset": 105,
+            "text": "L1 左栏一：先理解概念。",
+            "excerpt": "LE by rows.\n先左栏、后右栏；表格逐行从左向右。\nL1 左栏一：先理解概念。\nR1 右栏一：开始另一道题。\nL2 Left two: c"
+          }
+        ],
+        "content_unique_pass": true,
+        "location_pass": true
+      },
+      {
+        "id": "L2",
+        "expected": {
+          "id": "L2",
+          "text": "L2 Left two: connect the evidence.",
+          "physical_page": 1
+        },
+        "hits": [
+          {
+            "physical_page": 1,
+            "extracted_offset": 134,
+            "text": "L2 Left two: connect the evidence.",
+            "excerpt": "\nL1 左栏一：先理解概念。\nR1 右栏一：开始另一道题。\nL2 Left two: connect the evidence.\nR2 Right two: compare two att"
+          }
+        ],
+        "content_unique_pass": true,
+        "location_pass": true
+      },
+      {
+        "id": "L3",
+        "expected": {
+          "id": "L3",
+          "text": "L3 左栏三：最后给出解释。",
+          "physical_page": 1
+        },
+        "hits": [
+          {
+            "physical_page": 1,
+            "extracted_offset": 205,
+            "text": "L3 左栏三：最后给出解释。",
+            "excerpt": "ht two: compare two attempts.\nL3 左栏三：最后给出解释。\nR3 右栏三：更新复习计划。\nTABLE: each va"
+          }
+        ],
+        "content_unique_pass": true,
+        "location_pass": true
+      },
+      {
+        "id": "R1",
+        "expected": {
+          "id": "R1",
+          "text": "R1 右栏一：开始另一道题。",
+          "physical_page": 1
+        },
+        "hits": [
+          {
+            "physical_page": 1,
+            "extracted_offset": 119,
+            "text": "R1 右栏一：开始另一道题。",
+            "excerpt": "栏、后右栏；表格逐行从左向右。\nL1 左栏一：先理解概念。\nR1 右栏一：开始另一道题。\nL2 Left two: connect the evid"
+          }
+        ],
+        "content_unique_pass": true,
+        "location_pass": true
+      },
+      {
+        "id": "R2",
+        "expected": {
+          "id": "R2",
+          "text": "R2 Right two: compare two attempts.",
+          "physical_page": 1
+        },
+        "hits": [
+          {
+            "physical_page": 1,
+            "extracted_offset": 169,
+            "text": "R2 Right two: compare two attempts.",
+            "excerpt": "ft two: connect the evidence.\nR2 Right two: compare two attempts.\nL3 左栏三：最后给出解释。\nR3 右栏三：更新复习计划。"
+          }
+        ],
+        "content_unique_pass": true,
+        "location_pass": true
+      },
+      {
+        "id": "R3",
+        "expected": {
+          "id": "R3",
+          "text": "R3 右栏三：更新复习计划。",
+          "physical_page": 1
+        },
+        "hits": [
+          {
+            "physical_page": 1,
+            "extracted_offset": 220,
+            "text": "R3 右栏三：更新复习计划。",
+            "excerpt": " two attempts.\nL3 左栏三：最后给出解释。\nR3 右栏三：更新复习计划。\nTABLE: each value belongs to "
+          }
+        ],
+        "content_unique_pass": true,
+        "location_pass": true
+      },
+      {
+        "id": "TH1",
+        "expected": {
+          "id": "TH1",
+          "text": "T-H1 Topic",
+          "physical_page": 1
+        },
+        "hits": [
+          {
+            "physical_page": 1,
+            "extracted_offset": 291,
+            "text": "T-H1 Topic",
+            "excerpt": "to the topic on the same row.\nT-H1 Topic\nT-1A Energy\nT-2A Time\nT-H2 Va"
+          }
+        ],
+        "content_unique_pass": true,
+        "location_pass": true
+      },
+      {
+        "id": "TH2",
+        "expected": {
+          "id": "TH2",
+          "text": "T-H2 Value",
+          "physical_page": 1
+        },
+        "hits": [
+          {
+            "physical_page": 1,
+            "extracted_offset": 324,
+            "text": "T-H2 Value",
+            "excerpt": "1 Topic\nT-1A Energy\nT-2A Time\nT-H2 Value\nT-1B 12 joules\nT-2B 3 seconds"
+          }
+        ],
+        "content_unique_pass": true,
+        "location_pass": true
+      },
+      {
+        "id": "T1A",
+        "expected": {
+          "id": "T1A",
+          "text": "T-1A Energy",
+          "physical_page": 1
+        },
+        "hits": [
+          {
+            "physical_page": 1,
+            "extracted_offset": 302,
+            "text": "T-1A Energy",
+            "excerpt": "c on the same row.\nT-H1 Topic\nT-1A Energy\nT-2A Time\nT-H2 Value\nT-1B 12 "
+          }
+        ],
+        "content_unique_pass": true,
+        "location_pass": true
+      },
+      {
+        "id": "T1B",
+        "expected": {
+          "id": "T1B",
+          "text": "T-1B 12 joules",
+          "physical_page": 1
+        },
+        "hits": [
+          {
+            "physical_page": 1,
+            "extracted_offset": 335,
+            "text": "T-1B 12 joules",
+            "excerpt": "A Energy\nT-2A Time\nT-H2 Value\nT-1B 12 joules\nT-2B 3 seconds\nPhysical page "
+          }
+        ],
+        "content_unique_pass": true,
+        "location_pass": true
+      },
+      {
+        "id": "T2A",
+        "expected": {
+          "id": "T2A",
+          "text": "T-2A Time",
+          "physical_page": 1
+        },
+        "hits": [
+          {
+            "physical_page": 1,
+            "extracted_offset": 314,
+            "text": "T-2A Time",
+            "excerpt": "e row.\nT-H1 Topic\nT-1A Energy\nT-2A Time\nT-H2 Value\nT-1B 12 joules\nT-2"
+          }
+        ],
+        "content_unique_pass": true,
+        "location_pass": true
+      },
+      {
+        "id": "T2B",
+        "expected": {
+          "id": "T2B",
+          "text": "T-2B 3 seconds",
+          "physical_page": 1
+        },
+        "hits": [
+          {
+            "physical_page": 1,
+            "extracted_offset": 350,
+            "text": "T-2B 3 seconds",
+            "excerpt": "ime\nT-H2 Value\nT-1B 12 joules\nT-2B 3 seconds\nPhysical page 1; synthetic co"
+          }
+        ],
+        "content_unique_pass": true,
+        "location_pass": true
+      }
+    ],
+    "orders": [
+      {
+        "name": "column_reading",
+        "expected": [
+          "L1",
+          "L2",
+          "L3",
+          "R1",
+          "R2",
+          "R3"
+        ],
+        "observed": [
+          "L1",
+          "R1",
+          "L2",
+          "R2",
+          "L3",
+          "R3"
+        ],
+        "pass": false
+      },
+      {
+        "name": "table_row_reading",
+        "expected": [
+          "TH1",
+          "TH2",
+          "T1A",
+          "T1B",
+          "T2A",
+          "T2B"
+        ],
+        "observed": [
+          "TH1",
+          "T1A",
+          "T2A",
+          "TH2",
+          "T1B",
+          "T2B"
+        ],
+        "pass": false
+      }
+    ],
+    "page_count": {
+      "expected": 1,
+      "actual": 1,
+      "pass": true
+    }
+  },
+  "python_warnings": [],
+  "pypdf_log": "",
+  "captured_stdout": "",
+  "captured_stderr": "",
+  "status_matches_manifest": true
+}

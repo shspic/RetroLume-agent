@@ -1,0 +1,10 @@
+Traceback (most recent call last):
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task111\c04_step.py", line 82, in main
+    pdf_cases(resource,out)
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task111\c04_qualify.py", line 97, in pdf_cases
+    conn.execute('UPDATE pdf_review_candidates SET page_count=3 WHERE id=%s',(cid,));conn.execute('INSERT INTO pdf_review_pages(candidate_id,version_id,physical_page) VALUES(%s,%s,3)',(cid,version));observe('missing_extracted_page',False)
+                                                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\.venv\Lib\site-packages\psycopg\connection.py", line 300, in execute
+    raise ex.with_traceback(None)
+psycopg.errors.ForeignKeyViolation: insert or update on table "pdf_review_pages" violates foreign key constraint "pdf_review_pages_version_id_physical_page_fkey"
+DETAIL:  Key (version_id, physical_page)=(6e59fccf-c68b-40d4-ae45-6a3620460a0d, 3) is not present in table "pdf_extracted_pages".

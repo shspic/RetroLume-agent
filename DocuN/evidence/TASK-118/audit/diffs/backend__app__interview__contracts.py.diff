@@ -1,0 +1,98 @@
+--- first-pre/backend/app/interview/contracts.py
++++ current/backend/app/interview/contracts.py
+@@ -8,6 +8,8 @@
+ 
+ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+ from app.learning.contracts import CatalogEntry
++from app.retrieval.contracts import RetrievalRef
++from app.memory.contracts import MemoryChoice
+ 
+ PROFILE = "interview.v1"
+ PREFIX = "int10m."
+@@ -209,6 +211,20 @@
+ 
+ class InterviewCatalogEntry(CatalogEntry):
+     citation_id: str = Field(pattern=r"^ic_[0-9a-f]{24}$")
++
++
++class InterviewHybridCommandInput(InterviewCommandInput):
++    schema_id: Literal['interview.command.v2']=Field(default='interview.command.v2',alias='schema')
++    retrieval_ref: RetrievalRef | None = None
++    @model_validator(mode='after')
++    def retrieval_required(self):
++        if (self.action in MODEL_ACTIONS)!=(self.retrieval_ref is not None):raise ValueError('interview_retrieval_required')
++        return self
++
++
++def parse_command(value):
++    if isinstance(value,(str,bytes)):value=load_json(value)
++    return (InterviewHybridCommandInput if value.get('schema')=='interview.command.v2' else InterviewCommandInput).model_validate(value)
+ 
+ 
+ class RecordRef(Strict):
+@@ -294,6 +310,42 @@
+     _id = field_validator("business_key")(uuid_text)
+ 
+ 
++class InterviewHybridContext(InterviewContext):
++    schema_id: Literal['interview.context.v2']=Field(default='interview.context.v2',alias='schema')
++    prompt_version: Literal['interview.prompt.v2']='interview.prompt.v2'
++    retrieval_ref: RetrievalRef
++    memory_recipe: dict | None
++    memory_selection_sha256: str | None=Field(pattern=r'^[0-9a-f]{64}$')
++    memory_dependency_sha256: str | None=Field(pattern=r'^[0-9a-f]{64}$')
++    memory_refs:list[MemoryChoice]=Field(max_length=4)
++    @model_validator(mode='after')
++    def memory_shape(self):
++        if self.memory_selection_sha256 is None:
++            if self.memory_recipe is not None or self.memory_dependency_sha256 is not None or self.memory_refs:raise ValueError('interview_memory_binding_invalid')
++        elif (not self.memory_recipe or self.memory_recipe.get('policy')!='interview.memory.recipe.v1'
++              or self.memory_dependency_sha256 is None or not self.memory_refs):raise ValueError('interview_memory_binding_invalid')
++        return self
++
++
++class InterviewHybridProfile(InterviewProfile):
++    schema_id:Literal['interview.v2']=Field(default='interview.v2',alias='schema')
++    prompt_version:Literal['interview.prompt.v2']='interview.prompt.v2'
++    retrieval_ref:RetrievalRef
++    memory_selection_sha256:str|None=Field(pattern=r'^[0-9a-f]{64}$')
++    memory_dependency_sha256:str|None=Field(pattern=r'^[0-9a-f]{64}$')
++
++
++class InterviewHybridCallBinding(InterviewCallBinding):
++    retrieval_ref:RetrievalRef
++    memory_selection_sha256:str|None=Field(pattern=r'^[0-9a-f]{64}$')
++    memory_dependency_sha256:str|None=Field(pattern=r'^[0-9a-f]{64}$')
++
++
++def parse_context(value):
++    if isinstance(value,(str,bytes)):value=load_json(value)
++    return (InterviewHybridContext if value.get('schema')=='interview.context.v2' else InterviewContext).model_validate(value)
++
++
+ class Recognition(Strict):
+     answer_record_id: str
+     start_offset: int = Field(ge=0)
+@@ -354,15 +406,18 @@
+         return values
+ 
+ 
+-def operation_id(key: str) -> str:
+-    return PREFIX + UUID(uuid_text(key)).hex
++def operation_id(key: str, profile='interview.v1') -> str:
++    if profile not in ('interview.v1','interview.v2','interview.command.v1','interview.command.v2'):raise ValueError('interview_binding_invalid')
++    return ('int18m.' if profile.endswith('.v2') else PREFIX) + UUID(uuid_text(key)).hex
+ 
+ 
+ def profile_for(frozen: InterviewContext) -> InterviewProfile:
+     refs = {r.kind: r for r in frozen.parent_record_refs}
+-    return InterviewProfile(activity_id=frozen.activity_id, business_key=frozen.business_key, action=frozen.action,
++    hybrid=isinstance(frozen,InterviewHybridContext)
++    return (InterviewHybridProfile if hybrid else InterviewProfile)(activity_id=frozen.activity_id, business_key=frozen.business_key, action=frozen.action,
+         request_sha256=frozen.request_sha256, context_sha256=sha(canonical(frozen.model_dump())),
+         expected_head_revision=frozen.expected_head_revision, goal_version=frozen.expected_goal_version,
+         scope_revision=frozen.expected_scope_revision, round_index=frozen.round_index, probe_depth=frozen.probe_depth,
+         goal_record_id=frozen.goal_record_id, question_record_id=(refs.get("probe") or refs.get("question")).record_id if (refs.get("probe") or refs.get("question")) else None,
+-        answer_record_id=refs["answer"].record_id if "answer" in refs else None)
++        answer_record_id=refs["answer"].record_id if "answer" in refs else None,
++        **({'retrieval_ref':frozen.retrieval_ref,'memory_selection_sha256':frozen.memory_selection_sha256,'memory_dependency_sha256':frozen.memory_dependency_sha256} if hybrid else {}))

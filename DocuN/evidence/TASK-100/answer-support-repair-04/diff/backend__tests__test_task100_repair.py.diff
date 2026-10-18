@@ -1,0 +1,52 @@
+--- a/backend/tests/test_task100_repair.py
++++ b/backend/tests/test_task100_repair.py
+@@ -27,28 +27,36 @@
+         ex=self.exercise()
+         for answer,status in [('1m/s，2分钟=120秒','matched'),('60m/s','conflict'),
+                               ('0.01m/s','conflict'),('1m','conflict'),('60m/min','matched'),
+-                              ('可能1m/s也可能60m/s','unchecked'),('一段开放解释','unchecked'),('1e3m/s','unchecked')]:
++                              ('可能1m/s也可能60m/s','unchecked'),('一段开放解释','unchecked'),('1e3m/s','unchecked'),
++                              ('平均速度不等于1m/s','unchecked'),('答案未知，可能1m/s','unchecked'),
++                              ('1m/s，但尚不确定','unchecked'),('1m/s；先统一秒，但答案未知','unchecked')]:
+             with self.subTest(answer=answer):
+                 check=derive_support_checks(ex,answer)[0]
+                 self.assertEqual(check['reference_status'],'matched')
+                 self.assertEqual(check['status'],status)
++                self.assertEqual(check['answer_status'],status)
+                 self.assertEqual(check['dimension_ids'],['value'])
+ 
+     def test_misleading_model_met_cannot_advance_numeric_conflict_or_unknown(self):
+         ex=self.exercise(); path='path'
+         nodes=[{'completion_dimensions':[{'dimension':d['id']} for d in ex['dimensions']]}]
+-        for text in ['60m/s','0.01m/s','可能1m/s也可能60m/s']:
+-            facts=[]
+-            for index in range(2):
+-                value=copy.deepcopy(ex);value['variant']['purpose']='initial' if index==0 else 'retest'
+-                value['variant']['instance_data']['quantities'][0]['value_decimal']=str(120+index*60)
+-                facts.extend([{'kind':'exercise','record_id':f'e{index}','document':{'path_record_id':path,'node_id':'n1','result':value}},
+-                    {'kind':'answer','record_id':f'a{index}','body':canonical({'exercise_record_id':f'e{index}','text':text,'kind':'initial','exposures_seen':[]})},
+-                    {'kind':'feedback','record_id':f'f{index}','answer_record_id':f'a{index}','document':{'result':{'result_type':'feedback',
+-                        'dimension_observations':[{'id':d['id'],'observation':'met'} for d in ex['dimensions']]}}}])
+-            result=rebuild_progress(nodes,facts,path)['nodes']['n1']
+-            self.assertEqual(result['independent_answers'],[])
+-            self.assertNotEqual(result['status'],'evidence_sufficient')
++        for text in ['60m/s','0.01m/s','可能1m/s也可能60m/s',
++                     '平均速度不等于1m/s','答案未知，可能1m/s']:
++            with self.subTest(answer=text):
++                facts=[]; exercise_ids=[str(uuid4()),str(uuid4())]; feedback_ids=[str(uuid4()),str(uuid4())]
++                for index in range(2):
++                    # 真实样例同时更新题干、分钟量及参考操作数，避免靠不合法实例阻断。
++                    value=exercise({'node_id':'n1','purpose':'initial' if index==0 else 'retest',
++                        'parent_exercise_record_id':exercise_ids[0] if index else None,
++                        'parent_feedback_record_id':feedback_ids[0] if index else None},'lc_'+'a'*24)
++                    answer_id=str(uuid4())
++                    facts.extend([{'kind':'exercise','record_id':exercise_ids[index],'document':{'path_record_id':path,'node_id':'n1','result':value}},
++                        {'kind':'answer','record_id':answer_id,'body':canonical({'exercise_record_id':exercise_ids[index],'text':text,'kind':'initial','exposures_seen':[]})},
++                        {'kind':'feedback','record_id':feedback_ids[index],'answer_record_id':answer_id,'document':{'result':{'result_type':'feedback',
++                            'dimension_observations':[{'id':d['id'],'observation':'met'} for d in ex['dimensions']]}}}])
++                result=rebuild_progress(nodes,facts,path)['nodes']['n1']
++                self.assertEqual(result['independent_answers'],[])
++                self.assertNotEqual(result['status'],'evidence_sufficient')
+ 
+     def test_numeric_field_domains_without_float_coercion_or_tolerance_rounding(self):
+         base={'value_decimal':'10000000000000','unit':'m/s','operation':'divide','left':'1','right':'1','tolerance_decimal':'0.000000000001'}

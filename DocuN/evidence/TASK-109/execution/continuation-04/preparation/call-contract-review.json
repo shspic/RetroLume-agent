@@ -1,0 +1,16 @@
+{
+  "source": "本地同一Playwright1.62.1的types/protocol.d.ts、types/types.d.ts和coreBundle.js；引用卡面已核官方前置，不新增研究。",
+  "checks": [
+    "仅新增标准enable-automation启动参数；真实getVersion先emit再取argv",
+    "Page.enable完成后才读取或操作frame；snapshot也等待popup观察器",
+    "DOMSnapshot.documentURL/frameId为StringIndex，通过strings解析，backendNodeId为数字数组",
+    "routeWebSocket匹配函数/close及Locator.boundingBox timeout在同包定义成立",
+    "不以frames数组序号定位，导航后重取固定#h0_frame直属子frame",
+    "保留真实鼠标点击、isTrusted/active和两秒观察；console只采集固定fixture已有动作",
+    "diagnostic_begin起15秒独立截止，预览60秒；截止后独立CID收尾",
+    "stdout原始封包/完整有界stderr和截断标识；末次fixture与context冻结绑定",
+    "bootstrap原字节沿用，其image_bytes_changed:false是旧固定字段，不代表本轮新镜像未变"
+  ],
+  "offline_verdict": "仅语法，不签真实CDP或浏览器关口",
+  "runtime_expected": "首真实权限反证即终止；无反证仍NOT_FULL_H0；普通诊断错误有据修正可使用R07"
+}

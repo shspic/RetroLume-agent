@@ -1,0 +1,48 @@
+flowchart LR
+  MS[material_sources] -->|current_version 及 revision| MV[material_versions]
+  MV -.->|sha256 内容键| O[originals 不可变原字节]
+  MV --> PC[pdf_review_candidates]
+  PC --> PP[pdf_extracted_pages]
+  PP --> PR[pdf_review_pages]
+  PP --> PS[pdf_user_supplements]
+  A[activities 四账及 execution_generation] --> S[activity_scope_sources]
+  S --> MS
+  S --> MV
+  A --> AM[activity_allowed_models]
+  A --> OP[activity_operations model 或 tool]
+  OP --> R[activity_operation_results 不可变正文]
+  A --> TC[teaching_commands]
+  TC --> TR[teaching_records]
+  TR --> R
+  TC -->|parent 与 result 指针的循环 FK| TR
+  TR --> TH[teaching_heads 投影]
+  MH[learning_memories] --> MR[learning_memory_revisions]
+  MR --> MC[learning_memory_commands]
+  MC --> MH
+  MR --> MB[learning_memory_bodies 可准确清理]
+  MR --> MD[learning_memory_dependencies]
+  MD --> MV
+  MD --> TR
+  MD --> MR
+  A --> AB[activity_memory_bindings]
+  AB --> AC[activity_memory_choices]
+  AC --> MR
+  A --> IC[interview_commands]
+  IC --> IR[interview_records]
+  IR --> R
+  IR --> IH[interview_heads]
+  A --> HC[html_commands]
+  HC --> HA[html_artifacts 有限描述及关联]
+  HA --> R
+  A --> HB[html_preview_budgets 独立额度]
+  A --> HP[html_preview_sessions 状态及预留]
+  HP --> HA
+  TR -.->|source_refs 普通引用| MV
+  IR -.->|source_refs 普通引用| MV
+  HA -.->|冻结 context 及 parent| TR
+  P1[拟新增 data_control 恢复冻结]
+  P2[拟新增 data_operation_jobs]
+  P3[拟新增 data_tombstones]
+  P1 -.->|拟新增 默认只读| A
+  P3 -.->|拟新增 可用性屏障| MS
+  P3 -.->|拟新增 恢复删除覆盖| MH

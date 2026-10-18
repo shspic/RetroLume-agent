@@ -1,0 +1,17 @@
+--- pre/backend/app/learning/teaching_progress.py
++++ post/backend/app/learning/teaching_progress.py
+@@ -48,7 +48,13 @@
+             if disputed or conflict:
+                 contested.append(aid)
+                 continue
+-            opinion = opinions[-1]
++            opinion = opinions[-1]
++            # 确定核查只收紧模型观察；解析不足也不冒充该数值维度已核定。
++            opinion = dict(opinion)
++            for check in checks:
++                for dimension in check.get("dimension_ids", []):
++                    if check["status"] != "matched":
++                        opinion[dimension] = "not_met" if check["status"] == "conflict" else "unknown"
+             latest_bad = any(value == 'not_met' for value in opinion.values())
+             if answer.get("exposures_seen") or answer["kind"] == "continuation" or document["result"]["variant"]["purpose"] == "continuation":
+                 assisted.append(aid)

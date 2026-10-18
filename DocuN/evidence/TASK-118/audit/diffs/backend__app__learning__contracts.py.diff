@@ -1,0 +1,75 @@
+--- first-pre/backend/app/learning/contracts.py
++++ current/backend/app/learning/contracts.py
+@@ -96,13 +96,14 @@
+ 
+ 
+ def request_fingerprint(*, action, activity_id, goal, question, scope_revision, sources,
+-                        parent_operation_id, parent_payload_sha256, max_output_tokens):
++                        parent_operation_id, parent_payload_sha256, max_output_tokens, retrieval_ref=None):
+     return sha(canonical({
+-        "profile": PROFILE, "action": action, "activity_id": activity_id,
++        "profile": 'learning.v2' if retrieval_ref is not None else PROFILE, "action": action, "activity_id": activity_id,
+         "goal": goal, "question": question, "scope_revision": scope_revision,
+         "sources": [s.model_dump() if isinstance(s, SourceIdentity) else s for s in sources],
+         "parent_operation_id": parent_operation_id, "parent_payload_sha256": parent_payload_sha256,
+         "max_output_tokens": max_output_tokens,
++        **({'retrieval_ref':retrieval_ref.model_dump() if hasattr(retrieval_ref,'model_dump') else retrieval_ref} if retrieval_ref is not None else {}),
+     }))
+ 
+ 
+@@ -205,7 +206,7 @@
+             if self.question is not None or self.parent_operation_id is not None:
+                 raise ValueError("invalid_learning_document")
+             # 首次摘要不依赖任何消费凭证，可完整复算。
+-            LearningProfile(**self.model_dump(), parent_payload_sha256=None, history=None)
++            (LearningHybridProfile if self.profile=='learning.v2' else LearningProfile)(**self.model_dump(), parent_payload_sha256=None, history=None)
+         elif self.question is None or self.parent_operation_id is None or normalize_input(self.question) != self.question:
+             raise ValueError("invalid_learning_document")
+         identities = [s.model_dump() for s in self.sources]
+@@ -225,6 +226,21 @@
+         return self
+ 
+ 
++from app.retrieval.contracts import RetrievalRef
++
++
++class LearningHybridProfile(LearningProfile):
++    profile: Literal['learning.v2']='learning.v2'
++    retrieval_mode: Literal['hybrid.cosine-terms.rrf60.v1']='hybrid.cosine-terms.rrf60.v1'
++    retrieval_ref: RetrievalRef
++
++
++class StoredHybridProfile(StoredProfile):
++    profile: Literal['learning.v2']
++    retrieval_mode: Literal['hybrid.cosine-terms.rrf60.v1']
++    retrieval_ref: RetrievalRef
++
++
+ def validated_output(profile, value):
+     result = LearningOutput.model_validate(value)
+     catalog = {e.citation_id: e for e in profile.catalog}
+@@ -242,9 +258,9 @@
+ 
+ 
+ def normalize_result(profile: LearningProfile, value: object) -> dict:
+-    profile = LearningProfile.model_validate(profile.model_dump())
++    profile = (LearningHybridProfile if profile.profile=='learning.v2' else LearningProfile).model_validate(profile.model_dump())
+     result = validated_output(profile,value)
+-    stored = StoredProfile.model_validate(profile.model_dump(exclude={"parent_payload_sha256", "history"}))
++    stored = (StoredHybridProfile if profile.profile=='learning.v2' else StoredProfile).model_validate(profile.model_dump(exclude={"parent_payload_sha256", "history"}))
+     return {**stored.model_dump(), "result": result.model_dump(), "limitations": list(LIMITATIONS)}
+ 
+ 
+@@ -263,9 +279,10 @@
+ 
+ 
+ def read_document(value: object, *, activity_id=None, operation_id=None) -> tuple[StoredProfile, LearningOutput]:
+-    if type(value) is not dict or set(value) != set(StoredProfile.model_fields) | {"result", "limitations"}:
++    stored_type=StoredHybridProfile if isinstance(value,dict) and value.get('profile')=='learning.v2' else StoredProfile
++    if type(value) is not dict or set(value) != set(stored_type.model_fields) | {"result", "limitations"}:
+         raise ValueError("invalid_learning_document")
+-    profile = StoredProfile.model_validate({k: value[k] for k in StoredProfile.model_fields})
++    profile = stored_type.model_validate({k: value[k] for k in stored_type.model_fields})
+     if activity_id is not None and profile.activity_id != activity_id:
+         raise ValueError("invalid_learning_document_identity")
+     if operation_id is not None:

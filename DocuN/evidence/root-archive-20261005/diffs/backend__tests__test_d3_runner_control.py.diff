@@ -1,0 +1,67 @@
+--- before/backend/tests/test_d3_runner_control.py
++++ after/backend/tests/test_d3_runner_control.py
+@@ -9,7 +9,7 @@
+ import unittest
+ from unittest.mock import patch
+ ROOT=Path(__file__).resolve().parents[2]
+-sys.path[:0]=[str(ROOT/"backend"),str(ROOT/"Ndocu/evidence/task-083/d3-repair-11")]
++sys.path[:0]=[str(ROOT/"backend"),str(ROOT/"backend/tests/fixtures/task083/archived_d3_control")]
+ from contracts import deadline_left,expected_scenarios,parse_parts,validate_records
+ from controlled_child import ControlledChild,OwnershipUnknown
+ from app.worker.windows_job import _BASIC_ACCOUNTING,_PROCESS_INFORMATION,_FILETIME
+@@ -67,14 +67,14 @@
+         with self.assertRaises(OwnershipUnknown): child.stop(time.monotonic()+5)
+         self.assertFalse(child.cleanup_confirmed)
+         child.close()
+-    def test_close_failure_marks_cleanup_unknown(self):
+-        api=Kernel(); child=ControlledChild(api)
+-        child.start([sys.executable],cwd=ROOT,env={},deadline=time.monotonic()+5)
+-        child.stop(time.monotonic()+5)
+-        self.assertTrue(child.cleanup_confirmed)
+-        api.close_fail=True
+-        with self.assertRaises(OwnershipUnknown): child.close()
+-        self.assertFalse(child.cleanup_confirmed)
++    def test_close_failure_marks_cleanup_unknown(self):
++        api=Kernel(); child=ControlledChild(api)
++        child.start([sys.executable],cwd=ROOT,env={},deadline=time.monotonic()+5)
++        child.stop(time.monotonic()+5)
++        self.assertTrue(child.cleanup_confirmed)
++        api.close_fail=True
++        with self.assertRaises(OwnershipUnknown): child.close()
++        self.assertFalse(child.cleanup_confirmed)
+     def test_exact_results_and_deadlines(self):
+         parts=parse_parts("migration,ledger")
+         lines=[]
+@@ -91,19 +91,19 @@
+         self.assertFalse(validate_records(raw,parts,0,cleanup_confirmed=True,timed_out=True)["pass"])
+         with self.assertRaises(ValueError): parse_parts("migration,migration")
+         with self.assertRaises(TimeoutError): deadline_left(time.monotonic()+.2,reserve=1)
+-    def test_runner_import_does_not_touch_resources(self):
+-        with patch("subprocess.run",side_effect=AssertionError("resource command on import")), patch(
+-            "psycopg.connect",side_effect=AssertionError("PG connect on import")
+-        ):
+-            import runner
+-        self.assertEqual(runner.CID,"85242648b70dc11839a93de29a51bc7e492390d8ad479036c141f37b26f4f6a7")
+-    def test_unknown_cleanup_and_windows_start_block_retry(self):
+-        import runner
+-        base={"contract":{"pass":False},"outer_tree_zero":True,"cleanup_error":None,"windows_started":False}
+-        self.assertTrue(runner.retry_allowed(base))
+-        for changed in ({"outer_tree_zero":False},{"cleanup_error":"query unknown"},{"windows_started":True}):
+-            case=dict(base,**changed)
+-            self.assertFalse(runner.retry_allowed(case))
++    def test_runner_import_does_not_touch_resources(self):
++        with patch("subprocess.run",side_effect=AssertionError("resource command on import")), patch(
++            "psycopg.connect",side_effect=AssertionError("PG connect on import")
++        ):
++            import runner
++        self.assertEqual(runner.CID,"85242648b70dc11839a93de29a51bc7e492390d8ad479036c141f37b26f4f6a7")
++    def test_unknown_cleanup_and_windows_start_block_retry(self):
++        import runner
++        base={"contract":{"pass":False},"outer_tree_zero":True,"cleanup_error":None,"windows_started":False}
++        self.assertTrue(runner.retry_allowed(base))
++        for changed in ({"outer_tree_zero":False},{"cleanup_error":"query unknown"},{"windows_started":True}):
++            case=dict(base,**changed)
++            self.assertFalse(runner.retry_allowed(case))
+     def test_optimization_guard(self):
+         path=ROOT/"backend/tests/fixtures/task083/d3_pg_windows.py"
+         spec=importlib.util.spec_from_file_location("d3_offline_guard",path)

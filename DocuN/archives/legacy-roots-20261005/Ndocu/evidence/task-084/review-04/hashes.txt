@@ -1,0 +1,25 @@
+# TASK-084 review-04 hash 复核与读入范围（只读取证；本卡运行额度0，未运行任何脚本/测试）
+
+## 独立复核（托管 Python 3.13.12 hashlib，只读）
+4a633aff536f833cdbf3a266be2d44de70b8e01105a204b68d7947995627a1ca  backend/tests/fixtures/task083/focused_unit.py  == 卡面冻结 MATCH
+5bc35bf185de71e3ce94aa1a12e3e2a1466e6fd372e5c3f5d6aca196233980d2  backend/tests/fixtures/task083/job_control.py   == 卡面冻结 MATCH
+3029a709f615ab068d65004d1083568d0a96e577417380b26109defaf0a64c5c  backend/tests/fixtures/task083/offline_unit.py  == 卡面冻结 MATCH
+
+## 其余直接依赖（沿两轮 final-hashes 复用，未变不展开）
+fixture-repair-04/final-hashes.txt：13 文件 FROZEN_OK（launcher 703ceb03…、supervisor_ipc 57be00ae…、supervisor_main 98c420e7…、session 502a3743…、command b0e91c3a…、worker_main 5d065b5e…、gate 7e7588a5…、windows_job d05ca259…、repository 929320ba…、005 26b71a83…、fixture.py c9970b8d…、scenario_child 98f132f2…、job_batch 648e419c…）
+stub-fix-05/final-hashes.txt：同 13 文件 FROZEN_OK + focused_unit 1e58eb03→4a633aff
+两轮冻结集一致，本轮零漂移停查。
+
+## 读入清单（顺序即接触顺序）
+1. 卡面冻结三文件（上列）独立 hash 复核
+2. Ndocu/evidence/task-083/fixture-repair-04/{pre-hashes.txt, final-hashes.txt, incremental.diff}
+3. Ndocu/evidence/task-083/stub-fix-05/{pre-hashes.txt, final-hashes.txt, incremental.diff}
+4. backend/tests/fixtures/task083/{job_control.py, focused_unit.py, offline_unit.py} 全文；backend/app/worker/session.py（:95-319 run_once 全路径）
+5. ——独立初判落笔（prelog-assessment.md 正文）——
+6. Ndocu/evidence/task-083/fixture-repair-04/{unit-final-01.log, unit-final-meta.txt, manifest-final.txt}
+7. Ndocu/evidence/task-083/stub-fix-05/{unit-lifecycle-01.log, unit-lifecycle-01-meta.txt, static-attempt-01-fail.log, static-attempt-02-fail.log, static.log, static-meta.txt, manifest-final.txt}
+8. Ndocu/results/TASK-083-result.md（置顶两段=stub-fix-05、fixture-repair-04，作待评陈述）
+9. Ndocu/results/TASK-084-result.md（review-03 现状，复用基线）；Ndocu/results/TASK-082-work-decision.md（原批准边界）；Ndocu/archives/TASK-084-before-review04-20260925.md
+
+## 边界声明
+未读实现聊天；未运行 AST/import/compile/单元/Job/spawn/PG/Docker/网络/安装/模型/配置/凭据/实现者脚本；源码/测试/迁移/正式docu/公共库/Git 零写入；Job/PG 启动数 0。

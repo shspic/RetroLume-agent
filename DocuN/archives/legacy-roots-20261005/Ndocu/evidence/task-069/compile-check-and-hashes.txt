@@ -1,0 +1,37 @@
+# TASK-069 compile 语法检查与 hash 记录（2026-09-21）
+
+## 命令（真实执行，各一次）
+
+```
+PYTHONDONTWRITEBYTECODE=1 "D:/shspic/project_NO3_RetroLume-agent/backend/.venv/Scripts/python.exe" -c "import sys; print('EXE', sys.version.split()[0])"
+→ EXE 3.12.10
+
+PYTHONDONTWRITEBYTECODE=1 "D:/shspic/project_NO3_RetroLume-agent/backend/.venv/Scripts/python.exe" -c "
+import io
+path = r'D:\shspic\project_NO3_RetroLume-agent\backend\tests\test_activity_recovery.py'
+src = io.open(path, 'r', encoding='utf-8').read()
+code = compile(src, path, 'exec')
+print('COMPILE-OK lines=%d' % src.count(chr(10)))
+"
+→ COMPILE-OK lines=382
+```
+
+说明：使用内置 compile() 读取源码做语法检查，不落 pyc；实测 backend/tests/__pycache__
+中无 test_activity_recovery 的 pyc（目录内原有其他测试的历史 pyc 与本卡无关，未触碰）。
+未运行 unittest、未连接 PostgreSQL、未安装任何依赖。
+
+## SHA-256
+
+| 文件 | sha256 |
+|---|---|
+| 变更前 backend/tests/test_activity_recovery.py | c7450f088235945281c0c25bdf4a57337bd671d34ea10e3de258fb36220896e2 |
+| 变更后 backend/tests/test_activity_recovery.py | 7bf924cded794b94bdc213d255177253af2b3948ad844f302d7bd987ae6804f4 |
+
+变更前 hash 实测值与任务卡面给定值一致；原始副本见
+Ndocu/evidence/task-069/test_activity_recovery.py.pre-task069（18309 字节），
+变更后文件 18548 字节，差异见 Ndocu/evidence/task-069/test_activity_recovery.diff（143 行）。
+
+## 静态验证边界
+
+compile 通过仅证明语法正确，不证明真实 PostgreSQL 清理路径通过；
+未运行数据库，清理正确性由 TASK-068 运行卡后续验证。

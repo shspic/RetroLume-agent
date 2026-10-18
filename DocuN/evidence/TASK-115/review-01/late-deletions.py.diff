@@ -1,0 +1,20 @@
+--- as-run/backend/app/data_exit/deletions.py
++++ final/backend/app/data_exit/deletions.py
+@@ -83,7 +83,7 @@
+         operation = None
+         def tombstone():
+             from psycopg.types.json import Jsonb
+-            with self.gate.acquire():
++            with self.gate.acquire(operation=operation):
+                 with self.references.lease.acquire(True, timeout=operation.remaining(30)):
+                     with self.repository.connection(operation=operation) as connection:
+                         connection.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,113))", (self.references.root_id,))
+@@ -118,7 +118,7 @@
+             outcomes = await joined_thread(self.references.exclusive_cleanup, impact["hash_size_targets"], operation=operation)
+             def observe():
+                 from psycopg.types.json import Jsonb
+-                with self.gate.acquire():
++                with self.gate.acquire(operation=operation):
+                     with self.repository.connection(operation=operation) as connection:
+                         connection.execute('SELECT public.data_cleanup_observe(%s,%s,%s,%s)',
+                             (tomb['tombstone_id'],impact_sha,Jsonb(outcomes),self.references.maintenance_key))

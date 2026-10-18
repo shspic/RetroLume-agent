@@ -1,0 +1,238 @@
+--- S04-pre/DocuN/evidence/TASK-117/execution/control.py
++++ S04-post/DocuN/evidence/TASK-117/execution/control.py
+@@ -50,8 +50,13 @@
+                 if root.get('segment')!=segment['permit']:raise RuntimeError('旧根不能借新许可执行')
+                 if root['category']==kind:used+=(time.monotonic_ns()-root['start']['mono_ns'])/1e9
+                 if time.monotonic_ns()>=root['business_deadline_mono_ns']:raise RuntimeError('本根仅允许清场')
+-            if used>=cap:raise RuntimeError('S02_'+kind+'_time_cap')
+-        if sum(x['seconds'] for x in value['offline_intervals'])>=7200:raise RuntimeError('all_task_offline_time_cap')
++            if kind=='offline' and segment.get('offline_cursor_mono_ns') is not None:
++                used+=(time.monotonic_ns()-segment['offline_cursor_mono_ns'])/1e9
++            if used>=cap:raise RuntimeError(segment.get('stage','S02')+'_'+kind+'_time_cap')
++        offline_used=sum(x['seconds'] for x in value['offline_intervals'])
++        if segment.get('offline_cursor_mono_ns') is not None:
++            offline_used+=(time.monotonic_ns()-segment['offline_cursor_mono_ns'])/1e9
++        if offline_used>=segment.get('cumulative_offline_cap_seconds',7200):raise RuntimeError('all_task_offline_time_cap')
+         return value
+     elapsed=(time.monotonic_ns()-value['start_mono_ns'])/1e9
+     if elapsed>=27000:raise RuntimeError('本卡已进入1800秒保存清场段，不再开业务动作')
+@@ -73,7 +78,7 @@
+     effective_cap=root_cap if name=='roots' else amendments[-1].get('API_cumulative_cap',limits.get(name)) if name=='api_starts' and amendments else limits.get(name)
+     if name not in limits or number<1 or value['counts'][name]+number>effective_cap:raise RuntimeError('次数门关闭：'+name)
+     scheduling_override=bool(amendments and (name=='roots' or name=='api_starts' and 'API_cumulative_cap' in amendments[-1]))
+-    if segment and name in segment['segment_caps'] and (not scheduling_override or 'S03' in segment['permit']) and value['counts'][name]+number-segment['baseline_counts'][name]>segment['segment_caps'][name]:raise RuntimeError('当前段次数门关闭：'+name)
++    if segment and name in segment['segment_caps'] and (not scheduling_override or segment.get('stage') in ('S03','S04') or 'S03' in segment['permit']) and value['counts'][name]+number-segment['baseline_counts'][name]>segment['segment_caps'][name]:raise RuntimeError('当前段次数门关闭：'+name)
+     value['counts'][name]+=number;write(HERE/'budget.json',value);event('attempt_reserved',counter=name,number=number,total=value['counts'][name])
+ 
+ 
+@@ -96,6 +101,7 @@
+ def begin_root(label,category='offline'):
+     value=guard()
+     if value['active_root'] is not None:raise RuntimeError('上一运行根未精确结束')
++    settle_offline()
+     count('roots');value=state();stamp=sample()
+     root={'id':value['counts']['roots'],'label':label,'category':category,'start':stamp,'end':None,'attempts':[]}
+     segment=active_segment(value)
+@@ -115,6 +121,8 @@
+     interval={'root':number,'start_mono_ns':interval_start,'end_mono_ns':root['end']['mono_ns'],'seconds':seconds}
+     if root.get('segment'):interval['segment']=root['segment']
+     value[key].append(interval)
++    segment=active_segment(value)
++    if segment and segment.get('stage')=='S04':segment['offline_cursor_mono_ns']=root['end']['mono_ns']
+     value['active_root']=None;value['phase']='implementation';write(HERE/'budget.json',value);event('root_end',root=number,seconds=seconds,result=result)
+ 
+ 
+@@ -126,10 +134,28 @@
+     if root.get('segment')!=segment['permit'] or root['end'] is None or time.monotonic_ns()>=root['business_deadline_mono_ns']:raise RuntimeError('root_original_deadline_closed')
+     proof=json.loads(Path(stop_evidence).read_text(encoding='utf-8'))
+     if proof.get('all_stopped') is not True:raise RuntimeError('root_resume_stop_unconfirmed')
++    settle_offline();value=state();segment=active_segment(value);root=next(r for r in value['roots'] if r['id']==number)
+     stamp=sample();root.setdefault('completed_attempts',[]).append({'end':root['end'],'result':root['result'],'resume':stamp,'stop_evidence':str(stop_evidence),'stop_evidence_sha256':sha(Path(stop_evidence).read_bytes())})
+     root['resumed_interval_start_mono_ns']=stamp['mono_ns'];root['end']=None
+     value['active_root']=number;value['phase']=root['label'];write(HERE/'budget.json',value)
+     event('root_resumed_with_original_deadline',root=number,original_start=root['start'],business_deadline_mono_ns=root['business_deadline_mono_ns'],stamp=stamp)
++
++
++def settle_offline():
++    value=state();segment=active_segment(value)
++    if segment is None or segment.get('offline_cursor_mono_ns') is None:return
++    now=time.monotonic_ns();start=segment['offline_cursor_mono_ns']
++    value['offline_intervals'].append({'root':None,'segment':segment['permit'],'start_mono_ns':start,'end_mono_ns':now,'seconds':(now-start)/1e9,'basis':'S04无资源期间连续离线投入；启动根前结算，不另占真实根'})
++    segment['offline_cursor_mono_ns']=None;write(HERE/'budget.json',value)
++
++
++def reserve_offline(seconds):
++    value=guard();segment=active_segment(value)
++    used=sum(x['seconds'] for x in value['offline_intervals'] if x.get('segment')==segment['permit'])
++    live=(time.monotonic_ns()-segment['offline_cursor_mono_ns'])/1e9 if segment.get('offline_cursor_mono_ns') is not None else 0
++    if seconds<=0 or used+live+seconds>segment['offline_cap_seconds']:raise RuntimeError('offline_reservation_exceeds_segment')
++    if sum(x['seconds'] for x in value['offline_intervals'])+live+seconds>segment.get('cumulative_offline_cap_seconds',7200):raise RuntimeError('offline_reservation_exceeds_task')
++    event('offline_batch_reserved',seconds=seconds,remaining_segment_seconds=segment['offline_cap_seconds']-used-live)
+ 
+ 
+ def failure(label,reason,*,effect='保留失败，不改变原输入或预算'):
+--- S04-pre/DocuN/evidence/TASK-117/execution/runtime_control.py
++++ S04-post/DocuN/evidence/TASK-117/execution/runtime_control.py
+@@ -11,7 +11,7 @@
+ from control import HERE,ROOT,count,event,state,write,guard,sample
+ 
+ PG_IMAGE='sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f'
+-SLOTS={'source':(15481,'step018_syn'),'compat':(15482,'step018_compat'),'r01':(15483,'step018_r01'),'r02':(15484,'step018_r02'),'r02-fault':(15485,'step018_r02_fault')}
++SLOTS={'source':(15481,'step018_syn'),'compat':(15482,'step018_compat'),'r01':(15483,'step018_r01'),'r02':(15484,'step018_r02'),'r02-fault':(15485,'step018_r02_fault'),'r02-success-01':(15486,'step018_r02_success_01'),'r02-success-02':(15487,'step018_r02_success_02')}
+ PRIVATE=HERE/'synthetic/private'
+ _CONTROLLER=None
+ 
+--- S04-pre/backend/app/activities/teaching_repository.py
++++ S04-post/backend/app/activities/teaching_repository.py
+@@ -14,6 +14,14 @@
+ 
+ # head 指针哨兵：显式置空；None 表示本次不改动该列。
+ _HEAD_CLEAR = "__clear__"
++
++
++def _progress_reason(status, candidate):
++    if status != 'evidence_sufficient':
++        return '保留当前节点；独立实例不足、存在辅助或争议时不推定长期掌握。'
++    if candidate is None:
++        return '当前节点已有足够的独立实例证据，但没有满足前置条件的待推进节点；保留当前节点，不推定长期掌握。'
++    return '按当前评价已有两个不同的独立实例，含复测，可有限前进；不推定长期掌握。'
+ 
+ from app.capabilities.contracts import LedgerDisposition
+ 
+@@ -1308,7 +1316,7 @@
+                         and all(projection["nodes"][f"n{p+1}"]["status"] == "evidence_sufficient" for p in n["prerequisites"])),None)
+                 progress_id = str(uuid4())
+                 seq += 1
+-                reason = "按当前评价已有两个不同的独立实例，含复测，可有限前进。" if candidate else "保留当前节点；独立实例不足、存在辅助或争议时不推定长期掌握。"
++                reason = _progress_reason(current_node['status'], candidate)
+                 progress_body = canonical({"feedback_record_id":record_id,"answer_record_id":body["answer_record_id"],
+                     "advance":bool(candidate),"node_before":head["node_id"],"node_after":candidate or head["node_id"],
+                     "reason":reason,"observations":current_node,"support_checks":derive_support_checks(
+--- S04-pre/backend/app/data_exit/control.py
++++ S04-post/backend/app/data_exit/control.py
+@@ -1,5 +1,6 @@
+ """私有日志为长期操作和选择器的唯一权威；GET 不执行动作。"""
+ import ctypes
++import io
+ import json
+ import os
+ from pathlib import Path
+@@ -35,12 +36,12 @@
+                 raise DataError("control_unavailable", 503)
+             self.control_id = events[0]["payload"]["control_id"]
+ 
+-    def _read(self):
++    def _read(self, snapshot=None):
+         regular(self.path)
+         if self.path.stat().st_size > MAX_JOURNAL:
+             raise DataError("capacity_exceeded", 413)
+         events, previous = [], "0" * 64
+-        with self.path.open("rb") as stream:
++        with (self.path.open("rb") if snapshot is None else io.BytesIO(snapshot)) as stream:
+             while True:
+                 header = stream.read(4)
+                 if not header:
+@@ -106,10 +107,39 @@
+             elif kind=='source.register':state['source']=p
+         return state
+ 
++    def _current_snapshot(self, job_id=None):
++        with self.lock.acquire():
++            # 每次仍在真实锁内读取当前完整字节；仅复用同一文件对象和摘要的已验投影。
++            info = regular(self.path)
++            with self.path.open('rb') as stream:
++                opened = os.fstat(stream.fileno())
++                if (info.st_dev, info.st_ino) != (opened.st_dev, opened.st_ino):
++                    raise DataError('control_corrupt', 503)
++                if opened.st_size > MAX_JOURNAL:
++                    raise DataError('capacity_exceeded', 413)
++                raw = stream.read(opened.st_size + 1)
++                after = os.fstat(stream.fileno())
++            current = regular(self.path)
++            if len(raw) > MAX_JOURNAL:
++                raise DataError('capacity_exceeded', 413)
++            if (opened.st_dev, opened.st_ino, opened.st_size) != (after.st_dev, after.st_ino, len(raw)) or (current.st_dev, current.st_ino, current.st_size) != (opened.st_dev, opened.st_ino, len(raw)):
++                raise DataError('control_corrupt', 503)
++            identity = (opened.st_dev, opened.st_ino, digest(raw))
++            cached = getattr(self, '_state_cache', None)
++            if cached is None or cached[0] != identity:
++                events, _ = self._read(raw)
++                state = self.replay(events)
++                cached = (identity, canonical(state), {key: canonical(job) for key, job in state['jobs'].items()})
++                self._state_cache = cached
++            # 不把可变的日志payload或缓存对象交给调用者。
++            return json.loads(cached[1] if job_id is None else cached[2][job_id])
++
+     def state(self):
+-        with self.lock.acquire():
+-            events, _ = self._read()
+-            return self.replay(events)
++        return self._current_snapshot()
++
++    def execution_job(self, job_id):
++        """同一完整字节校验，只复制当前操作，避免逐行解码无关计划。"""
++        return self._current_snapshot(job_id)
+ 
+     def commit(self, kind, payload, *, validate=None):
+         with self.lock.acquire(True, timeout=1):
+--- S04-pre/backend/app/data_exit/operations.py
++++ S04-post/backend/app/data_exit/operations.py
+@@ -121,7 +121,7 @@
+         if deadline: self.remaining()
+ 
+     def check(self):
+-        job = self.hub.state()['jobs'][self.job_id]
++        job = self.hub.execution_job(self.job_id)
+         self._validate(job)
+         if job['revision'] != self.revision: raise DataError('request_conflict')
+ 
+--- S04-pre/backend/tests/fixtures/step018/runtime_fixture.py
++++ S04-post/backend/tests/fixtures/step018/runtime_fixture.py
+@@ -11,7 +11,7 @@
+ def install():
+     if os.environ.get('RETROLUME_TASK117_SYNTHETIC') not in (
+         'TASK-117-STEP018-INTEGRATION-S01-20261014',
+-        'TASK-117-STEP018-INTEGRATION-S02-20261015','TASK-117-STEP018-INTEGRATION-S03-20261015',
++        'TASK-117-STEP018-INTEGRATION-S02-20261015','TASK-117-STEP018-INTEGRATION-S03-20261015','TASK-117-STEP018-INTEGRATION-S04-20261016',
+     ):return False
+     from app.capabilities.transport import HttpxModelTransport,TransportResponse
+     async def send(self,*,endpoint,api_key,payload,timeout_seconds,max_response_bytes):
+--- S04-pre/backend/tests/fixtures/step018/sitecustomize.py
++++ S04-post/backend/tests/fixtures/step018/sitecustomize.py
+@@ -1,6 +1,6 @@
+ """只有本卡显式合成env才加载有限传输，产品默认路径不会包含此目录。"""
+ import os,sys
+-if (os.environ.get('RETROLUME_TASK117_SYNTHETIC') in ('TASK-117-STEP018-INTEGRATION-S01-20261014','TASK-117-STEP018-INTEGRATION-S02-20261015','TASK-117-STEP018-INTEGRATION-S03-20261015')
++if (os.environ.get('RETROLUME_TASK117_SYNTHETIC') in ('TASK-117-STEP018-INTEGRATION-S01-20261014','TASK-117-STEP018-INTEGRATION-S02-20261015','TASK-117-STEP018-INTEGRATION-S03-20261015','TASK-117-STEP018-INTEGRATION-S04-20261016')
+         and 'app.pdf_import.worker' not in sys.orig_argv):
+     from runtime_fixture import install
+     install()
+--- S04-pre/frontend/src/activities/TeachingWorkspace.tsx
++++ S04-post/frontend/src/activities/TeachingWorkspace.tsx
+@@ -539,6 +539,8 @@
+   const reasonBody=(workspace?.reason?.body??{}) as Record<string,unknown>;
+   const reasonObservations=(reasonBody.observations??{}) as Record<string,unknown>;
+   const reasonCount=(key:string)=>Array.isArray(reasonObservations[key])?(reasonObservations[key] as unknown[]).length:0;
++  const answerEditReady=Boolean(workspace?.head.exercise_record_id&&editing.current?.draft_key
++    &&editing.current.activity_id===activityId&&editing.current.head.exercise_record_id===workspace?.head.exercise_record_id);
+ 
+   return (
+     <section className="ws-teaching" aria-label="教学工作区">
+@@ -683,7 +685,7 @@
+         {Boolean(workspace?.answer?.text)&&<p aria-label="已保存作答">已保存作答：{String(workspace?.answer?.text)}</p>}
+         <label htmlFor="teaching-answer">作答</label>
+         <textarea
+-          id="teaching-answer" value={answerText} maxLength={ANSWER_MAX} disabled={busy !== ""}
++          id="teaching-answer" value={answerText} maxLength={ANSWER_MAX} disabled={busy !== ""||!answerEditReady}
+           placeholder="写下你的答案与依据（仅保存在本机浏览器，成功保存后成为不可变记录）"
+           onChange={event => {
+             editSeq.current++; dirty.current.answer=true; setAnswerText(event.target.value);
+@@ -699,7 +701,7 @@
+         <div className="ws-exercise-actions">
+           <button
+             className="primary"
+-            disabled={busy !== "" || !canLocal || editConflict || !workspace?.head.exercise_record_id || !answerText.trim()}
++            disabled={busy !== "" || !canLocal || !answerEditReady || editConflict || !workspace?.head.exercise_record_id || !answerText.trim()}
+             onClick={() => {
+               if (!workspace?.head.exercise_record_id) return;
+               void submit("answer", {

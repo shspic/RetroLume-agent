@@ -1,0 +1,303 @@
+
+backend/app/retrieval/repository.py
+1: """检索的持久意图、独立Embedding凭证及原子向量事实。网络只在事务外。"""
+2: from __future__ import annotations
+3: from datetime import datetime, timezone
+4: import json
+5: import re
+6: from uuid import UUID, uuid4
+7: from .contracts import canonical, digest, fused_rank, RetrievalRef, RetrievalRefusal
+8: from app.capabilities.contracts import AdmissionDenied, AdmissionPermit, LedgerDisposition, RecordOutcome
+9: from app.capabilities.embedding import (EmbeddingAdmissionIntent, EmbeddingAdmissionPermit, EmbeddingLedgerOutcome,
+10:                                       OutboundGrant, validate_stored_value, vector_digest)
+11: 
+12: ROSTER=('01800000-0000-4000-8000-000000000001','01800000-0000-4000-8000-000000000002','01800000-0000-4000-8000-000000000003')
+13: 
+14: 
+15: def plain(value):
+16:     if isinstance(value,dict):return {k:plain(v) for k,v in value.items()}
+17:     if isinstance(value,(list,tuple)):return [plain(v) for v in value]
+18:     if isinstance(value,UUID):return str(value)
+19:     if isinstance(value,datetime):return value.isoformat()
+20:     return value
+21: 
+22: 
+23: def operation_ids(row):
+24:     prefix='emb18i.' if row['action']=='source_index' else 'emb18q.'
+25:     return [prefix+str(row['business_key'])+'.'+str(i) for i in range(row['batch_count'])]
+26: 
+27: 
+28: class RetrievalLedgerMethods:
+29:     async def retrieval_context(self,activity_id):
+30:         async def operation(connection):
+31:             state=await self._memory_lock_prefix(connection,activity_id);activity=state['activity']
+32:             if activity is None:raise RetrievalRefusal('not_found',404)
+33:             domain,revision,parents=await self._retrieval_domain_locked(connection,activity)
+34:             return {'domain':domain,'domain_revision':revision,'parent_refs':parents,
+35:                     'memory_selection_sha256':activity.get('_memory_selection_sha256'),
+36:                     'memory_dependency_sha256':activity.get('_memory_dependency_sha256'),
+37:                     'current':bool(state['sources_valid'] and state['eligible'] and activity['status']!='cancelled'),
+38:                     'scope_revision':activity['scope_revision']}
+39:         return await self._transaction(operation)
+40: 
+41:     async def _outbound_lock(self,connection,activity_id,grant,provider,model,request_bytes,output_tokens,source_manifest=None):
+42:         """全许可固定锁先于source锁；不同grant或provider不能另起费用账。"""
+43:         if grant is None:return
+44:         grant=OutboundGrant.from_wire(grant)
+45:         grant.check(activity_id,provider,model,request_bytes,output_tokens)
+46:         from app.capabilities.embedding import OutboundSourceManifest
+47:         manifest=OutboundSourceManifest.from_wire(source_manifest)
+48:         if manifest.sha256!=grant.source_manifest_sha256:raise AdmissionDenied('outbound_manifest_mismatch')
+49:         await connection.execute("SELECT pg_advisory_xact_lock(hashtextextended('retrolume.outbound-roster.v1',0))")
+50:         cursor=await connection.execute('SELECT s.source_id,s.version_id AS source_version_id,s.source_revision,v.sha256 AS original_sha256 FROM activity_scope_sources s JOIN material_versions v ON v.id=s.version_id AND v.source_id=s.source_id WHERE s.activity_id=%s ORDER BY s.source_id',(activity_id,))
+51:         manifest.check_sources(await cursor.fetchall())
+52:         cursor=await connection.execute('SELECT outbound_grant_sha256,reserve_cost_microunits FROM activities WHERE id=%s',(activity_id,))
+53:         row=await cursor.fetchone()
+54:         if row is None or row['outbound_grant_sha256']!=grant.sha256 or row['reserve_cost_microunits']!=250000:
+55:             raise AdmissionDenied('outbound_grant_binding_invalid')
+56:         cursor=await connection.execute('SELECT COALESCE(sum(requests_reserved),0) AS requests,COALESCE(sum(cost_reserved_microunits),0) AS cost FROM activities WHERE id=ANY(%s::uuid[])',(list(ROSTER),))
+57:         used=await cursor.fetchone()
+58:         if used['requests']>=80 or used['cost']+250000>20000000:raise AdmissionDenied('outbound_grant_exhausted')
+59: 
+60:     async def _retrieval_domain_locked(self,connection,activity):
+61:         """沿现有活动→operations→head锁序，禁止在多个域之间挪用资格。"""
+62:         aid=str(activity['id'])
+63:         await self._teaching_lock_operations(connection,aid)
+64:         cursor=await connection.execute('SELECT * FROM interview_heads WHERE activity_id=%s FOR UPDATE',(aid,))
+65:         interview=await cursor.fetchone()
+66:         cursor=await connection.execute('SELECT * FROM teaching_heads WHERE activity_id=%s FOR UPDATE',(aid,))
+67:         teaching=await cursor.fetchone()
+68:         if interview and teaching:raise RetrievalRefusal('domain_conflict')
+69:         head=interview or teaching
+70:         refs=[]
+71:         if head:
+72:             table='interview_records' if interview else 'teaching_records'
+73:             names=('goal_record_id','current_question_id','current_answer_id','current_feedback_id') if interview else ('goal_record_id','path_record_id','exercise_record_id','answer_record_id','feedback_record_id','reason_record_id')
+74:             ids=sorted({str(head[x]) for x in names if head.get(x)})
+75:             if ids:
+76:                 cursor=await connection.execute('SELECT record_id,body_sha256 FROM '+table+' WHERE activity_id=%s AND record_id=ANY(%s::uuid[]) ORDER BY record_id',(aid,ids))
+77:                 refs=[{'record_id':str(r['record_id']),'body_sha256':r['body_sha256']} for r in await cursor.fetchall()]
+78:                 if len(refs)!=len(ids):raise RetrievalRefusal('domain_parent_invalid')
+79:         return ('interview' if interview else 'learning'),0 if head is None else head['revision'],refs
+80: 
+81:     async def _retrieval_current_locked(self,connection,activity,row,valid):
+82:         if (activity is None or not valid or not activity.get('_memory_eligible',True)
+83:             or activity['status']=='cancelled' or activity['scope_revision']!=row['scope_revision']
+84:             or activity['deadline_at']<=datetime.now(timezone.utc) or row['request_body'] is None):return False
+85:         domain,revision,parents=await self._retrieval_domain_locked(connection,activity)
+86:         if domain=='interview':
+87:             cursor=await connection.execute("SELECT phase='ended' AS ended FROM interview_heads WHERE activity_id=%s",(activity['id'],))
+88:             if (await cursor.fetchone())['ended']:return False
+89:         body=json.loads(row['request_body'])
+90:         return (domain==row['domain'] and revision==row['domain_revision'] and parents==row['parent_refs']
+91:                 and body.get('memory_selection_sha256')==activity.get('_memory_selection_sha256')
+92:                 and body.get('memory_dependency_sha256')==activity.get('_memory_dependency_sha256'))
+93: 
+94:     async def retrieval_freeze(self,activity_id,command,body,space,manifest,batches,source_refs,query_sha):
+95:         from psycopg.types.json import Jsonb
+96:         request_body=canonical(body);request_sha=digest(body)
+97:         if len(request_body.encode('utf-8'))>65536:raise RetrievalRefusal('retrieval_context_limit',413)
+98:         async def operation(connection):
+99:             state=await self._memory_lock_prefix(connection,activity_id)
+100:             activity=state['activity']
+101:             if activity is None:raise RetrievalRefusal('not_found',404)
+102:             domain,revision,parents=await self._retrieval_domain_locked(connection,activity)
+103:             cursor=await connection.execute('SELECT * FROM retrieval_commands WHERE activity_id=%s AND business_key=%s FOR UPDATE',(activity_id,command.business_key))
+104:             old=await cursor.fetchone()
+105:             if old:
+106:                 if old['request_sha256']!=request_sha or old['request_body']!=request_body:raise RetrievalRefusal('retrieval_key_conflict')
+107:                 return plain(old),False
+108:             if (not state['sources_valid'] or not state['eligible'] or activity['status']=='cancelled'
+109:                 or activity['deadline_at']<=datetime.now(timezone.utc) or activity['scope_revision']!=command.expected_scope_revision
+110:                 or revision!=command.expected_domain_revision or body['domain']!=domain or body['parent_refs']!=parents
+111:                 or body.get('memory_selection_sha256')!=activity.get('_memory_selection_sha256')
+112:                 or body.get('memory_dependency_sha256')!=activity.get('_memory_dependency_sha256')):raise RetrievalRefusal('retrieval_invalidated')
+113:             if plain(state['snapshots'])!=[{'source_id':x['source_id'],'version_id':x['source_version_id'],'source_revision':x['source_revision']} for x in source_refs]:
+114:                 raise RetrievalRefusal('retrieval_source_invalid')
+115:             # 预览不额外造预留表；逐笔admit仍是最终权威。query后还要一次模型。
+116:             needed=batches+(1 if command.action=='query' else 0)
+117:             if (activity['requests_reserved']+needed>activity['max_requests']
+118:                 or activity['cost_reserved_microunits']+needed*activity['reserve_cost_microunits']>activity['max_cost_microunits']
+119:                 or activity['running_settled_seconds']+activity['running_reserved_seconds']+needed*90>activity['max_running_seconds']):
+120:                 raise RetrievalRefusal('retrieval_workflow_budget_insufficient')
+121:             await connection.execute("INSERT INTO retrieval_spaces(space_id,provider,configured_model,dimensions,normalization,chunk_recipe) VALUES(%s,%s,%s,512,'l2.v1','lossless-line-2048cp.v1') ON CONFLICT(space_id) DO NOTHING",(space['space_id'],space['provider'],space['configured_model']))
+122:             cache=batches==0
+123:             cursor=await connection.execute('''INSERT INTO retrieval_commands(activity_id,business_key,action,space_id,scope_revision,domain,domain_revision,request_body,request_sha256,source_refs,parent_refs,query_sha256,manifest_sha256,batch_count,status,terminal_disposition,result_sha256)
+124:               VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *''',
+125:                 (activity_id,command.business_key,command.action,space['space_id'],command.expected_scope_revision,domain,revision,request_body,request_sha,
+126:                  Jsonb(source_refs),Jsonb(parents),query_sha,digest(manifest),batches,'terminal' if cache else 'accepted','cache_ready' if cache else None,
+127:                  digest({'manifest_sha256':digest(manifest),'space_id':space['space_id']}) if cache else None))
+128:             return plain(await cursor.fetchone()),True
+129:         return await self._transaction(operation)
+130: 
+131:     async def retrieval_claim(self,activity_id,key,request_sha):
+132:         async def operation(connection):
+133:             state=await self._memory_lock_prefix(connection,activity_id);activity=state['activity']
+134:             if activity is None:return False
+135:             await self._retrieval_domain_locked(connection,activity)
+136:             cursor=await connection.execute('SELECT * FROM retrieval_commands WHERE activity_id=%s AND business_key=%s FOR UPDATE',(activity_id,key))
+137:             row=await cursor.fetchone()
+138:             if row is None or row['status']!='accepted' or row['request_sha256']!=request_sha:return False
+139:             if not await self._retrieval_current_locked(connection,activity,row,state['sources_valid']):raise RetrievalRefusal('retrieval_invalidated')
+140:             await connection.execute("UPDATE retrieval_commands SET status='launch_claimed',updated_at=CURRENT_TIMESTAMP WHERE activity_id=%s AND business_key=%s",(activity_id,key))
+141:             return True
+142:         return await self._transaction(operation)
+143: 
+144:     async def _embedding_command_locked(self,connection,activity,operation_id,valid):
+145:         match=re.fullmatch(r'emb18([iq])\.([0-9a-f-]{36})\.(0|[1-9][0-9]{0,2})',operation_id)
+146:         if match is None:raise AdmissionDenied('embedding_binding_invalid')
+147:         await self._retrieval_domain_locked(connection,activity)
+148:         cursor=await connection.execute('SELECT * FROM retrieval_commands WHERE activity_id=%s AND business_key=%s FOR UPDATE',(activity['id'],match[2]))
+149:         row=await cursor.fetchone()
+150:         if row is None or operation_id not in operation_ids(row) or row['status']!='launch_claimed':raise AdmissionDenied('embedding_command_invalid')
+151:         if not await self._retrieval_current_locked(connection,activity,row,valid):raise AdmissionDenied('embedding_invalidated')
+152:         return row,int(match[3])
+153: 
+154:     async def admit_embedding(self,intent):
+155:         if type(intent) is not EmbeddingAdmissionIntent:raise AdmissionDenied('embedding_intent_invalid')
+156:         context=intent.context;aid=self._uuid(context.activity_id,'activity_id');oid=self._bounded_name(context.operation_id,'operation_id')
+157:         executor=self._bounded_name(context.executor_id,'executor_id')
+158:         if type(intent.request_bytes) is not int or not 0<intent.request_bytes<=65536 or intent.max_output_tokens!=0:raise AdmissionDenied('embedding_limits_invalid')
+159:         async def operation(connection):
+160:             await self._outbound_lock(connection,aid,intent.outbound_grant,intent.provider,intent.configured_model,intent.request_bytes,0,intent.outbound_source_manifest)
+161:             state=await self._memory_lock_prefix(connection,aid);activity=state['activity']
+162:             if activity is None or not self._activity_allows(activity,intent,executor,now=datetime.now(timezone.utc)) or not state['eligible']:raise AdmissionDenied('embedding_activity_invalid')
+163:             row,ordinal=await self._embedding_command_locked(connection,activity,oid,state['sources_valid'])
+164:             binding=intent.binding;body=json.loads(row['request_body'])
+165:             if (binding.business_key!=str(row['business_key']) or binding.purpose!=row['action'] or binding.batch_ordinal!=ordinal
+166:                 or binding.request_sha256!=row['request_sha256'] or binding.manifest_sha256!=row['manifest_sha256']
+167:                 or binding.scope_revision!=row['scope_revision'] or binding.domain!=row['domain'] or binding.domain_revision!=row['domain_revision']
+168:                 or binding.memory_selection_sha256!=body.get('memory_selection_sha256') or binding.memory_dependency_sha256!=body.get('memory_dependency_sha256')
+169:                 or intent.request.space_id!=row['space_id']):raise AdmissionDenied('embedding_binding_invalid')
+170:             expected=body['manifest'][ordinal*4:ordinal*4+4] if row['action']=='source_index' else body['manifest']
+171:             if [x.identity_sha256 for x in intent.request.inputs]!=[x['identity_sha256'] for x in expected]:raise AdmissionDenied('embedding_manifest_invalid')
+172:             for inp,meta in zip(intent.request.inputs,expected):
+173:                 if digest(inp.text)!=meta['input_sha256']:raise AdmissionDenied('embedding_input_invalid')
+174:             cursor=await connection.execute('SELECT 1 FROM activity_allowed_models WHERE activity_id=%s AND provider=%s AND model=%s',(aid,intent.provider,intent.configured_model))
+175:             if await cursor.fetchone() is None:raise AdmissionDenied('embedding_model_not_allowed')
+176:             cursor=await connection.execute('SELECT 1 FROM activity_operations WHERE activity_id=%s AND operation_id=%s',(aid,oid))
+177:             if await cursor.fetchone():raise AdmissionDenied('embedding_already_claimed')
+178:             admission=str(uuid4())
+179:             await connection.execute('UPDATE activities SET requests_reserved=requests_reserved+1,cost_reserved_microunits=cost_reserved_microunits+reserve_cost_microunits,updated_at=CURRENT_TIMESTAMP WHERE id=%s',(aid,))
+180:             await connection.execute("INSERT INTO activity_operations(activity_id,operation_id,admission_id,executor_id,execution_generation,scope_revision,provider,configured_model,request_bytes,max_output_tokens,tool_names,reserved_cost_microunits,kind) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,0,ARRAY[]::varchar(64)[],%s,'embedding')",
+
+backend/app/retrieval/contracts.py
+1: """有限检索命令、空间身份及领域引用；不携带授权秘密。"""
+2: from __future__ import annotations
+3: import hashlib
+4: import json
+5: from typing import Literal
+6: from uuid import UUID
+7: from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+8: 
+9: HEX=r'^[0-9a-f]{64}$'
+10: 
+11: 
+12: def canonical(value):
+13:     return json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':'),allow_nan=False)
+14: 
+15: 
+16: def digest(value):return hashlib.sha256(canonical(value).encode('utf-8')).hexdigest()
+17: 
+18: 
+19: class RetrievalRef(BaseModel):
+20:     model_config=ConfigDict(extra='forbid',frozen=True,strict=True)
+21:     business_key:str
+22:     query_sha256:str=Field(pattern=HEX)
+23:     space_id:str=Field(pattern=HEX)
+24:     result_sha256:str=Field(pattern=HEX)
+25: 
+26:     @field_validator('business_key')
+27:     @classmethod
+28:     def key(cls,value):
+29:         if str(UUID(value))!=value:raise ValueError('retrieval_binding_invalid')
+30:         return value
+31: 
+32: 
+33: class RetrievalCommandInput(BaseModel):
+34:     model_config=ConfigDict(extra='forbid',frozen=True,strict=True)
+35:     business_key:str
+36:     action:Literal['source_index','query']
+37:     expected_scope_revision:int=Field(ge=1,le=2147483647)
+38:     expected_domain_revision:int=Field(ge=0,le=2147483647)
+39:     query:str|None=Field(default=None,max_length=1024)
+40:     confirmed:Literal[True]
+41: 
+42:     @field_validator('confirmed',mode='before')
+43:     @classmethod
+44:     def explicit_bool(cls,value):
+45:         if type(value) is not bool or value is not True:raise ValueError('explicit_confirmation_required')
+46:         return value
+47: 
+48:     @field_validator('business_key')
+49:     @classmethod
+50:     def key(cls,value):
+51:         if str(UUID(value))!=value:raise ValueError('invalid_input')
+52:         return value
+53: 
+54:     @model_validator(mode='after')
+55:     def body(self):
+56:         if self.action=='query':
+57:             if not self.query or not self.query.strip() or len(self.query.encode('utf-8'))>4096:raise ValueError('retrieval_query_limit')
+58:         elif self.query is not None:raise ValueError('retrieval_input_invalid')
+59:         return self
+60: 
+61: 
+62: class RetrievalRefusal(RuntimeError):
+63:     def __init__(self,code,status=409):self.code,self.status=code,status;super().__init__(code)
+64: 
+65: 
+66: def space_identity(provider,model):
+67:     return digest({'provider':provider,'configured_model':model,'dimensions':512,'normalization':'l2.v1','chunk_recipe':'lossless-line-2048cp.v1'})
+68: 
+69: 
+70: def fused_rank(term_ids,vector_ids,*,top_k=8):
+71:     """同分按原证据ID确定排序；距离/排名不构成语义支持。"""
+72:     if not 1<=top_k<=8 or len(term_ids)>32 or len(vector_ids)>32:raise ValueError('retrieval_catalog_limit')
+73:     scores={}
+74:     for ids in (term_ids,vector_ids):
+75:         seen=set()
+76:         for rank,eid in enumerate(ids,1):
+77:             if eid in seen:raise ValueError('retrieval_duplicate_candidate')
+78:             seen.add(eid);scores[eid]=scores.get(eid,0)+1/(60+rank)
+79:     return sorted(scores,key=lambda eid:(-scores[eid],eid))[:top_k]
+
+backend/app/retrieval/api.py
+1: """同源session/DataContext下的显式检索入口，GET始终零模型/Embedding/SUP。"""
+2: from fastapi import APIRouter,Request,HTTPException
+3: from app.activities.api import _ledger,_guard,_uuid_text
+4: from app.memory.contracts import read_bounded_json
+5: from .contracts import RetrievalCommandInput,RetrievalRefusal
+6: from .service import RetrievalService,IntegrationConfig
+7: 
+8: router=APIRouter(prefix='/api/activities/{activity_id}/retrieval')
+9: 
+10: 
+11: def service(request):return RetrievalService(_ledger(request),request.app.state.materials,request.app.state.originals)
+12: def error(exc):return HTTPException(exc.status,detail={'code':exc.code,'message':'本轮资料检索未完成，请核对原操作；已有事实和预留保留'})
+13: 
+14: 
+15: @router.get('/status')
+16: async def status(activity_id:str,request:Request):
+17:     _guard(request);activity_id=_uuid_text(activity_id,'activity_id')
+18:     try:return await service(request).status(activity_id,getattr(request.app.state,'integration_config',IntegrationConfig()))
+19:     except RetrievalRefusal as exc:raise error(exc)
+20: 
+21: 
+22: @router.post('/commands')
+23: async def submit(activity_id:str,request:Request):
+24:     _guard(request);activity_id=_uuid_text(activity_id,'activity_id')
+25:     try:
+26:         value=await read_bounded_json(request,65536)
+27:         command=RetrievalCommandInput.model_validate(value)
+28:     except (ValueError,TypeError):raise HTTPException(400,detail={'code':'invalid_input','message':'请明确确认有限查询或索引'}) from None
+29:     try:return await service(request).submit(activity_id,command,getattr(request.app.state,'integration_config',IntegrationConfig()))
+30:     except RetrievalRefusal as exc:raise error(exc)
+31: 
+32: 
+33: @router.get('/commands/{business_key}')
+34: async def read(activity_id:str,business_key:str,request:Request):
+35:     _guard(request)
+36:     row=await _ledger(request).read_retrieval_command(_uuid_text(activity_id,'activity_id'),_uuid_text(business_key,'business_key'))
+37:     if row is None:raise HTTPException(404,detail={'code':'not_found'})
+38:     return RetrievalService._public(row)

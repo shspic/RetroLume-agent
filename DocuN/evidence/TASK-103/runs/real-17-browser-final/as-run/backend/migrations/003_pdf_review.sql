@@ -1,0 +1,59 @@
+-- PDF候选与人工逐页核对；仅供获批的新库或受控迁移执行，本卡不运行。
+BEGIN;
+
+ALTER TABLE material_versions DROP CONSTRAINT material_versions_format_check;
+ALTER TABLE material_versions ADD CONSTRAINT material_versions_format_check
+    CHECK (format IN ('txt','md','pdf'));
+
+CREATE TABLE pdf_review_candidates (
+    id UUID PRIMARY KEY,
+    source_id UUID NOT NULL REFERENCES material_sources(id),
+    version_id UUID NOT NULL,
+    expected_version UUID,
+    expected_revision INTEGER NOT NULL CHECK (expected_revision >= 0),
+    status TEXT NOT NULL CHECK (status IN ('pending','confirmed','skipped')),
+    page_count INTEGER NOT NULL CHECK (page_count BETWEEN 1 AND 50),
+    extraction_method TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    decided_at TIMESTAMPTZ,
+    UNIQUE(version_id),
+    UNIQUE(id,version_id),
+    FOREIGN KEY (source_id,version_id) REFERENCES material_versions(source_id,id),
+    FOREIGN KEY (source_id,expected_version) REFERENCES material_versions(source_id,id),
+    CHECK ((status='pending' AND decided_at IS NULL) OR (status<>'pending' AND decided_at IS NOT NULL))
+);
+
+CREATE TABLE pdf_extracted_pages (
+    version_id UUID NOT NULL REFERENCES pdf_review_candidates(version_id),
+    physical_page INTEGER NOT NULL CHECK (physical_page BETWEEN 1 AND 50),
+    extracted_text TEXT NOT NULL,
+    warnings JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(warnings)='array'),
+    PRIMARY KEY (version_id,physical_page)
+);
+
+CREATE TABLE pdf_review_pages (
+    candidate_id UUID NOT NULL,
+    version_id UUID NOT NULL,
+    physical_page INTEGER NOT NULL,
+    reviewed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (candidate_id,physical_page),
+    FOREIGN KEY (candidate_id,version_id) REFERENCES pdf_review_candidates(id,version_id),
+    FOREIGN KEY (version_id,physical_page) REFERENCES pdf_extracted_pages(version_id,physical_page)
+);
+
+CREATE TABLE pdf_user_supplements (
+    id UUID PRIMARY KEY,
+    candidate_id UUID NOT NULL,
+    version_id UUID NOT NULL,
+    physical_page INTEGER NOT NULL,
+    identity TEXT NOT NULL DEFAULT 'user_supplement' CHECK (identity='user_supplement'),
+    text TEXT NOT NULL CHECK (octet_length(text)>0 AND octet_length(text)<=65536),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (candidate_id,version_id) REFERENCES pdf_review_candidates(id,version_id),
+    FOREIGN KEY (version_id,physical_page) REFERENCES pdf_extracted_pages(version_id,physical_page)
+);
+
+CREATE INDEX pdf_review_candidates_pending ON pdf_review_candidates(created_at,id) WHERE status='pending';
+CREATE INDEX pdf_user_supplements_version_page ON pdf_user_supplements(version_id,physical_page);
+
+COMMIT;

@@ -1,0 +1,242 @@
+--- pre/backend/app/activities/repository.py
++++ final/backend/app/activities/repository.py
+@@ -23,6 +23,7 @@
+     LedgerDisposition,
+     LedgerOutcome,
+     RecordOutcome,
++    ResultConsumptionRef,
+     validate_business_payload,
+ )
+ 
+@@ -114,6 +115,17 @@
+ 
+ 
+ @dataclass(frozen=True)
++class ScopeSnapshot:
++    activity_id: str
++    scope_revision: int
++    sources: tuple[SourceSnapshot, ...]
++
++
++class ScopeConflict(ActivityLedgerConflict, AdmissionDenied):
++    """来源集合在取提示与活动锁之间变化；整事务回滚。"""
++
++
++@dataclass(frozen=True)
+ class ActivitySpec:
+     activity_id: str
+     sources: tuple[SourceSnapshot, ...]
+@@ -232,23 +244,7 @@
+             raise ValueError("scope_revision 必须为正数")
+         if not spec.sources:
+             raise ValueError("活动必须具有有限来源快照")
+-        normalized_sources = tuple(
+-            sorted(
+-                (
+-                    SourceSnapshot(
+-                        cls._uuid(item.source_id, "source_id"),
+-                        cls._uuid(item.version_id, "version_id"),
+-                        item.revision,
+-                    )
+-                    for item in spec.sources
+-                ),
+-                key=lambda item: UUID(item.source_id).int,
+-            )
+-        )
+-        if len({item.source_id for item in normalized_sources}) != len(normalized_sources):
+-            raise ValueError("来源快照不能重复")
+-        if any(item.revision < 0 for item in normalized_sources):
+-            raise ValueError("来源 revision 非法")
++        normalized_sources = cls._normalize_scope(spec.sources)
+         now = datetime.now(timezone.utc)
+         if spec.deadline_at.tzinfo is None or spec.deadline_at <= now:
+             raise ValueError("活动期限必须是未来的带时区时间")
+@@ -312,6 +308,75 @@
+                 valid = False
+         return valid
+ 
++    @staticmethod
++    def _scope_key(rows):
++        return tuple(sorted((str(x["source_id"]),str(x["version_id"]),x["source_revision"]) for x in rows))
++
++    async def _verify_scope_hint(self, connection, activity_id, hint):
++        if self._scope_key(hint) != self._scope_key(await self._source_rows(connection,activity_id)):
++            raise ScopeConflict("scope_conflict")
++
++    @classmethod
++    def _normalize_scope(cls, sources):
++        if not isinstance(sources,(tuple,list)) or len(sources)>128:
++            raise ValueError("invalid_input")
++        normalized=[]
++        for x in sources:
++            if type(x) is not SourceSnapshot or type(x.source_id) is not str or type(x.version_id) is not str or type(x.revision) is not int or not 0<=x.revision<=2_147_483_647:
++                raise ValueError("invalid_input")
++            normalized.append(SourceSnapshot(cls._uuid(x.source_id,"source_id"),cls._uuid(x.version_id,"version_id"),x.revision))
++        normalized.sort(key=lambda x:UUID(x.source_id).int)
++        if len({x.source_id for x in normalized})!=len(normalized):raise ValueError("invalid_input")
++        return tuple(normalized)
++
++    async def inspect_scope(self, activity_id: str) -> ScopeSnapshot | None:
++        activity_id=self._uuid(activity_id,"activity_id")
++        async def operation(connection):
++            cursor=await connection.execute("""SELECT a.scope_revision,
++                COALESCE(jsonb_agg(jsonb_build_array(s.source_id,s.version_id,s.source_revision)
++                ORDER BY s.source_id) FILTER (WHERE s.source_id IS NOT NULL),'[]'::jsonb) AS sources
++                FROM activities a LEFT JOIN activity_scope_sources s ON s.activity_id=a.id
++                WHERE a.id=%s GROUP BY a.id""",(activity_id,))
++            row=await cursor.fetchone()
++            if row is None:return None
++            return ScopeSnapshot(activity_id,row["scope_revision"],tuple(SourceSnapshot(*x) for x in row["sources"]))
++        return await self._transaction(operation)
++
++    async def revise_scope(self, activity_id: str, expected_scope_revision: int, sources) -> ScopeSnapshot:
++        activity_id=self._uuid(activity_id,"activity_id")
++        if type(expected_scope_revision) is not int or not 1<=expected_scope_revision<=2_147_483_647:
++            raise ValueError("invalid_input")
++        sources=self._normalize_scope(sources)
++        async def operation(connection):
++            hint=await self._source_rows(connection,activity_id)
++            # 旧新并集先按UUID锁定；来源有效性只针对新集合。
++            ids=sorted({str(x["source_id"]) for x in hint}|{x.source_id for x in sources},key=lambda x:UUID(x).int)
++            locked={}
++            for source_id in ids:
++                cursor=await connection.execute("SELECT current_version,revision FROM material_sources WHERE id=%s FOR UPDATE",(source_id,))
++                locked[source_id]=await cursor.fetchone()
++            cursor=await connection.execute("SELECT * FROM activities WHERE id=%s FOR UPDATE",(activity_id,))
++            row=await cursor.fetchone()
++            await self._verify_scope_hint(connection,activity_id,hint)
++            if row is None:raise ActivityLedgerConflict("not_found")
++            if row["scope_revision"]!=expected_scope_revision:raise ScopeConflict("scope_conflict")
++            if row["status"]=="cancelled":raise ActivityLedgerConflict("cancelled")
++            if row["status"] not in ("pending","running") or row["deadline_at"]<=datetime.now(timezone.utc):
++                raise ActivityLedgerConflict("activity_expired")
++            for x in sources:
++                actual=locked[x.source_id]
++                if actual is None or str(actual["current_version"])!=x.version_id or actual["revision"]!=x.revision:
++                    raise ActivityLedgerConflict("source_invalid")
++            new_key=tuple(sorted((x.source_id,x.version_id,x.revision) for x in sources))
++            if self._scope_key(hint)==new_key:return ScopeSnapshot(activity_id,expected_scope_revision,sources)
++            if expected_scope_revision==2_147_483_647:raise ActivityLedgerConflict("scope_revision_limit")
++            await connection.execute("DELETE FROM activity_scope_sources WHERE activity_id=%s",(activity_id,))
++            for x in sources:
++                await connection.execute("INSERT INTO activity_scope_sources(activity_id,source_id,version_id,source_revision) VALUES (%s,%s,%s,%s)",(activity_id,x.source_id,x.version_id,x.revision))
++            await connection.execute("UPDATE activities SET scope_revision=scope_revision+1,updated_at=CURRENT_TIMESTAMP WHERE id=%s",(activity_id,))
++            return ScopeSnapshot(activity_id,expected_scope_revision+1,sources)
++        return await self._transaction(operation)
++
+     async def create_activity(self, spec: ActivitySpec) -> None:
+         activity_id, sources = self._validate_spec(spec)
+ 
+@@ -413,6 +478,7 @@
+             sources_valid = bool(snapshots) and await self._lock_sources(connection, snapshots)
+             cursor = await connection.execute("SELECT * FROM activities WHERE id = %s FOR UPDATE", (activity_id,))
+             row = await cursor.fetchone()
++            await self._verify_scope_hint(connection, activity_id, snapshots)
+             now = datetime.now(timezone.utc)  # 来源及活动锁均已取得。
+             if row is None or not sources_valid:
+                 raise ActivityLedgerConflict("活动或来源快照不可用")
+@@ -493,6 +559,7 @@
+                 (activity_id,),
+             )
+             row = await cursor.fetchone()
++            await self._verify_scope_hint(connection, activity_id, snapshots)
+             if row is None:
+                 raise ActivityLedgerConflict("活动不存在")
+             now = datetime.now(timezone.utc)  # 与 claim 一致，在锁后判断资格。
+@@ -525,6 +592,7 @@
+             await self._lock_sources(connection, snapshots)
+             cursor = await connection.execute("SELECT * FROM activities WHERE id = %s FOR UPDATE", (activity_id,))
+             row = await cursor.fetchone()
++            await self._verify_scope_hint(connection, activity_id, snapshots)
+             if (
+                 row is None or row["status"] != "running"
+                 or row["executor_id"] != executor_id
+@@ -597,6 +665,7 @@
+             await self._lock_sources(connection, snapshots)
+             cursor = await connection.execute("SELECT * FROM activities WHERE id = %s FOR UPDATE", (activity_id,))
+             row = await cursor.fetchone()
++            await self._verify_scope_hint(connection, activity_id, snapshots)
+             if row is None:
+                 raise ActivityLedgerConflict("活动不存在")
+             if row["last_settled_generation"] == execution_generation:
+@@ -644,6 +713,7 @@
+             await self._lock_sources(connection, snapshots)
+             cursor = await connection.execute("SELECT * FROM activities WHERE id = %s FOR UPDATE", (activity_id,))
+             row = await cursor.fetchone()
++            await self._verify_scope_hint(connection, activity_id, snapshots)
+             if row is None:
+                 raise ActivityLedgerConflict("活动不存在")
+             if row["status"] == "cancelled":
+@@ -674,6 +744,7 @@
+             await self._lock_sources(connection, snapshots)
+             cursor = await connection.execute("SELECT * FROM activities WHERE id = %s FOR UPDATE", (activity_id,))
+             activity = await cursor.fetchone()
++            await self._verify_scope_hint(connection, activity_id, snapshots)
+             if activity is None:
+                 raise ActivityLedgerConflict("活动不存在")
+             now = datetime.now(timezone.utc)
+@@ -777,6 +848,7 @@
+             await self._lock_sources(connection, snapshots)
+             cursor = await connection.execute("SELECT * FROM activities WHERE id = %s FOR UPDATE", (activity_id,))
+             activity = await cursor.fetchone()
++            await self._verify_scope_hint(connection, activity_id, snapshots)
+             if activity is None:
+                 raise ActivityLedgerConflict("活动不存在")
+             current_generation = activity["execution_generation"]
+@@ -871,6 +943,13 @@
+             sources_valid = bool(snapshots) and await self._lock_sources(connection, snapshots)
+             cursor = await connection.execute("SELECT * FROM activities WHERE id = %s FOR UPDATE", (activity_id,))
+             activity = await cursor.fetchone()
++            await self._verify_scope_hint(connection, activity_id, snapshots)
++            if intent.input_result is not None and activity is not None:
++                if activity["status"]=="cancelled":raise AdmissionDenied("cancelled")
++                if not sources_valid:raise AdmissionDenied("source_invalid")
++                if activity["scope_revision"]!=intent.context.scope_revision:raise AdmissionDenied("result_invalidated")
++                if activity["requests_reserved"]>=activity["max_requests"] or activity["cost_reserved_microunits"]+activity["reserve_cost_microunits"]>activity["max_cost_microunits"]:
++                    raise AdmissionDenied("budget_exhausted")
+             if activity is None or not sources_valid or not self._activity_allows(
+                 activity, intent, executor_id, now=datetime.now(timezone.utc)
+             ):
+@@ -881,13 +960,27 @@
+             )
+             if await cursor.fetchone() is None:
+                 raise AdmissionDenied("provider/model 未获活动授权")
+-            cursor = await connection.execute(
+-                """SELECT admission_id FROM activity_operations
+-                    WHERE activity_id = %s AND operation_id = %s FOR UPDATE""",
+-                (activity_id, operation_id),
+-            )
+-            if await cursor.fetchone() is not None:
+-                raise AdmissionDenied("操作键已经占用，不能获得第二次发送资格")
++            ref=intent.input_result
++            if ref is not None:
++                try:ref=ResultConsumptionRef.model_validate(ref.model_dump())
++                except Exception:raise AdmissionDenied("invalid_input") from None
++                if ref.activity_id!=activity_id or ref.operation_id==operation_id or intent.tool_names:
++                    raise AdmissionDenied("invalid_input")
++                if ref.scope_revision!=activity["scope_revision"] or ref.scope_revision!=intent.context.scope_revision:
++                    raise AdmissionDenied("result_invalidated")
++            keys=sorted({operation_id}|({ref.operation_id} if ref else set()))
++            cursor=await connection.execute("SELECT * FROM activity_operations WHERE activity_id=%s AND operation_id=ANY(%s) ORDER BY operation_id FOR UPDATE",(activity_id,keys))
++            calls={x["operation_id"]:x for x in await cursor.fetchall()}
++            if operation_id in calls:raise AdmissionDenied("操作键已经占用，不能获得第二次发送资格")
++            if ref:
++                parent=calls.get(ref.operation_id)
++                if parent is None or parent["state"]!="received" or parent["scope_revision"]!=ref.scope_revision:
++                    raise AdmissionDenied("result_invalidated")
++                try:payload=await self._stored_payload_row(connection,parent)
++                except (AdmissionDenied,ResultIntegrityError,ValueError):raise AdmissionDenied("integrity_error") from None
++                if payload is None or payload[2]!=ref.payload_sha256:raise AdmissionDenied("result_invalidated")
++                try:validate_business_payload(payload[1],payload[0],payload[2])
++                except ValueError:raise AdmissionDenied("integrity_error") from None
+             admission_id = str(uuid4())
+             await connection.execute(
+                 """UPDATE activities
+@@ -941,6 +1034,7 @@
+         sources_valid = bool(snapshots) and await self._lock_sources(connection, snapshots)
+         cursor = await connection.execute("SELECT * FROM activities WHERE id = %s FOR UPDATE", (activity_id,))
+         activity = await cursor.fetchone()
++        await self._verify_scope_hint(connection, activity_id, snapshots)
+         cursor = await connection.execute(
+             "SELECT * FROM activity_operations WHERE admission_id = %s FOR UPDATE",
+             (admission_id,),

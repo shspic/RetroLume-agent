@@ -1,0 +1,65 @@
+"""C03薄适配，旧budget/freeze源码与C02目录保持冻结。"""
+from datetime import datetime, timezone
+import hashlib
+import json
+from pathlib import Path
+import shutil
+import sys
+import time
+from budget import Budget, ROOT, CONTROL
+
+EVIDENCE = ROOT / 'DocuN/evidence/TASK-114/implementation/continuation-03'
+PERMIT = 'TASK-114-STEP017-C03-20261014'
+
+
+def save(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('x', encoding='utf-8') as stream:
+        json.dump(value, stream, ensure_ascii=False, indent=2)
+
+
+def sample():
+    return {'utc': datetime.now(timezone.utc).isoformat(), 'mono_ns': time.monotonic_ns()}
+
+
+class C03Budget(Budget):
+    def check(self, cleanup=False):
+        value = super().check(cleanup)
+        continuation = value['continuation']
+        if continuation['permit'] != PERMIT or continuation['status'] != 'accepted_implementation':
+            raise RuntimeError('只有本轮有效C03执行段可以消费')
+        offline = value['offline_seconds'] - continuation['baseline_offline_seconds']
+        holding = self.holding(value) - continuation['baseline_holding_seconds']
+        if offline >= continuation['offline_round_max']: raise RuntimeError('C03离线上限')
+        if holding >= continuation['holding_round_max' if cleanup else 'holding_business_round_max']:
+            raise RuntimeError('C03持有停止门')
+        return value
+
+    def reserve(self, counter):
+        value = self.check()
+        if counter not in ('real_roots', 'frontend_build', 'browser_start'):
+            raise RuntimeError('C03不授权此消费者 ' + counter)
+        if value['counts'].get(counter, 0) >= value['continuation']['max_post_counts'][counter]:
+            raise RuntimeError('C03前向次数上限 ' + counter)
+        super().reserve(counter)
+
+
+def freeze(label):
+    before = json.loads((EVIDENCE / 'pre-manifest.json').read_text(encoding='utf-8'))
+    files = {ROOT / entry['path'] for entry in before}
+    files.update((ROOT / 'backend/tests/fixtures/task114').glob('c03*.py'))
+    files.add(ROOT / 'backend/tests/test_data_exit_c03.py')
+    files.add(ROOT / 'frontend/tests/task114-c03-inputs.mjs')
+    files.update(path for path in (ROOT / 'frontend/dist').rglob('*') if path.is_file())
+    destination = EVIDENCE / 'as-run' / label
+    destination.mkdir(parents=True)
+    manifest = []
+    for path in sorted(files):
+        relative = path.relative_to(ROOT).as_posix()
+        if not path.exists(): manifest.append({'path': relative, 'exists': False}); continue
+        raw = path.read_bytes(); target = destination / relative; target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(path, target)
+        manifest.append({'path': relative, 'exists': True, 'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()})
+    save(destination / 'manifest.json', {'label': label, **sample(), 'files': manifest})
+    C03Budget().event('c03.as_run', {'label': label, 'manifest': str((destination / 'manifest.json').relative_to(ROOT))})
+    return destination

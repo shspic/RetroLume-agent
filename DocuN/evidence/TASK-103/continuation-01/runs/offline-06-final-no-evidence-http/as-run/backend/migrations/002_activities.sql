@@ -1,0 +1,88 @@
+-- 候选迁移：只用于获批的新本地数据库；不由应用启动器自动执行。
+BEGIN;
+
+CREATE TABLE activities (
+    id UUID PRIMARY KEY,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'cancelled')),
+    scope_revision INTEGER NOT NULL CHECK (scope_revision > 0),
+    execution_generation INTEGER NOT NULL DEFAULT 0 CHECK (execution_generation >= 0),
+    executor_id VARCHAR(128),
+    lease_expires_at TIMESTAMPTZ,
+    deadline_at TIMESTAMPTZ NOT NULL,
+    max_requests INTEGER NOT NULL CHECK (max_requests > 0),
+    requests_reserved INTEGER NOT NULL DEFAULT 0 CHECK (requests_reserved >= 0 AND requests_reserved <= max_requests),
+    max_cost_microunits BIGINT NOT NULL CHECK (max_cost_microunits > 0),
+    cost_reserved_microunits BIGINT NOT NULL DEFAULT 0 CHECK (
+        cost_reserved_microunits >= 0 AND cost_reserved_microunits <= max_cost_microunits
+    ),
+    reserve_cost_microunits BIGINT NOT NULL CHECK (
+        reserve_cost_microunits > 0 AND reserve_cost_microunits <= max_cost_microunits
+    ),
+    max_request_bytes INTEGER NOT NULL CHECK (max_request_bytes > 0),
+    max_output_tokens INTEGER NOT NULL CHECK (max_output_tokens > 0),
+    allowed_tools VARCHAR(64)[] NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    cancelled_at TIMESTAMPTZ,
+    CHECK (cardinality(allowed_tools) <= 32),
+    CHECK (
+        (status = 'running' AND executor_id IS NOT NULL AND lease_expires_at IS NOT NULL)
+        OR status <> 'running'
+    )
+);
+
+CREATE TABLE activity_scope_sources (
+    activity_id UUID NOT NULL REFERENCES activities(id),
+    source_id UUID NOT NULL REFERENCES material_sources(id),
+    version_id UUID NOT NULL,
+    source_revision INTEGER NOT NULL CHECK (source_revision >= 0),
+    PRIMARY KEY (activity_id, source_id),
+    FOREIGN KEY (source_id, version_id) REFERENCES material_versions(source_id, id)
+);
+
+CREATE INDEX activity_scope_sources_source ON activity_scope_sources(source_id, activity_id);
+
+CREATE TABLE activity_allowed_models (
+    activity_id UUID NOT NULL REFERENCES activities(id),
+    provider VARCHAR(64) NOT NULL,
+    model VARCHAR(128) NOT NULL,
+    PRIMARY KEY (activity_id, provider, model)
+);
+
+CREATE TABLE activity_operations (
+    activity_id UUID NOT NULL REFERENCES activities(id),
+    operation_id VARCHAR(128) NOT NULL,
+    admission_id UUID NOT NULL UNIQUE,
+    executor_id VARCHAR(128) NOT NULL,
+    execution_generation INTEGER NOT NULL CHECK (execution_generation >= 0),
+    scope_revision INTEGER NOT NULL CHECK (scope_revision > 0),
+    provider VARCHAR(64) NOT NULL,
+    configured_model VARCHAR(128) NOT NULL,
+    request_bytes INTEGER NOT NULL CHECK (request_bytes > 0),
+    max_output_tokens INTEGER NOT NULL CHECK (max_output_tokens > 0),
+    tool_names VARCHAR(64)[] NOT NULL DEFAULT '{}',
+    reserved_cost_microunits BIGINT NOT NULL CHECK (reserved_cost_microunits > 0),
+    state TEXT NOT NULL DEFAULT 'reserved' CHECK (state IN ('reserved', 'dispatched', 'not_sent', 'received', 'unknown')),
+    disposition TEXT CHECK (disposition IN ('not_sent', 'received', 'unknown')),
+    error_code VARCHAR(64),
+    remote_request_id VARCHAR(128),
+    returned_model VARCHAR(128),
+    finish_reason VARCHAR(64),
+    prompt_tokens INTEGER CHECK (prompt_tokens >= 0),
+    completion_tokens INTEGER CHECK (completion_tokens >= 0),
+    response_bytes INTEGER CHECK (response_bytes >= 0 AND response_bytes <= 67108864),
+    reserved_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    dispatch_started_at TIMESTAMPTZ,
+    recorded_at TIMESTAMPTZ,
+    PRIMARY KEY (activity_id, operation_id),
+    CHECK (cardinality(tool_names) <= 32),
+    CHECK ((state IN ('reserved', 'dispatched') AND disposition IS NULL) OR state = disposition),
+    CHECK ((state = 'reserved' AND dispatch_started_at IS NULL) OR state <> 'reserved'),
+    CHECK ((state IN ('not_sent', 'received', 'unknown') AND recorded_at IS NOT NULL) OR state IN ('reserved', 'dispatched'))
+);
+
+CREATE INDEX activity_operations_recovery
+    ON activity_operations(activity_id, state, operation_id)
+    WHERE state IN ('reserved', 'dispatched');
+
+COMMIT;

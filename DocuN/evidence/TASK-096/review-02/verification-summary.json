@@ -1,0 +1,114 @@
+{
+  "task": "TASK-096",
+  "round": "review-02",
+  "date": "2026-10-02",
+  "purpose": "增量终审关键计算与判定固化（纯只读；无运行；编排据此复核）",
+  "identity_recheck": {
+    "index": "DocuN/evidence/TASK-095/orchestration-close-02/increment-input.json",
+    "index_sha256_recomputed": "48e7a55e4e019e82a74af647352168196ac2437f48266210078ddc21c08b5b86",
+    "matches_contract": true,
+    "contracts_4_of_4_match": true,
+    "current_files_51_of_51_match": true,
+    "supplemental_5_of_5_match": true,
+    "incremental_evidence_47_of_47_match": true,
+    "detail": "DocuN/evidence/TASK-096/review-02/identity-recheck.json"
+  },
+  "g2_reads_reconstruction": {
+    "method": "current reads (ed32fe37) minus test_activity_list_pagination_cursor section (lines 232-266) plus pre-original same method (lines 224-247), UTF-8 no BOM",
+    "reconstructed_sha256": "c1c40c356ca22e719f2ba1f7a937f9546eff48c10fb089d066c51a112b5ed19e",
+    "recorded_batch_time_sha256": "c1c40c356ca22e719f2ba1f7a937f9546eff48c10fb089d066c51a112b5ed19e",
+    "exact_match": true,
+    "extra_identity": "reconstruction line 243 = `self.assertEqual(set(seen), {self.activity, second, third})` matching the c01 traceback line 243 exactly",
+    "copy": "DocuN/evidence/TASK-096/review-02/reads-as-run-c1c40c-reconstruction.py",
+    "implication": "c1c40c and current differ only in the pagination method; the other 26 OK methods are byte-identical to current"
+  },
+  "g2_c01_batch": {
+    "unittest_out": "DocuN/evidence/TASK-095/continuation-01/final-merged/unittest.out.txt",
+    "command": "python -m unittest -v tests.test_activity_workspace_reads tests.test_activity_workspace_api",
+    "ran": 27,
+    "seconds": 11.274,
+    "result": "FAILED (failures=1) -> only test_activity_list_pagination_cursor, leftover row d77fe53c-8629-4fc2-8f2e-85fa4a0772ad vs pre-text exact-equality assertion",
+    "ok_26_breakdown": {"reads_pg": 7, "api_pg": 10, "api_offline": 9, "note": "26 OK includes 9 offline; not to be stated as 26 all-PG"},
+    "hashes_pre_import_final_reads": "c1c40c... in all three",
+    "app_files_batch_eq_current": true
+  },
+  "g2_c02_pagination_rerun": {
+    "command": "python -m unittest -v tests.test_activity_workspace_reads.ReadProjectionTests.test_activity_list_pagination_cursor",
+    "returncode": 0, "ran": 1, "test_seconds": 0.488, "result": "OK", "skipped_present": false,
+    "phase_seconds": 11.713,
+    "phase_scope": "container start + identity checks + stdin password reset + unittest + segment write (pg_seconds in run_c02_merged.py)",
+    "binding": "run_c02_merged.py FROZEN check enforced reads=ed32fe37 and all six frozen files + as-run browser fixture 5e541e22 before start; hashes-pre/import/final all equal current for the six + dist"
+  },
+  "g1_browser_asarun_reconstruction": {
+    "source_current": "frontend/tests/task095-continuation01-browser.mjs ee9074b8f85ab94d382c6843e5d1d3f6d3a6eb42dfc69d14c9b8f151f15970c1",
+    "transform": "revert s3 added comment+window-count block to original some(POST) failure line; delete added summary.post_total sync line; no other byte change",
+    "reconstructed_sha256": "5e541e22e60b3d69e2e9f334ce52abd3248c2bb0fe01622f8a38aad9dbc124a3",
+    "byte_equal_archived_copy": true,
+    "archived_copy": "DocuN/evidence/TASK-095/orchestration-close-02/browser-as-run.mjs",
+    "limitation": "inverse-transform reconstruction, not a retained original; independently recomputable",
+    "report_consistency": "failure string 's3 after-action slice contains POST' exists only in the as-run bytes (grep: as-run 1, current 0)"
+  },
+  "g1_run_facts": {
+    "report": "DocuN/evidence/TASK-095/continuation-02/final-run/browser-report.json",
+    "ok": false,
+    "steps_executed": 9,
+    "checks_true": "25/25",
+    "failures": ["s3 after-action slice contains POST"],
+    "failure_is_structural": "beforeS3b recorded before the explicit click (script lines 298-300); slice3b necessarily contains the explicit POST; some(POST) failure is definitionally true",
+    "log_recount": {"entries": 69, "GET": 68, "POST": 1, "post_entry": {"phase": "s3-reload", "group": "create", "t_start": 1790865595612, "duration_ms": 1, "inflight_at_start": 0}},
+    "post_reported_field": 0,
+    "post_reported_field_note": "summary.post_total unsynced in as-run bytes; actual count 1 proven by post_total_is_one check + log recount",
+    "phase_counts": {"s0-mount": 8, "s1-reload": 9, "s2-reload": 7, "s3-reload": 11, "s4-poll": 6, "s5-visibility": 6, "s6-late": 12, "s7-branches": 7, "s8-unmount": 3},
+    "s3_after_post_reads": ["GET list 1790865595623", "GET detail:X 1790865595626", "GET ops:X 1790865595626"],
+    "s4_timeline": {"list1": [1790865598637, 1790865601841, 3204], "list2": [1790865604640, 1790865607853, 3213], "spacing_ms": 6003, "list_overlap": false, "window_paired_peak": 2, "peak_source": "same-tick detail+ops micro-overlap"},
+    "s5_hidden_window": "0 requests over 5s; resume >=2 GET",
+    "s8": "0 requests after unmount",
+    "bundle_served": "index-CiaiBKAO.js (report.bundle.index_js)",
+    "screenshots_checked": ["c01-s0-capabilities.png", "c01-s2-unconfirmed-banner.png", "c01-s3-explicit-post.png", "c01-s6-late-isolation.png", "c01-s7-branches.png"]
+  },
+  "dist_object_relation": {
+    "index_html": "ce7f4d66cb368186ed4a9e7a67486724e3abed546361b6f1e5510aa2f6aa3476 references /assets/index-CiaiBKAO.js",
+    "bundle": "b2ae053151ef410b604a60983b13260c97abd69b3353701e8a32d053c70538e7",
+    "content_discriminator": "CiaiBKAO contains 'visibilitychange' (count 1); round-1 rebuilt old bundle index-7xLKRnHC.js contains 0 -> current dist is a post-D2 rebuild",
+    "build_record": "no retained build command/output found in reviewable continuation evidence; not claiming build provenance from co-hashes",
+    "css_pdf_worker_unchanged": ["e352c7038d034e66e933e5b20a170c27e8afae6cba20c94247465f3a1465e878", "8ab0e5e30031b4a06ecfddd5ae9562f0227f830ee7ec9ed1a968b134243d2386"]
+  },
+  "product_diffs": {
+    "materials_api": "09b2be09... -> e463ed5d...: repository() local_session(request, allow_own_origin=True) -> local_session(request); comment added; single hunk",
+    "repository": "295e3e95... -> ac55739c...: remove replace import; add _OPERATIONS_LIST_SELECT (no payload column, payload_eligible flag); add _operation_list_row_from_row (cross-check fail-closed); list_operations uses them; _RESULT_READ_SQL/_OPERATIONS_SELECT/read_operation/_read_status unchanged",
+    "activity_workspace": "a3ba46d6... -> b6a339d0...: mountedRef/pollInFlight/listSeq/detailSeq/openSeq/opsLoadSeq; stale-response and selection-context guards; poll loop rewritten (3s, in-flight skip, hidden pause, resume immediate GET, unmount cleanup); no auto-POST/retry/queue",
+    "test_api": "81fcb6d3... -> a5c95c79...: adds test_materials_default_origin_policy_restored (materials 403 / pdf-candidates 403 / capabilities 200 with own-origin testserver)",
+    "reads_pagination_adaptation": "exact-equality set replaced by contract-required subset assertions (all three IDs traversed, first page only case rows, global descending, no duplicates, invalid cursor rejection)",
+    "diff_files": ["diff-materials-api.diff", "diff-repository.diff", "diff-activity-workspace.diff", "diff-test-api.diff", "reads-pre-to-current.diff", "browser-fixture-asrun-to-current.diff"]
+  },
+  "execution_control": {
+    "c01": {"entries": "2/2", "container_starts": "2/2", "browser_starts": "1/2", "business_seconds": 31.517, "cleanup_seconds": 0.685, "entry1_abort": "schema probe queried pg_class in postgres DB (schema_tables=0); original adopt-identity.out.txt retained in pg-batch/", "entry2": "merged PG+browser; PG 15.275s incl. 27-test run; browser crashed ReferenceError fulfilAfter (63863d65)"},
+    "c02": {"entries": "1/1", "container_starts": "1/1", "browser_starts": "1/1", "pg_seconds": 11.713, "browser_seconds": 62.727, "business_seconds": 74.440, "cleanup_seconds": 0.69, "container_after": {"running": false, "pid": 0}},
+    "cumulative": {"entries": "10/10", "container_starts": "9/9", "note": "old deviations (7/6 original overrun, claim10/conservative 14) preserved"},
+    "resource": {"container": "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4", "db": "retrolume_task095_g6", "role": "retrolume_task095_synth", "identity_outputs_ok": true, "password_via_stdin": true},
+    "bookkeeping_observations": ["c01 entry#1 abort window (~6s + container start/stop) not booked into 31.517 business seconds", "c02 post-hashes.json generated_at 22:35:49 predates the run it describes (22:39:21-22:40:37); mtime 22:42", "c01 post-hashes.json note clause 'PG batch ran 5a7c8941' is inaccurate (actual c1c40c); corrected in close-02, original file unchanged"]
+  },
+  "nonblocking_observations": [
+    "current fixture ee9074b8 (two post-run fixes) not_run; fixes are fixture-definition/report-field only, add no product coverage; valid sub-evidence adopted",
+    "fixture intercepts all /api/**; unknown /api rejected+blocked; no explicit external-origin block; run showed no external traffic, blocked empty, console empty",
+    "UI label '已提交，正文可回查' derives from read_status (binding/scope/source), not content integrity; corrupt-payload row still shows it until expansion",
+    "s4 window paired-peak bound is <=2 to admit the inherent same-tick detail+ops micro-overlap; list-level serialization separately strict",
+    "browser stdout console log references summary.inflightPeak which is never assigned (cosmetic)"
+  ],
+  "independence": {
+    "actual_client": "Claude desktop app (Code tab), model Fable 5 (claude-fable-5) per session environment; new session, did not participate in 092/094/095 implementation or c01/c02 fixes",
+    "fix_window_registered_client": "WorkBuddy (GLM-5.3-Flash) - different session, as registered in c01/c02 ledgers",
+    "disclosure": "round-1 result file registered its client as WorkBuddy (GLM-5.3-Flash); this window's actual environment differs - disclosed for the orchestrator to weigh",
+    "forbidden_reads": "none executed (no 095-result/095-work-decision/096-work-decision/implementation chat)",
+    "operations": "read-only only; no compile/unittest/build/browser/PG/Docker/app/network; new runtime budget 0; no git writes"
+  },
+  "conclusion": {
+    "d1": "pass (default origin restored for materials/PDF; activity allow_own_origin retained; distinction test ok in batch)",
+    "d2": "pass (in-flight skip, hidden pause, unmount cleanup, sequence/context guards, GET-only, no auto actions)",
+    "o1": "pass (list SQL DB-level payload-free + eligibility bool with fail-closed cross-check; single-read full validation; corrupt-payload list/single distinction verified)",
+    "g2": "closed (byte reconstruction exact; 26 OK inherited with 17 PG + 9 offline; pagination re-run PASS on final bytes)",
+    "g1": "effective sub-evidence adopted (9 steps, 25/25 checks true, structural fixture false-failure; refresh GET-only, explicit single POST, post-action reads independently evidenced); original FAIL retained unchanged",
+    "execution_control": "within new budgets; cumulative 10/9; old deviations preserved",
+    "g6_closure_recommendation": "original G6 achievement (with D1/D2/O1 fixes and both evidence rounds) meets conditions to be submitted to orchestration for closing; no blocking defects found"
+  }
+}

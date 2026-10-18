@@ -1,0 +1,76 @@
+--- before/backend/app/activities/repository.py
++++ final/backend/app/activities/repository.py
+@@ -297,6 +297,7 @@
+         connect_timeout_seconds: int = 3,
+         statement_timeout_ms: int = 3_000,
+         lock_timeout_ms: int = 2_000,
++        data_guard: dict | None = None,
+     ) -> None:
+         if not dsn:
+             raise ValueError("数据库连接不能为空")
+@@ -310,13 +311,30 @@
+         self._connect_timeout = connect_timeout_seconds
+         self._statement_timeout_ms = statement_timeout_ms
+         self._lock_timeout_ms = lock_timeout_ms
+-
+-    async def _transaction(self, operation: Callable[[object], Awaitable[_T]]) -> _T:
++        self.mutation_gate = None
++        self.data_enabled = None
++        self.data_readonly = False
++        self.data_owned_id = None
++        if data_guard is not None:
++            from app.data_exit.maintenance import worker_gate
++            self.mutation_gate, self.data_owned_id = worker_gate(data_guard)
++            def validate(context):
++                from app.data_exit.repository import DataRepository
++                from app.data_exit.contracts import DataError
++                state=DataRepository(self._dsn).state()
++                if (state['dataset_id'],state['instance_id'],state['mode'])!=(context.dataset_id,context.instance_id,'normal'):
++                    raise DataError('mode_unknown',503)
++            self.mutation_gate.validate_source=validate
++            self.data_enabled = True
++
++    async def _transaction(self, operation: Callable[[object], Awaitable[_T]], *, closing_memory_purge=False) -> _T:
+         try:
+             import psycopg
+             from psycopg.rows import dict_row
+         except ImportError:
+             raise AdmissionUnavailable("PostgreSQL 驱动不可用") from None
++        guarded = None
++        outgoing = None
+         try:
+             connection = await psycopg.AsyncConnection.connect(
+                 self._dsn,
+@@ -336,11 +354,31 @@
+                     await connection.execute(
+                         "SET LOCAL idle_in_transaction_session_timeout = '5s'"
+                     )
+-                    return await operation(connection)
++                    if self.data_enabled is None:
++                        cursor=await connection.execute("SELECT to_regclass('public.data_control') IS NOT NULL AS enabled")
++                        self.data_enabled=(await cursor.fetchone())['enabled']
++                    if self.data_enabled:
++                        from app.data_exit.maintenance import GuardedAsyncConnection, outgoing_operation, CLOSE_LANE
++                        from app.data_exit.contracts import DataError
++                        readonly=self.data_readonly or (self.mutation_gate is not None and self.mutation_gate.context().mode!='normal')
++                        if not readonly:await connection.execute('SELECT public.data_mutation_enter()')
++                        if self.mutation_gate is not None and outgoing_operation(operation) and not closing_memory_purge:
++                            outgoing=self.mutation_gate.outgoing_section()
++                            outgoing.__enter__()
++                        guarded=GuardedAsyncConnection(connection,self.mutation_gate,readonly)
++                        if self.data_owned_id is not None:
++                            with self.mutation_gate.close_lane(self.data_owned_id):
++                                result=await operation(guarded)
++                        else:result=await operation(guarded)
++                    else:result=await operation(connection)
++                return result
+         except (AdmissionDenied, ActivityLedgerConflict):
+             raise
+         except psycopg.Error:
+             raise AdmissionUnavailable("持久准入账本暂不可用") from None
++        finally:
++            if guarded is not None:guarded.close_permit()
++            if outgoing is not None:outgoing.__exit__(None,None,None)
+ 
+     @staticmethod
+     def _uuid(value: str, field: str) -> str:

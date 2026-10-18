@@ -1,0 +1,49 @@
+[
+  {
+    "method": "GET",
+    "path": "/api/activities/38690bf7-5db9-4198-be74-795e6787446b/interview/history?limit=50",
+    "status": 413,
+    "body": {
+      "code": "interview_snapshot_limit",
+      "message": "本次读取超过上限，请读取单条记录",
+      "receipt": null,
+      "retryable": false,
+      "schema": "interview.error.v1",
+      "view_token": null
+    }
+  },
+  {
+    "method": "GET",
+    "path": "/api/activities/38690bf7-5db9-4198-be74-795e6787446b/interview/history?before_seq=0",
+    "status": 422,
+    "body": {
+      "detail": [
+        {
+          "type": "greater_than_equal",
+          "loc": [
+            "query",
+            "before_seq"
+          ],
+          "msg": "Input should be greater than or equal to 1",
+          "input": "0",
+          "ctx": {
+            "ge": 1
+          }
+        }
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "path": "/api/activities/07f8d236-9038-4c75-b996-e324578feda0/interview/commands",
+    "status": 413,
+    "body": {
+      "code": "interview_invalid_input",
+      "message": "命令超过32768字节",
+      "receipt": null,
+      "retryable": false,
+      "schema": "interview.error.v1",
+      "view_token": null
+    }
+  }
+]

@@ -1,0 +1,49 @@
+"""真实 Windows 跨进程共享/排他与稳定文件对象，不使用 PID 推断解锁。"""
+import json
+import subprocess
+import sys
+import time
+from budget import Budget,ROOT,CONTROL
+sys.path.insert(0,str(ROOT/'backend'))
+from app.data_exit.files import RootLease
+from app.data_exit.contracts import DataError
+from app.preview.process import birth
+
+
+def main():
+    budget=Budget();budget.reserve('windows_start')
+    child=None;identity=None
+    try:
+        child=subprocess.Popen([str(ROOT/'backend/.venv/Scripts/python.exe'),'-X','utf8',str(ROOT/'backend/tests/fixtures/task114/lock_child.py')],
+            stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,creationflags=subprocess.CREATE_NO_WINDOW)
+        born=birth(child.pid)
+        if born['state']!='running':raise RuntimeError('子进程出生未知')
+        identity='lock-child:'+str(child.pid)+':'+str(born['birth'])
+        budget.created(identity,'windows',{'pid':child.pid,'birth':born['birth'],'purpose':'RootLease 跨进程验证'})
+        budget.begin(identity)
+        if child.stdout.readline()!=b'LOCKED\r\n':raise RuntimeError('子进程锁未确认')
+        lock=RootLease(ROOT/'DocuN/evidence/TASK-114/synthetic/scratch')
+        shared=False;blocked=False;replacement_blocked=False
+        with lock.acquire(timeout=.1):shared=True
+        try:
+            with lock.acquire(True,timeout=.1):pass
+        except DataError as error:blocked=error.code=='operation_timeout'
+        try:lock.path.rename(lock.path.with_name('attempt-replace.lock'))
+        except OSError:replacement_blocked=True
+        if not (shared and blocked and replacement_blocked):raise RuntimeError('锁或稳定文件对象不符')
+        child.stdin.write(b'x');child.stdin.flush();child.wait(timeout=3)
+        with lock.acquire(True,timeout=.1):pass
+        lock.close()
+        result={'shared_acquired':shared,'exclusive_blocked_until_actual_release':blocked,
+                'stable_lock_file_replacement_rejected':replacement_blocked,'child_exit_code':child.returncode}
+        (CONTROL/'cross-process-lock-result.json').write_text(json.dumps(result,indent=2),encoding='utf-8')
+        print(json.dumps(result));return 0
+    finally:
+        if child is not None:
+            if child.poll() is None:
+                try:child.stdin.write(b'x');child.stdin.flush();child.wait(timeout=3)
+                except (OSError,subprocess.TimeoutExpired):child.terminate();child.wait(timeout=3)
+            if identity is not None:budget.end(identity,{'exit_code':child.returncode,'process_ended':child.poll() is not None})
+
+
+if __name__=='__main__':raise SystemExit(main())

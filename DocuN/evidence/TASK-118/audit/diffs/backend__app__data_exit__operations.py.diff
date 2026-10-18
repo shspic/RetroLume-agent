@@ -1,0 +1,11 @@
+--- first-pre/backend/app/data_exit/operations.py
++++ current/backend/app/data_exit/operations.py
+@@ -121,7 +121,7 @@
+         if deadline: self.remaining()
+ 
+     def check(self):
+-        job = self.hub.state()['jobs'][self.job_id]
++        job = self.hub.execution_job(self.job_id)
+         self._validate(job)
+         if job['revision'] != self.revision: raise DataError('request_conflict')
+ 

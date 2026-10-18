@@ -1,0 +1,43 @@
+--- pre/backend/app/worker/one_call.py
++++ final/backend/app/worker/one_call.py
+@@ -124,17 +124,19 @@
+     """协议3 回执：状态/身份/hash，result 去正文副本（text/json_object 恒 None）。
+ 
+     business_commit 推导：succeeded→committed（缺合法 hash 属内部错误即拒）；
+-    unknown 且 error_code==record_unconfirmed→unconfirmed；其余→not_committed。
++    unknown 且 record_denied/record_unconfirmed→unconfirmed；其余→not_committed。
+     """
+     status = result.status.value
+     if status == "succeeded":
+         if type(result.payload_sha256) is not str or _HEX64.fullmatch(result.payload_sha256) is None:
+             raise ValueError("succeeded result lacks confirmed payload digest")
+         commit = "committed"
+-    elif status == "unknown" and result.error_code == "record_unconfirmed":
++    elif status == "unknown" and result.error_code in ("record_denied", "record_unconfirmed"):
+         commit = "unconfirmed"
+     else:
+         commit = "not_committed"
++    if result.error_code in ("record_denied", "record_unconfirmed") and status != "unknown":
++        raise ValueError("record uncertainty requires unknown status")
+     data = asdict(result)
+     data["text"] = None
+     data["json_object"] = None
+@@ -190,10 +192,16 @@
+         if digest is not None or not data["tool_plans"] or data["text"] is not None or data["json_object"] is not None:
+             raise ValueError("invalid plan receipt")
+     else:
+-        if value["business_commit"] == "committed":
+-            raise ValueError("non-succeeded receipt cannot be committed")
++        expected_commit = (
++            "unconfirmed" if data["status"] == "unknown"
++            and data["error_code"] in ("record_denied", "record_unconfirmed") else "not_committed"
++        )
++        if value["business_commit"] != expected_commit:
++            raise ValueError("receipt commit does not match status and error")
+         if digest is not None or data["text"] is not None or data["json_object"] is not None or data["tool_plans"]:
+             raise ValueError("failure receipt carries business output")
++    if data["error_code"] in ("record_denied", "record_unconfirmed") and data["status"] != "unknown":
++        raise ValueError("record uncertainty requires unknown status")
+     try:
+         return TypeAdapter(ModelCallResult).validate_json(json.dumps(data, allow_nan=False))
+     except Exception:

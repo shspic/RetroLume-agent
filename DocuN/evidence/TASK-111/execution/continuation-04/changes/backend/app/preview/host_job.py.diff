@@ -1,0 +1,56 @@
+--- pre/backend/app/preview/host_job.py
++++ backend/app/preview/host_job.py
+@@ -96,8 +96,8 @@
+ 
+ class JobChild:
+     """仅固定内部argv/clean Env的Popen接口，三个匿名管道不继承其他handle。"""
+-    def __init__(self,args,job,*,env,cwd=None,devnull=False):
+-        self.args=args;self.job=job;self._handle=None;self.stdin=self.stdout=self.stderr=None
++    def __init__(self,args,job,*,env,cwd=None,devnull=False,suspended=False):
++        self.args=args;self.job=job;self._handle=None;self._thread_handle=None;self.resumed=False;self.stdin=self.stdout=self.stderr=None
+         children=[];parents=[];streams=[]
+         try:
+             for index in range(3):
+@@ -112,21 +112,22 @@
+             startup=subprocess.STARTUPINFO(dwFlags=subprocess.STARTF_USESTDHANDLES,
+                 hStdInput=children[0][0],hStdOutput=children[1][0],hStdError=children[2][0],lpAttributeList={"handle_list":[x[0] for x in children]})
+             hp,ht,pid,tid=_winapi.CreateProcess(args[0],subprocess.list2cmdline(args),None,None,True,0x4|0x08000000,env,cwd,startup)
+-            self._handle=hp;self.pid=pid
++            self._handle=hp;self._thread_handle=ht;self.pid=pid
+             try:
+                 if not job.api.AssignProcessToJobObject(job.handle,int(hp)):raise OwnershipUnknown("host_job_assignment")
+                 self.birth=birth(pid)
+                 if self.birth["state"]!="running":raise OwnershipUnknown("host_child_birth")
+-                if job.api.ResumeThread(int(ht))==0xffffffff:raise OwnershipUnknown("host_child_resume")
+             except BaseException:
+                 job.api.TerminateProcess(int(hp),1);job.api.WaitForSingleObject(int(hp),2000);raise
+-            finally:_winapi.CloseHandle(ht)
+             if not devnull:
+                 for index,handle in enumerate(parents):
+                     fd=msvcrt.open_osfhandle(handle,os.O_BINARY|(os.O_WRONLY if index==0 else os.O_RDONLY))
+                     streams.append(os.fdopen(fd,"wb" if index==0 else "rb",buffering=0));parents[index]=None
+                 self.stdin,self.stdout,self.stderr=streams
++            if not suspended:self.resume()
+         except BaseException:
++            if self._handle is not None:
++                self.terminate();self.wait(2)
+             for stream in streams:stream.close()
+             self.close();raise
+         finally:
+@@ -135,6 +136,11 @@
+                 else:_winapi.CloseHandle(handle)
+             for handle in parents:
+                 if handle is not None:_winapi.CloseHandle(handle)
++    def resume(self):
++        """管道和Job已归属；调用者完成关键登记后只能恢复一次。"""
++        if self.resumed or self._thread_handle is None or self.poll() is not None:raise OwnershipUnknown("host_child_resume_state")
++        if self.job.api.ResumeThread(int(self._thread_handle))==0xffffffff:raise OwnershipUnknown("host_child_resume")
++        self.resumed=True;_winapi.CloseHandle(self._thread_handle);self._thread_handle=None
+     def poll(self):
+         if self._handle is None:raise OwnershipUnknown("child_handle_closed")
+         if _winapi.WaitForSingleObject(self._handle,0)==258:return None
+@@ -171,3 +177,4 @@
+         for stream in (self.stdin,self.stdout,self.stderr):
+             if stream and not stream.closed:stream.close()
+         if self._handle is not None:_winapi.CloseHandle(self._handle);self._handle=None
++        if self._thread_handle is not None:_winapi.CloseHandle(self._thread_handle);self._thread_handle=None

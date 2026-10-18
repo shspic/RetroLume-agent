@@ -1,0 +1,128 @@
+"""Read/hash orchestration metadata only; never import or execute product code."""
+from pathlib import Path
+from collections import Counter
+from datetime import datetime, timezone, timedelta
+import hashlib
+import json
+
+ROOT = Path(r"D:\shspic\project_NO3_RetroLume-agent")
+OUT = ROOT / "DocuN/evidence/TASK-100/orchestration-receipt-06"
+
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def read_json(rel):
+    return json.loads((ROOT / rel).read_text(encoding="utf-8-sig"))
+
+
+def save(name, value):
+    target = OUT / name
+    if target.exists():
+        raise RuntimeError(f"Refuse to overwrite evidence: {target}")
+    target.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def check(path, expected, group):
+    path = Path(path)
+    actual = sha(path.read_bytes()) if path.is_file() else None
+    return {"group": group, "path": str(path), "expected": expected,
+            "actual": actual, "match": actual == expected}
+
+
+def main():
+    OUT.mkdir(parents=True, exist_ok=True)
+    final = read_json("DocuN/evidence/TASK-100/audit-repair-03/final-identity.json")
+    current = [check(ROOT / rel, digest, "current") for rel, digest in final["post_files"].items()]
+    rules = read_json("DocuN/evidence/v4-migration-20260930/rules-snapshot.json")
+    current += [check(item["absolute_path"], item["sha256"], "rules") for item in rules]
+    audited = read_json("DocuN/evidence/TASK-101/review-02/final-identities.json")
+    groups = Counter(item["group"] for item in audited["objects"])
+    frozen_paths = {str((ROOT / rel).resolve()).casefold() for rel in final["post_files"]}
+    protected = [item for item in audited["objects"] if item["group"] == "current_objects"
+                 and str(Path(item["path"]).resolve()).casefold() not in frozen_paths]
+    if len(protected) != 18:
+        raise RuntimeError("Protected objects must remain the same 18 original objects")
+    current += [check(item["path"], item["expected"], "protected") for item in protected]
+    proof = read_json("DocuN/evidence/TASK-101/review-02/delivery-check-v2.json")
+    current += [check(ROOT / "DocuN/results/TASK-101-result.md", proof["result_sha256"], "audit_result")]
+    report = (ROOT / "DocuN/results/TASK-101-result.md").read_bytes()
+    old_length = proof["original_suffix_bytes"]
+    history_ok = sha(report[-old_length:]) == proof["original_suffix_sha256"]
+    if not history_ok or any(not item["match"] for item in current):
+        save("identity-checks-blocked.json", {"checks": current, "audit_history_match": history_ok})
+        raise RuntimeError("Current identity or original audit history changed")
+    save("identity-checks.json", current)
+    files = ["DocuS/执行动态文档.MD", "DocuS/架构动态文档.MD", "DocuS/文档变更记录.MD",
+             "DocuN/tasks/TASK-100.md", "DocuN/tasks/TASK-101.md",
+             "DocuN/results/TASK-100-work-decision.md", "DocuN/results/TASK-101-work-decision.md"]
+    backups = []
+    for rel in files:
+        data = (ROOT / rel).read_bytes()
+        target = OUT / "before" / rel
+        if target.exists():
+            raise RuntimeError("Backup already exists")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        backups.append({"path": rel, "bytes": len(data), "sha256": sha(data), "backup": str(target)})
+    for name, rel in [("TASK-101-review-02-as-returned.md", "DocuN/results/TASK-101-result.md"),
+                      ("TASK-100-repair-03-card-as-frozen.md", "DocuN/tasks/TASK-100.md")]:
+        target = OUT / name
+        if target.exists():
+            raise RuntimeError("Read-only returned snapshot already exists")
+        target.write_bytes((ROOT / rel).read_bytes())
+    essential = ["AGENTS.md", "DocuN/results/TASK-099-result.md", "DocuN/results/TASK-100-result.md",
+        "DocuN/results/TASK-101-result.md", "DocuN/evidence/TASK-101/review-02/F01-static-finding.md",
+        "DocuN/evidence/TASK-101/review-02/final-identities.json",
+        "DocuN/evidence/TASK-101/review-02/delivery-check-v2.json",
+        "DocuN/evidence/TASK-101/review-02/independent-runtime-content-bindings-v3.json",
+        "DocuN/evidence/TASK-101/review-02/independent-method-bindings-v2.json",
+        "DocuN/evidence/TASK-101/review-02/independent-control-recalculation.json",
+        "backend/app/learning/teaching_policy.py", "backend/app/learning/teaching_progress.py",
+        "backend/app/activities/teaching_repository.py", "backend/tests/test_teaching_policy.py",
+        "backend/tests/test_task100_repair.py", "backend/migrations/009_teaching.sql"]
+    identities = []
+    for rel in essential:
+        path = ROOT / rel
+        if not path.is_file():
+            # Migration filename is obtained from the real frozen manifest, never guessed.
+            if rel == "backend/migrations/009_teaching.sql":
+                candidates = [key for key in final["post_files"] if key.startswith("backend/migrations/009")]
+                if len(candidates) != 1:
+                    raise RuntimeError("Cannot locate unique frozen 009 migration")
+                rel = candidates[0]
+                path = ROOT / rel
+            else:
+                raise RuntimeError(f"Missing required input: {rel}")
+        data = path.read_bytes()
+        identities.append({"path": rel, "sha256": sha(data), "bytes": len(data)})
+    save("before-manifest.json", backups)
+    save("essential-identities.json", identities)
+    save("receipt.json", {
+        "at": datetime.now(timezone(timedelta(hours=8))).isoformat(),
+        "task": "TASK-101", "R": "R-095", "round": "review-02",
+        "receipt": "audit delivery accepted; G8 remains blocked only by F01/DEF-008/P1",
+        "close_limited": ["DEF-009", "DEF-010", "DEF-011", "DEF-012", "DEF-013", "DEF-014", "DEF-015", "DEF-016", "DEF-017", "DEF-018"],
+        "DEF_005": "remaining record-source/public-projection finite boundary closed; original missing versions stay historical",
+        "current_match_count": sum(item["group"] == "current" for item in current),
+        "rules_match_count": sum(item["group"] == "rules" for item in current),
+        "protected_match_count": len(protected),
+        "audit_result_bound_to_delivery": True, "audit_original_history_match": history_ok,
+        "auditor_identity_groups": dict(groups), "auditor_total_independently_hashed": len(audited["objects"]),
+        "auditor_exclusion": "author result-header excluded; 2934 listed / 2933 hashed is not 2934 matches",
+        "review02_active_seconds": proof["active_seconds_at_final_save"],
+        "review02_registered_auxiliary_seconds": proof["known_helper_seconds_before_save"],
+        "review02_business_resource_counts": proof["business_resource_counts"],
+        "root_business_runs": 0, "root_product_writes": 0,
+        "raw_evidence": "Prior independent audit and prior root full hash verification reused; no raw rerun",
+        "runtime": "No resource operations this receipt; last stop observation retains original timestamp",
+        "next": "TASK-100/R-094 bounded offline F01 repair04 to original A+ implementation window"
+    })
+    print(json.dumps({"identity_checks": len(current), "current": len(final["post_files"]),
+        "rules": len(rules), "protected": len(protected), "audit_groups": dict(groups),
+        "history_match": history_ok, "essential": identities}, ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    main()

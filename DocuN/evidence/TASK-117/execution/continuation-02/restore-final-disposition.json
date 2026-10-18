@@ -1,0 +1,86 @@
+{
+  "sample": {
+    "utc": "2026-10-15T21:55:39.728121+00:00",
+    "mono_ns": 34239609000000
+  },
+  "targets": [
+    {
+      "target_id": "05abc665-bbf9-4d41-abf0-7fc607049bf8",
+      "slot_id": "r01",
+      "cid": "185cb0ca16203196597ac4c4e00b99b5725fe9806f72e2046d817f913e0f51d4",
+      "state": "sealed",
+      "temporary_credentials_revoked": null,
+      "job_id": "996accf4-4f10-4691-83ef-ceb7d68524e5",
+      "schema_profile": "data_exit.v1.r01"
+    },
+    {
+      "target_id": "3728af48-e602-4960-a70c-75f315abb2bc",
+      "slot_id": "r02-fault",
+      "cid": "5e5e4cda597a6d9ef302ad7e647e2cfb266704b284ee3446a91116b2ac2176ec",
+      "state": "failed",
+      "temporary_credentials_revoked": true,
+      "job_id": "d9cbc114-3657-4f3c-ba8a-2a57123c9ec8",
+      "schema_profile": "data_exit.v1.r02"
+    },
+    {
+      "target_id": "8e7a206c-54cd-46de-a0ab-bb448f2bb7a1",
+      "slot_id": "r02",
+      "cid": "9a222eee1716a0e70a2ac3ad120664993d3565ca856506bc98ef4d4f317d1d42",
+      "state": "failed",
+      "temporary_credentials_revoked": true,
+      "job_id": "fc632739-9a5a-4b81-930b-f96c5ec626d6",
+      "schema_profile": "data_exit.v1.r02"
+    }
+  ],
+  "jobs": [
+    {
+      "job_id": "996accf4-4f10-4691-83ef-ceb7d68524e5",
+      "kind": "restore",
+      "state": "verified",
+      "stage": "verified",
+      "error_code": null
+    },
+    {
+      "job_id": "890b59cb-2504-45f5-a508-3378d02dbf7b",
+      "kind": "source_delete",
+      "state": "deletion_unconfirmed",
+      "stage": "deletion_unconfirmed",
+      "error_code": "storage_unavailable"
+    },
+    {
+      "job_id": "7b32442e-dcc3-4257-82a6-44647d262579",
+      "kind": "source_delete",
+      "state": "deleted",
+      "stage": "deleted",
+      "error_code": null
+    },
+    {
+      "job_id": "7a10f64c-26bc-4c89-a409-4417ddc1a6dc",
+      "kind": "restore_checkpoint",
+      "state": "published",
+      "stage": "published",
+      "error_code": null
+    },
+    {
+      "job_id": "d9cbc114-3657-4f3c-ba8a-2a57123c9ec8",
+      "kind": "restore",
+      "state": "failed",
+      "stage": "failed",
+      "error_code": "integrity_failed"
+    },
+    {
+      "job_id": "fc632739-9a5a-4b81-930b-f96c5ec626d6",
+      "kind": "restore",
+      "state": "failed",
+      "stage": "failed",
+      "error_code": "operation_timeout"
+    }
+  ],
+  "selection": null,
+  "fence": null,
+  "failed_targets_never_reused": true,
+  "source_activation_attempted": false,
+  "R01_application_GET": "NOT_RUN",
+  "R02_success_roundtrip": "FAILED_component_timeout_30s",
+  "diagnostic_limit": "准确失败位置为restore._load组件内逐行INSERT后30秒检查；617行包，不推断某个SQL或根因已确定"
+}

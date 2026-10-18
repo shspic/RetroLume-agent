@@ -1,0 +1,136 @@
+--- C05-pre/backend/app/preview/production_supervisor.py
++++ backend/app/preview/production_supervisor.py
+@@ -22,7 +22,7 @@
+ from .host_policy import policy_config_sha256
+ from .pipe import send_packet,read_packet
+ from .process import atomic_json,birth,GlobalOwner,OwnershipUnknown,protect_control_key,unprotect_control_key,terminate_owned
+-from .host_job import HostJob,JobChild,scope,job_name,child_lineage
++from .host_job import HostJob,JobChild,scope,job_name,child_lineage,observe_job_end,valid_job_end
+ 
+ BACKEND=Path(__file__).resolve().parents[2]
+ PREVIEW_ROOT=BACKEND.parent/"deploy"/"preview"
+@@ -45,7 +45,7 @@
+             self.blocked=True
+         self._closed=False
+ 
+-    async def recover(self):
++    async def recover(self,*,recovery_observation=None):
+         if not self.available or not self._owner.held:return
+         if not self.current_file.exists():return
+         recovery_stage="registry"
+@@ -78,8 +78,9 @@
+                 if settled["state"]=="stopped":
+                     saved=await self.ledger._read_html_stop_confirmation(registry["activity_id"],registry["preview_id"])
+                     facts=json.loads((folder/"kernel-premises.json").read_text(encoding="utf-8"))
+-                    previous=json.loads((folder/"supervisor-result.json").read_text(encoding="utf-8"))
+-                    if saved is None or previous.get("confirmed") is not True or canonical(saved)!=canonical(previous.get("proof")):
++                    previous=json.loads((folder/"supervisor-result.json").read_text(encoding="utf-8")) if (folder/"supervisor-result.json").is_file() else {}
++                    recovered=json.loads((folder/"recovery-proof.json").read_text(encoding="utf-8")) if (folder/"recovery-proof.json").is_file() else None
++                    if saved is None or not (previous.get("confirmed") is True and canonical(saved)==canonical(previous.get("proof")) or recovered is not None and canonical(saved)==canonical(recovered)):
+                         raise OwnershipUnknown("settled_stop_receipt_mismatch")
+                     actual=inspect_owned(self.policy.docker,registry["cid"],intent);old_after=saved.get("after",{})
+                     events=saved.get("events",{});dies=[json.loads(line) for line in events.get("stdout","").splitlines() if line.strip()]
+@@ -87,7 +88,7 @@
+                         or saved.get("image_id")!=intent["image_id"] or saved.get("nonce")!=intent["nonce"]
+                         or saved.get("kernel_premises_sha256")!=digest(facts) or saved.get("attach_eof_confirmed") is not True
+                         or saved.get("owned_reaper_ended") is not True or saved.get("wait",{}).get("code")!=0
+-                        or any(saved.get(key,{}).get("ActiveProcesses")!=0 for key in ("reaper_windows_job","supervisor_cli_windows_job"))
++                        or any(not valid_job_end(saved.get(key),job_name(registry["preview_id"],intent["nonce"],role),registry.get("job_premises",{}).get(role)) for role,key in (("REAP","reaper_windows_job"),("SUP","supervisor_cli_windows_job")))
+                         or not any(e.get("Actor",{}).get("ID")==registry["cid"] and e.get("Action")=="die" for e in dies)
+                         or actual["state"]["Running"] or actual["state"]["Pid"]!=0 or actual["state"]["Restarting"]
+                         or actual["state"]["StartedAt"]!=old_after.get("state",{}).get("StartedAt")
+@@ -109,8 +110,11 @@
+             if cid is None:
+                 if not registry.get("create_requested_ns"):
+                     failure=json.loads((folder/"failure.json").read_text(encoding="utf-8"))
+-                    if failure.get("type")!="OwnershipUnknown" or failure.get("code")!="reaper_job_identity" or registry.get("start_requested_ns") or registry.get("attach_pid"):
++                    known_old=failure.get("code")=="reaper_job_identity"
++                    known_precreate=failure.get("stage")=="reaper_start" and not (folder/"create.json").exists() and not (folder/"reaper-lineage.json").exists()
++                    if failure.get("type")!="OwnershipUnknown" or not (known_old or known_precreate) or registry.get("start_requested_ns") or registry.get("attach_pid"):
+                         raise OwnershipUnknown("recovery_precreate_unknown")
++                    if find_intent(self.policy.docker,intent) is not None:raise OwnershipUnknown("recovery_precreate_object_found")
+                     created={"precreate_failure":failure,"create_never_requested":True}
+                 else:
+                     created=json.loads((folder/"create.json").read_text(encoding="utf-8"))
+@@ -128,14 +132,35 @@
+             ready_file=folder/"reaper-ready.json"
+             if ready_file.is_file():
+                 reaper=json.loads(ready_file.read_text(encoding="utf-8"));terminate_owned(reaper["pid"],reaper["birth"])
++            elif cid is None and created and created.get("create_never_requested") and registry.get("reaper_launcher"):
++                # 没有工作对象/attach或ready的失败只核实际已登记launcher终结；
++                # 不编造未登记的Reaper pid、Job查询零或Linux/EOF证明。
++                launcher=registry["reaper_launcher"]
++                if birth(launcher["pid"]).get("state")!="exited":raise OwnershipUnknown("precreate_launcher_not_ended")
++                reaper=None
+             else:raise OwnershipUnknown("recovery_reaper_identity_missing")
+             recovery_stage="tree_proof"
+             if cid is None:
+                 proof={"tree_confirmation":"never_started","cid":None,"image_id":intent["image_id"],"nonce":intent["nonce"],
+                     "name":intent["name"],"recovery":True,"cause":"known_failure_before_create" if created.get("create_never_requested") else "exact_cli_pid_parse_rejection","create_receipt_sha256":digest(created),
+                     "lookup":"exact_name_and_nonce_absent","parent_lifetime_ended":True,"owned_reaper_ended":True,"attach_never_started":True}
++                if not ready_file.is_file():
++                    proof["owned_reaper_ended"]=False;proof["reaper_never_registered"]=True;proof["registered_launcher_ended"]=True
+             else:
+-                proof=stop_owned(self.policy.docker,cid,intent,facts,attach_ended=attach_ended)
++                eof=False
++                if recovery_observation is not None:
++                    obs=recovery_observation;observer=birth(os.getpid())
++                    if (obs.get("preview_id")!=registry["preview_id"] or obs.get("cid")!=cid or obs.get("nonce")!=intent["nonce"]
++                        or obs.get("image_id")!=intent["image_id"] or obs.get("source_parent")!=registry["parent"]
++                        or obs.get("source_attach")!={"pid":registry.get("attach_pid"),"birth":registry.get("attach_birth")}
++                        or obs.get("observer")!={"pid":os.getpid(),"birth":observer.get("birth")}
++                        or obs.get("captured_before_trigger") is not True or obs.get("read_after_parent_exit") is not True
++                        or len(obs.get("pipes",[]))!=2 or any(p.get("actual_eof") is not True for p in obs["pipes"])):
++                        raise OwnershipUnknown("recovery_eof_observation_mismatch")
++                    eof=True
++                elif (folder/"supervisor-result.json").is_file():
++                    prior=json.loads((folder/"supervisor-result.json").read_text(encoding="utf-8"));eof=prior.get("proof",{}).get("attach_eof_confirmed") is True
++                proof=stop_owned(self.policy.docker,cid,intent,facts,attach_ended=attach_ended and eof)
+                 if state["state"]["Status"]=="created" and not state["state"]["Running"] and state["state"]["Pid"]==0 and state["state"]["StartedAt"].startswith("0001-"):
+                     previous=json.loads((folder/"supervisor-result.json").read_text(encoding="utf-8"))
+                     known=previous.get("proof",{})
+@@ -147,8 +172,8 @@
+                 proof["owned_reaper_ended"]=True;proof["parent_lifetime_ended"]=True
+                 if proof["tree_confirmation"]=="private_pid_init_terminated":
+                     for role,key in (("SUP","supervisor_cli_windows_job"),("REAP","reaper_windows_job")):
+-                        with HostJob(job_name(registry["preview_id"],intent["nonce"],role),existing=True) as owned_job:
+-                            proof[key]=owned_job.finish()
++                        proof[key]=observe_job_end(job_name(registry["preview_id"],intent["nonce"],role),registry.get("job_premises",{}).get(role))
++                    if recovery_observation is not None:proof["recovery_eof_observation_sha256"]=digest(recovery_observation)
+             if proof["tree_confirmation"] not in ("private_pid_init_terminated","never_started"):raise OwnershipUnknown("recovery_tree_unknown")
+             recovery_stage="persistent_row";row=await self.ledger.read_html_preview(registry["activity_id"],registry["preview_id"])
+             if row["state"] not in ("stopped","failed_unstarted"):
+@@ -238,6 +263,7 @@
+         c["stop"].set();c["error_code"]=c["error_code"] or "supervision_unconfirmed"
+         row={"stage":stage,"type":type(error).__name__,"errno":getattr(error,"errno",None),
+           "winerror":getattr(error,"winerror",None),"path_alias":path_alias,"at_ns":time.monotonic_ns()}
++        row["code"]=str(error)[:128] if isinstance(error,(OwnershipUnknown,DockerUnknown)) else "bounded_supervision_error"
+         c.setdefault("diagnostics",[]).append(row)
+         try:atomic_json(c["folder"]/"failure.json",row)
+         except OSError:pass
+@@ -313,7 +339,7 @@
+             if launcher["state"]!="running":raise OwnershipUnknown("reaper_launcher_birth")
+             c["registry"]["reaper_launcher"]={"pid":reaper.pid,"birth":launcher["birth"]};self._registry(c)
+             while not (c["folder"]/"reaper-ready.json").exists():
+-                if reaper.poll() is not None or time.monotonic_ns()>c["t0_ns"]+1000000000:raise OwnershipUnknown("reaper_not_ready")
++                if reaper.poll() is not None or time.monotonic_ns()>min(c["t0_ns"]+3000000000,c["deadline_ns"]-10000000000):raise OwnershipUnknown("reaper_not_ready")
+                 time.sleep(.02)
+             ready_owner=json.loads((c["folder"]/"reaper-ready.json").read_text(encoding="utf-8"))
+             expected_job=job_name(c["preview_id"],c["nonce"],"REAP")
+@@ -336,7 +362,7 @@
+                 if cid is None:raise
+             c["cid"]=cid;c["registry"]["cid"]=cid;self._registry(c);self._transition(c,"registered",cid=cid)
+             while not (c["folder"]/"reaper-bound.json").exists():
+-                if reaper.poll() is not None or time.monotonic_ns()>c["t0_ns"]+3000000000:raise OwnershipUnknown("reaper_bind_unconfirmed")
++                if reaper.poll() is not None or time.monotonic_ns()>min(c["t0_ns"]+4500000000,c["deadline_ns"]-10000000000):raise OwnershipUnknown("reaper_bind_unconfirmed")
+                 time.sleep(.02)
+             bound=json.loads((c["folder"]/"reaper-bound.json").read_text(encoding="utf-8"))
+             if bound["cid"]!=cid or bound["deadline_ns"]!=c["deadline_ns"]:raise OwnershipUnknown("reaper_bind_identity")
+@@ -348,6 +374,7 @@
+             born=birth(attach.pid)
+             if born["state"]!="running":raise OwnershipUnknown("attach_birth_unconfirmed")
+             c["registry"]["attach_pid"]=attach.pid;c["registry"]["attach_birth"]=born["birth"];c["registry"]["attach_suspended"]=True
++            c["registry"]["job_premises"]={"SUP":c["host_job"].premise(c["registry"]["parent"]),"REAP":c["reaper_job"].premise(c["registry"]["reaper_owner"])}
+             stage="readers_prepare"
+             c["reader"]=threading.Thread(target=self._read,args=(c,),daemon=False);c["reader"].start()
+             c["stderr_reader"]=threading.Thread(target=self._stderr,args=(c,),daemon=False);c["stderr_reader"].start()

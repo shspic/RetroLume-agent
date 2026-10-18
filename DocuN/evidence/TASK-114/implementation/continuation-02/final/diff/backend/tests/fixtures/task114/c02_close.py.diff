@@ -1,0 +1,48 @@
+--- pre/backend/tests/fixtures/task114/c02_close.py
++++ final/backend/tests/fixtures/task114/c02_close.py
+@@ -0,0 +1,45 @@
++"""只读精确身份收尾；不启动容器、不读Env/旧凭据/旧业务Hub。"""
++from datetime import datetime,timezone
++import json
++import subprocess
++import sys
++from budget import ROOT,EVIDENCE,Budget
++sys.path.insert(0,str(ROOT/'backend'))
++from app.data_exit.restore import docker_call
++from app.preview.process import birth
++
++
++def main():
++    budget=Budget();value=budget.check(cleanup=True);containers=[];processes=[]
++    for resource in value['resources']:
++        if resource['kind']=='pg':
++            raw=json.loads(docker_call(['inspect',resource['identity']]))[0]
++            meta=resource['metadata'];assert raw['Id']==resource['identity'] and raw['Image']==meta['image_id'] and raw['Name']=='/'+meta['name']
++            assert not raw['State']['Running'] and raw['State']['Pid']==0
++            mounts=raw['Mounts'];assert len(mounts)==1 and mounts[0]['Type']=='volume' and mounts[0]['Name']==meta['volume']
++            containers.append({'cid':raw['Id'],'name':meta['name'],'image_id':raw['Image'],'labels':raw['Config']['Labels'],
++              'volume':meta['volume'],'running':False,'pid':0,'status':raw['State']['Status']})
++        elif resource['metadata'].get('pid'):
++            pid=resource['metadata']['pid'];stamp=resource['metadata'].get('birth');observed=birth(pid)
++            ended=observed['state']=='exited' or stamp is not None and observed['state']=='running' and observed['birth']!=stamp
++            assert ended,(resource['identity'],observed)
++            processes.append({'identity':resource['identity'],'pid':pid,'expected_birth':stamp,'original_process_ended':True,
++              'PID_reused_by_other_process':observed['state']=='running'})
++    assert not any(r['state']=='running' for r in value['resources'])
++    command="$ErrorActionPreference='Stop'; @(Get-NetTCPConnection | Where-Object { $_.LocalPort -in @(15452,15453,15454,18114,15114,55461,55465,55466,55467,55468,55469) } | Select-Object LocalAddress,LocalPort,State,OwningProcess) | ConvertTo-Json -Compress"
++    result=subprocess.run(['powershell','-NoProfile','-Command',command],capture_output=True,timeout=15);assert result.returncode==0
++    ports=json.loads(result.stdout.decode('utf-8-sig').strip() or '[]')
++    # TIME_WAIT为完成TCP的内核历史，不能当活消费者；必须完整保留。
++    own_pids={r['metadata'].get('pid') for r in value['resources']}
++    active=[r for r in (ports if isinstance(ports,list) else [ports]) if str(r['State']) not in ('TimeWait','12') and r['OwningProcess'] in own_pids]
++    assert not active
++    data={'utc':datetime.now(timezone.utc).isoformat(),'containers':containers,'processes':processes,'all_TCP_states':ports,
++      'task_owned_active_TCP':active,'all_owned_consumers_stopped':True,'old_objects_not_started_by_C02':True,
++      'counts':value['counts'],'holding_seconds':value['real_holding_seconds'],'offline_seconds':value['offline_seconds']}
++    path=EVIDENCE/'closure.json'
++    with path.open('x',encoding='utf-8') as f:f.write(json.dumps(data,ensure_ascii=False,indent=2))
++    budget.event('closure.confirmed',{'containers_stopped':len(containers),'processes_ended':len(processes),'new_running':0,'path':str(path.relative_to(ROOT))})
++    print(json.dumps({'containers':len(containers),'processes':len(processes),'all_stopped':True,'counts':value['counts']}))
++
++
++if __name__=='__main__':main()

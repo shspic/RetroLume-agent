@@ -1,0 +1,45 @@
+--- pre/backend/app/data_exit/restore.py
++++ final/backend/app/data_exit/restore.py
+@@ -92,7 +92,6 @@
+         target_id, dataset_id, instance_id, root_id = (str(uuid4()) for _ in range(4))
+         intent = {"target_id": target_id, "job_id": uuid(job_id), "slot_id": slot["id"], "profile_id": accepted_profile_id,
+                   "state": "allocating", "dataset_id": dataset_id, "instance_id": instance_id, "root_id": root_id}
+-        self.hub.commit("target.register", intent)
+         # 名字、卷、端口碰撞停止此 slot，不改名或清理旧对象绕过。
+         if docker_call(["ps", "-aq", "--filter", "name=^/" + slot["name"] + "$"]): raise DataError("target_collision", 503)
+         volumes = docker_call(["volume", "ls", "--format", "{{.Name}}"])
+@@ -104,6 +103,8 @@
+         if image["Id"] != self.profile["image_id"] or image["Os"] != "linux" or image["Architecture"] != "amd64":
+             raise DataError("target_identity_unknown", 503)
+         self._hook("before_create", slot)
++        # 先完成host准入/内存门，再持久登记意图；仍先于实际资源创建。
++        self.hub.commit("target.register", intent)
+         prefix = self.profile["login_prefix"]
+         credentials = {"admin_password": secrets.token_urlsafe(32), "loader_password": secrets.token_urlsafe(32),
+                        "readonly_password": secrets.token_urlsafe(32), "snapshot_password": secrets.token_urlsafe(32),
+@@ -147,9 +148,13 @@
+                 import psycopg
+                 from psycopg import sql
+                 with psycopg.connect(credentials['admin_dsn'],connect_timeout=3) as connection:
++                    names={r[0] for r in connection.execute('SELECT rolname FROM pg_roles WHERE rolname=ANY(%s)',
++                        ([self.profile['login_prefix']+'loader',self.profile['login_prefix']+'admin','retrolume_data_restore_loader'],)).fetchall()}
+                     for suffix in ('loader','admin'):
+-                        connection.execute(sql.SQL('ALTER ROLE {} NOLOGIN PASSWORD NULL').format(sql.Identifier(self.profile['login_prefix']+suffix)))
+-                    connection.execute(sql.SQL('REVOKE retrolume_data_restore_loader FROM {}').format(sql.Identifier(self.profile['login_prefix']+'loader')))
++                        name=self.profile['login_prefix']+suffix
++                        if name in names:connection.execute(sql.SQL('ALTER ROLE {} NOLOGIN PASSWORD NULL').format(sql.Identifier(name)))
++                    if 'retrolume_data_restore_loader' in names and self.profile['login_prefix']+'loader' in names:
++                        connection.execute(sql.SQL('REVOKE retrolume_data_restore_loader FROM {}').format(sql.Identifier(self.profile['login_prefix']+'loader')))
+                 revoked=True
+             except Exception:pass
+         self.hub.commit('target.register',{'target_id':target.target_id,'state':'failed','temporary_credentials_revoked':revoked})
+@@ -211,6 +216,9 @@
+                 credentials[name + "_dsn"] = make_conninfo(host="127.0.0.1", port=target.port, dbname=slot["database"], user=username, password=credentials[name + "_password"])
+             connection.execute("INSERT INTO public.data_control(dataset_id,instance_id,schema_profile,mode,source_snapshot_id,originals_root_id,loader_session_user,maintenance_key_sha256) VALUES(%s,%s,%s,'loading',%s,%s,%s,%s)",
+                                (target.dataset_id, target.instance_id, PROFILE, target.job_id, target.root_id, prefix + "loader", digest(credentials["maintenance_key"])))
++            from psycopg.rows import dict_row
++            from .schema_checks import assert_data_schema_sync
++            with connection.cursor(row_factory=dict_row) as cursor:assert_data_schema_sync(cursor)
+             identity = {"server_version_num": version, "migration_chain": chain, "target_id": target.target_id, "mode": "loading"}
+             self.hub.commit("target.register", {"target_id": target.target_id, "schema_identity": identity})
+ 

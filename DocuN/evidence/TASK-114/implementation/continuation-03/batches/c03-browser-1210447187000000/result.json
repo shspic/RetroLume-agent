@@ -1,0 +1,2331 @@
+{
+  "state": "passed",
+  "layer": "真实Chromium/最终dist；全部routes/合成DTO，零监听/API/PG；切换响应不代表真实selector",
+  "cases": [
+    {
+      "case": "upload-pending-policy-change",
+      "old_upload_fact": true,
+      "stale_plan_POST": 0,
+      "restore_POST": 0
+    },
+    {
+      "case": "plan-pending-policy-change",
+      "stale_policy": "snapshot_only_readonly",
+      "current_policy": "respect_current_deletions",
+      "not_eligible": true
+    },
+    {
+      "case": "fresh-respect-positive",
+      "plan": {
+        "plan_id": "33300000-0000-4000-8000-000000000104",
+        "deletion_policy": "respect_current_deletions",
+        "plan_sha256": "02bb054e3151abccdbd72ce7ab32221ba25e24dc007907dde1a436f53ebe063d",
+        "package_root_sha256": "3b6c57b2da9961ffe7a4cd824797e80fdfba43e21040303c8973d94b8ab7d560",
+        "latest_status": "known",
+        "overlay_count": 31,
+        "executor_configured": true,
+        "permanent_readonly": true
+      },
+      "verify_body": {
+        "acknowledge_unknown_deletions": false,
+        "business_key": "25d794c4-be95-4d9f-8b18-2b4e98ae43ca",
+        "confirm": true,
+        "expected_plan_sha256": "02bb054e3151abccdbd72ce7ab32221ba25e24dc007907dde1a436f53ebe063d",
+        "plan_id": "33300000-0000-4000-8000-000000000104"
+      },
+      "explicit_once": true
+    },
+    {
+      "case": "refresh-plan-late-policy-change",
+      "old_GET_plan_not_requalified": true,
+      "snapshot_confirmation_reset": true
+    },
+    {
+      "case": "snapshot-unknown-positive",
+      "verify_body": {
+        "acknowledge_unknown_deletions": true,
+        "business_key": "43fd1293-c0a6-400b-911d-5f053ae7b305",
+        "confirm": true,
+        "expected_plan_sha256": "6ccb29635f78a11b5595a54f187c76c31d2a0fe8f024445acf73126801fc1d5a",
+        "plan_id": "33300000-0000-4000-8000-000000000108"
+      },
+      "activation": {
+        "seq": 27,
+        "method": "POST",
+        "path": "/api/data/restore-jobs/33300000-0000-4000-8000-000000000109/activate-readonly",
+        "query": "",
+        "body": {
+          "business_key": "697569de-af7c-4304-a7e6-2727ac1cc506",
+          "confirm": true,
+          "expected_plan_sha256": "6ccb29635f78a11b5595a54f187c76c31d2a0fe8f024445acf73126801fc1d5a",
+          "expected_selection_generation": 0
+        },
+        "phase": "snapshot-unknown-positive",
+        "context": {
+          "control_id": "33300000-0000-4000-8000-000000000001",
+          "current_mode": "normal",
+          "dataset_id": "33300000-0000-4000-8000-000000000002",
+          "instance_id": "33300000-0000-4000-8000-000000000003",
+          "read_only": false,
+          "selection_generation": 0
+        }
+      },
+      "fresh_mount_did_not_requalify_history_plan": true,
+      "real_onSelection_page_reload": true,
+      "layer": "route action only, no real selector"
+    },
+    {
+      "case": "same-context-file-replacement",
+      "file_replacement_invalidates_previous": true,
+      "no_automatic_verify": true
+    },
+    {
+      "case": "verify-late-input-change",
+      "old_verification_fact_preserved_but_not_activation_eligible": true
+    },
+    {
+      "case": "source-A-to-B",
+      "stale": {
+        "closure_sha256": "badd2315c547e42fd6b7630826fe7b7ab7b08cd6572c053823a8d627f139e25f",
+        "materials": [
+          {
+            "title": "SCOPE 33300000-0000-4000-8000-000000000020"
+          }
+        ],
+        "activity_count": 0
+      },
+      "export_body": {
+        "business_key": "e818e11e-6eef-4d14-bc78-4d256f46e6f5",
+        "confirm": true,
+        "kind": "portable_export",
+        "scope": {
+          "activity_ids": [],
+          "expected_closure_sha256": "5f12dc3190a4d58dcb65759943f5a7d7f25fa1ebac3788215bb4375a5ddbbfa0",
+          "mode": "selected",
+          "source_ids": [
+            "33300000-0000-4000-8000-000000000022"
+          ]
+        }
+      },
+      "explicit_once": true
+    },
+    {
+      "case": "activity-A-to-B",
+      "export_body": {
+        "business_key": "eb879d90-43da-4d90-b212-6362d970123d",
+        "confirm": true,
+        "kind": "portable_export",
+        "scope": {
+          "activity_ids": [
+            "33300000-0000-4000-8000-000000000031"
+          ],
+          "expected_closure_sha256": "5f77b47b4a9c4a111d6f3429431ace24c7e39dac629b6cec3e5405c233a6bc64",
+          "mode": "selected",
+          "source_ids": []
+        }
+      },
+      "explicit_once": true
+    },
+    {
+      "case": "mode-change",
+      "late_scope_absent": true,
+      "selected_requires_fresh_preview": true
+    },
+    {
+      "case": "unmount-plan-late",
+      "late_result_not_committed": true,
+      "history_GET_did_not_adopt_old_plan": true
+    },
+    {
+      "case": "context-plan-late",
+      "late_result_not_committed": true,
+      "current_identity": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "selection_generation": 1,
+        "dataset_id": "33300000-0000-4000-8000-000000000004",
+        "instance_id": "33300000-0000-4000-8000-000000000005",
+        "current_mode": "restored_readonly",
+        "read_only": true
+      }
+    }
+  ],
+  "requests": [
+    {
+      "seq": 1,
+      "method": "GET",
+      "path": "/",
+      "query": "",
+      "body": null,
+      "phase": "initial",
+      "context": null
+    },
+    {
+      "seq": 2,
+      "method": "GET",
+      "path": "/assets/index-DZduJTtr.js",
+      "query": "",
+      "body": null,
+      "phase": "initial",
+      "context": null
+    },
+    {
+      "seq": 3,
+      "method": "GET",
+      "path": "/assets/index-Ccc1_Rok.css",
+      "query": "",
+      "body": null,
+      "phase": "initial",
+      "context": null
+    },
+    {
+      "seq": 4,
+      "method": "GET",
+      "path": "/api/session",
+      "query": "",
+      "body": null,
+      "phase": "initial",
+      "context": null
+    },
+    {
+      "seq": 5,
+      "method": "GET",
+      "path": "/api/pdf-candidates",
+      "query": "",
+      "body": null,
+      "phase": "initial",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 6,
+      "method": "GET",
+      "path": "/api/materials",
+      "query": "?offset=0",
+      "body": null,
+      "phase": "initial",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 7,
+      "method": "GET",
+      "path": "/api/data/capabilities",
+      "query": "",
+      "body": null,
+      "phase": "initial",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 8,
+      "method": "GET",
+      "path": "/api/materials",
+      "query": "",
+      "body": null,
+      "phase": "initial",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 9,
+      "method": "GET",
+      "path": "/api/activities",
+      "query": "?limit=20",
+      "body": null,
+      "phase": "initial",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 10,
+      "method": "POST",
+      "path": "/api/data/uploads",
+      "query": "?business_key=7c11bad3-7692-44f4-b88a-1ae11c11aeb1&upload_id=896b6066-0bcb-438b-a05d-84f25f2b723a&expected_sha256=10bf81da5430144f99a0c8cf7a9bf1946219dd68b7e5c6c7c0dc863adeee464b&expected_bytes=24",
+      "body": null,
+      "phase": "upload-pending-policy-change",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      },
+      "bytes": 24
+    },
+    {
+      "seq": 11,
+      "method": "POST",
+      "path": "/api/data/uploads",
+      "query": "?business_key=b3bcbf8b-48fb-47d5-9004-92a9badf9a89&upload_id=539b2fa0-c769-4593-8daf-780152d31d18&expected_sha256=85669e8024bbae96ac87424a8fc726afc87eb380fbfdc1ed60505d64f2ab9640&expected_bytes=22",
+      "body": null,
+      "phase": "plan-pending-policy-change",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      },
+      "bytes": 22
+    },
+    {
+      "seq": 12,
+      "method": "POST",
+      "path": "/api/data/restore-plans",
+      "query": "",
+      "body": {
+        "deletion_policy": "snapshot_only_readonly",
+        "upload_id": "539b2fa0-c769-4593-8daf-780152d31d18"
+      },
+      "phase": "plan-pending-policy-change",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 13,
+      "method": "POST",
+      "path": "/api/data/uploads",
+      "query": "?business_key=0c45b4b0-38e4-4450-9fd3-e82a2efc4f77&upload_id=7fe76010-d050-4e7f-8d73-aa13e16e20f3&expected_sha256=af61d54e5f8551b14a748ea7a8919348c46c970cd6a5a316a4f0f582ba02e4ff&expected_bytes=19",
+      "body": null,
+      "phase": "fresh-respect-positive",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      },
+      "bytes": 19
+    },
+    {
+      "seq": 14,
+      "method": "POST",
+      "path": "/api/data/restore-plans",
+      "query": "",
+      "body": {
+        "deletion_policy": "respect_current_deletions",
+        "upload_id": "7fe76010-d050-4e7f-8d73-aa13e16e20f3"
+      },
+      "phase": "fresh-respect-positive",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 15,
+      "method": "POST",
+      "path": "/api/data/restore-jobs",
+      "query": "",
+      "body": {
+        "acknowledge_unknown_deletions": false,
+        "business_key": "25d794c4-be95-4d9f-8b18-2b4e98ae43ca",
+        "confirm": true,
+        "expected_plan_sha256": "02bb054e3151abccdbd72ce7ab32221ba25e24dc007907dde1a436f53ebe063d",
+        "plan_id": "33300000-0000-4000-8000-000000000104"
+      },
+      "phase": "fresh-respect-positive",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 16,
+      "method": "GET",
+      "path": "/api/data/capabilities",
+      "query": "",
+      "body": null,
+      "phase": "refresh-plan-late-policy-change",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 17,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/7c11bad3-7692-44f4-b88a-1ae11c11aeb1",
+      "query": "",
+      "body": null,
+      "phase": "refresh-plan-late-policy-change",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 18,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/b3bcbf8b-48fb-47d5-9004-92a9badf9a89",
+      "query": "",
+      "body": null,
+      "phase": "refresh-plan-late-policy-change",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 19,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/0c45b4b0-38e4-4450-9fd3-e82a2efc4f77",
+      "query": "",
+      "body": null,
+      "phase": "refresh-plan-late-policy-change",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 20,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/25d794c4-be95-4d9f-8b18-2b4e98ae43ca",
+      "query": "",
+      "body": null,
+      "phase": "refresh-plan-late-policy-change",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 21,
+      "method": "GET",
+      "path": "/api/data/restore-plans/33300000-0000-4000-8000-000000000104",
+      "query": "",
+      "body": null,
+      "phase": "refresh-plan-late-policy-change",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 22,
+      "method": "GET",
+      "path": "/api/materials",
+      "query": "",
+      "body": null,
+      "phase": "refresh-plan-late-policy-change",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 23,
+      "method": "GET",
+      "path": "/api/activities",
+      "query": "?limit=20",
+      "body": null,
+      "phase": "refresh-plan-late-policy-change",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 24,
+      "method": "POST",
+      "path": "/api/data/uploads",
+      "query": "?business_key=02b62e55-08f7-4cce-b059-2383a4871be0&upload_id=c7d8118c-bef6-47cc-a27a-eff2f0e75ce0&expected_sha256=3e954a44e206b227606b23f439d4f9e99f67df42d2f97f4fa205c033939789b9&expected_bytes=20",
+      "body": null,
+      "phase": "snapshot-unknown-positive",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      },
+      "bytes": 20
+    },
+    {
+      "seq": 25,
+      "method": "POST",
+      "path": "/api/data/restore-plans",
+      "query": "",
+      "body": {
+        "deletion_policy": "snapshot_only_readonly",
+        "upload_id": "c7d8118c-bef6-47cc-a27a-eff2f0e75ce0"
+      },
+      "phase": "snapshot-unknown-positive",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 26,
+      "method": "POST",
+      "path": "/api/data/restore-jobs",
+      "query": "",
+      "body": {
+        "acknowledge_unknown_deletions": true,
+        "business_key": "43fd1293-c0a6-400b-911d-5f053ae7b305",
+        "confirm": true,
+        "expected_plan_sha256": "6ccb29635f78a11b5595a54f187c76c31d2a0fe8f024445acf73126801fc1d5a",
+        "plan_id": "33300000-0000-4000-8000-000000000108"
+      },
+      "phase": "snapshot-unknown-positive",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 27,
+      "method": "POST",
+      "path": "/api/data/restore-jobs/33300000-0000-4000-8000-000000000109/activate-readonly",
+      "query": "",
+      "body": {
+        "business_key": "697569de-af7c-4304-a7e6-2727ac1cc506",
+        "confirm": true,
+        "expected_plan_sha256": "6ccb29635f78a11b5595a54f187c76c31d2a0fe8f024445acf73126801fc1d5a",
+        "expected_selection_generation": 0
+      },
+      "phase": "snapshot-unknown-positive",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 28,
+      "method": "GET",
+      "path": "/",
+      "query": "",
+      "body": null,
+      "phase": "snapshot-unknown-positive",
+      "context": null
+    },
+    {
+      "seq": 29,
+      "method": "GET",
+      "path": "/assets/index-DZduJTtr.js",
+      "query": "",
+      "body": null,
+      "phase": "snapshot-unknown-positive",
+      "context": null
+    },
+    {
+      "seq": 30,
+      "method": "GET",
+      "path": "/assets/index-Ccc1_Rok.css",
+      "query": "",
+      "body": null,
+      "phase": "snapshot-unknown-positive",
+      "context": null
+    },
+    {
+      "seq": 31,
+      "method": "GET",
+      "path": "/api/session",
+      "query": "",
+      "body": null,
+      "phase": "snapshot-unknown-positive",
+      "context": null
+    },
+    {
+      "seq": 32,
+      "method": "GET",
+      "path": "/api/pdf-candidates",
+      "query": "",
+      "body": null,
+      "phase": "snapshot-unknown-positive",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 33,
+      "method": "GET",
+      "path": "/api/materials",
+      "query": "?offset=0",
+      "body": null,
+      "phase": "snapshot-unknown-positive",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 34,
+      "method": "GET",
+      "path": "/api/data/capabilities",
+      "query": "",
+      "body": null,
+      "phase": "snapshot-unknown-positive",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 35,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/7c11bad3-7692-44f4-b88a-1ae11c11aeb1",
+      "query": "",
+      "body": null,
+      "phase": "snapshot-unknown-positive",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 36,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/b3bcbf8b-48fb-47d5-9004-92a9badf9a89",
+      "query": "",
+      "body": null,
+      "phase": "snapshot-unknown-positive",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 37,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/0c45b4b0-38e4-4450-9fd3-e82a2efc4f77",
+      "query": "",
+      "body": null,
+      "phase": "snapshot-unknown-positive",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 38,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/25d794c4-be95-4d9f-8b18-2b4e98ae43ca",
+      "query": "",
+      "body": null,
+      "phase": "snapshot-unknown-positive",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 39,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/02b62e55-08f7-4cce-b059-2383a4871be0",
+      "query": "",
+      "body": null,
+      "phase": "snapshot-unknown-positive",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 40,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/43fd1293-c0a6-400b-911d-5f053ae7b305",
+      "query": "",
+      "body": null,
+      "phase": "snapshot-unknown-positive",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 41,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/697569de-af7c-4304-a7e6-2727ac1cc506",
+      "query": "",
+      "body": null,
+      "phase": "snapshot-unknown-positive",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 42,
+      "method": "GET",
+      "path": "/api/materials",
+      "query": "",
+      "body": null,
+      "phase": "snapshot-unknown-positive",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 43,
+      "method": "GET",
+      "path": "/api/activities",
+      "query": "?limit=20",
+      "body": null,
+      "phase": "snapshot-unknown-positive",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 44,
+      "method": "POST",
+      "path": "/api/data/uploads",
+      "query": "?business_key=db2a64c2-281e-4c35-af1d-8eeb6b86257a&upload_id=fc5f859b-b9a0-4d32-b5a2-f6c13f05dc90&expected_sha256=4422bde168eed8c12586acb9262b703eb100b630fd7fe6bb7d4d2cccd4ffc4f4&expected_bytes=12",
+      "body": null,
+      "phase": "same-context-file-replacement",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      },
+      "bytes": 12
+    },
+    {
+      "seq": 45,
+      "method": "POST",
+      "path": "/api/data/restore-plans",
+      "query": "",
+      "body": {
+        "deletion_policy": "respect_current_deletions",
+        "upload_id": "fc5f859b-b9a0-4d32-b5a2-f6c13f05dc90"
+      },
+      "phase": "same-context-file-replacement",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 46,
+      "method": "POST",
+      "path": "/api/data/uploads",
+      "query": "?business_key=528b2ac5-5432-422b-8c49-a37c425b6516&upload_id=5fcfcb1f-8223-4eee-aadc-272396b598c4&expected_sha256=48ee49ef3699486990249f22d93099714d45bc0a4aab13f4ae8db3931b9bee81&expected_bytes=20",
+      "body": null,
+      "phase": "same-context-file-replacement",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      },
+      "bytes": 20
+    },
+    {
+      "seq": 47,
+      "method": "POST",
+      "path": "/api/data/restore-plans",
+      "query": "",
+      "body": {
+        "deletion_policy": "respect_current_deletions",
+        "upload_id": "5fcfcb1f-8223-4eee-aadc-272396b598c4"
+      },
+      "phase": "same-context-file-replacement",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 48,
+      "method": "POST",
+      "path": "/api/data/restore-jobs",
+      "query": "",
+      "body": {
+        "acknowledge_unknown_deletions": false,
+        "business_key": "e12b04ae-23e7-4171-a8cb-66e540ea7175",
+        "confirm": true,
+        "expected_plan_sha256": "47f205dbb8f8874cda2ccb96c0a794270b87471f336bc91380a92fc3c4d05e58",
+        "plan_id": "33300000-0000-4000-8000-000000000114"
+      },
+      "phase": "verify-late-input-change",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 49,
+      "method": "POST",
+      "path": "/api/data/scope-preview",
+      "query": "",
+      "body": {
+        "scope": {
+          "activity_ids": [],
+          "mode": "selected",
+          "source_ids": [
+            "33300000-0000-4000-8000-000000000020"
+          ]
+        }
+      },
+      "phase": "source-A-to-B",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 50,
+      "method": "POST",
+      "path": "/api/data/scope-preview",
+      "query": "",
+      "body": {
+        "scope": {
+          "activity_ids": [],
+          "mode": "selected",
+          "source_ids": [
+            "33300000-0000-4000-8000-000000000022"
+          ]
+        }
+      },
+      "phase": "source-A-to-B",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 51,
+      "method": "POST",
+      "path": "/api/data/jobs",
+      "query": "",
+      "body": {
+        "business_key": "e818e11e-6eef-4d14-bc78-4d256f46e6f5",
+        "confirm": true,
+        "kind": "portable_export",
+        "scope": {
+          "activity_ids": [],
+          "expected_closure_sha256": "5f12dc3190a4d58dcb65759943f5a7d7f25fa1ebac3788215bb4375a5ddbbfa0",
+          "mode": "selected",
+          "source_ids": [
+            "33300000-0000-4000-8000-000000000022"
+          ]
+        }
+      },
+      "phase": "source-A-to-B",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 52,
+      "method": "POST",
+      "path": "/api/data/scope-preview",
+      "query": "",
+      "body": {
+        "scope": {
+          "activity_ids": [
+            "33300000-0000-4000-8000-000000000030"
+          ],
+          "mode": "selected",
+          "source_ids": []
+        }
+      },
+      "phase": "activity-A-to-B",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 53,
+      "method": "POST",
+      "path": "/api/data/scope-preview",
+      "query": "",
+      "body": {
+        "scope": {
+          "activity_ids": [
+            "33300000-0000-4000-8000-000000000031"
+          ],
+          "mode": "selected",
+          "source_ids": []
+        }
+      },
+      "phase": "activity-A-to-B",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 54,
+      "method": "POST",
+      "path": "/api/data/jobs",
+      "query": "",
+      "body": {
+        "business_key": "eb879d90-43da-4d90-b212-6362d970123d",
+        "confirm": true,
+        "kind": "portable_export",
+        "scope": {
+          "activity_ids": [
+            "33300000-0000-4000-8000-000000000031"
+          ],
+          "expected_closure_sha256": "5f77b47b4a9c4a111d6f3429431ace24c7e39dac629b6cec3e5405c233a6bc64",
+          "mode": "selected",
+          "source_ids": []
+        }
+      },
+      "phase": "activity-A-to-B",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 55,
+      "method": "POST",
+      "path": "/api/data/scope-preview",
+      "query": "",
+      "body": {
+        "scope": {
+          "activity_ids": [
+            "33300000-0000-4000-8000-000000000031"
+          ],
+          "mode": "selected",
+          "source_ids": []
+        }
+      },
+      "phase": "mode-change",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 56,
+      "method": "POST",
+      "path": "/api/data/uploads",
+      "query": "?business_key=0bfcf072-0698-4dfb-b85d-2520a466d959&upload_id=b0e220c4-4427-4217-ac84-974e5ec56692&expected_sha256=40212dbe14b3485e650157ea85c03c27c156b30c5cc3ca556456eb8ac1ea8ed5&expected_bytes=16",
+      "body": null,
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      },
+      "bytes": 16
+    },
+    {
+      "seq": 57,
+      "method": "POST",
+      "path": "/api/data/restore-plans",
+      "query": "",
+      "body": {
+        "deletion_policy": "respect_current_deletions",
+        "upload_id": "b0e220c4-4427-4217-ac84-974e5ec56692"
+      },
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 58,
+      "method": "GET",
+      "path": "/api/pdf-candidates",
+      "query": "",
+      "body": null,
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 59,
+      "method": "GET",
+      "path": "/api/data/capabilities",
+      "query": "",
+      "body": null,
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 60,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/7c11bad3-7692-44f4-b88a-1ae11c11aeb1",
+      "query": "",
+      "body": null,
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 61,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/b3bcbf8b-48fb-47d5-9004-92a9badf9a89",
+      "query": "",
+      "body": null,
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 62,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/0c45b4b0-38e4-4450-9fd3-e82a2efc4f77",
+      "query": "",
+      "body": null,
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 63,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/25d794c4-be95-4d9f-8b18-2b4e98ae43ca",
+      "query": "",
+      "body": null,
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 64,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/02b62e55-08f7-4cce-b059-2383a4871be0",
+      "query": "",
+      "body": null,
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 65,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/43fd1293-c0a6-400b-911d-5f053ae7b305",
+      "query": "",
+      "body": null,
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 66,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/697569de-af7c-4304-a7e6-2727ac1cc506",
+      "query": "",
+      "body": null,
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 67,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/db2a64c2-281e-4c35-af1d-8eeb6b86257a",
+      "query": "",
+      "body": null,
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 68,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/528b2ac5-5432-422b-8c49-a37c425b6516",
+      "query": "",
+      "body": null,
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 69,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/e12b04ae-23e7-4171-a8cb-66e540ea7175",
+      "query": "",
+      "body": null,
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 70,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/e818e11e-6eef-4d14-bc78-4d256f46e6f5",
+      "query": "",
+      "body": null,
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 71,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/eb879d90-43da-4d90-b212-6362d970123d",
+      "query": "",
+      "body": null,
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 72,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/0bfcf072-0698-4dfb-b85d-2520a466d959",
+      "query": "",
+      "body": null,
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 73,
+      "method": "GET",
+      "path": "/api/materials",
+      "query": "",
+      "body": null,
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 74,
+      "method": "GET",
+      "path": "/api/activities",
+      "query": "?limit=20",
+      "body": null,
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 75,
+      "method": "GET",
+      "path": "/api/data/capabilities",
+      "query": "",
+      "body": null,
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 76,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/7c11bad3-7692-44f4-b88a-1ae11c11aeb1",
+      "query": "",
+      "body": null,
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 77,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/b3bcbf8b-48fb-47d5-9004-92a9badf9a89",
+      "query": "",
+      "body": null,
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 78,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/0c45b4b0-38e4-4450-9fd3-e82a2efc4f77",
+      "query": "",
+      "body": null,
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 79,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/25d794c4-be95-4d9f-8b18-2b4e98ae43ca",
+      "query": "",
+      "body": null,
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 80,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/02b62e55-08f7-4cce-b059-2383a4871be0",
+      "query": "",
+      "body": null,
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 81,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/43fd1293-c0a6-400b-911d-5f053ae7b305",
+      "query": "",
+      "body": null,
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 82,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/697569de-af7c-4304-a7e6-2727ac1cc506",
+      "query": "",
+      "body": null,
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 83,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/db2a64c2-281e-4c35-af1d-8eeb6b86257a",
+      "query": "",
+      "body": null,
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 84,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/528b2ac5-5432-422b-8c49-a37c425b6516",
+      "query": "",
+      "body": null,
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 85,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/e12b04ae-23e7-4171-a8cb-66e540ea7175",
+      "query": "",
+      "body": null,
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 86,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/e818e11e-6eef-4d14-bc78-4d256f46e6f5",
+      "query": "",
+      "body": null,
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 87,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/eb879d90-43da-4d90-b212-6362d970123d",
+      "query": "",
+      "body": null,
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 88,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/0bfcf072-0698-4dfb-b85d-2520a466d959",
+      "query": "",
+      "body": null,
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 89,
+      "method": "GET",
+      "path": "/api/materials",
+      "query": "",
+      "body": null,
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 90,
+      "method": "GET",
+      "path": "/api/activities",
+      "query": "?limit=20",
+      "body": null,
+      "phase": "unmount-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 91,
+      "method": "POST",
+      "path": "/api/data/uploads",
+      "query": "?business_key=7193c6bb-9f72-494c-86b6-8cc684817cb7&upload_id=9bc69356-551d-401d-b30b-88dc769c4818&expected_sha256=a6a27c889cd93027cb89b49bcc9cba164436fb0531a057022c61019f2a30e17e&expected_bytes=16",
+      "body": null,
+      "phase": "context-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      },
+      "bytes": 16
+    },
+    {
+      "seq": 92,
+      "method": "POST",
+      "path": "/api/data/restore-plans",
+      "query": "",
+      "body": {
+        "deletion_policy": "respect_current_deletions",
+        "upload_id": "9bc69356-551d-401d-b30b-88dc769c4818"
+      },
+      "phase": "context-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 93,
+      "method": "GET",
+      "path": "/api/data/capabilities",
+      "query": "",
+      "body": null,
+      "phase": "context-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "normal",
+        "dataset_id": "33300000-0000-4000-8000-000000000002",
+        "instance_id": "33300000-0000-4000-8000-000000000003",
+        "read_only": false,
+        "selection_generation": 0
+      }
+    },
+    {
+      "seq": 94,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/7c11bad3-7692-44f4-b88a-1ae11c11aeb1",
+      "query": "",
+      "body": null,
+      "phase": "context-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "restored_readonly",
+        "dataset_id": "33300000-0000-4000-8000-000000000004",
+        "instance_id": "33300000-0000-4000-8000-000000000005",
+        "read_only": true,
+        "selection_generation": 1
+      }
+    },
+    {
+      "seq": 95,
+      "method": "GET",
+      "path": "/api/data/saved-records",
+      "query": "?category=activities&offset=0",
+      "body": null,
+      "phase": "context-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "restored_readonly",
+        "dataset_id": "33300000-0000-4000-8000-000000000004",
+        "instance_id": "33300000-0000-4000-8000-000000000005",
+        "read_only": true,
+        "selection_generation": 1
+      }
+    },
+    {
+      "seq": 96,
+      "method": "GET",
+      "path": "/api/data/capabilities",
+      "query": "",
+      "body": null,
+      "phase": "context-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "restored_readonly",
+        "dataset_id": "33300000-0000-4000-8000-000000000004",
+        "instance_id": "33300000-0000-4000-8000-000000000005",
+        "read_only": true,
+        "selection_generation": 1
+      }
+    },
+    {
+      "seq": 97,
+      "method": "GET",
+      "path": "/api/materials",
+      "query": "?offset=0",
+      "body": null,
+      "phase": "context-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "restored_readonly",
+        "dataset_id": "33300000-0000-4000-8000-000000000004",
+        "instance_id": "33300000-0000-4000-8000-000000000005",
+        "read_only": true,
+        "selection_generation": 1
+      }
+    },
+    {
+      "seq": 98,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/7c11bad3-7692-44f4-b88a-1ae11c11aeb1",
+      "query": "",
+      "body": null,
+      "phase": "context-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "restored_readonly",
+        "dataset_id": "33300000-0000-4000-8000-000000000004",
+        "instance_id": "33300000-0000-4000-8000-000000000005",
+        "read_only": true,
+        "selection_generation": 1
+      }
+    },
+    {
+      "seq": 99,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/b3bcbf8b-48fb-47d5-9004-92a9badf9a89",
+      "query": "",
+      "body": null,
+      "phase": "context-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "restored_readonly",
+        "dataset_id": "33300000-0000-4000-8000-000000000004",
+        "instance_id": "33300000-0000-4000-8000-000000000005",
+        "read_only": true,
+        "selection_generation": 1
+      }
+    },
+    {
+      "seq": 100,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/0c45b4b0-38e4-4450-9fd3-e82a2efc4f77",
+      "query": "",
+      "body": null,
+      "phase": "context-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "restored_readonly",
+        "dataset_id": "33300000-0000-4000-8000-000000000004",
+        "instance_id": "33300000-0000-4000-8000-000000000005",
+        "read_only": true,
+        "selection_generation": 1
+      }
+    },
+    {
+      "seq": 101,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/25d794c4-be95-4d9f-8b18-2b4e98ae43ca",
+      "query": "",
+      "body": null,
+      "phase": "context-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "restored_readonly",
+        "dataset_id": "33300000-0000-4000-8000-000000000004",
+        "instance_id": "33300000-0000-4000-8000-000000000005",
+        "read_only": true,
+        "selection_generation": 1
+      }
+    },
+    {
+      "seq": 102,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/02b62e55-08f7-4cce-b059-2383a4871be0",
+      "query": "",
+      "body": null,
+      "phase": "context-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "restored_readonly",
+        "dataset_id": "33300000-0000-4000-8000-000000000004",
+        "instance_id": "33300000-0000-4000-8000-000000000005",
+        "read_only": true,
+        "selection_generation": 1
+      }
+    },
+    {
+      "seq": 103,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/43fd1293-c0a6-400b-911d-5f053ae7b305",
+      "query": "",
+      "body": null,
+      "phase": "context-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "restored_readonly",
+        "dataset_id": "33300000-0000-4000-8000-000000000004",
+        "instance_id": "33300000-0000-4000-8000-000000000005",
+        "read_only": true,
+        "selection_generation": 1
+      }
+    },
+    {
+      "seq": 104,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/697569de-af7c-4304-a7e6-2727ac1cc506",
+      "query": "",
+      "body": null,
+      "phase": "context-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "restored_readonly",
+        "dataset_id": "33300000-0000-4000-8000-000000000004",
+        "instance_id": "33300000-0000-4000-8000-000000000005",
+        "read_only": true,
+        "selection_generation": 1
+      }
+    },
+    {
+      "seq": 105,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/db2a64c2-281e-4c35-af1d-8eeb6b86257a",
+      "query": "",
+      "body": null,
+      "phase": "context-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "restored_readonly",
+        "dataset_id": "33300000-0000-4000-8000-000000000004",
+        "instance_id": "33300000-0000-4000-8000-000000000005",
+        "read_only": true,
+        "selection_generation": 1
+      }
+    },
+    {
+      "seq": 106,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/528b2ac5-5432-422b-8c49-a37c425b6516",
+      "query": "",
+      "body": null,
+      "phase": "context-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "restored_readonly",
+        "dataset_id": "33300000-0000-4000-8000-000000000004",
+        "instance_id": "33300000-0000-4000-8000-000000000005",
+        "read_only": true,
+        "selection_generation": 1
+      }
+    },
+    {
+      "seq": 107,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/e12b04ae-23e7-4171-a8cb-66e540ea7175",
+      "query": "",
+      "body": null,
+      "phase": "context-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "restored_readonly",
+        "dataset_id": "33300000-0000-4000-8000-000000000004",
+        "instance_id": "33300000-0000-4000-8000-000000000005",
+        "read_only": true,
+        "selection_generation": 1
+      }
+    },
+    {
+      "seq": 108,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/e818e11e-6eef-4d14-bc78-4d256f46e6f5",
+      "query": "",
+      "body": null,
+      "phase": "context-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "restored_readonly",
+        "dataset_id": "33300000-0000-4000-8000-000000000004",
+        "instance_id": "33300000-0000-4000-8000-000000000005",
+        "read_only": true,
+        "selection_generation": 1
+      }
+    },
+    {
+      "seq": 109,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/eb879d90-43da-4d90-b212-6362d970123d",
+      "query": "",
+      "body": null,
+      "phase": "context-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "restored_readonly",
+        "dataset_id": "33300000-0000-4000-8000-000000000004",
+        "instance_id": "33300000-0000-4000-8000-000000000005",
+        "read_only": true,
+        "selection_generation": 1
+      }
+    },
+    {
+      "seq": 110,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/0bfcf072-0698-4dfb-b85d-2520a466d959",
+      "query": "",
+      "body": null,
+      "phase": "context-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "restored_readonly",
+        "dataset_id": "33300000-0000-4000-8000-000000000004",
+        "instance_id": "33300000-0000-4000-8000-000000000005",
+        "read_only": true,
+        "selection_generation": 1
+      }
+    },
+    {
+      "seq": 111,
+      "method": "GET",
+      "path": "/api/data/jobs/by-key/7193c6bb-9f72-494c-86b6-8cc684817cb7",
+      "query": "",
+      "body": null,
+      "phase": "context-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "restored_readonly",
+        "dataset_id": "33300000-0000-4000-8000-000000000004",
+        "instance_id": "33300000-0000-4000-8000-000000000005",
+        "read_only": true,
+        "selection_generation": 1
+      }
+    },
+    {
+      "seq": 112,
+      "method": "GET",
+      "path": "/api/materials",
+      "query": "",
+      "body": null,
+      "phase": "context-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "restored_readonly",
+        "dataset_id": "33300000-0000-4000-8000-000000000004",
+        "instance_id": "33300000-0000-4000-8000-000000000005",
+        "read_only": true,
+        "selection_generation": 1
+      }
+    },
+    {
+      "seq": 113,
+      "method": "GET",
+      "path": "/api/activities",
+      "query": "?limit=20",
+      "body": null,
+      "phase": "context-plan-late",
+      "context": {
+        "control_id": "33300000-0000-4000-8000-000000000001",
+        "current_mode": "restored_readonly",
+        "dataset_id": "33300000-0000-4000-8000-000000000004",
+        "instance_id": "33300000-0000-4000-8000-000000000005",
+        "read_only": true,
+        "selection_generation": 1
+      }
+    }
+  ],
+  "sequence": [
+    {
+      "event": "held",
+      "kind": "upload",
+      "phase": "upload-pending-policy-change",
+      "body": {
+        "upload_id": "896b6066-0bcb-438b-a05d-84f25f2b723a"
+      }
+    },
+    {
+      "event": "released",
+      "kind": "upload",
+      "phase": "upload-pending-policy-change",
+      "result": "fulfilled",
+      "body": {
+        "upload_id": "896b6066-0bcb-438b-a05d-84f25f2b723a"
+      }
+    },
+    {
+      "event": "held",
+      "kind": "plan",
+      "phase": "plan-pending-policy-change",
+      "body": {
+        "plan_id": "33300000-0000-4000-8000-000000000102",
+        "deletion_policy": "snapshot_only_readonly",
+        "plan_sha256": "72c060e158401ae74216249b72c32c48b01013077224544083ef8bcbcb3b7264",
+        "package_root_sha256": "bff60b9e9b5f4f13be89046f48fbd3770c0a253ed0a0fd3560a337ceea339d06",
+        "latest_status": "known",
+        "overlay_count": 7199,
+        "executor_configured": true,
+        "permanent_readonly": true
+      }
+    },
+    {
+      "event": "released",
+      "kind": "plan",
+      "phase": "plan-pending-policy-change",
+      "result": "fulfilled",
+      "body": {
+        "plan_id": "33300000-0000-4000-8000-000000000102",
+        "deletion_policy": "snapshot_only_readonly",
+        "plan_sha256": "72c060e158401ae74216249b72c32c48b01013077224544083ef8bcbcb3b7264",
+        "package_root_sha256": "bff60b9e9b5f4f13be89046f48fbd3770c0a253ed0a0fd3560a337ceea339d06",
+        "latest_status": "known",
+        "overlay_count": 7199,
+        "executor_configured": true,
+        "permanent_readonly": true
+      }
+    },
+    {
+      "event": "held",
+      "kind": "get_plan",
+      "phase": "refresh-plan-late-policy-change",
+      "body": {
+        "plan_id": "33300000-0000-4000-8000-000000000104",
+        "deletion_policy": "respect_current_deletions",
+        "plan_sha256": "02bb054e3151abccdbd72ce7ab32221ba25e24dc007907dde1a436f53ebe063d",
+        "package_root_sha256": "3b6c57b2da9961ffe7a4cd824797e80fdfba43e21040303c8973d94b8ab7d560",
+        "latest_status": "known",
+        "overlay_count": 31,
+        "executor_configured": true,
+        "permanent_readonly": true
+      }
+    },
+    {
+      "event": "released",
+      "kind": "get_plan",
+      "phase": "refresh-plan-late-policy-change",
+      "result": "fulfilled",
+      "body": {
+        "plan_id": "33300000-0000-4000-8000-000000000104",
+        "deletion_policy": "respect_current_deletions",
+        "plan_sha256": "02bb054e3151abccdbd72ce7ab32221ba25e24dc007907dde1a436f53ebe063d",
+        "package_root_sha256": "3b6c57b2da9961ffe7a4cd824797e80fdfba43e21040303c8973d94b8ab7d560",
+        "latest_status": "known",
+        "overlay_count": 31,
+        "executor_configured": true,
+        "permanent_readonly": true
+      }
+    },
+    {
+      "event": "held",
+      "kind": "upload",
+      "phase": "same-context-file-replacement",
+      "body": {
+        "upload_id": "5fcfcb1f-8223-4eee-aadc-272396b598c4"
+      }
+    },
+    {
+      "event": "released",
+      "kind": "upload",
+      "phase": "same-context-file-replacement",
+      "result": "fulfilled",
+      "body": {
+        "upload_id": "5fcfcb1f-8223-4eee-aadc-272396b598c4"
+      }
+    },
+    {
+      "event": "held",
+      "kind": "verify",
+      "phase": "verify-late-input-change",
+      "body": {
+        "job_id": "33300000-0000-4000-8000-000000000115",
+        "business_key": "e12b04ae-23e7-4171-a8cb-66e540ea7175",
+        "kind": "restore",
+        "state": "verified",
+        "stage": "verified",
+        "revision": 4,
+        "plan_id": "33300000-0000-4000-8000-000000000114",
+        "target_id": "33300000-0000-4000-8000-000000000116"
+      }
+    },
+    {
+      "event": "released",
+      "kind": "verify",
+      "phase": "verify-late-input-change",
+      "result": "fulfilled",
+      "body": {
+        "job_id": "33300000-0000-4000-8000-000000000115",
+        "business_key": "e12b04ae-23e7-4171-a8cb-66e540ea7175",
+        "kind": "restore",
+        "state": "verified",
+        "stage": "verified",
+        "revision": 4,
+        "plan_id": "33300000-0000-4000-8000-000000000114",
+        "target_id": "33300000-0000-4000-8000-000000000116"
+      }
+    },
+    {
+      "event": "held",
+      "kind": "scope",
+      "phase": "source-A-to-B",
+      "body": {
+        "closure_sha256": "badd2315c547e42fd6b7630826fe7b7ab7b08cd6572c053823a8d627f139e25f",
+        "materials": [
+          {
+            "title": "SCOPE 33300000-0000-4000-8000-000000000020"
+          }
+        ],
+        "activity_count": 0
+      }
+    },
+    {
+      "event": "released",
+      "kind": "scope",
+      "phase": "source-A-to-B",
+      "result": "fulfilled",
+      "body": {
+        "closure_sha256": "badd2315c547e42fd6b7630826fe7b7ab7b08cd6572c053823a8d627f139e25f",
+        "materials": [
+          {
+            "title": "SCOPE 33300000-0000-4000-8000-000000000020"
+          }
+        ],
+        "activity_count": 0
+      }
+    },
+    {
+      "event": "held",
+      "kind": "scope",
+      "phase": "activity-A-to-B",
+      "body": {
+        "closure_sha256": "f5cf96ba07a3181256e09a96556e2979e4840d63719316dacb9f88e5d9182d73",
+        "materials": [
+          {
+            "title": "SCOPE 33300000-0000-4000-8000-000000000030"
+          }
+        ],
+        "activity_count": 1
+      }
+    },
+    {
+      "event": "released",
+      "kind": "scope",
+      "phase": "activity-A-to-B",
+      "result": "fulfilled",
+      "body": {
+        "closure_sha256": "f5cf96ba07a3181256e09a96556e2979e4840d63719316dacb9f88e5d9182d73",
+        "materials": [
+          {
+            "title": "SCOPE 33300000-0000-4000-8000-000000000030"
+          }
+        ],
+        "activity_count": 1
+      }
+    },
+    {
+      "event": "held",
+      "kind": "scope",
+      "phase": "mode-change",
+      "body": {
+        "closure_sha256": "5f77b47b4a9c4a111d6f3429431ace24c7e39dac629b6cec3e5405c233a6bc64",
+        "materials": [
+          {
+            "title": "SCOPE 33300000-0000-4000-8000-000000000031"
+          }
+        ],
+        "activity_count": 1
+      }
+    },
+    {
+      "event": "released",
+      "kind": "scope",
+      "phase": "mode-change",
+      "result": "fulfilled",
+      "body": {
+        "closure_sha256": "5f77b47b4a9c4a111d6f3429431ace24c7e39dac629b6cec3e5405c233a6bc64",
+        "materials": [
+          {
+            "title": "SCOPE 33300000-0000-4000-8000-000000000031"
+          }
+        ],
+        "activity_count": 1
+      }
+    },
+    {
+      "event": "held",
+      "kind": "plan",
+      "phase": "unmount-plan-late",
+      "body": {
+        "plan_id": "33300000-0000-4000-8000-000000000120",
+        "deletion_policy": "respect_current_deletions",
+        "plan_sha256": "749a0c75a643eeea60b7751d7decee0d994734e229021025d21e90c6229e57ee",
+        "package_root_sha256": "a245d59b3aea652fd96984e3034ed78c993eece1f6db622e8e56a83c143792c2",
+        "latest_status": "known",
+        "overlay_count": 8899,
+        "executor_configured": true,
+        "permanent_readonly": true
+      }
+    },
+    {
+      "event": "released",
+      "kind": "plan",
+      "phase": "unmount-plan-late",
+      "result": "fulfilled",
+      "body": {
+        "plan_id": "33300000-0000-4000-8000-000000000120",
+        "deletion_policy": "respect_current_deletions",
+        "plan_sha256": "749a0c75a643eeea60b7751d7decee0d994734e229021025d21e90c6229e57ee",
+        "package_root_sha256": "a245d59b3aea652fd96984e3034ed78c993eece1f6db622e8e56a83c143792c2",
+        "latest_status": "known",
+        "overlay_count": 8899,
+        "executor_configured": true,
+        "permanent_readonly": true
+      }
+    },
+    {
+      "event": "held",
+      "kind": "plan",
+      "phase": "context-plan-late",
+      "body": {
+        "plan_id": "33300000-0000-4000-8000-000000000122",
+        "deletion_policy": "respect_current_deletions",
+        "plan_sha256": "25f55b1be579ffe223c96225ddfc35fc49ca136c8c0b60215af8a930570f5582",
+        "package_root_sha256": "459ffa29999c45e6e58831c0f3e8205dc80cf724e213cd90b3e24f88bd83dc27",
+        "latest_status": "known",
+        "overlay_count": 9999,
+        "executor_configured": true,
+        "permanent_readonly": true
+      }
+    },
+    {
+      "event": "released",
+      "kind": "plan",
+      "phase": "context-plan-late",
+      "result": "fulfilled",
+      "body": {
+        "plan_id": "33300000-0000-4000-8000-000000000122",
+        "deletion_policy": "respect_current_deletions",
+        "plan_sha256": "25f55b1be579ffe223c96225ddfc35fc49ca136c8c0b60215af8a930570f5582",
+        "package_root_sha256": "459ffa29999c45e6e58831c0f3e8205dc80cf724e213cd90b3e24f88bd83dc27",
+        "latest_status": "known",
+        "overlay_count": 9999,
+        "executor_configured": true,
+        "permanent_readonly": true
+      }
+    }
+  ],
+  "errors": [],
+  "finalIdentity": [
+    {
+      "path": "frontend/src/data/DataWorkspace.tsx",
+      "sha256": "878b2ef365e704b01432e6d1d934034d2e7e2ce3c506577dfa682415491fd3da"
+    },
+    {
+      "path": "frontend/tests/task114-c03-inputs.mjs",
+      "sha256": "e3663d566b8792ac5bc5a6dae9613e131c64424178f72dafed79e3236d042a3d"
+    },
+    {
+      "path": "frontend/dist/index.html",
+      "sha256": "df38c0f0ca2630dfbe678d23aca7884c9063a0b9f7c0f80e5bfcc68a607a9f63"
+    },
+    {
+      "path": "frontend/dist/assets/index-Ccc1_Rok.css",
+      "sha256": "6f02da29293bb8bf41825425f1d9d0c5da950ab02e77dfa4854ed195f49e8b94"
+    },
+    {
+      "path": "frontend/dist/assets/index-DZduJTtr.js",
+      "sha256": "9c9a3c69659371fac708d3ace004aca67b67f789a2b4a3725da1bf5c3cf60181"
+    },
+    {
+      "path": "frontend/dist/assets/pdf.worker.min-Dswkl-cV.mjs",
+      "sha256": "8ab0e5e30031b4a06ecfddd5ae9562f0227f830ee7ec9ed1a968b134243d2386"
+    }
+  ],
+  "explicit_restore_POST": 3,
+  "explicit_export_POST": 2,
+  "explicit_activate_POST": 1,
+  "automatic_action_POST": 0
+}

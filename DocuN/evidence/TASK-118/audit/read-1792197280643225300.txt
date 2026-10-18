@@ -1,0 +1,89 @@
+
+backend/app/data_exit/control.py
+1: """私有日志为长期操作和选择器的唯一权威；GET 不执行动作。"""
+2: import ctypes
+3: import io
+4: import json
+5: import os
+6: from pathlib import Path
+7: import struct
+8: from uuid import uuid4
+9: from datetime import datetime, timezone
+10: from .contracts import DataContext, DataError, canonical, digest, business_key, uuid
+11: from .files import RootLease, safe_root, regular, publish,private_file
+12: 
+13: MAX_FRAME, MAX_JOURNAL = 65536, 64 * 1024**2
+14: TAIL = b"\nCOMMIT:"
+15: PUBLIC_JOB = ("job_id", "business_key", "kind", "request_sha256", "state", "stage", "revision",
+16:               "control_seq", "package_id", "root_sha256", "plan_id", "target_id", "error_code",
+17:               "selection_generation", "created_at", "updated_at", "counts", "latest_status")
+18: PUBLIC_JOB += ('receipt_id','receipt_sha256')
+19: 
+20: 
+21: class ControlHub:
+22:     def __init__(self, root):
+23:         self.root = safe_root(root)
+24:         private_file(self.root,directory=True)
+25:         self.lock = RootLease(self.root, ".journal.lock")
+26:         self.operation_lock = RootLease(self.root, ".operation.lock")
+27:         self.path = self.root / "journal.bin"
+28:         with self.lock.acquire(True):
+29:             if not self.path.exists():
+30:                 with self.path.open("xb") as stream:
+31:                     stream.flush(); os.fsync(stream.fileno())
+32:                 private_file(self.path)
+33:                 self._append([], "hub.init", {"control_id": str(uuid4())})
+34:             events, tail = self._read()
+35:             if not events or events[0]["kind"] != "hub.init":
+36:                 raise DataError("control_unavailable", 503)
+37:             self.control_id = events[0]["payload"]["control_id"]
+38: 
+39:     def _read(self, snapshot=None):
+40:         regular(self.path)
+41:         if self.path.stat().st_size > MAX_JOURNAL:
+42:             raise DataError("capacity_exceeded", 413)
+43:         events, previous = [], "0" * 64
+44:         with (self.path.open("rb") if snapshot is None else io.BytesIO(snapshot)) as stream:
+45:             while True:
+46:                 header = stream.read(4)
+47:                 if not header:
+48:                     return events, False
+49:                 if len(header) != 4:
+50:                     return events, True
+51:                 length = struct.unpack("!I", header)[0]
+52:                 if not 1 <= length <= MAX_FRAME:
+53:                     raise DataError("control_corrupt", 503)
+54:                 raw = stream.read(length)
+55:                 tail = stream.read(len(TAIL) + 65)
+56:                 if len(raw) != length or len(tail) != len(TAIL) + 65:
+57:                     return events, True
+58:                 if tail != TAIL + digest(raw).encode("ascii") + b"\n":
+59:                     raise DataError("control_corrupt", 503)
+60:                 try:
+61:                     from .codec import load_json
+62:                     event = load_json(raw)
+63:                     valid = (event["format"] == "data.control.v1" and event["seq"] == len(events) + 1
+64:                              and event["prev_hash"] == previous and event["body_hash"] == digest(canonical(event["payload"])))
+65:                 except (KeyError, ValueError, TypeError):
+66:                     valid = False
+67:                 if not valid:
+68:                     raise DataError("control_corrupt", 503)
+69:                 if raw != canonical(event).encode('utf-8'):
+70:                     raise DataError('control_corrupt',503)
+71:                 previous = digest(raw)
+72:                 events.append(event)
+73: 
+74:     def _append(self, events, kind, payload):
+75:         event = {"format": "data.control.v1", "seq": len(events) + 1,
+76:                  "prev_hash": "0" * 64 if not events else digest(canonical(events[-1])),
+77:                  "event_id": str(uuid4()), "kind": kind, "payload": payload,
+78:                  "body_hash": digest(canonical(payload)), "utc": datetime.now(timezone.utc).isoformat()}
+79:         raw = canonical(event).encode("utf-8")
+80:         frame = struct.pack("!I", len(raw)) + raw + TAIL + digest(raw).encode("ascii") + b"\n"
+81:         if len(raw) > MAX_FRAME or self.path.stat().st_size + len(frame) > MAX_JOURNAL:
+82:             raise DataError("capacity_exceeded", 413)
+83:         with self.path.open("ab") as stream:
+84:             stream.write(frame); stream.flush(); os.fsync(stream.fileno())
+85:         return event
+86: 
+FileNotFoundError: [Errno 2] No such file or directory: 'D:\\shspic\\project_NO3_RetroLume-agent\\backend\\app\\activities\\teaching_service.py'

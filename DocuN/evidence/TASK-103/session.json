@@ -1,0 +1,1947 @@
+{
+  "task": "TASK-103",
+  "permit": "TASK-103-G9-20261006",
+  "start_ns": 537666346814000,
+  "deadline_ns": 566466346814000,
+  "initialized_ns": 537876828000000,
+  "first_read_utc": "2026-10-06T05:57:35+00:00",
+  "initial_clock_mapping": "首读UTC到当前monotonic映射，另保守扣60秒，不后移截止",
+  "limits": {
+    "active": 28800,
+    "offline": 1800,
+    "real": 7200,
+    "cleanup": 900,
+    "metadata": 600
+  },
+  "counts": {
+    "offline": 4,
+    "build": 3,
+    "entry": 24,
+    "container_create": 3,
+    "volume_create": 3,
+    "container_start": 23,
+    "listener_start": 3,
+    "sup": 16,
+    "browser": 3,
+    "driver": 3
+  },
+  "used_seconds": {
+    "offline": 15.452999999979511,
+    "real": 539.2510000002803,
+    "cleanup": 22.017999999807216,
+    "metadata": 548.4530000000959
+  },
+  "resources": [
+    {
+      "slot": 1,
+      "name": "retrolume-task-103-g9-pg1",
+      "volume": "retrolume-task-103-g9-pg1-data",
+      "port": 55443,
+      "database": "retrolume_task103_g9_main",
+      "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11"
+    },
+    {
+      "slot": 2,
+      "name": "retrolume-task-103-g9-pg2",
+      "volume": "retrolume-task-103-g9-pg2-data",
+      "port": 55444,
+      "database": "retrolume_task103_g9_upgrade",
+      "cid": "f96ac8dcb64648c76a2bc70f3f8b75969ada0ea0ea69b5896fe5ecb71affab85"
+    },
+    {
+      "slot": 3,
+      "name": "retrolume-task-103-g9-pg3",
+      "volume": "retrolume-task-103-g9-pg3-data",
+      "port": 55445,
+      "database": "retrolume_task103_g9_fault",
+      "cid": "4b813f9e4317aef9c613eb140fcb2d40c55a6bd98ee5d79807ea5851975d7f68"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "offline",
+      "count": 1,
+      "at": "2026-10-06T06:59:15.504471+00:00",
+      "ns": 541426859000000,
+      "detail": {
+        "name": "offline-01"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "offline",
+      "seconds": 1.4209999999729916,
+      "at": "2026-10-06T06:59:16.945703+00:00",
+      "detail": {
+        "name": "offline-01"
+      }
+    },
+    {
+      "kind": "offline",
+      "count": 2,
+      "at": "2026-10-06T07:03:10.222115+00:00",
+      "ns": 541661578000000,
+      "detail": {
+        "name": "offline-02-control"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "offline",
+      "seconds": 1.375,
+      "at": "2026-10-06T07:03:11.606940+00:00",
+      "detail": {
+        "name": "offline-02-control"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 1,
+      "at": "2026-10-06T07:04:48.466148+00:00",
+      "ns": 541759812000000,
+      "detail": {
+        "name": "bootstrap-pg1"
+      }
+    },
+    {
+      "kind": "volume_create",
+      "count": 1,
+      "at": "2026-10-06T07:04:49.105091+00:00",
+      "ns": 541760453000000,
+      "detail": {
+        "name": "retrolume-task-103-g9-pg1-data"
+      }
+    },
+    {
+      "kind": "container_create",
+      "count": 1,
+      "at": "2026-10-06T07:04:53.945460+00:00",
+      "ns": 541765296000000,
+      "detail": {
+        "name": "retrolume-task-103-g9-pg1"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 1,
+      "at": "2026-10-06T07:04:54.756860+00:00",
+      "ns": 541766109000000,
+      "detail": {
+        "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 7.827999999979511,
+      "at": "2026-10-06T07:04:56.293314+00:00",
+      "detail": {
+        "name": "bootstrap-pg1"
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T07:04:57.187845+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg1",
+          "volume": "retrolume-task-103-g9-pg1-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 0.9059999999590218,
+      "at": "2026-10-06T07:04:57.199784+00:00",
+      "detail": {
+        "name": "bootstrap-pg1"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 9.562000000034459,
+      "at": "2026-10-06T07:04:57.253502+00:00",
+      "detail": {
+        "name": "real-01-bootstrap"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 2,
+      "at": "2026-10-06T07:08:05.104826+00:00",
+      "ns": 541956453000000,
+      "detail": {
+        "name": "bootstrap-pg1"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 2,
+      "at": "2026-10-06T07:08:05.654204+00:00",
+      "ns": 541957000000000,
+      "detail": {
+        "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 1.375,
+      "at": "2026-10-06T07:08:06.471172+00:00",
+      "detail": {
+        "name": "bootstrap-pg1"
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T07:08:07.296969+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg1",
+          "volume": "retrolume-task-103-g9-pg1-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 0.8279999999795109,
+      "at": "2026-10-06T07:08:07.313238+00:00",
+      "detail": {
+        "name": "bootstrap-pg1"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 2.812000000034459,
+      "at": "2026-10-06T07:08:07.346613+00:00",
+      "detail": {
+        "name": "real-02-bootstrap-resume"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 3,
+      "at": "2026-10-06T07:10:03.328545+00:00",
+      "ns": 542074687000000,
+      "detail": {
+        "name": "bootstrap-pg1"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 3,
+      "at": "2026-10-06T07:10:03.873186+00:00",
+      "ns": 542075218000000,
+      "detail": {
+        "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 1.3589999999385327,
+      "at": "2026-10-06T07:10:04.687831+00:00",
+      "detail": {
+        "name": "bootstrap-pg1"
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T07:10:05.558886+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg1",
+          "volume": "retrolume-task-103-g9-pg1-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 0.8599999999860302,
+      "at": "2026-10-06T07:10:05.570928+00:00",
+      "detail": {
+        "name": "bootstrap-pg1"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 2.812999999965541,
+      "at": "2026-10-06T07:10:05.618442+00:00",
+      "detail": {
+        "name": "real-03-bootstrap-syntax-fix"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 4,
+      "at": "2026-10-06T07:14:16.448842+00:00",
+      "ns": 542327796000000,
+      "detail": {
+        "name": "memory-pg-smoke"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 4,
+      "at": "2026-10-06T07:14:16.830114+00:00",
+      "ns": 542328187000000,
+      "detail": {
+        "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 2.155999999959022,
+      "at": "2026-10-06T07:14:18.618679+00:00",
+      "detail": {
+        "name": "memory-pg-smoke"
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T07:14:19.448969+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg1",
+          "volume": "retrolume-task-103-g9-pg1-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 0.8279999999795109,
+      "at": "2026-10-06T07:14:19.466968+00:00",
+      "detail": {
+        "name": "memory-pg-smoke"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 3.672000000020489,
+      "at": "2026-10-06T07:14:19.530064+00:00",
+      "detail": {
+        "name": "real-04-memory-crud"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 5,
+      "at": "2026-10-06T07:15:46.182879+00:00",
+      "ns": 542417531000000,
+      "detail": {
+        "name": "memory-pg-smoke"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 5,
+      "at": "2026-10-06T07:15:46.554792+00:00",
+      "ns": 542417906000000,
+      "detail": {
+        "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 2.2660000000614673,
+      "at": "2026-10-06T07:15:48.467480+00:00",
+      "detail": {
+        "name": "memory-pg-smoke"
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T07:15:49.296927+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg1",
+          "volume": "retrolume-task-103-g9-pg1-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 0.8279999999795109,
+      "at": "2026-10-06T07:15:49.314926+00:00",
+      "detail": {
+        "name": "memory-pg-smoke"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 3.797000000020489,
+      "at": "2026-10-06T07:15:49.374530+00:00",
+      "detail": {
+        "name": "real-05-memory-crud-projection-fix"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 6,
+      "at": "2026-10-06T07:18:23.319021+00:00",
+      "ns": 542574671000000,
+      "detail": {
+        "name": "purge-diagnostic"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 0.5470000000204891,
+      "at": "2026-10-06T07:18:23.870070+00:00",
+      "detail": {
+        "name": "purge-diagnostic"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 0.9220000000204891,
+      "at": "2026-10-06T07:18:23.886976+00:00",
+      "detail": {
+        "name": "real-06-purge-diagnostic"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 7,
+      "at": "2026-10-06T07:19:33.696361+00:00",
+      "ns": 542645046000000,
+      "detail": {
+        "name": "memory-pg-smoke"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 6,
+      "at": "2026-10-06T07:19:34.078570+00:00",
+      "ns": 542645437000000,
+      "detail": {
+        "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 2.405999999959022,
+      "at": "2026-10-06T07:19:36.118628+00:00",
+      "detail": {
+        "name": "memory-pg-smoke"
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T07:19:36.976919+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg1",
+          "volume": "retrolume-task-103-g9-pg1-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 0.8599999999860302,
+      "at": "2026-10-06T07:19:36.995779+00:00",
+      "detail": {
+        "name": "memory-pg-smoke"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 3.905999999959022,
+      "at": "2026-10-06T07:19:37.054295+00:00",
+      "detail": {
+        "name": "real-07-memory-crud-purge-fix"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 8,
+      "at": "2026-10-06T07:34:07.399820+00:00",
+      "ns": 543518750000000,
+      "detail": {
+        "name": "windows-v2-normal"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 7,
+      "at": "2026-10-06T07:34:07.778944+00:00",
+      "ns": 543519125000000,
+      "detail": {
+        "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11"
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 1,
+      "at": "2026-10-06T07:34:15.149398+00:00",
+      "ns": 543526500000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 16828
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 2,
+      "at": "2026-10-06T07:34:18.409026+00:00",
+      "ns": 543529765000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 16828
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 3,
+      "at": "2026-10-06T07:34:22.300524+00:00",
+      "ns": 543533656000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 16828
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 17.906000000075437,
+      "at": "2026-10-06T07:34:25.340719+00:00",
+      "detail": {
+        "name": "windows-v2-normal"
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T07:34:26.173412+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg1",
+          "volume": "retrolume-task-103-g9-pg1-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 0.8279999999795109,
+      "at": "2026-10-06T07:34:26.193195+00:00",
+      "detail": {
+        "name": "windows-v2-normal"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 19.719000000040978,
+      "at": "2026-10-06T07:34:26.301478+00:00",
+      "detail": {
+        "name": "real-08-windows-v2"
+      }
+    },
+    {
+      "kind": "build",
+      "count": 1,
+      "at": "2026-10-06T07:53:13.217248+00:00",
+      "ns": 544664562000000,
+      "detail": {
+        "name": "build-01"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "offline",
+      "seconds": 4.202999999979511,
+      "at": "2026-10-06T07:53:17.449406+00:00",
+      "detail": {
+        "name": "build-01"
+      }
+    },
+    {
+      "kind": "build",
+      "count": 2,
+      "at": "2026-10-06T07:56:25.041142+00:00",
+      "ns": 544856390000000,
+      "detail": {
+        "name": "build-02-jsx-fix"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "offline",
+      "seconds": 3.25,
+      "at": "2026-10-06T07:56:28.306805+00:00",
+      "detail": {
+        "name": "build-02-jsx-fix"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 9,
+      "at": "2026-10-06T08:15:50.865517+00:00",
+      "ns": 546022218000000,
+      "detail": {
+        "name": "memory-boundaries"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 8,
+      "at": "2026-10-06T08:15:51.248593+00:00",
+      "ns": 546022593000000,
+      "detail": {
+        "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11"
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 4,
+      "at": "2026-10-06T08:16:03.834151+00:00",
+      "ns": 546035187000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 15500
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 5,
+      "at": "2026-10-06T08:16:06.602563+00:00",
+      "ns": 546037953000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 15500
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 6,
+      "at": "2026-10-06T08:16:09.517991+00:00",
+      "ns": 546040875000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 15500
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 21.82799999997951,
+      "at": "2026-10-06T08:16:12.708554+00:00",
+      "detail": {
+        "name": "memory-boundaries"
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T08:16:13.510781+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg1",
+          "volume": "retrolume-task-103-g9-pg1-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 0.8129999999655411,
+      "at": "2026-10-06T08:16:13.536403+00:00",
+      "detail": {
+        "name": "memory-boundaries"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 23.81299999996554,
+      "at": "2026-10-06T08:16:13.698308+00:00",
+      "detail": {
+        "name": "real-09-memory-boundaries"
+      }
+    },
+    {
+      "kind": "offline",
+      "count": 3,
+      "at": "2026-10-06T08:26:29.583995+00:00",
+      "ns": 546660937000000,
+      "detail": {
+        "name": "offline-03-process-control"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "offline",
+      "seconds": 1.1099999999860302,
+      "at": "2026-10-06T08:26:30.732683+00:00",
+      "detail": {
+        "name": "offline-03-process-control"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 10,
+      "at": "2026-10-06T08:34:39.458312+00:00",
+      "ns": 547150812000000,
+      "detail": {
+        "name": "browser-workspace"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 9,
+      "at": "2026-10-06T08:34:39.816658+00:00",
+      "ns": 547151171000000,
+      "detail": {
+        "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11"
+      }
+    },
+    {
+      "kind": "listener_start",
+      "count": 1,
+      "at": "2026-10-06T08:34:45.221500+00:00",
+      "ns": 547156578000000,
+      "detail": {
+        "module": "tests.fixtures.task103.server",
+        "port": 18103
+      }
+    },
+    {
+      "kind": "driver",
+      "count": 1,
+      "at": "2026-10-06T08:34:46.961044+00:00",
+      "ns": 547158312000000,
+      "detail": {
+        "script": "frontend/tests/task103-browser.cjs"
+      }
+    },
+    {
+      "kind": "browser",
+      "count": 1,
+      "at": "2026-10-06T08:34:46.969724+00:00",
+      "ns": 547158328000000,
+      "detail": {
+        "profile": "workspace/browser-profile-01"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 42.71899999992456,
+      "at": "2026-10-06T08:35:22.178423+00:00",
+      "detail": {
+        "name": "browser-workspace"
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T08:35:23.941773+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg1",
+          "volume": "retrolume-task-103-g9-pg1-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 1.7650000000139698,
+      "at": "2026-10-06T08:35:23.955777+00:00",
+      "detail": {
+        "name": "browser-workspace"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 45.14000000001397,
+      "at": "2026-10-06T08:35:24.000248+00:00",
+      "detail": {
+        "name": "real-10-browser"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 11,
+      "at": "2026-10-06T09:56:04.191062+00:00",
+      "ns": 552035546000000,
+      "detail": {
+        "name": "migration-upgrade"
+      }
+    },
+    {
+      "kind": "volume_create",
+      "count": 2,
+      "at": "2026-10-06T09:56:04.809757+00:00",
+      "ns": 552036156000000,
+      "detail": {
+        "name": "retrolume-task-103-g9-pg2-data"
+      }
+    },
+    {
+      "kind": "container_create",
+      "count": 2,
+      "at": "2026-10-06T09:56:09.634491+00:00",
+      "ns": 552040984000000,
+      "detail": {
+        "name": "retrolume-task-103-g9-pg2"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 10,
+      "at": "2026-10-06T09:56:10.613194+00:00",
+      "ns": 552041968000000,
+      "detail": {
+        "cid": "f96ac8dcb64648c76a2bc70f3f8b75969ada0ea0ea69b5896fe5ecb71affab85"
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 7,
+      "at": "2026-10-06T09:56:13.955082+00:00",
+      "ns": 552045312000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 5324
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 8,
+      "at": "2026-10-06T09:56:16.596348+00:00",
+      "ns": 552047953000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 5324
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 9,
+      "at": "2026-10-06T09:56:19.032595+00:00",
+      "ns": 552050390000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 5324
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 16.905999999959022,
+      "at": "2026-10-06T09:56:21.118299+00:00",
+      "detail": {
+        "name": "migration-upgrade"
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T09:56:21.954391+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "f96ac8dcb64648c76a2bc70f3f8b75969ada0ea0ea69b5896fe5ecb71affab85",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg2",
+          "volume": "retrolume-task-103-g9-pg2-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 0.8279999999795109,
+      "at": "2026-10-06T09:56:21.980150+00:00",
+      "detail": {
+        "name": "migration-upgrade"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 18.858999999938533,
+      "at": "2026-10-06T09:56:22.090674+00:00",
+      "detail": {
+        "name": "real-11-upgrade"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 12,
+      "at": "2026-10-06T09:57:58.313068+00:00",
+      "ns": 552149671000000,
+      "detail": {
+        "name": "migration-upgrade-resume"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 11,
+      "at": "2026-10-06T09:57:58.886968+00:00",
+      "ns": 552150234000000,
+      "detail": {
+        "cid": "f96ac8dcb64648c76a2bc70f3f8b75969ada0ea0ea69b5896fe5ecb71affab85"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 2.8290000000270084,
+      "at": "2026-10-06T09:58:01.154357+00:00",
+      "detail": {
+        "name": "migration-upgrade-resume"
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T09:58:01.960038+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "f96ac8dcb64648c76a2bc70f3f8b75969ada0ea0ea69b5896fe5ecb71affab85",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg2",
+          "volume": "retrolume-task-103-g9-pg2-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 0.8129999999655411,
+      "at": "2026-10-06T09:58:01.985381+00:00",
+      "detail": {
+        "name": "migration-upgrade-resume"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 4.625,
+      "at": "2026-10-06T09:58:02.130138+00:00",
+      "detail": {
+        "name": "real-12-upgrade-resume"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 13,
+      "at": "2026-10-06T09:58:14.952022+00:00",
+      "ns": 552166296000000,
+      "detail": {
+        "name": "migration-fault"
+      }
+    },
+    {
+      "kind": "volume_create",
+      "count": 3,
+      "at": "2026-10-06T09:58:15.533465+00:00",
+      "ns": 552166890000000,
+      "detail": {
+        "name": "retrolume-task-103-g9-pg3-data"
+      }
+    },
+    {
+      "kind": "container_create",
+      "count": 3,
+      "at": "2026-10-06T09:58:15.744999+00:00",
+      "ns": 552167093000000,
+      "detail": {
+        "name": "retrolume-task-103-g9-pg3"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 12,
+      "at": "2026-10-06T09:58:16.962606+00:00",
+      "ns": 552168312000000,
+      "detail": {
+        "cid": "4b813f9e4317aef9c613eb140fcb2d40c55a6bd98ee5d79807ea5851975d7f68"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 3.390999999945052,
+      "at": "2026-10-06T09:58:18.344030+00:00",
+      "detail": {
+        "name": "migration-fault"
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T09:58:19.221091+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4b813f9e4317aef9c613eb140fcb2d40c55a6bd98ee5d79807ea5851975d7f68",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg3",
+          "volume": "retrolume-task-103-g9-pg3-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 0.8900000000139698,
+      "at": "2026-10-06T09:58:19.247338+00:00",
+      "detail": {
+        "name": "migration-fault"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 5.140999999945052,
+      "at": "2026-10-06T09:58:19.317410+00:00",
+      "detail": {
+        "name": "real-13-fault"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 14,
+      "at": "2026-10-06T09:59:13.926210+00:00",
+      "ns": 552225281000000,
+      "detail": {
+        "name": "migration-fault-resume"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 13,
+      "at": "2026-10-06T09:59:14.646763+00:00",
+      "ns": 552226000000000,
+      "detail": {
+        "cid": "4b813f9e4317aef9c613eb140fcb2d40c55a6bd98ee5d79807ea5851975d7f68"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 1.5160000000614673,
+      "at": "2026-10-06T09:59:15.467200+00:00",
+      "detail": {
+        "name": "migration-fault-resume"
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T09:59:16.287803+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4b813f9e4317aef9c613eb140fcb2d40c55a6bd98ee5d79807ea5851975d7f68",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg3",
+          "volume": "retrolume-task-103-g9-pg3-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 0.8279999999795109,
+      "at": "2026-10-06T09:59:16.318093+00:00",
+      "detail": {
+        "name": "migration-fault-resume"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 3.4380000000819564,
+      "at": "2026-10-06T09:59:16.398131+00:00",
+      "detail": {
+        "name": "real-14-fault-resume"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 15,
+      "at": "2026-10-06T10:00:22.214261+00:00",
+      "ns": 552293562000000,
+      "detail": {
+        "name": "migration-fault-resume"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 14,
+      "at": "2026-10-06T10:00:22.934159+00:00",
+      "ns": 552294281000000,
+      "detail": {
+        "cid": "4b813f9e4317aef9c613eb140fcb2d40c55a6bd98ee5d79807ea5851975d7f68"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 2.609000000054948,
+      "at": "2026-10-06T10:00:24.833664+00:00",
+      "detail": {
+        "name": "migration-fault-resume"
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T10:00:25.710512+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4b813f9e4317aef9c613eb140fcb2d40c55a6bd98ee5d79807ea5851975d7f68",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg3",
+          "volume": "retrolume-task-103-g9-pg3-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 0.875,
+      "at": "2026-10-06T10:00:25.731019+00:00",
+      "detail": {
+        "name": "migration-fault-resume"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 4.437000000034459,
+      "at": "2026-10-06T10:00:25.808740+00:00",
+      "detail": {
+        "name": "real-15-fault-continue"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 16,
+      "at": "2026-10-06T10:02:08.374595+00:00",
+      "ns": 552399734000000,
+      "detail": {
+        "name": "migration-fault-resume"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 15,
+      "at": "2026-10-06T10:02:09.080903+00:00",
+      "ns": 552400437000000,
+      "detail": {
+        "cid": "4b813f9e4317aef9c613eb140fcb2d40c55a6bd98ee5d79807ea5851975d7f68"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 1.890999999945052,
+      "at": "2026-10-06T10:02:10.275699+00:00",
+      "detail": {
+        "name": "migration-fault-resume"
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T10:02:11.131026+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4b813f9e4317aef9c613eb140fcb2d40c55a6bd98ee5d79807ea5851975d7f68",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg3",
+          "volume": "retrolume-task-103-g9-pg3-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 0.8599999999860302,
+      "at": "2026-10-06T10:02:11.160266+00:00",
+      "detail": {
+        "name": "migration-fault-resume"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 3.73499999998603,
+      "at": "2026-10-06T10:02:11.247214+00:00",
+      "detail": {
+        "name": "real-16-fault-cleanup"
+      }
+    },
+    {
+      "kind": "build",
+      "count": 3,
+      "at": "2026-10-06T10:03:45.612456+00:00",
+      "ns": 552496968000000,
+      "detail": {
+        "name": "build-03-final-memory-fixes"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "offline",
+      "seconds": 2.640999999945052,
+      "at": "2026-10-06T10:03:48.271320+00:00",
+      "detail": {
+        "name": "build-03-final-memory-fixes"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 17,
+      "at": "2026-10-06T10:04:09.041528+00:00",
+      "ns": 552520390000000,
+      "detail": {
+        "name": "browser-workspace"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 16,
+      "at": "2026-10-06T10:04:09.750527+00:00",
+      "ns": 552521109000000,
+      "detail": {
+        "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11"
+      }
+    },
+    {
+      "kind": "listener_start",
+      "count": 2,
+      "at": "2026-10-06T10:04:10.584580+00:00",
+      "ns": 552521937000000,
+      "detail": {
+        "module": "tests.fixtures.task103.server",
+        "port": 18103
+      }
+    },
+    {
+      "kind": "driver",
+      "count": 2,
+      "at": "2026-10-06T10:04:12.317746+00:00",
+      "ns": 552523671000000,
+      "detail": {
+        "script": "frontend/tests/task103-browser.cjs"
+      }
+    },
+    {
+      "kind": "browser",
+      "count": 2,
+      "at": "2026-10-06T10:04:12.338968+00:00",
+      "ns": 552523687000000,
+      "detail": {
+        "profile": "workspace/browser-profile-02"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 5.76500000001397,
+      "at": "2026-10-06T10:04:14.821340+00:00",
+      "detail": {
+        "name": "browser-workspace"
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T10:04:16.496738+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg1",
+          "volume": "retrolume-task-103-g9-pg1-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 1.672000000020489,
+      "at": "2026-10-06T10:04:16.523098+00:00",
+      "detail": {
+        "name": "browser-workspace"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 8.35999999998603,
+      "at": "2026-10-06T10:04:16.618040+00:00",
+      "detail": {
+        "name": "real-17-browser-final"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 18,
+      "at": "2026-10-06T10:06:55.031521+00:00",
+      "ns": 552686390000000,
+      "detail": {
+        "name": "browser-workspace"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 17,
+      "at": "2026-10-06T10:06:55.747457+00:00",
+      "ns": 552687093000000,
+      "detail": {
+        "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11"
+      }
+    },
+    {
+      "kind": "listener_start",
+      "count": 3,
+      "at": "2026-10-06T10:06:56.920834+00:00",
+      "ns": 552688265000000,
+      "detail": {
+        "module": "tests.fixtures.task103.server",
+        "port": 18103
+      }
+    },
+    {
+      "kind": "driver",
+      "count": 3,
+      "at": "2026-10-06T10:06:58.643154+00:00",
+      "ns": 552690000000000,
+      "detail": {
+        "script": "frontend/tests/task103-browser.cjs"
+      }
+    },
+    {
+      "kind": "browser",
+      "count": 3,
+      "at": "2026-10-06T10:06:58.666093+00:00",
+      "ns": 552690015000000,
+      "detail": {
+        "profile": "workspace/browser-profile-03"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 37.64000000001397,
+      "at": "2026-10-06T10:07:32.688481+00:00",
+      "detail": {
+        "name": "browser-workspace"
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T10:07:34.134455+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg1",
+          "volume": "retrolume-task-103-g9-pg1-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 1.437999999965541,
+      "at": "2026-10-06T10:07:34.167943+00:00",
+      "detail": {
+        "name": "browser-workspace"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 40.06200000003446,
+      "at": "2026-10-06T10:07:34.245831+00:00",
+      "detail": {
+        "name": "real-18-browser-final-list-await"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 19,
+      "at": "2026-10-06T10:15:20.000827+00:00",
+      "ns": 553191359000000,
+      "detail": {
+        "name": "integration-remaining"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 18,
+      "at": "2026-10-06T10:15:20.733381+00:00",
+      "ns": 553192078000000,
+      "detail": {
+        "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11"
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 10,
+      "at": "2026-10-06T10:15:32.168640+00:00",
+      "ns": 553203515000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 28032
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 11,
+      "at": "2026-10-06T10:15:37.193210+00:00",
+      "ns": 553208546000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 28032
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 12,
+      "at": "2026-10-06T10:15:43.346421+00:00",
+      "ns": 553214703000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 28032
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 13,
+      "at": "2026-10-06T10:15:49.102619+00:00",
+      "ns": 553220453000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 28032
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 14,
+      "at": "2026-10-06T10:15:55.535788+00:00",
+      "ns": 553226890000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 28032
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 15,
+      "at": "2026-10-06T10:16:06.792756+00:00",
+      "ns": 553238140000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 28032
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 49.78200000000652,
+      "at": "2026-10-06T10:16:09.853226+00:00",
+      "detail": {
+        "name": "integration-remaining"
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T10:16:10.769426+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg1",
+          "volume": "retrolume-task-103-g9-pg1-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 0.9220000000204891,
+      "at": "2026-10-06T10:16:10.848272+00:00",
+      "detail": {
+        "name": "integration-remaining"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 52.125,
+      "at": "2026-10-06T10:16:11.066852+00:00",
+      "detail": {
+        "name": "real-19-integration-final"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 20,
+      "at": "2026-10-06T10:19:01.277893+00:00",
+      "ns": 553412625000000,
+      "detail": {
+        "name": "integration-resume"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 19,
+      "at": "2026-10-06T10:19:02.043750+00:00",
+      "ns": 553413390000000,
+      "detail": {
+        "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11"
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 16,
+      "at": "2026-10-06T10:19:06.498426+00:00",
+      "ns": 553417843000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 34636
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 8.312999999965541,
+      "at": "2026-10-06T10:19:09.642871+00:00",
+      "detail": {
+        "name": "integration-resume"
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T10:19:10.532404+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg1",
+          "volume": "retrolume-task-103-g9-pg1-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 0.890999999945052,
+      "at": "2026-10-06T10:19:10.614416+00:00",
+      "detail": {
+        "name": "integration-resume"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 10.484000000054948,
+      "at": "2026-10-06T10:19:10.780886+00:00",
+      "detail": {
+        "name": "real-20-integration-resume"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 21,
+      "at": "2026-10-06T10:21:20.254086+00:00",
+      "ns": 553551609000000,
+      "detail": {
+        "name": "integration-resume"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 20,
+      "at": "2026-10-06T10:21:21.042333+00:00",
+      "ns": 553552390000000,
+      "detail": {
+        "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 3.594000000040978,
+      "at": "2026-10-06T10:21:23.920086+00:00",
+      "detail": {
+        "name": "integration-resume"
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T10:21:24.768537+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg1",
+          "volume": "retrolume-task-103-g9-pg1-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 0.8440000000409782,
+      "at": "2026-10-06T10:21:24.846362+00:00",
+      "detail": {
+        "name": "integration-resume"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 5.797000000020489,
+      "at": "2026-10-06T10:21:25.028495+00:00",
+      "detail": {
+        "name": "real-21-unknown-and-restore"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 22,
+      "at": "2026-10-06T10:23:33.124569+00:00",
+      "ns": 553684484000000,
+      "detail": {
+        "name": "integration-resume"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 21,
+      "at": "2026-10-06T10:23:33.926919+00:00",
+      "ns": 553685281000000,
+      "detail": {
+        "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 4.797000000020489,
+      "at": "2026-10-06T10:23:37.999877+00:00",
+      "detail": {
+        "name": "integration-resume"
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T10:23:38.891225+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg1",
+          "volume": "retrolume-task-103-g9-pg1-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 0.875,
+      "at": "2026-10-06T10:23:38.973552+00:00",
+      "detail": {
+        "name": "integration-resume"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 7.25,
+      "at": "2026-10-06T10:23:39.169898+00:00",
+      "detail": {
+        "name": "real-22-restore-and-tool"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 23,
+      "at": "2026-10-06T10:24:55.375458+00:00",
+      "ns": 553766734000000,
+      "detail": {
+        "name": "integration-resume"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 22,
+      "at": "2026-10-06T10:24:56.169246+00:00",
+      "ns": 553767515000000,
+      "detail": {
+        "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 3.469000000040978,
+      "at": "2026-10-06T10:24:58.913163+00:00",
+      "detail": {
+        "name": "integration-resume"
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T10:24:59.793731+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg1",
+          "volume": "retrolume-task-103-g9-pg1-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 0.875,
+      "at": "2026-10-06T10:24:59.887399+00:00",
+      "detail": {
+        "name": "integration-resume"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 5.734000000054948,
+      "at": "2026-10-06T10:25:00.104126+00:00",
+      "detail": {
+        "name": "real-23-tool-from-checkpoint"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 24,
+      "at": "2026-10-06T10:26:10.960797+00:00",
+      "ns": 553842312000000,
+      "detail": {
+        "name": "integration-resume"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 23,
+      "at": "2026-10-06T10:26:11.770843+00:00",
+      "ns": 553843125000000,
+      "detail": {
+        "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 3.937000000034459,
+      "at": "2026-10-06T10:26:14.996228+00:00",
+      "detail": {
+        "name": "integration-resume"
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T10:26:15.887260+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg1",
+          "volume": "retrolume-task-103-g9-pg1-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 0.8910000000614673,
+      "at": "2026-10-06T10:26:15.974853+00:00",
+      "detail": {
+        "name": "integration-resume"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 6.219000000040978,
+      "at": "2026-10-06T10:26:16.168057+00:00",
+      "detail": {
+        "name": "real-24-tool-final"
+      }
+    },
+    {
+      "kind": "offline",
+      "count": 4,
+      "at": "2026-10-06T10:36:15.411341+00:00",
+      "ns": 554446765000000,
+      "detail": {
+        "name": "offline-04-final-contracts"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "offline",
+      "seconds": 1.4530000000959262,
+      "at": "2026-10-06T10:36:16.887062+00:00",
+      "detail": {
+        "name": "offline-04-final-contracts"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "metadata",
+      "seconds": 360,
+      "at": "2026-10-06T10:42:47.968515+00:00",
+      "detail": {
+        "name": "prior-readonly-control-conservative",
+        "exact": false,
+        "unknown_retained": true,
+        "scope": "首读至封装前文件/身份/端口/控制辅助的保守合并登记，既有未逐项计量不冒0；运行外壳已在其分项内收费。"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "metadata",
+      "seconds": 5.563000000081956,
+      "at": "2026-10-06T10:42:53.504812+00:00",
+      "detail": {
+        "name": "final-package-and-readonly-resource-witnesses",
+        "exact": true
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "metadata",
+      "seconds": 2.89000000001397,
+      "at": "2026-10-06T10:44:26.248571+00:00",
+      "detail": {
+        "name": "final-package-and-readonly-resource-witnesses",
+        "exact": true
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "metadata",
+      "seconds": 180,
+      "at": "2026-10-06T11:10:16.370765+00:00",
+      "detail": {
+        "name": "packaging-tail-and-report-conservative",
+        "exact": false,
+        "includes_reply_tail": true,
+        "unknown_retained": true
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T11:11:03.581354+00:00",
+      "detail": {
+        "execution_stopped": true,
+        "result_path": "D:\\shspic\\project_NO3_RetroLume-agent\\DocuN\\results\\TASK-103-result.md",
+        "result_sha256": "b62695f7da2b3b5c65553f7a7ec5f87a979c7029c3e2b33ed5ee9cb06fe21b13",
+        "final_evidence_manifest": "D:\\shspic\\project_NO3_RetroLume-agent\\DocuN\\evidence\\TASK-103\\final\\delivery-manifest.json"
+      }
+    }
+  ]
+}

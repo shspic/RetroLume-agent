@@ -1,0 +1,40 @@
+--- pre/backend/app/activities/interview_repository.py
++++ post/backend/app/activities/interview_repository.py
+@@ -570,6 +570,15 @@
+           ir.source_refs,ir.body_sha256,ir.operation_id,ir.payload_sha256,ir.created_at"""
+         base=f"(ir.goal_version=h.goal_version AND ir.scope_revision=a.scope_revision AND a.status<>'cancelled' AND sg.valid AND ({memory}) AND NOT ({selected}) AND NOT c.obsolete)"
+         eligible=f"(CASE WHEN ir.origin='model' THEN {base} AND public.interview_result_eligible(ir.activity_id,ir.operation_id) WHEN ir.kind IN ('question','probe','feedback') THEN {base} ELSE true END)"
++        correctable=f"""(ir.kind='answer' AND {base} AND h.phase<>'ended'
++          AND a.status IN ('pending','running') AND a.deadline_at>CURRENT_TIMESTAMP
++          AND ir.answer_version<256 AND ir.answer_version=(SELECT max(av.answer_version) FROM public.interview_records av
++            WHERE av.activity_id=ir.activity_id AND av.question_record_id=ir.question_record_id)
++          AND EXISTS(SELECT 1 FROM public.interview_records q JOIN public.interview_commands qc
++            ON qc.activity_id=q.activity_id AND qc.business_key=q.business_key
++            WHERE q.activity_id=ir.activity_id AND q.record_id=ir.question_record_id AND q.kind IN ('question','probe')
++            AND q.goal_version=h.goal_version AND q.scope_revision=a.scope_revision AND NOT qc.obsolete
++            AND (q.origin<>'model' OR public.interview_result_eligible(q.activity_id,q.operation_id))))"""
+         bodycol=f",CASE WHEN {eligible} THEN CASE WHEN ir.origin='model' THEN rr.payload ELSE ir.local_body END ELSE NULL END AS payload" if details else ''
+         joins='LEFT JOIN public.activity_operation_results rr ON rr.activity_id=ir.activity_id AND rr.operation_id=ir.operation_id' if details else ''
+         if rid:
+@@ -584,10 +593,10 @@
+           sg AS (SELECT EXISTS(SELECT 1 FROM public.activity_scope_sources s WHERE s.activity_id=%s)
+             AND NOT EXISTS(SELECT 1 FROM public.activity_scope_sources s LEFT JOIN public.material_sources m ON m.id=s.source_id
+               WHERE s.activity_id=%s AND (m.id IS NULL OR m.current_version IS DISTINCT FROM s.version_id OR m.revision<>s.source_revision)) AS valid),
+-          rs AS (SELECT {meta},{eligible} AS eligible{bodycol} FROM public.interview_records ir
++          rs AS (SELECT {meta},{eligible} AS eligible,{correctable} AS can_correct_answer{bodycol} FROM public.interview_records ir
+             JOIN public.interview_commands c ON c.activity_id=ir.activity_id AND c.business_key=ir.business_key
+             CROSS JOIN a CROSS JOIN h CROSS JOIN sg {joins} WHERE ir.activity_id=a.id AND {filter_sql} ORDER BY ir.seq DESC LIMIT %s),
+-          current_meta AS (SELECT {meta},{eligible} AS eligible FROM public.interview_records ir
++          current_meta AS (SELECT {meta},{eligible} AS eligible,{correctable} AS can_correct_answer FROM public.interview_records ir
+             JOIN public.interview_commands c ON c.activity_id=ir.activity_id AND c.business_key=ir.business_key
+             CROSS JOIN a CROSS JOIN h CROSS JOIN sg WHERE ir.activity_id=a.id AND ir.record_id=ANY(ARRAY[h.goal_record_id,h.root_question_id,h.current_question_id,h.current_answer_id,h.current_feedback_id]) ORDER BY ir.seq),
+           pending AS (SELECT {command_meta} FROM public.interview_commands c JOIN h ON h.activity_id=c.activity_id AND h.pending_key=c.business_key),
+@@ -620,7 +629,7 @@
+             'max_running_seconds','running_reserved_seconds','running_settled_seconds','max_tool_calls','tools_reserved','deadline_at','status')}
+         fresh=(h is None and not snapshot['other_started'] and a['status']=='pending' and a['execution_generation']==0)
+         safe=snapshot['memory_eligible'] and not snapshot['memory_selected'] and snapshot['sources_valid']
+-        reason='interview_memory_not_supported' if snapshot['memory_selected'] else 'interview_memory_dependency_invalid' if not snapshot['memory_eligible'] else 'source_invalid' if not snapshot['sources_valid'] else None
++        reason='interview_memory_dependency_invalid' if not snapshot['memory_eligible'] else 'interview_memory_not_supported' if snapshot['memory_selected'] else 'source_invalid' if not snapshot['sources_valid'] else None
+         view=dict(schema='interview.view.v1',activity_id=a['id'],domain='interview' if h else 'none' if fresh else 'existing',head=h,
+             sources=snapshot['sources'],budget=budget,pending=snapshot['pending'],records=current,
+             memory={'selected':snapshot['memory_selected'],'eligible':snapshot['memory_eligible'],'supported':False},

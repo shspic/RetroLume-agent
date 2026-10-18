@@ -1,0 +1,536 @@
+--- before/tests/fixtures/task063/task057-db-schema-inventory-after-migration.json
++++ after/tests/fixtures/task063/task057-db-schema-inventory-after-migration.json
+@@ -0,0 +1,533 @@
++{
++  "tables": {
++    "material_sources": "material_sources",
++    "material_versions": "material_versions",
++    "activities": "activities",
++    "activity_scope_sources": "activity_scope_sources",
++    "activity_allowed_models": "activity_allowed_models",
++    "activity_operations": "activity_operations",
++    "pdf_review_candidates": "pdf_review_candidates",
++    "pdf_extracted_pages": "pdf_extracted_pages",
++    "pdf_review_pages": "pdf_review_pages",
++    "pdf_user_supplements": "pdf_user_supplements"
++  },
++  "columns": {
++    "activities.max_cost_microunits": "bigint",
++    "activity_operations.completion_tokens": "integer",
++    "activity_operations.response_bytes": "integer",
++    "activity_operations.reserved_at": "timestamp with time zone",
++    "activity_operations.dispatch_started_at": "timestamp with time zone",
++    "activity_operations.recorded_at": "timestamp with time zone",
++    "pdf_review_candidates.id": "uuid",
++    "pdf_review_candidates.source_id": "uuid",
++    "pdf_review_candidates.version_id": "uuid",
++    "pdf_review_candidates.expected_version": "uuid",
++    "pdf_review_candidates.expected_revision": "integer",
++    "pdf_review_candidates.page_count": "integer",
++    "pdf_review_candidates.created_at": "timestamp with time zone",
++    "pdf_review_candidates.decided_at": "timestamp with time zone",
++    "pdf_extracted_pages.version_id": "uuid",
++    "pdf_extracted_pages.physical_page": "integer",
++    "pdf_extracted_pages.warnings": "jsonb",
++    "pdf_review_pages.candidate_id": "uuid",
++    "pdf_review_pages.version_id": "uuid",
++    "pdf_review_pages.physical_page": "integer",
++    "pdf_review_pages.reviewed_at": "timestamp with time zone",
++    "pdf_user_supplements.id": "uuid",
++    "pdf_user_supplements.candidate_id": "uuid",
++    "pdf_user_supplements.version_id": "uuid",
++    "pdf_user_supplements.physical_page": "integer",
++    "pdf_user_supplements.created_at": "timestamp with time zone",
++    "material_sources.current_version": "uuid",
++    "material_sources.revision": "integer",
++    "material_versions.id": "uuid",
++    "material_versions.source_id": "uuid",
++    "material_versions.size": "bigint",
++    "material_versions.created_at": "timestamp with time zone",
++    "activities.id": "uuid",
++    "activities.scope_revision": "integer",
++    "activities.execution_generation": "integer",
++    "activities.lease_expires_at": "timestamp with time zone",
++    "activities.deadline_at": "timestamp with time zone",
++    "activities.max_requests": "integer",
++    "activities.requests_reserved": "integer",
++    "material_sources.id": "uuid",
++    "activities.cost_reserved_microunits": "bigint",
++    "activities.reserve_cost_microunits": "bigint",
++    "activities.max_request_bytes": "integer",
++    "activities.max_output_tokens": "integer",
++    "activities.created_at": "timestamp with time zone",
++    "activities.updated_at": "timestamp with time zone",
++    "activities.cancelled_at": "timestamp with time zone",
++    "activity_scope_sources.activity_id": "uuid",
++    "activity_scope_sources.source_id": "uuid",
++    "activity_scope_sources.version_id": "uuid",
++    "activity_scope_sources.source_revision": "integer",
++    "activity_allowed_models.activity_id": "uuid",
++    "activity_operations.activity_id": "uuid",
++    "activity_operations.admission_id": "uuid",
++    "activity_operations.execution_generation": "integer",
++    "activity_operations.scope_revision": "integer",
++    "activity_operations.request_bytes": "integer",
++    "activity_operations.max_output_tokens": "integer",
++    "activity_operations.reserved_cost_microunits": "bigint",
++    "activity_operations.prompt_tokens": "integer",
++    "material_sources.title": "text",
++    "pdf_user_supplements.text": "text",
++    "pdf_review_candidates.extraction_method": "text",
++    "activity_operations.tool_names": "ARRAY",
++    "pdf_user_supplements.identity": "text",
++    "material_versions.filename": "text",
++    "material_versions.format": "text",
++    "material_versions.sha256": "character",
++    "activity_operations.state": "text",
++    "activity_operations.disposition": "text",
++    "activity_operations.error_code": "character varying",
++    "activities.status": "text",
++    "activity_operations.remote_request_id": "character varying",
++    "activity_allowed_models.provider": "character varying",
++    "activities.executor_id": "character varying",
++    "activity_allowed_models.model": "character varying",
++    "activity_operations.returned_model": "character varying",
++    "activity_operations.operation_id": "character varying",
++    "activity_operations.finish_reason": "character varying",
++    "activity_operations.executor_id": "character varying",
++    "pdf_extracted_pages.extracted_text": "text",
++    "pdf_review_candidates.status": "text",
++    "activity_operations.provider": "character varying",
++    "activity_operations.configured_model": "character varying",
++    "activities.allowed_tools": "ARRAY"
++  },
++  "constraints": [
++    {
++      "table": "activities",
++      "name": "activities_allowed_tools_check",
++      "type": "c",
++      "def": "CHECK ((cardinality(allowed_tools) <= 32))"
++    },
++    {
++      "table": "activities",
++      "name": "activities_check",
++      "type": "c",
++      "def": "CHECK (((requests_reserved >= 0) AND (requests_reserved <= max_requests)))"
++    },
++    {
++      "table": "activities",
++      "name": "activities_check1",
++      "type": "c",
++      "def": "CHECK (((cost_reserved_microunits >= 0) AND (cost_reserved_microunits <= max_cost_microunits)))"
++    },
++    {
++      "table": "activities",
++      "name": "activities_check2",
++      "type": "c",
++      "def": "CHECK (((reserve_cost_microunits > 0) AND (reserve_cost_microunits <= max_cost_microunits)))"
++    },
++    {
++      "table": "activities",
++      "name": "activities_check3",
++      "type": "c",
++      "def": "CHECK ((((status = 'running'::text) AND (executor_id IS NOT NULL) AND (lease_expires_at IS NOT NULL)) OR (status <> 'running'::text)))"
++    },
++    {
++      "table": "activities",
++      "name": "activities_execution_generation_check",
++      "type": "c",
++      "def": "CHECK ((execution_generation >= 0))"
++    },
++    {
++      "table": "activities",
++      "name": "activities_max_cost_microunits_check",
++      "type": "c",
++      "def": "CHECK ((max_cost_microunits > 0))"
++    },
++    {
++      "table": "activities",
++      "name": "activities_max_output_tokens_check",
++      "type": "c",
++      "def": "CHECK ((max_output_tokens > 0))"
++    },
++    {
++      "table": "activities",
++      "name": "activities_max_request_bytes_check",
++      "type": "c",
++      "def": "CHECK ((max_request_bytes > 0))"
++    },
++    {
++      "table": "activities",
++      "name": "activities_max_requests_check",
++      "type": "c",
++      "def": "CHECK ((max_requests > 0))"
++    },
++    {
++      "table": "activities",
++      "name": "activities_pkey",
++      "type": "p",
++      "def": "PRIMARY KEY (id)"
++    },
++    {
++      "table": "activities",
++      "name": "activities_scope_revision_check",
++      "type": "c",
++      "def": "CHECK ((scope_revision > 0))"
++    },
++    {
++      "table": "activities",
++      "name": "activities_status_check",
++      "type": "c",
++      "def": "CHECK ((status = ANY (ARRAY['pending'::text, 'running'::text, 'cancelled'::text])))"
++    },
++    {
++      "table": "activity_allowed_models",
++      "name": "activity_allowed_models_activity_id_fkey",
++      "type": "f",
++      "def": "FOREIGN KEY (activity_id) REFERENCES activities(id)"
++    },
++    {
++      "table": "activity_allowed_models",
++      "name": "activity_allowed_models_pkey",
++      "type": "p",
++      "def": "PRIMARY KEY (activity_id, provider, model)"
++    },
++    {
++      "table": "activity_operations",
++      "name": "activity_operations_activity_id_fkey",
++      "type": "f",
++      "def": "FOREIGN KEY (activity_id) REFERENCES activities(id)"
++    },
++    {
++      "table": "activity_operations",
++      "name": "activity_operations_admission_id_key",
++      "type": "u",
++      "def": "UNIQUE (admission_id)"
++    },
++    {
++      "table": "activity_operations",
++      "name": "activity_operations_check",
++      "type": "c",
++      "def": "CHECK ((((state = ANY (ARRAY['reserved'::text, 'dispatched'::text])) AND (disposition IS NULL)) OR (state = disposition)))"
++    },
++    {
++      "table": "activity_operations",
++      "name": "activity_operations_check1",
++      "type": "c",
++      "def": "CHECK ((((state = 'reserved'::text) AND (dispatch_started_at IS NULL)) OR (state <> 'reserved'::text)))"
++    },
++    {
++      "table": "activity_operations",
++      "name": "activity_operations_check2",
++      "type": "c",
++      "def": "CHECK ((((state = ANY (ARRAY['not_sent'::text, 'received'::text, 'unknown'::text])) AND (recorded_at IS NOT NULL)) OR (state = ANY (ARRAY['reserved'::text, 'dispatched'::text]))))"
++    },
++    {
++      "table": "activity_operations",
++      "name": "activity_operations_completion_tokens_check",
++      "type": "c",
++      "def": "CHECK ((completion_tokens >= 0))"
++    },
++    {
++      "table": "activity_operations",
++      "name": "activity_operations_disposition_check",
++      "type": "c",
++      "def": "CHECK ((disposition = ANY (ARRAY['not_sent'::text, 'received'::text, 'unknown'::text])))"
++    },
++    {
++      "table": "activity_operations",
++      "name": "activity_operations_execution_generation_check",
++      "type": "c",
++      "def": "CHECK ((execution_generation >= 0))"
++    },
++    {
++      "table": "activity_operations",
++      "name": "activity_operations_max_output_tokens_check",
++      "type": "c",
++      "def": "CHECK ((max_output_tokens > 0))"
++    },
++    {
++      "table": "activity_operations",
++      "name": "activity_operations_pkey",
++      "type": "p",
++      "def": "PRIMARY KEY (activity_id, operation_id)"
++    },
++    {
++      "table": "activity_operations",
++      "name": "activity_operations_prompt_tokens_check",
++      "type": "c",
++      "def": "CHECK ((prompt_tokens >= 0))"
++    },
++    {
++      "table": "activity_operations",
++      "name": "activity_operations_request_bytes_check",
++      "type": "c",
++      "def": "CHECK ((request_bytes > 0))"
++    },
++    {
++      "table": "activity_operations",
++      "name": "activity_operations_reserved_cost_microunits_check",
++      "type": "c",
++      "def": "CHECK ((reserved_cost_microunits > 0))"
++    },
++    {
++      "table": "activity_operations",
++      "name": "activity_operations_response_bytes_check",
++      "type": "c",
++      "def": "CHECK (((response_bytes >= 0) AND (response_bytes <= 67108864)))"
++    },
++    {
++      "table": "activity_operations",
++      "name": "activity_operations_scope_revision_check",
++      "type": "c",
++      "def": "CHECK ((scope_revision > 0))"
++    },
++    {
++      "table": "activity_operations",
++      "name": "activity_operations_state_check",
++      "type": "c",
++      "def": "CHECK ((state = ANY (ARRAY['reserved'::text, 'dispatched'::text, 'not_sent'::text, 'received'::text, 'unknown'::text])))"
++    },
++    {
++      "table": "activity_operations",
++      "name": "activity_operations_tool_names_check",
++      "type": "c",
++      "def": "CHECK ((cardinality(tool_names) <= 32))"
++    },
++    {
++      "table": "activity_scope_sources",
++      "name": "activity_scope_sources_activity_id_fkey",
++      "type": "f",
++      "def": "FOREIGN KEY (activity_id) REFERENCES activities(id)"
++    },
++    {
++      "table": "activity_scope_sources",
++      "name": "activity_scope_sources_pkey",
++      "type": "p",
++      "def": "PRIMARY KEY (activity_id, source_id)"
++    },
++    {
++      "table": "activity_scope_sources",
++      "name": "activity_scope_sources_source_id_fkey",
++      "type": "f",
++      "def": "FOREIGN KEY (source_id) REFERENCES material_sources(id)"
++    },
++    {
++      "table": "activity_scope_sources",
++      "name": "activity_scope_sources_source_id_version_id_fkey",
++      "type": "f",
++      "def": "FOREIGN KEY (source_id, version_id) REFERENCES material_versions(source_id, id)"
++    },
++    {
++      "table": "activity_scope_sources",
++      "name": "activity_scope_sources_source_revision_check",
++      "type": "c",
++      "def": "CHECK ((source_revision >= 0))"
++    },
++    {
++      "table": "material_sources",
++      "name": "material_current_version_source",
++      "type": "f",
++      "def": "FOREIGN KEY (id, current_version) REFERENCES material_versions(source_id, id)"
++    },
++    {
++      "table": "material_sources",
++      "name": "material_sources_pkey",
++      "type": "p",
++      "def": "PRIMARY KEY (id)"
++    },
++    {
++      "table": "material_sources",
++      "name": "material_sources_revision_check",
++      "type": "c",
++      "def": "CHECK ((revision >= 0))"
++    },
++    {
++      "table": "material_versions",
++      "name": "material_versions_format_check",
++      "type": "c",
++      "def": "CHECK ((format = ANY (ARRAY['txt'::text, 'md'::text, 'pdf'::text])))"
++    },
++    {
++      "table": "material_versions",
++      "name": "material_versions_pkey",
++      "type": "p",
++      "def": "PRIMARY KEY (id)"
++    },
++    {
++      "table": "material_versions",
++      "name": "material_versions_sha256_check",
++      "type": "c",
++      "def": "CHECK ((sha256 ~ '^[0-9a-f]{64}$'::text))"
++    },
++    {
++      "table": "material_versions",
++      "name": "material_versions_size_check",
++      "type": "c",
++      "def": "CHECK (((size >= 0) AND (size <= 5242880)))"
++    },
++    {
++      "table": "material_versions",
++      "name": "material_versions_source_id_fkey",
++      "type": "f",
++      "def": "FOREIGN KEY (source_id) REFERENCES material_sources(id)"
++    },
++    {
++      "table": "material_versions",
++      "name": "material_versions_source_id_id_key",
++      "type": "u",
++      "def": "UNIQUE (source_id, id)"
++    },
++    {
++      "table": "pdf_extracted_pages",
++      "name": "pdf_extracted_pages_physical_page_check",
++      "type": "c",
++      "def": "CHECK (((physical_page >= 1) AND (physical_page <= 50)))"
++    },
++    {
++      "table": "pdf_extracted_pages",
++      "name": "pdf_extracted_pages_pkey",
++      "type": "p",
++      "def": "PRIMARY KEY (version_id, physical_page)"
++    },
++    {
++      "table": "pdf_extracted_pages",
++      "name": "pdf_extracted_pages_version_id_fkey",
++      "type": "f",
++      "def": "FOREIGN KEY (version_id) REFERENCES pdf_review_candidates(version_id)"
++    },
++    {
++      "table": "pdf_extracted_pages",
++      "name": "pdf_extracted_pages_warnings_check",
++      "type": "c",
++      "def": "CHECK ((jsonb_typeof(warnings) = 'array'::text))"
++    },
++    {
++      "table": "pdf_review_candidates",
++      "name": "pdf_review_candidates_check",
++      "type": "c",
++      "def": "CHECK ((((status = 'pending'::text) AND (decided_at IS NULL)) OR ((status <> 'pending'::text) AND (decided_at IS NOT NULL))))"
++    },
++    {
++      "table": "pdf_review_candidates",
++      "name": "pdf_review_candidates_expected_revision_check",
++      "type": "c",
++      "def": "CHECK ((expected_revision >= 0))"
++    },
++    {
++      "table": "pdf_review_candidates",
++      "name": "pdf_review_candidates_id_version_id_key",
++      "type": "u",
++      "def": "UNIQUE (id, version_id)"
++    },
++    {
++      "table": "pdf_review_candidates",
++      "name": "pdf_review_candidates_page_count_check",
++      "type": "c",
++      "def": "CHECK (((page_count >= 1) AND (page_count <= 50)))"
++    },
++    {
++      "table": "pdf_review_candidates",
++      "name": "pdf_review_candidates_pkey",
++      "type": "p",
++      "def": "PRIMARY KEY (id)"
++    },
++    {
++      "table": "pdf_review_candidates",
++      "name": "pdf_review_candidates_source_id_expected_version_fkey",
++      "type": "f",
++      "def": "FOREIGN KEY (source_id, expected_version) REFERENCES material_versions(source_id, id)"
++    },
++    {
++      "table": "pdf_review_candidates",
++      "name": "pdf_review_candidates_source_id_fkey",
++      "type": "f",
++      "def": "FOREIGN KEY (source_id) REFERENCES material_sources(id)"
++    },
++    {
++      "table": "pdf_review_candidates",
++      "name": "pdf_review_candidates_source_id_version_id_fkey",
++      "type": "f",
++      "def": "FOREIGN KEY (source_id, version_id) REFERENCES material_versions(source_id, id)"
++    },
++    {
++      "table": "pdf_review_candidates",
++      "name": "pdf_review_candidates_status_check",
++      "type": "c",
++      "def": "CHECK ((status = ANY (ARRAY['pending'::text, 'confirmed'::text, 'skipped'::text])))"
++    },
++    {
++      "table": "pdf_review_candidates",
++      "name": "pdf_review_candidates_version_id_key",
++      "type": "u",
++      "def": "UNIQUE (version_id)"
++    },
++    {
++      "table": "pdf_review_pages",
++      "name": "pdf_review_pages_candidate_id_version_id_fkey",
++      "type": "f",
++      "def": "FOREIGN KEY (candidate_id, version_id) REFERENCES pdf_review_candidates(id, version_id)"
++    },
++    {
++      "table": "pdf_review_pages",
++      "name": "pdf_review_pages_pkey",
++      "type": "p",
++      "def": "PRIMARY KEY (candidate_id, physical_page)"
++    },
++    {
++      "table": "pdf_review_pages",
++      "name": "pdf_review_pages_version_id_physical_page_fkey",
++      "type": "f",
++      "def": "FOREIGN KEY (version_id, physical_page) REFERENCES pdf_extracted_pages(version_id, physical_page)"
++    },
++    {
++      "table": "pdf_user_supplements",
++      "name": "pdf_user_supplements_candidate_id_version_id_fkey",
++      "type": "f",
++      "def": "FOREIGN KEY (candidate_id, version_id) REFERENCES pdf_review_candidates(id, version_id)"
++    },
++    {
++      "table": "pdf_user_supplements",
++      "name": "pdf_user_supplements_identity_check",
++      "type": "c",
++      "def": "CHECK ((identity = 'user_supplement'::text))"
++    },
++    {
++      "table": "pdf_user_supplements",
++      "name": "pdf_user_supplements_pkey",
++      "type": "p",
++      "def": "PRIMARY KEY (id)"
++    },
++    {
++      "table": "pdf_user_supplements",
++      "name": "pdf_user_supplements_text_check",
++      "type": "c",
++      "def": "CHECK (((octet_length(text) > 0) AND (octet_length(text) <= 65536)))"
++    },
++    {
++      "table": "pdf_user_supplements",
++      "name": "pdf_user_supplements_version_id_physical_page_fkey",
++      "type": "f",
++      "def": "FOREIGN KEY (version_id, physical_page) REFERENCES pdf_extracted_pages(version_id, physical_page)"
++    }
++  ],
++  "indexes": [
++    {
++      "name": "activity_operations_recovery",
++      "def": "CREATE INDEX activity_operations_recovery ON public.activity_operations USING btree (activity_id, state, operation_id) WHERE (state = ANY (ARRAY['reserved'::text, 'dispatched'::text]))"
++    },
++    {
++      "name": "activity_scope_sources_source",
++      "def": "CREATE INDEX activity_scope_sources_source ON public.activity_scope_sources USING btree (source_id, activity_id)"
++    },
++    {
++      "name": "material_versions_source",
++      "def": "CREATE INDEX material_versions_source ON public.material_versions USING btree (source_id)"
++    },
++    {
++      "name": "pdf_review_candidates_pending",
++      "def": "CREATE INDEX pdf_review_candidates_pending ON public.pdf_review_candidates USING btree (created_at, id) WHERE (status = 'pending'::text)"
++    },
++    {
++      "name": "pdf_user_supplements_version_page",
++      "def": "CREATE INDEX pdf_user_supplements_version_page ON public.pdf_user_supplements USING btree (version_id, physical_page)"
++    }
++  ]
++}

@@ -1,0 +1,38 @@
+{
+  "layer": "真实Hub/Operation/LoadingReferencePin/BoundedConnection，原始psycopg.connect替身；不代表PG等待上界",
+  "same_object": true,
+  "execution_before_after": {
+    "actor_id": "82af36f5-10ad-4ff1-96bf-d9b5515853bb",
+    "admission": null,
+    "clock_domain": "7009b5d5-e6ba-44f4-8341-d66e93aac9ef",
+    "deadline_ns": 12800000000,
+    "started_ns": 10000000000
+  },
+  "clock_domain": "7009b5d5-e6ba-44f4-8341-d66e93aac9ef",
+  "connections": [
+    {
+      "dsn": "c03-controlled-loader-only",
+      "kwargs": {
+        "connect_timeout": 2,
+        "options": "-c statement_timeout=2800 -c lock_timeout=2800 "
+      },
+      "at_ns": 10000000000
+    }
+  ],
+  "statements": [
+    {
+      "sql": "SET LOCAL statement_timeout='2550ms'",
+      "at_ns": 10250000000
+    },
+    {
+      "sql": "SET LOCAL lock_timeout='2550ms'",
+      "at_ns": 10250000000
+    },
+    {
+      "sql": "SELECT public.data_loading_allowed(),public.data_state()",
+      "at_ns": 10250000000
+    }
+  ],
+  "after_deadline_pin": "operation_timeout",
+  "verified": false
+}

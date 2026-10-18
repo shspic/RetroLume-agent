@@ -1,0 +1,11 @@
+--- first-pre/backend/app/capabilities/transport.py
++++ current/backend/app/capabilities/transport.py
+@@ -39,6 +39,8 @@
+ 
+ class HttpxModelTransport:
+     """单次 POST；禁代理、禁重定向、禁 SDK/transport 自动重试。"""
++    # 默认真实传输，只有获准合成夹具的最低传输替身可另标False。
++    is_external = True
+ 
+     async def send(
+         self,

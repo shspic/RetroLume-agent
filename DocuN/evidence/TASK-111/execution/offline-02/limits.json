@@ -1,0 +1,580 @@
+{
+  "binomial": {
+    "actions": [
+      {
+        "id": "hact_reset",
+        "kind": "reset",
+        "label": "恢复默认参数"
+      }
+    ],
+    "calculation_notes": [
+      {
+        "citations": [
+          "lc_synthetic_binomial"
+        ],
+        "domain": "n整数1到5，k整数0到n，p在0到1",
+        "error": "绝对误差1e-9",
+        "formula": "P(X=k)=C(n,k)p^k(1-p)^(n-k)",
+        "samples": [
+          {
+            "expected": "0.375",
+            "input": "n=3,k=2,p=0.5"
+          },
+          {
+            "expected": "1",
+            "input": "p=0,k=0"
+          }
+        ]
+      }
+    ],
+    "calculations": [
+      {
+        "expression": {
+          "args": [
+            {
+              "id": "hctl_n",
+              "op": "input"
+            },
+            {
+              "id": "hctl_k",
+              "op": "input"
+            },
+            {
+              "id": "hctl_p",
+              "op": "input"
+            }
+          ],
+          "op": "binomial_pmf"
+        },
+        "id": "hcalc_pmf"
+      }
+    ],
+    "citations": [
+      "lc_synthetic_binomial"
+    ],
+    "concept": "独立试验的二项分布；脚本闭合文本 </script><img src=x onerror=alert(1)> 仅显示文字。",
+    "constraints": [
+      {
+        "kind": "le",
+        "left": "hctl_k",
+        "right": "hctl_n"
+      }
+    ],
+    "inputs": [
+      {
+        "default": "3",
+        "description": "合成资料限定参数",
+        "id": "hctl_n",
+        "kind": "integer",
+        "label": "试验次数 n",
+        "max": "20",
+        "min": "0",
+        "step": "1"
+      },
+      {
+        "default": "2",
+        "description": "合成资料限定参数",
+        "id": "hctl_k",
+        "kind": "integer",
+        "label": "成功次数 k",
+        "max": "20",
+        "min": "0",
+        "step": "1"
+      },
+      {
+        "default": "0.5",
+        "description": "合成资料限定参数",
+        "id": "hctl_p",
+        "kind": "range",
+        "label": "成功概率 p",
+        "max": "1",
+        "min": "0",
+        "step": "0.05"
+      }
+    ],
+    "limitations": [
+      "只是冻结资料的公式交互，不证明全学科正确性"
+    ],
+    "schema": "interactive_description.v1",
+    "title": "二项概率交互 <script>alert(1)</script>",
+    "views": [
+      {
+        "calculation": "hcalc_pmf",
+        "id": "hout_probability",
+        "kind": "readout",
+        "label": "恰好k次成功概率",
+        "unit": ""
+      },
+      {
+        "id": "hview_distribution",
+        "kind": "bar",
+        "label": "全部概率柱形图",
+        "source": {
+          "kind": "binomial_distribution",
+          "n": {
+            "id": "hctl_n",
+            "op": "input"
+          },
+          "p": {
+            "id": "hctl_p",
+            "op": "input"
+          }
+        }
+      }
+    ]
+  },
+  "upper": {
+    "actions": [
+      {
+        "id": "hact_reset",
+        "kind": "reset",
+        "label": "恢复默认参数"
+      }
+    ],
+    "calculation_notes": [
+      {
+        "citations": [
+          "lc_synthetic_energy"
+        ],
+        "domain": "m/h均为0到10",
+        "error": "绝对误差1e-9",
+        "formula": "E=mgh，g=9.8",
+        "samples": [
+          {
+            "expected": "58.8 J",
+            "input": "m=2,h=3"
+          },
+          {
+            "expected": "0 J",
+            "input": "h=0"
+          }
+        ]
+      }
+    ],
+    "calculations": [
+      {
+        "expression": {
+          "args": [
+            {
+              "args": [
+                {
+                  "id": "hctl_m",
+                  "op": "input"
+                },
+                {
+                  "op": "const",
+                  "value": "9.8"
+                }
+              ],
+              "op": "mul"
+            },
+            {
+              "id": "hctl_h",
+              "op": "input"
+            }
+          ],
+          "op": "mul"
+        },
+        "id": "hcalc_energy"
+      }
+    ],
+    "citations": [
+      "lc_synthetic_energy"
+    ],
+    "concept": "合成材料定义E=mgh，g=9.8，数值及柱高按输入重算。",
+    "constraints": [],
+    "inputs": [
+      {
+        "default": "2",
+        "description": "合成资料限定参数",
+        "id": "hctl_m",
+        "kind": "number",
+        "label": "质量 m",
+        "max": "10",
+        "min": "0",
+        "step": "1"
+      },
+      {
+        "default": "3",
+        "description": "合成资料限定参数",
+        "id": "hctl_h",
+        "kind": "number",
+        "label": "高度 h",
+        "max": "10",
+        "min": "0",
+        "step": "1"
+      }
+    ],
+    "limitations": [
+      "只是冻结资料的公式交互，不证明全学科正确性"
+    ],
+    "schema": "interactive_description.v1",
+    "title": "机械能交互",
+    "views": [
+      {
+        "calculation": "hcalc_energy",
+        "id": "hout_energy",
+        "kind": "readout",
+        "label": "能量",
+        "unit": "J"
+      },
+      {
+        "id": "hview_limit",
+        "kind": "curve",
+        "label": "有限步数上界",
+        "source": {
+          "expression": {
+            "args": [
+              {
+                "args": [
+                  {
+                    "args": [
+                      {
+                        "args": [
+                          {
+                            "args": [
+                              {
+                                "op": "const",
+                                "value": "20"
+                              },
+                              {
+                                "op": "const",
+                                "value": "20"
+                              },
+                              {
+                                "op": "const",
+                                "value": "0.5"
+                              }
+                            ],
+                            "op": "binomial_pmf"
+                          },
+                          {
+                            "args": [
+                              {
+                                "op": "const",
+                                "value": "20"
+                              },
+                              {
+                                "op": "const",
+                                "value": "20"
+                              },
+                              {
+                                "op": "const",
+                                "value": "0.5"
+                              }
+                            ],
+                            "op": "binomial_pmf"
+                          }
+                        ],
+                        "op": "add"
+                      },
+                      {
+                        "args": [
+                          {
+                            "args": [
+                              {
+                                "op": "const",
+                                "value": "20"
+                              },
+                              {
+                                "op": "const",
+                                "value": "20"
+                              },
+                              {
+                                "op": "const",
+                                "value": "0.5"
+                              }
+                            ],
+                            "op": "binomial_pmf"
+                          },
+                          {
+                            "args": [
+                              {
+                                "op": "const",
+                                "value": "20"
+                              },
+                              {
+                                "op": "const",
+                                "value": "20"
+                              },
+                              {
+                                "op": "const",
+                                "value": "0.5"
+                              }
+                            ],
+                            "op": "binomial_pmf"
+                          }
+                        ],
+                        "op": "add"
+                      }
+                    ],
+                    "op": "add"
+                  },
+                  {
+                    "args": [
+                      {
+                        "args": [
+                          {
+                            "args": [
+                              {
+                                "op": "const",
+                                "value": "20"
+                              },
+                              {
+                                "op": "const",
+                                "value": "20"
+                              },
+                              {
+                                "op": "const",
+                                "value": "0.5"
+                              }
+                            ],
+                            "op": "binomial_pmf"
+                          },
+                          {
+                            "args": [
+                              {
+                                "op": "const",
+                                "value": "20"
+                              },
+                              {
+                                "op": "const",
+                                "value": "20"
+                              },
+                              {
+                                "op": "const",
+                                "value": "0.5"
+                              }
+                            ],
+                            "op": "binomial_pmf"
+                          }
+                        ],
+                        "op": "add"
+                      },
+                      {
+                        "args": [
+                          {
+                            "args": [
+                              {
+                                "op": "const",
+                                "value": "20"
+                              },
+                              {
+                                "op": "const",
+                                "value": "20"
+                              },
+                              {
+                                "op": "const",
+                                "value": "0.5"
+                              }
+                            ],
+                            "op": "binomial_pmf"
+                          },
+                          {
+                            "args": [
+                              {
+                                "op": "const",
+                                "value": "20"
+                              },
+                              {
+                                "op": "const",
+                                "value": "20"
+                              },
+                              {
+                                "op": "const",
+                                "value": "0.5"
+                              }
+                            ],
+                            "op": "binomial_pmf"
+                          }
+                        ],
+                        "op": "add"
+                      }
+                    ],
+                    "op": "add"
+                  }
+                ],
+                "op": "add"
+              },
+              {
+                "args": [
+                  {
+                    "args": [
+                      {
+                        "args": [
+                          {
+                            "args": [
+                              {
+                                "op": "const",
+                                "value": "20"
+                              },
+                              {
+                                "op": "const",
+                                "value": "20"
+                              },
+                              {
+                                "op": "const",
+                                "value": "0.5"
+                              }
+                            ],
+                            "op": "binomial_pmf"
+                          },
+                          {
+                            "args": [
+                              {
+                                "op": "const",
+                                "value": "20"
+                              },
+                              {
+                                "op": "const",
+                                "value": "20"
+                              },
+                              {
+                                "op": "const",
+                                "value": "0.5"
+                              }
+                            ],
+                            "op": "binomial_pmf"
+                          }
+                        ],
+                        "op": "add"
+                      },
+                      {
+                        "args": [
+                          {
+                            "args": [
+                              {
+                                "op": "const",
+                                "value": "20"
+                              },
+                              {
+                                "op": "const",
+                                "value": "20"
+                              },
+                              {
+                                "op": "const",
+                                "value": "0.5"
+                              }
+                            ],
+                            "op": "binomial_pmf"
+                          },
+                          {
+                            "args": [
+                              {
+                                "op": "const",
+                                "value": "20"
+                              },
+                              {
+                                "op": "const",
+                                "value": "20"
+                              },
+                              {
+                                "op": "const",
+                                "value": "0.5"
+                              }
+                            ],
+                            "op": "binomial_pmf"
+                          }
+                        ],
+                        "op": "add"
+                      }
+                    ],
+                    "op": "add"
+                  },
+                  {
+                    "args": [
+                      {
+                        "args": [
+                          {
+                            "args": [
+                              {
+                                "op": "const",
+                                "value": "20"
+                              },
+                              {
+                                "op": "const",
+                                "value": "20"
+                              },
+                              {
+                                "op": "const",
+                                "value": "0.5"
+                              }
+                            ],
+                            "op": "binomial_pmf"
+                          },
+                          {
+                            "args": [
+                              {
+                                "op": "const",
+                                "value": "20"
+                              },
+                              {
+                                "op": "const",
+                                "value": "20"
+                              },
+                              {
+                                "op": "const",
+                                "value": "0.5"
+                              }
+                            ],
+                            "op": "binomial_pmf"
+                          }
+                        ],
+                        "op": "add"
+                      },
+                      {
+                        "args": [
+                          {
+                            "args": [
+                              {
+                                "op": "const",
+                                "value": "20"
+                              },
+                              {
+                                "op": "const",
+                                "value": "20"
+                              },
+                              {
+                                "op": "const",
+                                "value": "0.5"
+                              }
+                            ],
+                            "op": "binomial_pmf"
+                          },
+                          {
+                            "args": [
+                              {
+                                "op": "const",
+                                "value": "20"
+                              },
+                              {
+                                "op": "const",
+                                "value": "20"
+                              },
+                              {
+                                "op": "const",
+                                "value": "0.5"
+                              }
+                            ],
+                            "op": "binomial_pmf"
+                          }
+                        ],
+                        "op": "add"
+                      }
+                    ],
+                    "op": "add"
+                  }
+                ],
+                "op": "add"
+              }
+            ],
+            "op": "add"
+          },
+          "max": "1",
+          "min": "0",
+          "samples": 128
+        }
+      }
+    ]
+  }
+}

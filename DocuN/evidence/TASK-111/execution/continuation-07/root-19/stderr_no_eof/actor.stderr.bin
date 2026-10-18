@@ -1,0 +1,16 @@
+Exception in thread preview-supervisor-00dfe6db-dc46-4415-8f42-bc8cb229e928:
+Traceback (most recent call last):
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\threading.py", line 1075, in _bootstrap_inner
+    self.run()
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\threading.py", line 1012, in run
+    self._target(*self._args, **self._kwargs)
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\preview\production_supervisor.py", line 388, in _run
+    with scope(job):self._run_owned(c)
+                    ^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\preview\production_supervisor.py", line 523, in _run_owned
+    if c["attach"]:c["attach"].close()
+                   ^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\preview\host_job.py", line 239, in close
+    if stream and not stream.closed:stream.close()
+                      ^^^^^^^^^^^^^
+AttributeError: 'ClosedActualStderr' object has no attribute 'closed'. Did you mean: 'close'?

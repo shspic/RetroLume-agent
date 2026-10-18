@@ -1,0 +1,30 @@
+--- pre/ledger
++++ current/ledger
+@@ -87,6 +87,7 @@
+             reserve_cost_microunits=100,
+             max_request_bytes=4096,
+             max_output_tokens=256,
++            max_running_seconds=3600,
+             allowed_models=((Provider.DEEPSEEK_CHAT_COMPLETIONS.value, "synthetic-model"),),
+             allowed_tools=("finite_calculate",),
+             scope_revision=1,
+@@ -94,7 +95,10 @@
+         values.update(changes)
+         spec = ActivitySpec(**values)
+         await self.ledger.create_activity(spec)
+-        lease = await self.ledger.claim_lease(spec.activity_id, "worker-1", lease_seconds=300)
++        lease = await self.ledger.claim_lease(
++            spec.activity_id, "worker-1", lease_seconds=300, window_seconds=300
++        )
++        self.assertIsNotNone(lease)
+         return spec, lease, source
+ 
+     @staticmethod
+@@ -160,6 +164,7 @@
+             reserve_cost_microunits=100,
+             max_request_bytes=100,
+             max_output_tokens=10,
++            max_running_seconds=3600,
+             allowed_models=((Provider.DEEPSEEK_CHAT_COMPLETIONS.value, "synthetic-model"),),
+         )
+         with self.assertRaises(ValueError):

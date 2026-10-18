@@ -1,0 +1,85 @@
+{
+  "kind": "TASK-093 独立审计证据身份与核对记录（只读审计，运行预算0）",
+  "audit_window": "2026-10-01T03:05+08:00 起，全新隔离会话，未接触092实现聊天与自评",
+  "input_verification": {
+    "source_contract_TASK-091-result.md": {
+      "expected": "a6dfdd231ea1cac76497c1a6c3dd77a77e7b653cac2231850d95d49128c92866",
+      "actual": "a6dfdd231ea1cac76497c1a6c3dd77a77e7b653cac2231850d95d49128c92866",
+      "match": true
+    },
+    "input_snapshot_evidence_files": "120/120 逐文件 SHA-256 匹配，0缺失0漂移",
+    "product_files_vs_snapshot": "21/21 当前工作树与快照一致，审计批期产品冻结成立",
+    "rules_snapshot": "DocuN/evidence/v4-migration-20260930/rules-snapshot.json 已读，公共AGENTS按锁定版本读取"
+  },
+  "difference_baseline": {
+    "changed": 17,
+    "unchanged": 4,
+    "unchanged_files": [
+      "backend/app/activities/__init__.py",
+      "backend/app/worker/one_call.py",
+      "backend/tests/test_capabilities.py",
+      "backend/tests/test_worker_session.py"
+    ],
+    "new_files": [
+      "backend/app/capabilities/tool_execution.py",
+      "backend/app/worker/one_tool.py",
+      "backend/migrations/008_activity_tool_budget.sql",
+      "backend/tests/test_activity_tools.py",
+      "backend/tests/test_worker_one_tool.py"
+    ],
+    "final_diff_patch_format": "自定义格式（--- pre/... +++ backend/...），12个修改文件块，非git diff头"
+  },
+  "batch_product_hash_consistency": {
+    "method": "各批 as-run-hashes before 与 real-04 before（=最终版）逐文件对比",
+    "real-01": "产品app/+migrations与最终版一致；差异仅 backend/tests/test_activity_tools.py（eecba489…旧版夹具）与runner/child脚本",
+    "real-02": "产品一致；差异仅runner/child脚本（预检失败未运行子批）",
+    "real-03": "产品与测试均与最终版一致；差异仅upgrade_child/win_chain脚本",
+    "real-04": "全部一致（含最终版测试）",
+    "real-05": "升级库批；as-run由final-product-hashes冻结覆盖",
+    "post_vs_before": "五批 post-hashes 与 as-run before 零漂移"
+  },
+  "loaded_hash_spot_check_real-04": {
+    "bootstrap-worker-one_tool-23252": {
+      "tool_execute_calls": 1,
+      "loaded_modules_checked": [
+        "backend/app/activities/repository.py",
+        "backend/app/worker/one_tool.py",
+        "backend/app/capabilities/tool_execution.py",
+        "backend/app/capabilities/tools.py",
+        "backend/app/worker/launcher.py",
+        "backend/app/worker/session.py"
+      ],
+      "result": "全部与最终产品hash一致，共19个app模块被捕获"
+    },
+    "bootstrap-sup-37716": "supervisor_main/session 加载hash一致，worker_mode=one_tool"
+  },
+  "authorization_cross_check": {
+    "container_cid": "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4（与卡面参照一致）",
+    "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+    "volume": "retrolume-task-088-g3-w1-data",
+    "port": "127.0.0.1:55441->5432",
+    "limits": "1CPU/512MiB/pids128/restart=no/非privileged，逐批manifest preflight/started/final_resource三态一致",
+    "databases": "retrolume_task092_tools + retrolume_task092_upgrade，角色 retrolume_task092_synth，未触旧用户库",
+    "windows_session_attempts_real-04": 6,
+    "windows_session_attempts_total": 7
+  },
+  "c1_c12_evidence_map": {
+    "C1": ["real-01 test_c1_tool_operation_conditional_constraints ok", "real-01 test_c1_budget_check_rejections_and_repeat_008_rollback ok", "real-05 s1/s2/s3 passed（非空升级旧行不变/篡改识别回滚84约束/缺前置拒绝，阴性SQLSTATE=P0001命中008文本）"],
+    "C2": ["real-01 test_c2_mark_and_record_reject_wrong_identity ok", "offline CanonicalToolArgumentsTests + ToolExecutionInput strict wire", "缺口：2048字节边界无用例"],
+    "C3": ["real-01 test_c3_whitelist_null_zero_and_exhaustion ok", "real-01 test_c3_rejected_admit_leaves_no_trace_and_no_refund_of_unknown ok"],
+    "C4": ["real-01 test_c4_same_key_two_connections_single_permit_and_execution ok（Event屏障）", "real-01 test_c4_model_key_occupied_and_winner_crash_zero_execution ok"],
+    "C5": ["real-01 test_c5_read_list_typed_and_parent_isolation ok（服务拒+仓储锁内拒+model父对照）"],
+    "C6": ["real-01 test_c6_admit_and_mark_commit_boundaries ok（真实触发器COMMIT前+子类丢响应COMMIT后）"],
+    "C7": ["real-03 pg_retry c7 ok（夹具修复后复验，2/2 passed）"],
+    "C8": ["real-01 test_c8 ok（ALREADY_PRESENT xmin不变/异文拒绝/无正文补写拒绝/json与3.0非规范拒绝）"],
+    "C9": ["real-03 pg_retry c9 ok（barrier_lock屏障两连接CAS竞争）"],
+    "C10": ["real-04 tool_chain committed_current（真实launcher/SUP主体/worker主体/Job/PG；execute1、T1、model计数0、树零、关门、结算、read一致）", "real-04 model_regression 外2/内3端到端（合成transport一次发送）"],
+    "C11": ["real-04 tool_stop_recovery（sleep600阻塞→stopped_at_deadline→R10全额保留T1不退→同会话接续G2新键成功、旧R折叠一次）"],
+    "C12": ["real-01 test_c12 ok（close丢响应ALREADY_CLOSED/settle同GWC一次/异C拒绝/工具账独立）"]
+  },
+  "real-01_test_version_caveat": "real-01以旧版test_activity_tools.py（eecba489…）执行15例通过；旧版原件未存档，最终版（fc6da437…）仅c7/c9经real-03真实PG复验。产品代码五批hash一致缓解，但最终版PG测试全量通过无可证。real-01 stderr保留15过/1 FAIL(c7夹具)/1 ERROR(c9夹具)原样。",
+  "windows_reject_probes": {
+    "old_sup_reject": "legacy_probe副本pre hash c329e531…/5372ac4b…与pre原件一致；protocol_seen=3、rejected、无claim、T0、R0",
+    "old_worker_reject": "legacy_worker退出2、worker_failed_full_reservation、R=10如实保留、tool_execute_calls=null"
+  }
+}

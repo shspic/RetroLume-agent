@@ -1,0 +1,43 @@
+--- before/backend/app/memory/repository.py
++++ final/backend/app/memory/repository.py
+@@ -72,6 +72,12 @@
+         return sql.replace('/*teach_memory*/TRUE',guard).replace('/*teach_selected*/FALSE',selected).replace('/*teach_record_memory*/TRUE',record_guard)
+ 
+     async def _memory_schema_info(self, connection):
++        fingerprints=FUNCTION_FINGERPRINTS
++        if getattr(self,'data_enabled',False):
++            from app.data_exit.schema_checks import assert_data_schema
++            from app.data_exit.schema import BUSINESS_FUNCTIONS_013
++            await assert_data_schema(connection)
++            fingerprints={**FUNCTION_FINGERPRINTS,**{k:v for k,v in BUSINESS_FUNCTIONS_013.items() if k in FUNCTION_FINGERPRINTS}}
+         cursor=await connection.execute("""SELECT
+           (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+            WHERE n.nspname='public' AND c.relname=ANY(%s) AND c.relkind='r') AS tables,
+@@ -114,7 +120,7 @@
+         functions=await cursor.fetchall()
+         if len(functions)!=len(FUNCTION_FINGERPRINTS):return 'damaged'
+         for function in functions:
+-            if sha(re.sub(r'\s+','',function['prosrc']))!=FUNCTION_FINGERPRINTS[function['proname']]:return 'damaged'
++            if sha(re.sub(r'\s+','',function['prosrc']))!=fingerprints[function['proname']]:return 'damaged'
+             if function['public_execute'] or function['proconfig']!=['search_path=pg_catalog, pg_temp']:return 'damaged'
+             if function['prosecdef']!=(function['proname']=='purge_learning_memory'):return 'damaged'
+         return 'ready'
+@@ -559,7 +565,17 @@
+             cursor=await connection.execute("SELECT * FROM public.learning_memory_commands WHERE business_key=%s",(command.business_key,))
+             return await self._memory_receipt(connection,await cursor.fetchone())
+         from app.capabilities.contracts import AdmissionUnavailable
+-        try:return await self._transaction(operation)
++        closing=False
++        gate=getattr(self,'mutation_gate',None)
++        if command.action=='purge' and gate is not None:
++            from app.data_exit.maintenance import CLOSE_LANE
++            owner=gate.hub.state()['owned'].get(CLOSE_LANE.get())
++            if owner is not None and owner.get('state')=='registered':
++                identity=owner['identity']
++                closing=identity.get('service')=='MemoryService.submit_command' and identity.get('memory_id')==command.memory_id and (
++                    identity.get('action')=='revoke' and identity.get('business_key')==command.body['revocation_key'] or
++                    identity.get('action')=='purge' and identity.get('business_key')==command.business_key)
++        try:return await (self._transaction(operation,closing_memory_purge=True) if closing else self._transaction(operation))
+         except AdmissionUnavailable:
+             # 同时首次INSERT可能由唯一约束决定赢家；仅做一次有限收据核对。
+             async def confirm(connection):

@@ -1,0 +1,22 @@
+--- pre/frontend/src/main.tsx
++++ post/frontend/src/main.tsx
+@@ -31,7 +31,7 @@
+   const [loading, setLoading] = useState(false);
+   const [nextOffset, setNextOffset] = useState<number | null>(null);
+   const [candidateReload, setCandidateReload] = useState(0);
+-  const [view, setView] = useState<"materials" | "activities">("materials");
++  const [view, setView] = useState<"materials" | "activities" | "interview">("materials");
+   const picker = useRef<HTMLInputElement>(null);
+   const replacement = useRef<HTMLInputElement>(null);
+   const excerptRequest = useRef<AbortController | null>(null);
+@@ -140,8 +140,8 @@
+   }
+ 
+   return <div className="workspace">
+-    <aside className="rail"><div className="wordmark">R<span>RetroLume</span></div><p className="rail-caption">溯光教育 · 本地工作台</p><nav><div className={view === "materials" ? "nav-active" : "nav-muted"} role="button" tabIndex={0} style={{cursor: "pointer"}} onClick={() => setView("materials")}>▤ <span>我的资料</span></div><div className={view === "activities" ? "nav-active" : "nav-muted"} role="button" tabIndex={0} style={{cursor: "pointer"}} onClick={() => setView("activities")}>▦ <span>学习活动</span></div><div className="nav-muted">模拟面试 <small>尚未接入</small></div></nav><div className="local-note"><span className="status-dot"/> 个人本地空间<br/><small>资料是学习的起点</small></div></aside>
+-    <main className="main">{view === "activities" ? <ActivityWorkspace token={session?.token ?? ""}/> : (<>
++    <aside className="rail"><div className="wordmark">R<span>RetroLume</span></div><p className="rail-caption">溯光教育 · 本地工作台</p><nav><div className={view === "materials" ? "nav-active" : "nav-muted"} role="button" tabIndex={0} style={{cursor: "pointer"}} onClick={() => setView("materials")}>▤ <span>我的资料</span></div><div className={view === "activities" ? "nav-active" : "nav-muted"} role="button" tabIndex={0} style={{cursor: "pointer"}} onClick={() => setView("activities")}>▦ <span>学习活动</span></div><div className={view === "interview" ? "nav-active" : "nav-muted"} role="button" tabIndex={0} style={{cursor: "pointer"}} onClick={() => setView("interview")}>模拟面试</div></nav><div className="local-note"><span className="status-dot"/> 个人本地空间<br/><small>资料是学习的起点</small></div></aside>
++    <main className="main">{view !== "materials" ? <ActivityWorkspace key={view} token={session?.token ?? ""} variant={view === "interview" ? "interview" : "learning"}/> : (<>
+       <header><div><p className="eyebrow">YOUR KNOWLEDGE, IN CONTEXT</p><h1>我的资料</h1><p className="subtitle">保存原始内容，为接下来的学习保留依据。</p></div><button className="primary" disabled={busy || !session?.storage_configured} onClick={() => picker.current?.click()}>＋ 导入资料</button></header>
+       <input ref={picker} hidden aria-label="选择资料" type="file" multiple accept=".txt,.md,.markdown,.pdf,application/pdf" onChange={event => {void upload(event.target.files); event.target.value = "";}}/>
+       <input ref={replacement} hidden aria-label="选择替换文件" type="file" accept=".txt,.md,.markdown,.pdf,application/pdf" onChange={event => {void upload(event.target.files, readerMaterial); event.target.value = "";}}/>

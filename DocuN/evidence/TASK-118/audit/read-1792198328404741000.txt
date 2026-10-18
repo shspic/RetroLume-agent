@@ -1,0 +1,110 @@
+
+DocuN/results/TASK-118-result.md
+141: ### D02 / P1（仅未来 Q）：合成外发 manifest 未约束模型消息中的用户/记忆正文
+142: 
+143: 定位：[embedding.py:171](D:/shspic/project_NO3_RetroLume-agent/backend/app/capabilities/embedding.py:171) 的 OutboundSourceManifest.check_model 只核 catalog 的 fragment/source。实际模型消息另外包含 [teaching_service.py:509](D:/shspic/project_NO3_RetroLume-agent/backend/app/learning/teaching_service.py:509) 的 goal、answer_text、corrections/历史，以及 [interview/service.py:54](D:/shspic/project_NO3_RetroLume-agent/backend/app/interview/service.py:54) 的回答链 body 和 selected memory 背景。
+144: 
+145: 触发：将来在有效 Q grant/固定活动内，资料与 query 均使用批准的合成项，但在本地保存另一段未批准真实回答，或选择未被 Q manifest 绑定的记忆，再 evaluate/review。现有源片段校验仍可通过，而实际模型 user 正文含这段内容。provider key 当前未配置、grant 默认关闭会阻止现在外发，但不能在未来启用时证明 synthetic-only。
+146: 
+147: 影响：AP2 仅合成必要片段、不含本人学习记录/履历的权限边界未被实际模型请求闭合。没有实际出网或泄露证据；此项只阻断 Q，不能把正常本地保存本人文字本身列为产品缺陷。
+148: 
+149: 最小修正：受信 Q manifest 同时约束可外发用户输入、selected memory 的版本/body hash 和必要派生上下文，或对已冻结合成动作的完整受控 user payload 建立可验证摘要/模板规则；在准入与 dispatch 前核完整范围，拒绝未批准正文。不能靠浏览器 synthetic 声明，也不应简单删除正常领域功能。用最低 transport 的不批准 answer/memory 反例证明零外发，保留正常合成样本；不需要向真实供方故意发送隐私或故障请求。
+150: 
+151: ### D03 / P2：教学新 query→domain 链最后比较的是可变 owner，且缺 view 绑定
+152: 
+153: 定位：[TeachingWorkspace.tsx:209](D:/shspic/project_NO3_RetroLume-agent/frontend/src/activities/TeachingWorkspace.tsx:209) 的 contextKey 不含 view_token、scope/head revision；[submit:320](D:/shspic/project_NO3_RetroLume-agent/frontend/src/activities/TeachingWorkspace.tsx:320) 的 stillCurrent 只核 mounted/activity/contextKey。query 初段捕获 owner，但后续 build/save/intent 等 await 后，[390 行](D:/shspic/project_NO3_RetroLume-agent/frontend/src/activities/TeachingWorkspace.tsx:390) 用新读取 currentOwner 比较可变 editorOwner.current，而不是原 owner。
+154: 
+155: 触发：同一 activity 的 query 已确认后，在保存草稿/意图等 await 间从 owner A 变成 B，refresh 同时把 editorOwner.current 更新为 B，原 contextKey 又未变化；最后 B==B 可继续发 A 链的 domain POST。只有 view_token 改变也不会使 stillCurrent 失效。
+156: 
+157: 影响：违反新检索链“原 owner/view 仍有效才发下一 POST”。服务器 scope/head/资格 CAS 能限制过期业务效果，不能把服务器拒绝当成前端从未发送。已有 Browser12 是另一 activity 的晚读，不能覆盖这个同 activity 分支；本审计未启动浏览器制造动态复现。
+158: 
+159: 最小修正：在一次明确意图开始时捕获 owner/view_token/scope/head/DataContext，并让所有 await 后及紧接最终 POST 前都核同一份不可变身份；参考 [InterviewWorkspace.tsx:66](D:/shspic/project_NO3_RetroLume-agent/frontend/src/activities/InterviewWorkspace.tsx:66) 的现有做法。保留原 key 的 GET 和草稿，未发领域命令保持明确可恢复状态。只需定向晚 query/草稿保存后换同 activity owner/view 的正式 bundle 反例；不要求两域完整链重跑。
+160: 
+161: ### D04 / P2：新检索和两域动作没有显示实际供应商
+162: 
+163: 定位：[RetrievalPanel.tsx:12](D:/shspic/project_NO3_RetroLume-agent/frontend/src/activities/RetrievalPanel.tsx:12) 显示用途、请求、费用和时间，却没有 provider/model；前端 RetrievalStatus 也没有接入服务端 public 返回的 provider/model。TeachingWorkspace/InterviewWorkspace 的新动作没有补充该告知。旧 ActivityWorkspace 的 learning provider 展示不覆盖资料索引及这两个新入口。
+164: 
+165: 触发/影响：用户在新入口点击确认索引或 query+model 时，看不到要发送给哪家供应商；不满足 SEC001 及116 B3 的告知要求。本地受信配置和文档可供人工核对，故按有替代的 P2 处理；这不能自动视为用户已接受 UI 限制，也不能签 Q 已满足告知。
+166: 
+167: 最小修正：从受信只读 status/capabilities 展示索引/query 的实际 provider/model，以及整步后续聊天 provider、用途和有限预算，在确认前可见；不显示 key、内部 space/SQL 等实现细节。定向检查正式 bundle 对固定两 provider 的展示即可，既有零 provider 合成浏览器记录不能证明真实供应商告知已实现。
+168: 
+169: ## 五、证据继承、FAIL 和 unknown 保留
+170: 
+171: 28 场景不等同28个新根，也不等同28项都已在 Q 通过。本次按相应层次继承如下。
+172: 
+173: - L01—L05：学习链、确定 parser/手算、exposure、独立 exercise、同键及进度持久性，沿未改 policy、S03 真 PG/HTTP 和 S04/S05 UI 增量组合继承；实际供方对等价、否定、未知和数量级解释的语义仍未验证。
+174: - L06—L09、I01—I03：概念/程序/歧义/冲突、面试 probe/支持边界的封闭结构和引用资格可继承；不能用固定合成回应证明开放语义、真实认可或真实缺证推断。无执行用户程序的新工具权限。
+175: - L10：继承本次真实输入 ACK、seq2 PNG、reset ACK、ready 时点、Job/双EOF及结算；不外推原 G11 全部边界或长期学习效果。
+176: - X01/X02/X10：PDF 两页确认和补充身份、记忆修订/撤销晚到、原 revoke 的物理 purge、源删除/overlay/向量失效，各采实际回执；旧422、清理失败和未知保留，不能改造为新 delete 命令。
+177: - X03—X09/X12：同键/semantic slot、先 dispatch 后 invalidation、欠额整步拒、GET/显式继续和实际父消费闭包按具体分支继承；D03/D04 为当前未满足增量。真实 provider unknown 不做付费故障注入，原合成 unknown 原预留照留。
+178: - X11：已有真实资源/端口/内存/迁移失败原件保持其工程层意义，不能把 runner 检查泛化成完整 start_local 产品 UX；未来交接说明按实际能力完成。
+179: - P01—P03：采用真实两个目录/legacy、R01 reader、617行成功包及失败目标、正式 selector/readonly 重开，保留精确 profile/as-run 身份；不要求或声称恢复副本可继续 normal 执行。
+180: 
+181: 原 events 中 63 条 failure 和 budget 中全部旧失败未改写；完整事实导航在 ledger-facts.json。特别保留：原45秒全局锁检查超时；迁移/恢复前向修补与两个失败目标；旧预览首次 UNCONFIRMED；Browser11 四个 observer error；Browser15 整体 FAIL；旧 PDF 两次422；确认后错误GET404；所有 dispatched→unknown、record_denied/late invalidated 和费用预留。后续成功各有新身份，不用其状态覆盖旧记录。
+182: 
+183: S06 当前读取原件显示各类未知不因刷新/重开恢复资格或退款。包中两笔 unknown 各250000、S03晚到 unknown、旧预览60秒保守项和新预览11秒分别保持。当前没有 PID/CID 或当前文件 frozen 不是历史 StopProof。
+184: 
+185: ## 六、条件风险和非阻断观察
+186: 
+187: 1. _end_recovered_owned 的 origin/scope 没有在函数内独立再比较。当前可验证正常链及唯一 owned 身份不显示误收口；因此是受限条件风险，不是第二个已证错杀缺陷。若修正接触该链，可顺手显式绑定原 scope 并只补唯一匹配/错 scope 定向反例，不重做32项宿主全套。
+188: 
+189: 2. 未持有首次修改前字节的文件，只签当前源码审查，不补造基线。Browser proof 对 bundle 的实际 fetch 覆盖和四项磁盘 hash 也分开；没有由此要求无关重构建或浏览器全量重跑。
+190: 
+191: 3. start_local 的初始化/迁移/端口诊断交付范围应在正常本机交接前明确。当前没有采用 Linux 全应用/Nginx/公网发布批次，不把它们升为 S 必需动态门。
+192: 
+193: 4. 恢复副本永久只读、S06 原 source 已 frozen，是已批准切片边界。Q 需要新 normal 合成资源属于后续启用安排，不能误写成 S 恢复不能持续执行的缺陷。
+194: 
+195: ## 七、S01—S06 执行控制事实
+196: 
+197: 原 budget/events 是唯一工程账。本审计只归并读取，不写第二份可执行全局状态。最终 phase 为 returned_engineering_candidate、active_root null；roots24、PG create尝试/对象/卷均6、PGstart46、API33、Browser16、build7、Native140、HTTP2324、preview create/start2、provider0、费用0。未用 S根25/API34/PG47 不授本审计。
+198: 
+199: 按各有效 permit 的当时上限核账，后续 scheduling amendments 只对应其明示未来计数，不套原初 caps 给后来已批准新增，也不反向赦免旧超额。
+200: 
+201: - S01：活动37651.0027854/28800秒；PG实际持有16216.391/14400，保守计16219.36；offline1724.875/7200。最早硬门事件已记录 activity36673.425，最后返还包含后续保存。平台审批/账号中断时资源仍被持有的区间不能豁免，也不能断言全程行为均有观察。
+202: - S02：活动17303.702146/28800；新增持有5705.063/10800；offline821.686/3600。计数按已采用 scheduling amendments 核，不回零旧根和失败。该段数值合规不改变 S01 结论。
+203: - S03：活动31724.280143/21600；新增持有1555.313/10800；offline3682.780117/3000。首工具漏采钟，账用许可发出时刻作保守更早下界，后续可靠同步点单存；不能把该下界写成真正首工具时钟。
+204: - S04：活动4127.187/14400；持有1344.734/7200；offline2782.296/2400，累计9011.637117/9000，累计超11.637117。超额保留。
+205: - S05：活动16611.729874/21600；持有159.953/7200；offline16451.527874/10800，段超5651.527874；累计25463.164991/19812，超5651.164991。大段未观察空档按规则保守计入，不称真实 CPU，也不因账号中断追减。
+206: - S06：活动12244.341136/14400；持有139.233/5400；离线进程保守257.6443102/1800。连续无资源12104.874136没有第二滚动 offline cap，null 不是0，也不能退回旧段上限。其真实首点为2026-10-16T13:00:19.1708422Z、host QPC885179903576/freq1e7；controller起点88517923864000ns另有保守20ms时钟桥说明，不把不同字段硬当完全相同。pause0；resume-gap 未找到预记暂停，未知空档保留活动/无资源投入。没有据此宣称完整持续监控。
+207: 
+208: 审计独立比较证明：S06以前 segments 原对象、最初21个root、failure原前缀均完整保持；events旧730929字节、SHA2560ef0646bdd2855f9fc9dc1cc2a0622c0d5c6e125cc82d7acc5642e81a0d59c0e 为当前精确前缀。没有用 S06 新门重算旧违规。
+209: 
+210: 最终停止记录是2026-10-16T15:45:05Z 的六个准确 PG CID 非 running/Pid0、无占用端口和42个已登记 birth 的当时观测；新预览另有 Job0/双EOF证明。主控与本审计均未重新查询实时 Docker/PG，故只签该次原始停止记录和当前文件封存，不能声称2026-10-17实时系统全部停止。
+211: 
+212: ## 八、Q 仍缺的可验证启用条件
+213: 
+214: Q 必须继续单列未启用，现有 AP2 条件批准无需重复询问。以下条件只影响后续付费启用及相应语义，不冻结已充分证明的普通合成实现。
+215: 
+216: 1. 合并修正 D01—D04，尤其 synthetic-only 完整模型消息范围与真实供应商告知。此后独审只核实际改动和最小反例，保留本次有效结论。
+217: 
+218: 2. 获得后续卡的精确联网范围后，核官方现行 DeepSeek chat configured/returned model、thinking disabled/结构输出与无额外思考账单，以及智谱 embedding-3 的512维/批量/返回身份/usage、端点、账号适用性、保留/训练条款和现行币种价格。候选字符串和旧官方快照不是今天可用性承诺；本卡没有公网额度，未作此核验。
+219: 
+220: 3. 形成逐动作最坏调用矩阵与费率摘要。单次 model/embedding 保守预留250000 microunits，价率上界留至少25%余量；总额80次/20000000 microunits，学习40/10元、面试24/6元、补证16/4元，失败/超时/unknown全计。按实际剩余语义用例计算 index批次、query+chat、追问和HTML所需次数，80内不足就交缺口，不能偷偷加额度或换模型/延10秒。
+221: 
+222: 4. 在获准的新 normal 合成库/控制根，用最低合成 transport、零外部请求，补一批真实 PG 组合证据：两种 provider 都经原生产 admission，真实 roster SUM、同一全局锁、活动/操作持久预扣与 COMMIT 共同成立；边界竞争只允许一个提交，失败/unknown不退款、重开不归零。无需故意向供方发错请求，也无需重跑旧28场景或重装载617行恢复目标。
+223: 
+224: 5. 账号/key 通过正常本地 secret loader 配置，模型和 embedding 环境名隔离，不能把 key 发到对话/浏览器/证据/包。由后续正常配置自检给非敏感 readiness，而不是本审计读取私配或索凭据。
+225: 
+226: 6. 固定 Q 新活动 roster 和受信 source/input manifest、price snapshot、official checks、72小时 valid_from/valid_until 与主控明确 Q 启用回执形成一致身份后才启用。72小时从未来 grant 生效起算，不能用本审计日期代填。
+227: 
+228: 7. 当前 S source 控制根已永久 readonly、源库 frozen，不可回 normal 或往该根写新 Q roster。后续卡明确新 normal 合成库/控制根及资源许可，保留所有历史而不借新根清零。已有80次/20元条件批准继续受总账约束；旧13元失败已用账不抵扣。
+229: 
+230: 8. Q 启用后仅补真实服务语义：至少 L01、L02—L04关键正反、L06三答、L07二答、L08/L09、I01—I03及当前题解释至L10的逐例 rubric。封闭结构、位置正确不等于语义支持；不足、冲突、部分认可和自报分别记录，长期效果不冒通过。只从已 COMMIT 处 GET 继续，不付费重放安全故障。
+231: 
+232: ## 九、本审计独立性、投入、偏差与交回
+233: 
+234: 实际执行环境是 Codex desktop 会话中的内置 collaboration 新独立执行上下文，fork_turns=none，共享文件系统但未继承父聊天/TASK117实施历史。它不是新建桌面侧栏 chat，也不是另一个外部客户端。A+ 是用户资源路由标签，精确后台模型 ID/变体及是否不同家族无法确认，未发明身份。父会话只给原始任务路由、状态请求和可读性要求，没有给实现自评或审计预判；本审计没有再委派代理。
+235: 
+236: 未读 TASK117结果正文、备份正文、实施聊天/推理、其他 Agent 记忆或个人 memory 文件。TASK117 结果只按原始 bytes/hash 和旧体后缀比较；原账的 failure/permit 是控制事实，不用其实施者自评段作证明。路由详情见 [isolation-dispatch.json](D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-118/audit/isolation-dispatch.json)。父路由会话首工具先读卡、第二工具才采钟的偏差已在该文件披露，未追造其首点；本独审首工具确实直接同步 UTC/host monotonic。
+237: 
+238: 本独审首点为2026-10-17T00:03:14.5869924Z，host ticks1282926956509，freq10000000。所有读取、思考、保存和复读计入本段活动；没有预记暂停或外部等待、没有启动在途产品资源。最终活动与 metadata 进程 wall-time 汇总及报告复读 hash 见 audit-execution-receipt.json，均远低于14400/1800秒；没有进入10800新族停止或13200只保存门。进程 wall-time 是保守元数据命令耗时，不称 CPU，也不算工程第25根。产品真实运行、外部网络、provider和费用均为0。
+239: 
+240: 实际验证仅用 PowerShell 的定向读取/rg/当前钟，及已有 Python 标准库的 read/hash/JSON/AST/有限 diff/ZIP/账目归并；图片只由标准本地图片查看工具读取。未 import 产品、执行原 runner、compile/unittest/SQL/PG/Docker/WindowsJob/API/Browser/Node，不安装依赖、不读取 env值/私配/密钥、不解DPAPI、不执行 Git 写入。
+241: 
+242: 元数据失败保留：初次 stdout 编码乱码后固定UTF-8并针对性重读；初次缺失文件 bytes=null 与原记录0造成8个假不匹配，按原语义修正为0后重核；若干路径猜测/不存在目录及一次误选 JSON summary 字段得到非零退出，随后用文件索引/实际 keys 定位。大型输出截断仅作定位，核心断言改用小范围/摘要核对。四个 audit_meta 读取/选择错误留在 metadata-commands.jsonl，其余 rg/路径错误保留在工具记录；这些不是产品失败、也未删除历史。没有出现同一问题两次有据修正仍失败后机械重试，冻结稳定，未触发受影响对象停止门。
+243: 
+244: 主控必要同步建议：在 [执行动态文档](D:/shspic/project_NO3_RetroLume-agent/DocuS/执行动态文档.MD) 登记本 R112 已返回、三轴建议、S未验收/Q未启用及合并修正归属；在 [架构动态文档](D:/shspic/project_NO3_RetroLume-agent/DocuS/架构动态文档.MD) 仅按实际修正更新完整出站范围和控制写身份说明；正常运行交接时使 README 与真实 startup/迁移能力一致。由主控在其串行维护时记录 UTC/Asia-Shanghai 时间、最终状态及需要的文档变更记录，本窗没有改共享文档。需求不因审计降低，用户原始需求不改。
+245: 
+246: 必要用户动作：无。本卡不索凭据、不让用户执行代码、不重新请求80次/20元条件许可。下一步由主控合并 D01—D04 派回原工程窗；修正后本窗作必要增量复核，再由后续明确 Q 卡处理官方核验、正常配置、真实 PG 组合补证及启用回执。没有额外编号/经验入库写入，未以未证根因申请合格经验。
+247: 
+248: 本报告与审计证据已保存；最终复读收据只证明文件可访问及内容核对，不替代主控裁定。

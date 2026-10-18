@@ -1,0 +1,13 @@
+--- C04-pre/backend/migrations/012_html_explanations.sql
++++ backend/migrations/012_html_explanations.sql
+@@ -330,6 +330,10 @@
+  public.teaching_commands,public.activity_memory_bindings,public.activity_memory_choices,public.learning_memories,
+  public.learning_memory_revisions,public.learning_memory_dependencies,public.learning_memory_bodies TO retrolume_html_owner;
+ GRANT EXECUTE ON FUNCTION public.activity_memory_eligible(uuid) TO retrolume_html_owner;
++-- 记忆资格只读取PDF核对状态和页数，不取得正文或写入权。
++GRANT SELECT (id, version_id, status, page_count) ON public.pdf_review_candidates TO retrolume_html_owner;
++GRANT SELECT (candidate_id) ON public.pdf_review_pages TO retrolume_html_owner;
++GRANT SELECT (version_id) ON public.pdf_extracted_pages TO retrolume_html_owner;
+ GRANT EXECUTE ON FUNCTION public.memory_scope_digest(uuid),public.memory_choice_digest(uuid),
+  public.memory_revision_eligible(uuid,integer),public.memory_revision_readable(uuid,integer),
+  public.memory_dependency_digest(uuid,integer),public.memory_dependency_line(public.learning_memory_dependencies) TO retrolume_html_owner;

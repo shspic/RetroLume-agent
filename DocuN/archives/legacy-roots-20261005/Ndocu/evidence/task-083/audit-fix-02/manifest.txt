@@ -1,0 +1,8 @@
+TASK-083 audit-fix-02 exact pure-unit batch
+command: backend/.venv/Scripts/python.exe -B backend/tests/fixtures/task083/run_audit_fix_02.py
+IDs: exactly the 14 literal IDS in run_audit_fix_02.py; no discovery
+scope: in-memory substitutes only; no OS spawn/Job/PG/network
+run allowance: one initial <=180s batch, command <=60s; one failed/affected recheck only if needed
+Job and PG: not_run, frozen
+correction: fixed worker interpreter changed from base interpreter to fixed backend/.venv/Scripts/python.exe after initial batch; the initial command-path assertion was insufficient.
+one focused recheck: exact IDs in run_audit_fix_02_recheck.py (05,06,12); no other test consumes argv.

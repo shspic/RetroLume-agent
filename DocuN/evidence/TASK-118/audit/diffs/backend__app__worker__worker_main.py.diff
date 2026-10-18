@@ -1,0 +1,22 @@
+--- first-pre/backend/app/worker/worker_main.py
++++ current/backend/app/worker/worker_main.py
+@@ -82,13 +82,17 @@
+ async def execute_one_call(value):
+     call, context = decode_worker_request(value)
+     ledger = PostgresAdmissionLedger(**value["ledger"])
+-    gateway = ControlledModelGateway(call.service, ledger=ledger)
++    if call.capability_kind == 'embedding':
++        from app.capabilities.embedding import ControlledEmbeddingGateway
++        gateway = ControlledEmbeddingGateway(call.service, ledger=ledger)
++    else:
++        gateway = ControlledModelGateway(call.service, ledger=ledger)
+     # 单调截止由SUP固定；整体超时包括准入/发送/记账，不靠网络timeout扩窗。
+     seconds = min(value["call_seconds"], (value["stop_ns"] - time.monotonic_ns()) / 1e9 - 0.25)
+     if seconds <= 0:
+         raise ValueError("call window expired")
+     result = await run_internal_task(gateway, "one_call", context, call.request, call_seconds=seconds)
+-    return receipt(result, context, value["run_tag"])
++    return receipt(result, context, value["run_tag"], capability_kind=call.capability_kind if call.protocol==4 else None)
+ 
+ 
+ async def execute_one_tool(value):

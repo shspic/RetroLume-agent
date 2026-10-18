@@ -1,0 +1,21 @@
+Traceback (most recent call last):
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task111\c04_step.py", line 86, in main
+    elif action=='ui':ui(resource,built,out)
+                      ^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task111\c04_step.py", line 40, in ui
+    with asyncio.Runner(loop_factory=psycopg_compatible_loop_factory) as runner:rows=runner.run(parents(resource,built,out))
+                                                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task111\c04_step.py", line 22, in parents
+    rows=conn.execute("SELECT c.activity_id::text,c.business_key::text,c.context_body,a.artifact_id::text,a.artifact_sha256,a.body,a.renderer_sha256,public.html_artifact_eligible(a.activity_id,a.artifact_id) AS eligible,x.deadline_at,(SELECT count(*) FROM html_preview_budgets b WHERE b.activity_id=c.activity_id) AS budget_rows FROM html_commands c JOIN html_artifacts a USING(activity_id,business_key) JOIN activities x ON x.id=c.activity_id WHERE c.activity_id=%s",(item['activity_id'],)).fetchall()
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\.venv\Lib\site-packages\psycopg\connection.py", line 300, in execute
+    raise ex.with_traceback(None)
+psycopg.errors.UndefinedColumn: column a.body does not exist
+LINE 1: ...ontext_body,a.artifact_id::text,a.artifact_sha256,a.body,a.r...
+                                                             ^

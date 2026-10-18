@@ -1,0 +1,40 @@
+--- before/backend/app/worker/worker_main.py
++++ final/backend/app/worker/worker_main.py
+@@ -26,12 +26,26 @@
+     work: Callable[[ClosingCallGate], Awaitable[None]],
+     *,
+     drain_timeout_seconds: float,
++    maintenance_gate=None,
+ ) -> None:
+     gate = ClosingCallGate(gateway)
+     await gate.arm()
++    async def observe_maintenance():
++        while True:
++            await asyncio.sleep(0.1)
++            try:closing=maintenance_gate.hub.state()['fence'] is not None
++            except Exception:closing=True
++            if closing:
++                try:await gate.close(timeout_seconds=drain_timeout_seconds)
++                except TimeoutError:pass
++                return
++    monitor=asyncio.create_task(observe_maintenance()) if maintenance_gate is not None else None
+     try:
+         await work(gate)
+     finally:
++        if monitor is not None:
++            monitor.cancel()
++            await asyncio.gather(monitor,return_exceptions=True)
+         await gate.close(timeout_seconds=drain_timeout_seconds)
+ 
+ 
+@@ -59,7 +73,9 @@
+ 
+     result = None
+     work = {"one_call": one_call, "one_tool": one_tool}.get(task, idle)
+-    await run_controlled_worker(gateway, work, drain_timeout_seconds=1.0)
++    ledger=getattr(gateway,'ledger',getattr(gateway,'_ledger',None))
++    await run_controlled_worker(gateway, work, drain_timeout_seconds=1.0,
++                                maintenance_gate=getattr(ledger,'mutation_gate',None))
+     return result
+ 
+ 

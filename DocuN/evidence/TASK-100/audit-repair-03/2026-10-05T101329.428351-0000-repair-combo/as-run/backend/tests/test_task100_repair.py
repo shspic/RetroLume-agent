@@ -1,0 +1,435 @@
+"""Audit repair03: limited answer checks, strict stream and field domains, source qualification.
+
+PG/HTTP classes are selected only by the metered repair runner. Offline tests do not connect.
+"""
+import asyncio
+import copy
+import json
+import unittest
+from uuid import uuid4
+from starlette.requests import Request
+from fastapi import HTTPException
+from app.learning.contracts import canonical
+from app.learning.teaching_api import _read_bounded_body
+from app.learning.teaching_contracts import NumericRef, VariantData, TeachingRefusal
+from app.learning.teaching_policy import derive_support_checks
+from app.learning.teaching_progress import rebuild_progress
+from app.learning.teaching_views import record_sources_valid
+from tests.fixtures.task100.synthetic_content import MATERIAL, exercise, output_for
+from tests.fixtures.task100.support import PGBase
+
+
+class RepairOfflineTests(unittest.IsolatedAsyncioTestCase):
+    def exercise(self):
+        return exercise({'node_id':'n1','purpose':'initial'},'lc_'+'a'*24)
+
+    def test_answer_value_unit_and_ambiguous_input_are_separate_from_reference(self):
+        ex=self.exercise()
+        for answer,status in [('1m/s，2分钟=120秒','matched'),('60m/s','conflict'),
+                              ('0.01m/s','conflict'),('1m','conflict'),('60m/min','matched'),
+                              ('可能1m/s也可能60m/s','unchecked'),('一段开放解释','unchecked'),('1e3m/s','unchecked')]:
+            with self.subTest(answer=answer):
+                check=derive_support_checks(ex,answer)[0]
+                self.assertEqual(check['reference_status'],'matched')
+                self.assertEqual(check['status'],status)
+                self.assertEqual(check['dimension_ids'],['value'])
+
+    def test_misleading_model_met_cannot_advance_numeric_conflict_or_unknown(self):
+        ex=self.exercise(); path='path'
+        nodes=[{'completion_dimensions':[{'dimension':d['id']} for d in ex['dimensions']]}]
+        for text in ['60m/s','0.01m/s','可能1m/s也可能60m/s']:
+            facts=[]
+            for index in range(2):
+                value=copy.deepcopy(ex);value['variant']['purpose']='initial' if index==0 else 'retest'
+                value['variant']['instance_data']['quantities'][0]['value_decimal']=str(120+index*60)
+                facts.extend([{'kind':'exercise','record_id':f'e{index}','document':{'path_record_id':path,'node_id':'n1','result':value}},
+                    {'kind':'answer','record_id':f'a{index}','body':canonical({'exercise_record_id':f'e{index}','text':text,'kind':'initial','exposures_seen':[]})},
+                    {'kind':'feedback','record_id':f'f{index}','answer_record_id':f'a{index}','document':{'result':{'result_type':'feedback',
+                        'dimension_observations':[{'id':d['id'],'observation':'met'} for d in ex['dimensions']]}}}])
+            result=rebuild_progress(nodes,facts,path)['nodes']['n1']
+            self.assertEqual(result['independent_answers'],[])
+            self.assertNotEqual(result['status'],'evidence_sufficient')
+
+    def test_numeric_field_domains_without_float_coercion_or_tolerance_rounding(self):
+        base={'value_decimal':'10000000000000','unit':'m/s','operation':'divide','left':'1','right':'1','tolerance_decimal':'0.000000000001'}
+        NumericRef.model_validate(base)
+        NumericRef.model_validate({**base,'value_decimal':'1000000000000000000','left':'1000000000000'})
+        for field,bad in [('value_decimal','1000000000000000000.0000000000001'),('value_decimal',1.0),
+                          ('left','1000000000001'),('right','1e2'),('tolerance_decimal','-0.01'),
+                          ('tolerance_decimal','2'),('tolerance_decimal','0.0000000000001'),('value_decimal','NaN')]:
+            with self.subTest(field=field,bad=bad),self.assertRaises(ValueError): NumericRef.model_validate({**base,field:bad})
+        data={'purpose':'initial','instance_data':{'kind':'calculation','quantities':[{'name':'x','unit':'m','value_decimal':'1000000000000000000'}]}}
+        VariantData.model_validate(data)
+        for bad in [1.0,1,True,'1000000000000000000.0000000000001','1e3','Infinity']:
+            sample=copy.deepcopy(data);sample['instance_data']['quantities'][0]['value_decimal']=bad
+            with self.subTest(bad=bad),self.assertRaises(ValueError): VariantData.model_validate(sample)
+
+    async def read(self,chunks):
+        calls=[]
+        async def receive():
+            calls.append(len(calls)); index=len(calls)-1
+            return {'type':'http.request','body':chunks[index],'more_body':index+1<len(chunks)}
+        request=Request({'type':'http','headers':[]},receive)
+        try: return await _read_bounded_body(request),calls
+        except HTTPException as error: return error,calls
+
+    async def test_real_asgi_stream_stops_on_first_overflow_before_next_chunk(self):
+        value,calls=await self.read([b' '*16384,b' '*16384,b'X',b'not read'])
+        self.assertIsInstance(value,HTTPException);self.assertEqual(value.status_code,413)
+        self.assertEqual(len(calls),3)
+        value,_=await self.read([b'{' ,b'"goal":"\xe4\xb8\xad"}'])
+        self.assertEqual(value,{'goal':'中'})
+
+    async def test_utf8_and_nested_duplicate_keys_are_rejected_before_dto(self):
+        for raw in [b'{"body":{"goal":"a","goal":"b"}}',b'{"x":[{"a":1,"a":2}]}',
+                    '{"goal":"中"}'.encode('utf-16'),'{"goal":"中"}'.encode('utf-32'),
+                    b'{"goal":"\xff"}',b'{"x":NaN}']:
+            with self.subTest(raw=raw):
+                value,_=await self.read([raw]);self.assertIsInstance(value,HTTPException);self.assertEqual(value.status_code,400)
+
+    def test_original_record_source_hash_and_revision_cannot_use_new_scope(self):
+        sid,vid=str(uuid4()),str(uuid4())
+        ref=dict(source_id=sid,version_id=vid,source_revision=1,original_sha256='a'*64)
+        row={'source_refs':canonical([ref])};actual={**ref,'sha256':'a'*64,'valid':True,'ready':True}
+        self.assertTrue(record_sources_valid(row,[actual]))
+        for changes in [{'source_revision':2},{'sha256':'b'*64},{'valid':False},{'ready':False},{'version_id':str(uuid4())}]:
+            self.assertFalse(record_sources_valid(row,[{**actual,**changes}]))
+        self.assertFalse(record_sources_valid({'source_refs':'not JSON'},[actual]))
+
+    def test_supported_citations_survive_catalog_reordering_and_missing_stays_no_evidence(self):
+        entries=[{'id':'lc_'+str(i)*24,'text':text} for i,text in enumerate(MATERIAL.splitlines(),1)]
+        for task in [{'kind':'plan'},*({'kind':'exercise','node_id':node,'purpose':'initial'} for node in ['n1','n2','n3'])]:
+            document={'evidence':entries,'task':task}
+            expected=output_for(document)
+            self.assertNotEqual(expected['result_type'],'no_evidence')
+            self.assertEqual(expected,output_for({**document,'evidence':list(reversed(entries))}))
+        wrong=output_for({'evidence':entries[:1],'task':{'kind':'exercise','node_id':'n2','purpose':'initial'}})
+        self.assertEqual(wrong['result_type'],'no_evidence')
+
+
+class RepairControlOfflineTests(unittest.TestCase):
+    def test_repair_caps_and_old_grants_never_borrowed(self):
+        from tests.fixtures.task100 import control as c
+        self.assertTrue(c.IS_REPAIR)
+        self.assertEqual(c.LIMITS,{'real_entries':4,'container_starts':4,'app_starts':3,'sup_creates':18,'browser':3,'driver':3,'frontend_build':2})
+        with self.assertRaises(c.ControlRefusal):c.effective_limits({'supplementary_permit':{}})
+
+    def test_fixed_monotonic_clock_and_bad_ledger_values_refuse_before_action(self):
+        import tempfile,time
+        from pathlib import Path
+        from tests.fixtures.task100 import control as c
+        value={'permit':c.PERMIT,'limits':c.LIMITS,'time_limits':c.TIME_LIMITS,
+            'counts':dict.fromkeys(c.LIMITS,0),'seconds':dict.fromkeys(c.TIME_LIMITS,0),
+            'events':[],'active_monotonic_start':time.monotonic()-5}
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'ledger.json';ledger=c.Ledger(path)
+            with self.assertRaises(c.ControlRefusal):ledger.load()
+            for bad in [-1,True,float('nan'),1.5]:
+                sample=copy.deepcopy(value);sample['counts']['real_entries']=bad;c.atomic_json(path,sample)
+                with self.assertRaises(c.ControlRefusal):ledger.consume('real_entries')
+            for bad in [None,True,float('inf'),time.monotonic()+1000]:
+                sample=copy.deepcopy(value);sample['active_monotonic_start']=bad;c.atomic_json(path,sample)
+                with self.assertRaises(c.ControlRefusal):ledger.consume('real_entries')
+            c.atomic_json(path,{**value,'counts':{**value['counts'],'browser':3}})
+            with self.assertRaises(c.ControlRefusal):ledger.consume('browser')
+            c.atomic_json(path,value);self.assertEqual(ledger.consume('real_entries')['counts']['real_entries'],1)
+            self.assertLess(c.active_remaining(value),c.TIME_LIMITS['active'])
+
+    def test_ended_legacy_entry_and_no_mutation_database_preparation(self):
+        import inspect
+        from tests.fixtures.task100 import control,runner,repair_runner
+        with self.assertRaises(control.ControlRefusal):runner.main()
+        source=inspect.getsource(repair_runner.RepairBatch.database)
+        for forbidden in ('create_database(', 'create_roles(', 'apply_migrations(', 'grant_table_privileges(',
+                          'DROP ', 'DELETE ', 'TRUNCATE ', 'CREATE DATABASE', 'CREATE ROLE', 'GRANT '):
+            self.assertNotIn(forbidden,source)
+        self.assertIn('ALTER ROLE',source)
+
+    def test_independent_content_oracle_rejects_speed_for_concept_or_program(self):
+        from tests.fixtures.task100.repair_oracle import supports
+        speed=MATERIAL.splitlines()[0]
+        self.assertTrue(supports('calculation',speed))
+        self.assertFalse(supports('concept',speed));self.assertFalse(supports('program',speed))
+        self.assertTrue(supports('concept',MATERIAL.splitlines()[1]))
+        self.assertTrue(supports('program',MATERIAL.splitlines()[2]))
+
+
+class RepairPGTests(PGBase):
+    async def test_numeric_result_commit_blocks_false_met_and_allows_two_real_instances(self):
+        from tests.fixtures.task100.seed_helpers import ready_answer, command, seed_model
+        from tests.fixtures.task100.repair_cases import commit_feedback
+        for text,expected in [('60m/s','needs_repair'),('0.01m/s','needs_repair'),
+                              ('可能1m/s也可能60m/s','practising'),('1m/s；先统一秒，单位与数量级合理','evidence_sufficient')]:
+            aid,source,eid,answer=await ready_answer(self.fixture)
+            await self.ledger.apply_teaching_local(aid,command(self.fixture.head(aid),'answer',{
+                'exercise_record_id':eid,'kind':'revision','text':text,'supersedes_answer_record_id':answer}))
+            await commit_feedback(self.fixture,aid,force_met=True)
+            head=self.fixture.head(aid)
+            eid=await seed_model(self.fixture,aid,'exercise',{'confirmed':True,'path_record_id':str(head['path_record_id']),
+                'node_id':'n1','purpose':'retest','parent_feedback_record_id':str(head['feedback_record_id']),'retry_of':None})
+            await self.ledger.apply_teaching_local(aid,command(self.fixture.head(aid),'answer',{
+                'exercise_record_id':eid,'kind':'initial','text':text,'supersedes_answer_record_id':None}))
+            await commit_feedback(self.fixture,aid,force_met=True)
+            head=self.fixture.head(aid);projection=json.loads(head['projection'])['nodes']['n1']
+            self.assertEqual(projection['status'],expected)
+            self.assertEqual(len(projection['independent_answers']),2 if expected=='evidence_sufficient' else 0)
+            self.assertEqual(head['node_id'],'n2' if expected=='evidence_sufficient' else 'n1')
+            reason=self.fixture.rows("SELECT body FROM teaching_records WHERE activity_id=%s AND kind='progress' ORDER BY seq DESC LIMIT 1",(aid,))[0]
+            check=json.loads(reason['body'])['support_checks'][0]
+            self.assertEqual(check['reference_status'],'matched')
+            print('REPAIR_NUMERIC_COMMIT',canonical({'activity_id':aid,'answer':text,'head_node':head['node_id'],'projection':projection,'support_check':check}))
+
+    async def test_original_sources_single_snapshot_new_scope_cannot_restore_old_bodies(self):
+        import io
+        from unittest.mock import patch
+        from tests.fixtures.task100.seed_helpers import ready_answer,command,seed_model
+        from tests.fixtures.task100.repair_cases import commit_feedback
+        from app.learning.teaching_views import public_record
+        from app.learning.teaching_api import _workspace_payload
+        for mode in ['new_other_source','new_same_source_version','revoked_to_other_source']:
+            aid,source,eid,answer=await ready_answer(self.fixture)
+            await commit_feedback(self.fixture,aid)
+            head=self.fixture.head(aid);feedback=str(head['feedback_record_id']);path=str(head['path_record_id'])
+            correction=await self.ledger.apply_teaching_local(aid,command(head,'correct',{
+                'target_record_id':feedback,'text':'用户纠错原文仍保留','disputed_dimensions':[]}))
+            head=self.fixture.head(aid)
+            hidden=await seed_model(self.fixture,aid,'exercise',{'confirmed':True,'path_record_id':path,'node_id':'n1',
+                'purpose':'retest','parent_feedback_record_id':feedback,'retry_of':None})
+            answer_receipt=await self.ledger.apply_teaching_local(aid,command(self.fixture.head(aid),'answer',{
+                'exercise_record_id':hidden,'kind':'initial','text':'用户答案原文仍保留','supersedes_answer_record_id':None}))
+            raw=self.fixture.originals.put(io.BytesIO((MATERIAL+'新修订。').encode()),max_bytes=5242880)
+            newer=self.fixture.materials.save(source_id=source['id'],expected_version=source['version_id'],filename='repair-new.md',
+                format='md',sha256=raw.sha256,size=raw.size)
+            if mode=='revoked_to_other_source': self.fixture.rows('UPDATE material_sources SET current_version=NULL,revision=revision+1 WHERE id=%s',(source['id'],))
+            selected=newer if mode=='new_same_source_version' else self.fixture.text(MATERIAL,'repair-other.md')
+            # Fixed legal scope replacement precondition by UPDATE: no DELETE even of mutable scope mappings.
+            self.fixture.rows('UPDATE activity_scope_sources SET source_id=%s,version_id=%s,source_revision=%s WHERE activity_id=%s',
+                (selected['id'],selected['version_id'],selected['revision'],aid))
+            self.fixture.rows('UPDATE activities SET scope_revision=scope_revision+1 WHERE id=%s',(aid,))
+            view=await self.ledger.read_teaching_workspace(aid);payload=_workspace_payload(aid,view)
+            self.assertFalse(payload['overlay']['source_invalid'])
+            self.assertEqual(payload['exercise']['qualification'],'source_invalid');self.assertNotIn('stem',payload['exercise'])
+            self.assertEqual(payload['path']['qualification'],'source_invalid');self.assertNotIn('nodes',payload['path']);self.assertEqual(payload['nodes'],[])
+            self.assertEqual(payload['answer']['text'],'用户答案原文仍保留')
+            queries=[];original=self.ledger._transaction
+            async def counted(operation):
+                async def wrapped(conn):
+                    class Proxy:
+                        async def execute(self,sql,*args): queries.append(sql);return await conn.execute(sql,*args)
+                    return await operation(Proxy())
+                return await original(wrapped)
+            with patch.object(self.ledger,'_transaction',counted):
+                for reader in [lambda:self.ledger.read_teaching_workspace(aid),lambda:self.ledger.read_teaching_history(aid),
+                               lambda:self.ledger.read_teaching_record(aid,feedback),lambda:self.ledger.read_teaching_command(aid,correction.business_key)]:
+                    queries.clear();await reader();self.assertEqual(len(queries),1)
+            for rid in [feedback,path,hidden]:
+                row=await self.ledger.read_teaching_record(aid,rid)
+                q,body=public_record(row,row['snapshot_sources'],row['snapshot_exposures'],row['snapshot_head'],row['snapshot_activity'])
+                self.assertEqual((q,body),('source_invalid',None))
+            for rid,text in [(answer_receipt.record_ids[0].record_id,'用户答案原文仍保留'),(correction.record_ids[0].record_id,'用户纠错原文仍保留')]:
+                row=await self.ledger.read_teaching_record(aid,rid)
+                q,body=public_record(row,row['snapshot_sources'],row['snapshot_exposures'],row['snapshot_head'],row['snapshot_activity'])
+                self.assertEqual(body['text'],text)
+            head=self.fixture.head(aid)
+            before=self.fixture.commands(aid)
+            exposure=command(head,'expose',{'exercise_record_id':hidden,'part':'reference'}).model_copy(update={'expected_scope_revision':2})
+            with self.assertRaisesRegex(TeachingRefusal,'source_invalid'):await self.ledger.apply_teaching_local(aid,exposure)
+            self.assertEqual(before,self.fixture.commands(aid))
+            self.assertEqual((await self.ledger.read_teaching_exposures(aid,hidden)),set())
+            print('REPAIR_SOURCE_SCOPE',canonical({'mode':mode,'activity_id':aid,'new_scope_revision':2,'source_current_valid':True,
+                'derived_suppressed':[path,feedback,hidden],'user_text_retained':True,'each_public_read_business_sql':1,'delete_used':False}))
+
+    async def test_path_32_accepted_33_refused_and_same_key_replay_preserves_capacity(self):
+        from tests.fixtures.task100.seed_helpers import command,seed_model
+        source=self.fixture.text(MATERIAL,'repair-capacity.md')
+        aid=await self.fixture.activity([source],max_requests=64,max_cost_microunits=6400000)
+        await self.ledger.apply_teaching_local(aid,command(None,'goal',{'goal':'能换算平均速度、解释原子性并手推程序条件'}))
+        last=None
+        for index in range(32):
+            proposal=await seed_model(self.fixture,aid,'plan',{'confirmed':True,'correction_record_id':None,'retry_of':None})
+            last=command(self.fixture.head(aid),'accept_path',{'proposal_record_id':proposal})
+            receipt=await self.ledger.apply_teaching_local(aid,last);self.assertEqual(receipt.status,'committed')
+        before=self.fixture.head(aid);count=self.fixture.rows("SELECT count(*) AS n FROM teaching_records WHERE activity_id=%s AND kind='path_accept'",(aid,))[0]['n']
+        self.assertEqual(count,32)
+        replay=await self.ledger.apply_teaching_local(aid,last);self.assertEqual(replay.status,'committed')
+        self.assertEqual(before,self.fixture.head(aid))
+        proposal=await seed_model(self.fixture,aid,'plan',{'confirmed':True,'correction_record_id':None,'retry_of':None})
+        before_commands=self.fixture.commands(aid)
+        with self.assertRaisesRegex(TeachingRefusal,'history_limit'):
+            await self.ledger.apply_teaching_local(aid,command(self.fixture.head(aid),'accept_path',{'proposal_record_id':proposal}))
+        self.assertEqual(before_commands,self.fixture.commands(aid))
+        self.assertEqual(self.fixture.rows("SELECT count(*) AS n FROM teaching_records WHERE activity_id=%s AND kind='path_accept'",(aid,))[0]['n'],32)
+        print('REPAIR_PATH_CAPACITY',canonical({'activity_id':aid,'accepted':32,'replay_extra':0,'rejected':33,'history_retained':True}))
+
+    async def test_g7_seed_valid_current_identity_and_invalid_variants_write_nothing(self):
+        from tests.fixtures.task100.repair_cases import seed_g7
+        from tests.fixtures.task100.seed_helpers import command
+        value=await seed_g7(self.fixture);aid=value['activity_id']
+        body={'goal':value['goal'],'seed_operation_id':value['operation_id'],'seed_payload_sha256':value['payload_sha256']}
+        for change in [{'seed_payload_sha256':'f'*64},{'seed_operation_id':'ordinary-model'}, {'goal':'完全不同目标'}]:
+            with self.assertRaises(TeachingRefusal):await self.ledger.apply_teaching_local(aid,command(None,'goal',{**body,**change}))
+            self.assertEqual(self.fixture.commands(aid),[]);self.assertIsNone(self.fixture.head(aid))
+        other=await self.fixture.activity([value['source']])
+        with self.assertRaises(TeachingRefusal):await self.ledger.apply_teaching_local(other,command(None,'goal',body))
+        receipt=await self.ledger.apply_teaching_local(aid,command(None,'goal',body))
+        goal=self.fixture.rows("SELECT body,source_refs FROM teaching_records WHERE activity_id=%s AND kind='goal'",(aid,))[0]
+        self.assertEqual(json.loads(goal['body'])['seed_operation_id'],value['operation_id'])
+        self.assertEqual(json.loads(goal['body'])['seed_payload_sha256'],value['payload_sha256'])
+        self.assertTrue(json.loads(goal['source_refs']));self.assertEqual(json.loads(self.fixture.head(aid)['projection']),{})
+        self.assertEqual(self.fixture.rows('SELECT count(*) AS n FROM activity_operations WHERE activity_id=%s',(aid,))[0]['n'],1)
+        self.fixture.rows('UPDATE activities SET scope_revision=scope_revision+1 WHERE id=%s',(aid,))
+        before=self.fixture.commands(aid)
+        stale=command(self.fixture.head(aid),'goal',body).model_copy(update={'expected_scope_revision':2})
+        with self.assertRaises(TeachingRefusal):await self.ledger.apply_teaching_local(aid,stale)
+        self.assertEqual(before,self.fixture.commands(aid))
+        self.fixture.rows('UPDATE material_sources SET revision=revision+1 WHERE id=%s',(value['source']['id'],))
+        before=self.fixture.commands(aid)
+        invalid=command(self.fixture.head(aid),'goal',body).model_copy(update={'expected_scope_revision':2})
+        with self.assertRaisesRegex(TeachingRefusal,'source_invalid'):await self.ledger.apply_teaching_local(aid,invalid)
+        self.assertEqual(before,self.fixture.commands(aid))
+        print('REPAIR_G7_SEED',canonical({'activity_id':aid,'goal_record':receipt.record_ids[0].record_id,'synthetic_g7_precondition':True,
+            'actual_original_admit_mark_result':True,'sup_created':False,'provider_sent':False,'extra_first_operations':0,'progress_observations':0}))
+
+    async def test_unclaimed_concurrent_claim_once_and_claimed_service_remains_read_only(self):
+        from unittest.mock import AsyncMock,patch
+        from tests.fixtures.task100.seed_helpers import ready_answer,config
+        from tests.fixtures.task100.repair_cases import unclaimed_model
+        from app.learning.teaching_service import TeachingService
+        aid,*_=await ready_answer(self.fixture)
+        cmd,frozen=await unclaimed_model(self.fixture,aid)
+        original=await self.ledger.read_teaching_command(aid,cmd.business_key)
+        self.assertEqual(TeachingService._read_receipt(original).retry_policy,'same_key_before_claim')
+        decisions=await asyncio.gather(*(self.ledger.claim_teaching_launch(aid,cmd.business_key,cmd.request_sha256(aid)) for _ in range(4)))
+        self.assertEqual(sum(d['launch_allowed'] for d in decisions),1)
+        service=TeachingService(self.ledger,self.fixture.materials,self.fixture.originals)
+        with (patch.object(service,'_freeze_model_context',AsyncMock(side_effect=AssertionError('must not repack'))),
+              patch('app.learning.teaching_service.run_one_call',side_effect=AssertionError('must not relaunch'))):
+            receipt=await service.submit_command(aid,cmd,config())
+        self.assertEqual(receipt.status,'started');self.assertEqual(receipt.retry_policy,'read_only')
+        current=await self.ledger.read_teaching_command(aid,cmd.business_key)
+        self.assertEqual(current['command']['context_body'],original['command']['context_body'])
+        self.assertEqual(self.fixture.rows('SELECT count(*) AS n FROM activity_operations WHERE activity_id=%s AND operation_id=%s',(aid,cmd.operation_id(aid)))[0]['n'],0)
+        print('REPAIR_CLAIM_CAS',canonical({'activity_id':aid,'concurrent_attempts':4,'claims':1,'claimed_no_operation_relaunches':0,'frozen_identity_unchanged':True}))
+
+
+class RepairHttpTests(PGBase):
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        from tests.fixtures.task100.chain_client import Client
+        self.client=Client()
+
+    async def asyncTearDown(self):
+        import os,time
+        from pathlib import Path
+        if hasattr(self,'client'):
+            self.client.save(Path(os.environ['RETROLUME_TASK100_BATCH_DIR'])/('http-'+self._testMethodName+'-'+str(time.time_ns())+'.json'))
+        await super().asyncTearDown()
+
+    def facts(self,aid):
+        return self.fixture.rows('SELECT a.requests_reserved,a.cost_reserved_microunits,a.tools_reserved,'
+            'a.running_reserved_seconds,a.running_settled_seconds,'
+            '(SELECT count(*) FROM teaching_commands c WHERE c.activity_id=a.id) AS commands,'
+            '(SELECT count(*) FROM teaching_records r WHERE r.activity_id=a.id) AS records,'
+            '(SELECT count(*) FROM activity_operations o WHERE o.activity_id=a.id) AS operations '
+            'FROM activities a WHERE id=%s',(aid,))[0]
+
+    async def test_stream_utf8_encoding_duplicate_auth_rejections_have_zero_effects(self):
+        import urllib.request,urllib.error
+        from tests.fixtures.task100.seed_helpers import command
+        source=self.fixture.text(MATERIAL,'repair-http-strict-'+str(uuid4())+'.md');aid=await self.fixture.activity([source])
+        path=f'/api/activities/{aid}/teaching/commands';before=self.facts(aid)
+        samples=[('overflow_chunked',iter([b' '*16384,b' '*16384,b'X',b'next chunk']),413),
+            ('invalid_utf8',b'{"goal":"\xff"}',400),('utf16','{"goal":"中"}'.encode('utf-16'),400),
+            ('utf32','{"goal":"中"}'.encode('utf-32'),400),
+            ('nested_duplicate',b'{"body":{"goal":"a","goal":"b"}}',400),
+            ('array_nested_duplicate',b'{"body":[{"a":1,"a":2}]}',400)]
+        for name,data,expected in samples:
+            headers={'X-RetroLume-Session':self.client.token,'Content-Type':'application/json'}
+            request=urllib.request.Request(self.client.base+path,data=data,headers=headers,method='POST')
+            try:
+                with urllib.request.urlopen(request,timeout=self.client.timeout(10)) as response:
+                    status=response.status;value=json.loads(response.read())
+            except urllib.error.HTTPError as exc:status=exc.code;value=json.loads(exc.read())
+            self.assertEqual(status,expected,(name,value));self.assertEqual(before,self.facts(aid))
+            self.client.timeline.append({'name':name,'path':path,'method':'POST','status':status,'response':value,
+                'body_encoding':name,'bytes_limit':32768,'facts_before':before,'facts_after':self.facts(aid)})
+        request=urllib.request.Request(self.client.base+path,data=b'{}',headers={'X-RetroLume-Session':'wrong-fixed-synthetic-token','Content-Type':'application/json'})
+        with self.assertRaises(urllib.error.HTTPError) as refusal:urllib.request.urlopen(request,timeout=self.client.timeout(5))
+        self.assertEqual(refusal.exception.code,403);self.assertEqual(before,self.facts(aid))
+        cmd=command(None,'goal',{'goal':'中文多字节目标 <script>window.invalid=true</script>',
+            'self_report':None,'domain':None,'seed_operation_id':None,'seed_payload_sha256':None})
+        receipt=self.client.request(path,cmd.model_dump())
+        self.assertEqual(receipt['status'],'committed');after=self.facts(aid)
+        self.assertEqual(after['commands'],1);self.assertEqual(after['records'],1)
+        for key in ('requests_reserved','cost_reserved_microunits','tools_reserved','operations','running_settled_seconds'):
+            self.assertEqual(before[key],after[key])
+        self.assertIn('中文多字节目标',self.client.workspace(aid)['goal']['goal'])
+        print('REPAIR_HTTP_STRICT',canonical({'activity_id':aid,'negative_cases':7,'unicode_goal_committed':True,
+            'rejections_zero_effects':True,'actual_stream_observation':'observations/*http_body_stream.json'}))
+
+    async def test_actual_citations_history_cursor_and_original_source_invalidation(self):
+        from tests.fixtures.task100.seed_helpers import ready_answer,command
+        from tests.fixtures.task100.repair_cases import commit_feedback
+        aid,source,eid,answer=await ready_answer(self.fixture)
+        row=self.fixture.rows('SELECT o.payload FROM teaching_records r JOIN activity_operation_results o '
+            'USING(activity_id,operation_id) WHERE r.activity_id=%s AND r.record_id=%s',(aid,eid))[0]
+        cid=json.loads(row['payload'])['value']['result']['reference_points'][0]['citations'][0]
+        before=self.facts(aid)
+        self.client.request(f'/api/activities/{aid}/teaching/records/{eid}/citations/{cid}',expected=404)
+        self.assertEqual(before,self.facts(aid))
+        await commit_feedback(self.fixture,aid)
+        head=self.fixture.head(aid);feedback=str(head['feedback_record_id']);path=str(head['path_record_id'])
+        public=self.client.request(f'/api/activities/{aid}/teaching/records/{eid}/citations/{cid}')['citation']
+        self.assertEqual(public['start_line'],1);self.assertIn('分钟',public['text'])
+        path_cid=self.client.workspace(aid)['path']['nodes'][0]['citations'][0]
+        self.client.request(f'/api/activities/{aid}/teaching/records/{path}/citations/{path_cid}')
+        fcid=self.client.workspace(aid)['feedback']['errors'][0]['citations'][0]
+        self.client.request(f'/api/activities/{aid}/teaching/records/{feedback}/citations/{fcid}')
+        for index in range(23):
+            await self.ledger.apply_teaching_local(aid,command(self.fixture.head(aid),'correct',{
+                'target_record_id':feedback,'text':f'只读分页前提说明 {index}','disputed_dimensions':[]}))
+        view=self.client.workspace(aid);self.assertEqual(len(view['history']),20);self.assertTrue(view['next_cursor'])
+        from urllib.parse import quote
+        cursor=quote(view['next_cursor']);older=self.client.request(f'/api/activities/{aid}/teaching/history?cursor={cursor}')
+        self.assertLess(older['items'][0]['seq'],view['history'][-1]['seq'])
+        self.client.request(f'/api/activities/{aid}/teaching/history?cursor=bad_cursor',expected=400)
+        await self.ledger.apply_teaching_local(aid,command(self.fixture.head(aid),'correct',{
+            'target_record_id':feedback,'text':'使旧游标确实过期','disputed_dimensions':[]}))
+        self.client.request(f'/api/activities/{aid}/teaching/history?cursor={cursor}',expected=409)
+        other=await self.fixture.activity([source])
+        self.client.request(f'/api/activities/{other}/teaching/records/{eid}',expected=404)
+        new=self.fixture.text(MATERIAL,'repair-http-new-valid-scope.md')
+        self.fixture.rows('UPDATE material_sources SET current_version=NULL,revision=revision+1 WHERE id=%s',(source['id'],))
+        self.fixture.rows('UPDATE activity_scope_sources SET source_id=%s,version_id=%s,source_revision=%s WHERE activity_id=%s',
+            (new['id'],new['version_id'],new['revision'],aid))
+        self.fixture.rows('UPDATE activities SET scope_revision=scope_revision+1 WHERE id=%s',(aid,))
+        before=self.facts(aid);view=self.client.workspace(aid)
+        self.assertFalse(view['overlay']['source_invalid']);self.assertEqual(view['path']['qualification'],'source_invalid')
+        record=self.client.request(f'/api/activities/{aid}/teaching/records/{feedback}')
+        self.assertEqual(record['qualification'],'source_invalid');self.assertIsNone(record['public_body'])
+        self.client.request(f'/api/activities/{aid}/teaching/records/{feedback}/citations/{fcid}',expected=409)
+        text=self.client.request(f'/api/activities/{aid}/teaching/records/{answer}')
+        self.assertIn('60m/s',text['public_body']['text']);self.assertEqual(before,self.facts(aid))
+        print('REPAIR_HTTP_READS',canonical({'activity_id':aid,'current_scope_valid':True,'old_bodies_hidden':True,
+            'actual_citations':3,'over_20_history':True,'bad_cursor':400,'stale_cursor':409,'reads_zero_effects':True}))
+
+    async def test_g7_seed_current_identity_http_refusals_and_explicit_goal_commit(self):
+        from tests.fixtures.task100.repair_cases import seed_g7
+        from tests.fixtures.task100.seed_helpers import command
+        value=await seed_g7(self.fixture);aid=value['activity_id'];before=self.facts(aid)
+        seed=self.client.request(f'/api/activities/{aid}/teaching/seeds/{value["operation_id"]}')
+        self.assertEqual(seed['goal'],value['goal']);self.assertEqual(before,self.facts(aid))
+        body={'goal':value['goal'],'self_report':None,'domain':None,
+              'seed_operation_id':value['operation_id'],'seed_payload_sha256':value['payload_sha256']}
+        for changes in ({'seed_payload_sha256':'a'*64},{'goal':'different goal'}):
+            cmd=command(None,'goal',{**body,**changes})
+            self.client.request(f'/api/activities/{aid}/teaching/commands',cmd.model_dump(),expected=409)
+            self.assertEqual(before,self.facts(aid))
+        receipt=self.client.request(f'/api/activities/{aid}/teaching/commands',command(None,'goal',body).model_dump())
+        self.assertEqual(receipt['status'],'committed');after=self.facts(aid)
+        self.assertEqual(after['operations'],before['operations']);self.assertEqual(after['requests_reserved'],before['requests_reserved'])
+        self.assertEqual(json.loads(self.fixture.head(aid)['projection']),{})
+        record=self.fixture.rows("SELECT body FROM teaching_records WHERE activity_id=%s AND kind='goal'",(aid,))[0]
+        self.assertEqual(json.loads(record['body'])['seed_payload_sha256'],value['payload_sha256'])
+        print('REPAIR_HTTP_SEED',canonical({'activity_id':aid,'synthetic_g7_precondition':True,'real_local_http_goal':True,
+            'first_restarted':False,'extra_observations':0}))

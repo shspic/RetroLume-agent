@@ -1,0 +1,1820 @@
+--- a/backend/app/worker/launcher.py
++++ b/backend/app/worker/launcher.py
+@@ -1,46 +1,215 @@
+-"""Internal Windows SUP launcher with one monotonic management deadline.
+-
+-The CPython Process.start and Connection.recv calls do not expose a cancellable
+-operation handle. This module fails closed on every unconfirmed exit; D1's
+-pre-return start/partial-creation bound remains a run gate.
+-"""
++"""Fixed two-process Windows SUP launcher with suspended handoff and one deadline."""
+ 
+ from __future__ import annotations
+ 
+ import asyncio
+-from dataclasses import replace
+-import multiprocessing
++import ctypes
++from ctypes import wintypes
++from dataclasses import asdict, fields, replace
+ import os
++import secrets
++import subprocess
++import sys
+ import time
++from uuid import UUID
+ 
+ from app.activities import PostgresAdmissionLedger
+-from app.runtime import psycopg_compatible_loop_factory
+-
+-from .command import WorkerCommand
+-from .session import SessionConfig, SessionOutcome, SingleWindowSupervisor
+-
+-
+-def _supervisor_target(pipe, ledger, config, activity_id, executor_id, command, run_tag, deadline_ns):
+-    try:
+-        with asyncio.Runner(loop_factory=psycopg_compatible_loop_factory) as runner:
+-            outcome = runner.run(SingleWindowSupervisor(ledger, config).run_once(
+-                activity_id, executor_id, command,
+-                run_tag=run_tag, manager_deadline_ns=deadline_ns,
+-            ))
+-        pipe.send(outcome)
+-    finally:
+-        pipe.close()
++
++from .command import WorkerCommand, _BACKEND, _INTERPRETER
++from .session import SessionConfig, SessionOutcome
++from .supervisor_ipc import NamedMapping
++from .windows_job import (_FILETIME, _PROCESS_INFORMATION, _STARTUPINFOW,
++                          CREATE_NO_WINDOW, CREATE_SUSPENDED, WAIT_OBJECT_0,
++                          WAIT_TIMEOUT)
++
++
++CREATE_UNICODE_ENVIRONMENT = 0x00000400
++STILL_ACTIVE = 259
++
++
++class ManagerControlError(RuntimeError):
++    pass
++
++
++class ProcessCreationError(ManagerControlError):
++    def __init__(self, error_code: int, partial=None):
++        super().__init__(f"CreateProcessW failed: Windows error {error_code}")
++        self.partial = partial
++
++
++def _api():
++    if os.name != "nt":
++        raise ManagerControlError("Windows only")
++    api = ctypes.WinDLL("kernel32", use_last_error=True)
++    api.CreateProcessW.argtypes = [
++        wintypes.LPCWSTR, wintypes.LPWSTR, ctypes.c_void_p, ctypes.c_void_p,
++        wintypes.BOOL, wintypes.DWORD, ctypes.c_void_p, wintypes.LPCWSTR,
++        ctypes.POINTER(_STARTUPINFOW), ctypes.POINTER(_PROCESS_INFORMATION),
++    ]
++    api.CreateProcessW.restype = wintypes.BOOL
++    api.ResumeThread.argtypes = [wintypes.HANDLE]
++    api.ResumeThread.restype = wintypes.DWORD
++    api.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
++    api.WaitForSingleObject.restype = wintypes.DWORD
++    api.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
++    api.TerminateProcess.restype = wintypes.BOOL
++    api.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
++    api.GetExitCodeProcess.restype = wintypes.BOOL
++    api.GetProcessTimes.argtypes = [wintypes.HANDLE, ctypes.POINTER(_FILETIME),
++                                    ctypes.POINTER(_FILETIME), ctypes.POINTER(_FILETIME),
++                                    ctypes.POINTER(_FILETIME)]
++    api.GetProcessTimes.restype = wintypes.BOOL
++    api.CloseHandle.argtypes = [wintypes.HANDLE]
++    api.CloseHandle.restype = wintypes.BOOL
++    return api
+ 
+ 
+ def _remaining(deadline_ns: int) -> float:
+     return max(0.0, (deadline_ns - time.monotonic_ns()) / 1e9)
+ 
+ 
+-def _alive(process) -> bool | None:
+-    try:
+-        return process.is_alive()
+-    except BaseException:
+-        return None
++def _environment_block() -> ctypes.Array:
++    # The base Python executable needs the venv redirector path to find the
++    # project dependencies, while the parent must own the actual base process.
++    values = os.environ.copy()
++    values["__PYVENV_LAUNCHER__"] = str(_INTERPRETER)
++    if any("\x00" in key or "\x00" in value for key, value in values.items()):
++        raise ManagerControlError("invalid process environment")
++    block = "\x00".join(f"{key}={value}" for key, value in sorted(values.items(), key=lambda item: item[0].upper())) + "\x00\x00"
++    if len(block) > 32767:
++        raise ManagerControlError("process environment too large")
++    return ctypes.create_unicode_buffer(block)
++
++
++class _SuspendedSupervisor:
++    """Owns the exact base interpreter process and primary-thread handles."""
++
++    def __init__(self, api, info: _PROCESS_INFORMATION):
++        self.api = api
++        self.info = info
++        self.resumed = False
++
++    @classmethod
++    def create(cls, mapping_name: str) -> "_SuspendedSupervisor":
++        api = _api()
++        executable = str(sys._base_executable)
++        if not os.path.isabs(executable) or not os.path.isfile(executable):
++            raise ManagerControlError("fixed base interpreter unavailable")
++        argv = [executable, "-B", "-m", "app.worker.supervisor_main", mapping_name]
++        command_line = ctypes.create_unicode_buffer(subprocess.list2cmdline(argv))
++        environment = _environment_block()
++        startup = _STARTUPINFOW()
++        startup.cb = ctypes.sizeof(startup)
++        info = _PROCESS_INFORMATION()
++        created = api.CreateProcessW(
++            executable, command_line, None, None, False,
++            CREATE_SUSPENDED | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
++            ctypes.cast(environment, ctypes.c_void_p), str(_BACKEND),
++            ctypes.byref(startup), ctypes.byref(info),
++        )
++        if not created:
++            partial = cls(api, info) if info.hProcess or info.hThread else None
++            raise ProcessCreationError(ctypes.get_last_error(), partial)
++        if not info.hProcess or not info.hThread:
++            raise ProcessCreationError(0, cls(api, info))
++        return cls(api, info)
++
++    @property
++    def pid(self) -> int | None:
++        return int(self.info.dwProcessId) if self.info.hProcess else None
++
++    def creation_time_100ns(self) -> int:
++        created, exited, kernel, user = (_FILETIME() for _ in range(4))
++        if not self.info.hProcess or not self.api.GetProcessTimes(
++            self.info.hProcess, ctypes.byref(created), ctypes.byref(exited),
++            ctypes.byref(kernel), ctypes.byref(user),
++        ):
++            raise ManagerControlError(f"GetProcessTimes: Windows error {ctypes.get_last_error()}")
++        return (int(created.dwHighDateTime) << 32) | int(created.dwLowDateTime)
++
++    def resume(self) -> None:
++        if not self.info.hThread or self.api.ResumeThread(self.info.hThread) == 0xFFFFFFFF:
++            raise ManagerControlError(f"ResumeThread: Windows error {ctypes.get_last_error()}")
++        self.resumed = True
++
++    def wait(self, seconds: float) -> bool:
++        if not self.info.hProcess:
++            raise ManagerControlError("SUP process handle missing")
++        timeout_ms = max(0, min(0xFFFFFFFE, int(seconds * 1000)))
++        result = self.api.WaitForSingleObject(self.info.hProcess, timeout_ms)
++        if result == WAIT_OBJECT_0:
++            return True
++        if result == WAIT_TIMEOUT:
++            return False
++        raise ManagerControlError(f"WaitForSingleObject: result {result}")
++
++    def exit_code(self) -> int:
++        code = wintypes.DWORD()
++        if not self.api.GetExitCodeProcess(self.info.hProcess, ctypes.byref(code)):
++            raise ManagerControlError(f"GetExitCodeProcess: Windows error {ctypes.get_last_error()}")
++        return int(code.value)
++
++    def terminate(self) -> None:
++        if not self.wait(0) and not self.api.TerminateProcess(self.info.hProcess, 1):
++            if not self.wait(0):
++                raise ManagerControlError(f"TerminateProcess: Windows error {ctypes.get_last_error()}")
++
++    def close(self) -> None:
++        errors = []
++        for label, field in (("thread", "hThread"), ("process", "hProcess")):
++            handle = getattr(self.info, field)
++            if handle:
++                if self.api.CloseHandle(handle):
++                    setattr(self.info, field, None)
++                else:
++                    errors.append(label)
++        if errors:
++            raise ManagerControlError("CloseHandle(SUP): " + ",".join(errors))
++
++
++def _request(ledger, config, activity_id, executor_id, command, run_tag, mapping_name, deadline_ns) -> dict:
++    if type(ledger) is not PostgresAdmissionLedger or type(config) is not SessionConfig or type(command) is not WorkerCommand:
++        raise TypeError("fixed ledger, config and command required")
++    if type(ledger._dsn) is not str or not 1 <= len(ledger._dsn.encode("utf-8")) <= 4096 or "\x00" in ledger._dsn:
++        raise ValueError("bounded ledger connection data required")
++    if type(activity_id) is not str or str(UUID(activity_id)) != activity_id:
++        raise ValueError("activity UUID invalid")
++    if type(executor_id) is not str or not 1 <= len(executor_id) <= 128:
++        raise ValueError("executor invalid")
++    if type(run_tag) is not str or not 1 <= len(run_tag) <= 64 or not run_tag.isascii() or not run_tag.replace("-", "").replace("_", "").isalnum():
++        raise ValueError("runTag invalid")
++    return {
++        "protocol": 1, "mapping_name": mapping_name,
++        "activity_id": activity_id, "executor_id": executor_id,
++        "run_tag": run_tag, "deadline_ns": deadline_ns,
++        "command": {"task": command.task},
++        "config": asdict(config),
++        "ledger": {
++            "dsn": ledger._dsn,
++            "connect_timeout_seconds": ledger._connect_timeout,
++            "statement_timeout_ms": ledger._statement_timeout_ms,
++            "lock_timeout_ms": ledger._lock_timeout_ms,
++        },
++    }
++
++
++def _decode_outcome(frame: dict, run_tag: str, activity_id: str) -> SessionOutcome:
++    if type(frame) is not dict or frame.get("protocol") != 1 or frame.get("run_tag") != run_tag or frame.get("activity_id") != activity_id:
++        raise ManagerControlError("SUP response identity mismatch")
++    data = frame.get("outcome")
++    if type(data) is not dict or set(data) != {f.name for f in fields(SessionOutcome)}:
++        raise ManagerControlError("SUP response shape invalid")
++    if data.get("run_tag") != run_tag or data.get("activity_id") != activity_id:
++        raise ManagerControlError("SUP outcome identity mismatch")
++    errors = data.get("cleanup_errors")
++    timing = data.get("timing_diagnostic")
++    if type(errors) is not list or any(type(item) is not str or len(item) > 128 for item in errors):
++        raise ManagerControlError("SUP cleanup field invalid")
++    if timing is not None and (type(timing) is not list or len(timing) != 5 or any(type(item) is not int for item in timing)):
++        raise ManagerControlError("SUP timing field invalid")
++    data["cleanup_errors"] = tuple(errors)
++    data["timing_diagnostic"] = tuple(timing) if timing is not None else None
++    return SessionOutcome(**data)
+ 
+ 
+ def run_supervised_window(
+@@ -52,7 +221,7 @@
+     *,
+     run_tag: str,
+ ) -> SessionOutcome:
+-    """Blocking internal entry; its result never grants new work."""
++    """Blocking internal entry; no application event-loop or business grant."""
+     if os.name != "nt":
+         raise RuntimeError("Windows only")
+     try:
+@@ -61,97 +230,97 @@
+         pass
+     else:
+         raise RuntimeError("launcher cannot run in application event loop")
+-    if type(ledger) is not PostgresAdmissionLedger or type(config) is not SessionConfig or type(command) is not WorkerCommand:
+-        raise TypeError("fixed ledger, config and command required")
+-    if not run_tag or len(run_tag) > 64 or not run_tag.isascii() or not run_tag.replace("-", "").replace("_", "").isalnum():
+-        raise ValueError("invalid run_tag")
+-
+-    deadline_ns = time.monotonic_ns() + int(config.manager_total_seconds * 1e9)
++
++    started_ns = time.monotonic_ns()
++    deadline_ns = started_ns + int(config.manager_total_seconds * 1e9)
+     run_deadline_ns = deadline_ns - int(config.cleanup_seconds * 1e9)
+-    context = multiprocessing.get_context("spawn")
+-    receive = send = process = None
+-    launched = False
++    mapping_name = "Local\\RetroLume.SUP." + secrets.token_hex(16)
++    request = _request(ledger, config, activity_id, executor_id, command, run_tag, mapping_name, deadline_ns)
++    mapping = None
++    process = None
+     outcome = None
+-    failure = None
+-    status = "launcher_failed_unconfirmed"
++    failure: BaseException | None = None
++    state = "launcher_failed_unconfirmed"
+     errors: list[str] = []
++    manager_pid = None
++    manager_created = None
++    exited = False
+     try:
+-        receive, send = context.Pipe(duplex=False)
+-        process = context.Process(
+-            target=_supervisor_target,
+-            args=(send, ledger, config, activity_id, executor_id, command, run_tag, deadline_ns),
+-            name=f"RetroLumeSUP-{run_tag}",
+-        )
+-        if _remaining(run_deadline_ns) == 0:
+-            status = "manager_timeout_unconfirmed"
++        if _remaining(run_deadline_ns) <= 0:
++            state = "manager_startup_deadline_unconfirmed"
+         else:
+-            process.start()
+-            launched = True
+-            send.close()
+-            send = None
+-            process.join(_remaining(run_deadline_ns))
+-            if _alive(process) is True:
+-                status = "manager_timeout_unconfirmed"
+-            elif _alive(process) is False and process.exitcode == 0 and receive.poll(0):
+-                received = receive.recv()
+-                if type(received) is SessionOutcome:
+-                    outcome = received
++            mapping = NamedMapping.create(mapping_name)
++            mapping.write_request(request)
++            if _remaining(run_deadline_ns) <= 0:
++                state = "manager_startup_deadline_unconfirmed"
++            else:
++                try:
++                    process = _SuspendedSupervisor.create(mapping_name)
++                except ProcessCreationError as exc:
++                    process = exc.partial
++                    raise
++                manager_pid = process.pid
++                manager_created = process.creation_time_100ns()
++                if _remaining(run_deadline_ns) <= 0:
++                    state = "manager_startup_deadline_unconfirmed"
+                 else:
+-                    status = "supervisor_lost_unconfirmed"
+-            else:
+-                status = "supervisor_lost_unconfirmed"
++                    process.resume()
++                    state = "supervisor_lost_unconfirmed"
++                    exited = process.wait(_remaining(run_deadline_ns))
++                    if not exited:
++                        state = "manager_timeout_unconfirmed"
++                    elif process.exit_code() == 0:
++                        outcome = _decode_outcome(mapping.read_result(), run_tag, activity_id)
+     except BaseException as exc:
+         failure = exc
+         errors.append(f"launcher:{type(exc).__name__}")
+     finally:
+         if process is not None:
+-            # A start exception may occur after OS creation. Probe the exact
+-            # Process object; no PID/name scan or optimistic cleanup claim.
+-            alive = _alive(process)
+-            if alive is not False and (launched or getattr(process, "pid", None) is not None):
++            try:
++                exited = process.wait(0)
++            except BaseException as exc:
++                errors.append(f"exit_query:{type(exc).__name__}")
++            if not exited:
+                 try:
+                     process.terminate()
+                 except BaseException as exc:
+                     errors.append(f"terminate:{type(exc).__name__}")
+                 try:
+-                    process.join(_remaining(deadline_ns))
++                    exited = process.wait(_remaining(deadline_ns))
+                 except BaseException as exc:
+-                    errors.append(f"terminate_join:{type(exc).__name__}")
+-                if _alive(process) is not False:
+-                    try:
+-                        process.kill()
+-                    except BaseException as exc:
+-                        errors.append(f"kill:{type(exc).__name__}")
+-                    try:
+-                        process.join(_remaining(deadline_ns))
+-                    except BaseException as exc:
+-                        errors.append(f"kill_join:{type(exc).__name__}")
+-            if _alive(process) is False:
+-                try:
+-                    process.close()
+-                except BaseException as exc:
+-                    errors.append(f"process_close:{type(exc).__name__}")
+-            elif launched or getattr(process, "pid", None) is not None:
++                    errors.append(f"exit_wait:{type(exc).__name__}")
++            if not exited:
+                 errors.append("supervisor_exit_unknown")
+-        for label, pipe in (("receive", receive), ("send", send)):
+-            if pipe is not None:
+-                try:
+-                    pipe.close()
+-                except BaseException as exc:
+-                    errors.append(f"{label}_close:{type(exc).__name__}")
+-
+-    if isinstance(failure, (KeyboardInterrupt, SystemExit)):
+-        failure.add_note("launcher cleanup: " + ",".join(errors))
++            try:
++                process.close()
++            except BaseException as exc:
++                errors.append(f"process_close:{type(exc).__name__}")
++        if mapping is not None:
++            try:
++                mapping.close()
++            except BaseException as exc:
++                errors.append(f"mapping_close:{type(exc).__name__}")
++
++    if outcome is not None:
++        outcome = replace(outcome, manager_pid=manager_pid, manager_created_100ns=manager_created)
++        if errors:
++            outcome = replace(
++                outcome,
++                state="settled_cleanup_error" if outcome.state == "settled" else outcome.state,
++                cleanup_incomplete=True,
++                cleanup_errors=outcome.cleanup_errors + tuple(errors),
++            )
++    else:
++        outcome = SessionOutcome(
++            run_tag, state, activity_id,
++            settled_seconds=None, reserved_seconds=None, pending_fold_seconds=None,
++            cleanup_incomplete=True,
++            error_type=type(failure).__name__ if failure is not None else state,
++            cleanup_errors=tuple(errors),
++            manager_pid=manager_pid, manager_created_100ns=manager_created,
++        )
++    if isinstance(failure, (KeyboardInterrupt, SystemExit, asyncio.CancelledError)):
++        failure.session_outcome = outcome
+         raise failure
+-    if outcome is not None:
+-        if errors:
+-            return replace(outcome, state="settled_cleanup_error" if outcome.state == "settled" else outcome.state, cleanup_incomplete=True, cleanup_errors=outcome.cleanup_errors + tuple(errors))
+-        return outcome
+-    return SessionOutcome(
+-        run_tag, status, activity_id,
+-        settled_seconds=None, reserved_seconds=None, pending_fold_seconds=None,
+-        cleanup_incomplete=True,
+-        error_type=type(failure).__name__ if failure is not None else status,
+-        cleanup_errors=tuple(errors),
+-    )
++    return outcome
+ 
+--- a/backend/app/worker/supervisor_ipc.py
++++ b/backend/app/worker/supervisor_ipc.py
+@@ -0,0 +1,161 @@
++"""Bounded one-shot SUP exchange through a named page-file mapping.
++
++The request is written before Resume. The parent reads the response only after
++the exact SUP process exits. No pipe read/write or background sender can block
++past the management deadline. A torn frame is never interpreted as a result.
++"""
++
++from __future__ import annotations
++
++import ctypes
++from ctypes import wintypes
++import hashlib
++import json
++import os
++import re
++import struct
++
++
++MAP_SIZE = 16_384
++SLOT_SIZE = MAP_SIZE // 2
++REQUEST_OFFSET = 0
++RESULT_OFFSET = SLOT_SIZE
++_FRAME_HEADER = 36  # uint32 length + SHA-256
++ERROR_ALREADY_EXISTS = 183
++PAGE_READWRITE = 0x04
++FILE_MAP_READ = 0x0004
++FILE_MAP_WRITE = 0x0002
++_MAPPING_NAME = re.compile(r"Local\\RetroLume\.SUP\.[0-9a-f]{32}\Z")
++
++
++class IpcUnknown(RuntimeError):
++    pass
++
++
++def validate_name(name: str) -> str:
++    if type(name) is not str or _MAPPING_NAME.fullmatch(name) is None:
++        raise ValueError("invalid SUP mapping name")
++    return name
++
++
++def pack_frame(value: dict, *, capacity: int = SLOT_SIZE) -> bytes:
++    if type(value) is not dict:
++        raise TypeError("SUP frame must be an object")
++    payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
++    if not payload or len(payload) > capacity - _FRAME_HEADER:
++        raise IpcUnknown("SUP frame exceeds bounded slot")
++    return struct.pack("<I", len(payload)) + hashlib.sha256(payload).digest() + payload
++
++
++def unpack_frame(raw: bytes, *, capacity: int = SLOT_SIZE) -> dict:
++    if type(raw) is not bytes or len(raw) != capacity:
++        raise IpcUnknown("SUP frame slot length invalid")
++    length = struct.unpack_from("<I", raw)[0]
++    if length == 0 or length > capacity - _FRAME_HEADER:
++        raise IpcUnknown("SUP frame incomplete or oversized")
++    expected = raw[4:36]
++    payload = raw[36:36 + length]
++    if hashlib.sha256(payload).digest() != expected:
++        raise IpcUnknown("SUP frame checksum mismatch")
++    try:
++        value = json.loads(payload.decode("utf-8"))
++    except (UnicodeError, ValueError) as exc:
++        raise IpcUnknown("SUP frame JSON invalid") from exc
++    if type(value) is not dict:
++        raise IpcUnknown("SUP frame root must be object")
++    return value
++
++
++def _kernel():
++    if os.name != "nt":
++        raise IpcUnknown("Windows mapping unavailable")
++    api = ctypes.WinDLL("kernel32", use_last_error=True)
++    api.CreateFileMappingW.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD,
++                                        wintypes.DWORD, wintypes.DWORD, wintypes.LPCWSTR]
++    api.CreateFileMappingW.restype = wintypes.HANDLE
++    api.OpenFileMappingW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
++    api.OpenFileMappingW.restype = wintypes.HANDLE
++    api.MapViewOfFile.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD,
++                                  wintypes.DWORD, ctypes.c_size_t]
++    api.MapViewOfFile.restype = ctypes.c_void_p
++    api.UnmapViewOfFile.argtypes = [ctypes.c_void_p]
++    api.UnmapViewOfFile.restype = wintypes.BOOL
++    api.CloseHandle.argtypes = [wintypes.HANDLE]
++    api.CloseHandle.restype = wintypes.BOOL
++    return api
++
++
++class NamedMapping:
++    def __init__(self, api, handle, view: int, name: str):
++        self.api = api
++        self.handle = handle
++        self.view = view
++        self.name = name
++
++    @classmethod
++    def create(cls, name: str) -> "NamedMapping":
++        validate_name(name)
++        api = _kernel()
++        ctypes.set_last_error(0)
++        handle = api.CreateFileMappingW(ctypes.c_void_p(-1), None, PAGE_READWRITE, 0, MAP_SIZE, name)
++        error = ctypes.get_last_error()
++        if not handle or error == ERROR_ALREADY_EXISTS:
++            if handle:
++                api.CloseHandle(handle)
++            raise IpcUnknown(f"SUP mapping create/collision: Windows error {error}")
++        view = api.MapViewOfFile(handle, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, MAP_SIZE)
++        if not view:
++            api.CloseHandle(handle)
++            raise IpcUnknown(f"SUP mapping view: Windows error {ctypes.get_last_error()}")
++        return cls(api, handle, view, name)
++
++    @classmethod
++    def open_existing(cls, name: str) -> "NamedMapping":
++        validate_name(name)
++        api = _kernel()
++        handle = api.OpenFileMappingW(FILE_MAP_READ | FILE_MAP_WRITE, False, name)
++        if not handle:
++            raise IpcUnknown(f"SUP mapping open: Windows error {ctypes.get_last_error()}")
++        view = api.MapViewOfFile(handle, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, MAP_SIZE)
++        if not view:
++            api.CloseHandle(handle)
++            raise IpcUnknown(f"SUP mapping view: Windows error {ctypes.get_last_error()}")
++        return cls(api, handle, view, name)
++
++    def _write(self, offset: int, value: dict) -> None:
++        frame = pack_frame(value)
++        # A nonzero length is the final commit marker; process exit is the read barrier.
++        ctypes.memset(self.view + offset, 0, 4)
++        ctypes.memmove(self.view + offset + 4, frame[4:], len(frame) - 4)
++        ctypes.memmove(self.view + offset, frame[:4], 4)
++
++    def _read(self, offset: int) -> dict:
++        return unpack_frame(ctypes.string_at(self.view + offset, SLOT_SIZE))
++
++    def write_request(self, value: dict) -> None:
++        self._write(REQUEST_OFFSET, value)
++
++    def read_request(self) -> dict:
++        return self._read(REQUEST_OFFSET)
++
++    def write_result(self, value: dict) -> None:
++        self._write(RESULT_OFFSET, value)
++
++    def read_result(self) -> dict:
++        return self._read(RESULT_OFFSET)
++
++    def close(self) -> None:
++        failures = []
++        if self.view:
++            if self.api.UnmapViewOfFile(self.view):
++                self.view = 0
++            else:
++                failures.append("UnmapViewOfFile")
++        if self.handle:
++            if self.api.CloseHandle(self.handle):
++                self.handle = None
++            else:
++                failures.append("CloseHandle(mapping)")
++        if failures:
++            raise IpcUnknown("/".join(failures))
++
+--- a/backend/app/worker/supervisor_main.py
++++ b/backend/app/worker/supervisor_main.py
+@@ -0,0 +1,88 @@
++"""Fixed SUP child module. Only a bounded named mapping carries runtime data."""
++
++from __future__ import annotations
++
++import asyncio
++from dataclasses import asdict, fields
++import re
++import sys
++import time
++from uuid import UUID
++
++from app.activities import PostgresAdmissionLedger
++from app.runtime import psycopg_compatible_loop_factory
++
++from .command import WorkerCommand
++from .session import SessionConfig, SingleWindowSupervisor
++from .supervisor_ipc import NamedMapping
++
++
++_RUN_TAG = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
++
++
++def _validated_request(value: dict, mapping_name: str):
++    if type(value) is not dict or value.get("protocol") != 1 or value.get("mapping_name") != mapping_name:
++        raise ValueError("SUP request identity mismatch")
++    activity_id = value.get("activity_id")
++    executor_id = value.get("executor_id")
++    run_tag = value.get("run_tag")
++    if type(activity_id) is not str or str(UUID(activity_id)) != activity_id:
++        raise ValueError("activity UUID invalid")
++    if type(executor_id) is not str or not 1 <= len(executor_id) <= 128:
++        raise ValueError("executor invalid")
++    if type(run_tag) is not str or _RUN_TAG.fullmatch(run_tag) is None:
++        raise ValueError("runTag invalid")
++    deadline_ns = value.get("deadline_ns")
++    if type(deadline_ns) is not int or deadline_ns <= time.monotonic_ns():
++        raise ValueError("management deadline expired")
++    ledger_data = value.get("ledger")
++    if type(ledger_data) is not dict or set(ledger_data) != {
++        "dsn", "connect_timeout_seconds", "statement_timeout_ms", "lock_timeout_ms",
++    }:
++        raise ValueError("ledger data invalid")
++    dsn = ledger_data["dsn"]
++    if type(dsn) is not str or not 1 <= len(dsn.encode("utf-8")) <= 4096:
++        raise ValueError("ledger connection data invalid")
++    config_data = value.get("config")
++    if type(config_data) is not dict or set(config_data) != {f.name for f in fields(SessionConfig)}:
++        raise ValueError("config data invalid")
++    command_data = value.get("command")
++    if type(command_data) is not dict or set(command_data) != {"task"}:
++        raise ValueError("command data invalid")
++    ledger = PostgresAdmissionLedger(**ledger_data)
++    config = SessionConfig(**config_data)
++    command = WorkerCommand(**command_data)
++    return ledger, config, activity_id, executor_id, command, run_tag, deadline_ns
++
++
++def main() -> int:
++    if len(sys.argv) != 2:
++        return 2
++    mapping = None
++    try:
++        mapping = NamedMapping.open_existing(sys.argv[1])
++        ledger, config, activity_id, executor_id, command, run_tag, deadline_ns = _validated_request(
++            mapping.read_request(), sys.argv[1],
++        )
++        with asyncio.Runner(loop_factory=psycopg_compatible_loop_factory) as runner:
++            outcome = runner.run(SingleWindowSupervisor(ledger, config).run_once(
++                activity_id, executor_id, command, run_tag=run_tag,
++                manager_deadline_ns=deadline_ns,
++            ))
++        mapping.write_result({"protocol": 1, "run_tag": run_tag, "activity_id": activity_id,
++                              "outcome": asdict(outcome)})
++        return 0
++    except BaseException:
++        # No traceback containing a DSN; the parent reports unknown and stops work.
++        return 1
++    finally:
++        if mapping is not None:
++            try:
++                mapping.close()
++            except BaseException:
++                return 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
++
+--- a/backend/app/worker/session.py
++++ b/backend/app/worker/session.py
+@@ -1,313 +1,320 @@
+-"""Windows 内部单窗 SUP。阻塞 Job 操作仅由 launcher 的专用子进程调用。"""
+-
+-from __future__ import annotations
+-
+-import asyncio
+-from dataclasses import dataclass
+-import math
+-import threading
+-import time
+-from typing import Protocol
+-
+-from app.activities import ActivityLease, CloseResult, SettleResult, WindowSnapshot
+-
+-from .command import WorkerCommand
+-from .windows_job import ActivityMutex, JobUnknown, NamedJob, job_name
+-
+-
+-_LOCAL_LOCKS_GUARD = threading.Lock()
+-_LOCAL_LOCKS: dict[str, threading.Lock] = {}
+-
+-
+-def _local_lock(activity_id: str) -> threading.Lock:
+-    with _LOCAL_LOCKS_GUARD:
+-        return _LOCAL_LOCKS.setdefault(activity_id, threading.Lock())
+-
+-
+-class WindowLedger(Protocol):
+-    async def inspect_window(self, activity_id: str) -> WindowSnapshot: ...
+-    async def claim_lease(self, activity_id: str, executor_id: str, *, lease_seconds: int, window_seconds: int) -> ActivityLease | None: ...
+-    async def begin_window_close(self, activity_id: str, executor_id: str, execution_generation: int) -> CloseResult: ...
+-    async def settle_execution_window(self, activity_id: str, executor_id: str, execution_generation: int, *, window_seconds: int, elapsed_seconds: float) -> SettleResult: ...
+-
+-
+-@dataclass(frozen=True)
+-class SessionConfig:
+-    window_seconds: int = 90
+-    request_timeout_seconds: float = 10.0
+-    stop_grace_seconds: float = 5.0
+-    startup_limit_seconds: float = 5.0
+-    manager_db_timeout_seconds: float = 5.0
+-    cleanup_seconds: float = 5.0
+-    mutex_wait_seconds: float = 3.0
+-    manager_overhead_seconds: float = 30.0
+-
+-    def __post_init__(self) -> None:
+-        if type(self.window_seconds) is not int or not 1 <= self.window_seconds <= 3600:
+-            raise ValueError("单窗秒数须在1到3600之间")
+-        values = (
+-            self.request_timeout_seconds, self.stop_grace_seconds,
+-            self.startup_limit_seconds, self.manager_db_timeout_seconds,
+-            self.cleanup_seconds, self.mutex_wait_seconds, self.manager_overhead_seconds,
+-        )
+-        if any(type(x) not in (int, float) or not math.isfinite(x) or x <= 0 for x in values):
+-            raise ValueError("监督期限必须是有限正数")
+-        if self.window_seconds <= self.startup_limit_seconds + self.request_timeout_seconds + self.stop_grace_seconds:
+-            raise ValueError("W必须大于启动上限+请求超时+停止预留")
+-        if self.manager_overhead_seconds <= self.mutex_wait_seconds + 3 * self.manager_db_timeout_seconds + self.cleanup_seconds:
+-            raise ValueError("管理总余量不足以覆盖互斥、DB与清理等待")
+-
+-    @property
+-    def manager_total_seconds(self) -> float:
+-        return self.window_seconds + self.manager_overhead_seconds
+-
+-
+-@dataclass(frozen=True)
+-class SessionOutcome:
+-    run_tag: str
+-    state: str
+-    activity_id: str
+-    generation: int | None = None
+-    job_name: str | None = None
+-    pid: int | None = None
+-    active_processes_at_end: int | None = None
+-    settled_seconds: int | None = None  # 已确认写入 S；未知时为 None。
+-    reserved_seconds: int | None = None  # 已确认仍占 R；结算响应未知时为 None。
+-    pending_fold_seconds: int | None = None  # 以后按原规则保守折叠，未计入 S。
+-    elapsed_seconds: float | None = None
+-    cleanup_incomplete: bool = False
+-    error_type: str | None = None
+-    cleanup_errors: tuple[str, ...] = ()
+-
+-
+-class _StopSession(Exception):
+-    """已记录预期终态，继续统一清理后才构造结果。"""
+-
+-
+-class ManagerDeadline(RuntimeError):
+-    pass
+-
+-
+-class SingleWindowSupervisor:
+-    """仅供 launcher 子进程执行；任何旧树不明都不认领新代次。"""
+-
+-    def __init__(self, ledger: WindowLedger, config: SessionConfig):
+-        self.ledger = ledger
+-        self.config = config
+-
+-    @staticmethod
+-    def _remaining(deadline_ns: int) -> float:
+-        remaining = (deadline_ns - time.monotonic_ns()) / 1_000_000_000
+-        if remaining <= 0:
+-            raise ManagerDeadline("SUP管理总期限已耗尽")
+-        return remaining
+-
+-    async def _db(self, awaitable, deadline_ns: int):
+-        try:
+-            timeout = min(self.config.manager_db_timeout_seconds, self._remaining(deadline_ns))
+-        except BaseException:
+-            if hasattr(awaitable, "close"):
+-                awaitable.close()
+-            raise
+-        return await asyncio.wait_for(awaitable, timeout=timeout)
+-
+-    async def run_once(
+-        self,
+-        activity_id: str,
+-        executor_id: str,
+-        command: WorkerCommand,
+-        *,
+-        run_tag: str,
+-        manager_deadline_ns: int,
+-    ) -> SessionOutcome:
+-        # 产品调用只经 launcher.run_supervised_window；此方法供子进程与纯替身测试。
+-        if type(command) is not WorkerCommand:
+-            raise TypeError("SUP只接受已校验的WorkerCommand纯数据")
+-        if not run_tag or len(run_tag) > 64 or not run_tag.isascii() or not run_tag.replace("-", "").replace("_", "").isalnum():
+-            raise ValueError("run_tag须是受限非空ASCII标识")
+-        identity_name = job_name(activity_id, 0)  # 在任何副作用前验证 UUID。
+-        del identity_name
+-        self._remaining(manager_deadline_ns)
+-
+-        config = self.config
+-        lease: ActivityLease | None = None
+-        job: NamedJob | None = None
+-        owner: ActivityMutex | None = None
+-        pid: int | None = None
+-        name: str | None = None
+-        t0_ns: int | None = None
+-        tree_empty = False
+-        created_job = False
+-        state = "not_started"
+-        error_type: str | None = None
+-        cleanup_errors: list[str] = []
+-        settled_seconds: int | None = 0
+-        reserved_seconds: int | None = 0
+-        pending_fold_seconds: int | None = 0
+-        elapsed_seconds: float | None = None
+-        settlement_attempted = False
+-        claim_attempted = False
+-        interrupted: BaseException | None = None
+-
+-        local_owner = _local_lock(activity_id)
+-        if not local_owner.acquire(blocking=False):
+-            return SessionOutcome(run_tag, "local_owner_busy", activity_id)
+-        try:
+-            owner = ActivityMutex(activity_id, wait_seconds=min(config.mutex_wait_seconds, self._remaining(manager_deadline_ns)))
+-            snapshot = await self._db(self.ledger.inspect_window(activity_id), manager_deadline_ns)
+-            if snapshot.status == "cancelled":
+-                state = "cancelled"
+-                raise _StopSession
+-            if snapshot.status == "running":
+-                old = NamedJob.open_existing(activity_id, snapshot.execution_generation)
+-                old_failure: BaseException | None = None
+-                try:
+-                    old.terminate()
+-                    old_deadline = min(manager_deadline_ns, time.monotonic_ns() + int(config.cleanup_seconds * 1e9))
+-                    if not old.wait_empty_until(old_deadline):
+-                        raise JobUnknown("旧Job整树未确认退出")
+-                except BaseException as exc:
+-                    old_failure = exc
+-                try:
+-                    old.close()
+-                except BaseException as exc:
+-                    if old_failure is None:
+-                        old_failure = exc
+-                    else:
+-                        cleanup_errors.append(type(exc).__name__)
+-                if old_failure is not None:
+-                    raise old_failure
+-            elif snapshot.status != "pending":
+-                raise JobUnknown("未知活动状态")
+-
+-            t0_ns = time.monotonic_ns()  # claim前固定；响应丢失不spawn或重领。
+-            claim_attempted = True
+-            lease = await self._db(self.ledger.claim_lease(
+-                activity_id, executor_id,
+-                lease_seconds=config.window_seconds,
+-                window_seconds=config.window_seconds,
+-            ), manager_deadline_ns)
+-            if lease is None:
+-                state = "budget_exhausted"
+-                raise _StopSession
+-            window = lease.window_seconds
+-            reserved_seconds = window
+-            pending_fold_seconds = window
+-            deadline_ns = t0_ns + window * 1_000_000_000
+-            stop_ns = min(
+-                deadline_ns - int(config.stop_grace_seconds * 1e9),
+-                manager_deadline_ns - int(config.cleanup_seconds * 1e9),
+-            )
+-            if window <= config.startup_limit_seconds + config.request_timeout_seconds + config.stop_grace_seconds:
+-                state = "partial_window_too_small"
+-                raise _StopSession
+-            if time.monotonic_ns() >= min(t0_ns + int(config.startup_limit_seconds * 1e9), stop_ns):
+-                state = "startup_deadline"
+-                raise _StopSession
+-
+-            self._remaining(manager_deadline_ns)
+-            job = NamedJob.create(activity_id, lease.execution_generation)
+-            created_job = True
+-            name = job.name
+-            pid = job.spawn_suspended(command.argv(), cwd=command.cwd)
+-            if time.monotonic_ns() >= min(t0_ns + int(config.startup_limit_seconds * 1e9), stop_ns):
+-                state = "startup_deadline"
+-                raise _StopSession
+-            # 唯一 Job/悬停 worker 已登记且截止固定，才 armed/Resume。
+-            job.resume()
+-            state = "running"
+-            tree_empty = job.wait_empty_until(stop_ns)
+-            if not tree_empty:
+-                job.terminate()
+-                tree_empty = job.wait_empty_until(min(deadline_ns, manager_deadline_ns))
+-                state = "stopped_at_deadline" if tree_empty else "overrun_unconfirmed"
+-                elapsed_seconds = (time.monotonic_ns() - t0_ns) / 1e9
+-                raise _StopSession
+-
+-            t1_ns = time.monotonic_ns()
+-            elapsed_seconds = (t1_ns - t0_ns) / 1e9
+-            observed = (t1_ns - t0_ns + 999_999_999) // 1_000_000_000
+-            if job.primary_exit_code() != 0:
+-                state = "worker_failed_full_reservation"
+-                raise _StopSession
+-            if not 1 <= observed <= window:
+-                state = "elapsed_violation_full_reservation"
+-                raise _StopSession
+-            # 树已确认0且主进程成功；先关闭自身全部Job/进程句柄，避免
+-            # 后续清理失败发生在部分退款之后。活动互斥仍保持到结算结束。
+-            job.close()
+-            job = None
+-            await self._db(self.ledger.begin_window_close(activity_id, executor_id, lease.execution_generation), manager_deadline_ns)
+-            settlement_attempted = True
+-            try:
+-                settled = await self._db(self.ledger.settle_execution_window(
+-                    activity_id, executor_id, lease.execution_generation,
+-                    window_seconds=window, elapsed_seconds=elapsed_seconds,
+-                ), manager_deadline_ns)
+-            except Exception:
+-                # 首次提交响应可能丢失，仅相同 G/W/C 重试一次。
+-                settled = await self._db(self.ledger.settle_execution_window(
+-                    activity_id, executor_id, lease.execution_generation,
+-                    window_seconds=window, elapsed_seconds=elapsed_seconds,
+-                ), manager_deadline_ns)
+-            if settled not in (SettleResult.SETTLED, SettleResult.ALREADY_SETTLED):
+-                state = "settlement_unconfirmed"
+-                reserved_seconds = None
+-                pending_fold_seconds = None
+-                raise _StopSession
+-            state = "settled"
+-            settled_seconds = observed
+-            reserved_seconds = 0
+-            pending_fold_seconds = 0
+-        except _StopSession:
+-            pass
+-        except BaseException as exc:
+-            interrupted = exc if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt, SystemExit)) else None
+-            error_type = type(exc).__name__
+-            state = "cancelled_by_caller" if isinstance(exc, asyncio.CancelledError) else "failed_closed"
+-            if settlement_attempted or (claim_attempted and lease is None):
+-                settled_seconds = None
+-                reserved_seconds = None
+-                pending_fold_seconds = None
+-        finally:
+-            if job is not None:
+-                if not tree_empty:
+-                    try:
+-                        job.terminate()
+-                    except BaseException as exc:
+-                        cleanup_errors.append(f"terminate:{type(exc).__name__}")
+-                    try:
+-                        limit = min(manager_deadline_ns, time.monotonic_ns() + int(config.cleanup_seconds * 1e9))
+-                        tree_empty = job.wait_empty_until(limit)
+-                    except BaseException as exc:
+-                        cleanup_errors.append(f"query:{type(exc).__name__}")
+-                try:
+-                    job.close()
+-                except BaseException as exc:
+-                    cleanup_errors.append(f"job_close:{type(exc).__name__}")
+-            if owner is not None:
+-                try:
+-                    owner.close()
+-                except BaseException as exc:
+-                    cleanup_errors.append(f"owner_close:{type(exc).__name__}")
+-            try:
+-                local_owner.release()
+-            except BaseException as exc:
+-                cleanup_errors.append(f"local_owner_release:{type(exc).__name__}")
+-
+-        incomplete = (created_job and not tree_empty) or bool(cleanup_errors)
+-        if incomplete and state == "settled":
+-            state = "settled_cleanup_error"  # 已确认结算不能伪装成未结算。
+-        elif incomplete and state not in ("settlement_unconfirmed", "cancelled_by_caller"):
+-            state = "failed_closed"
+-        result = SessionOutcome(
+-            run_tag, state, activity_id,
+-            lease.execution_generation if lease else None,
+-            name, pid, 0 if created_job and tree_empty else None,
+-            settled_seconds, reserved_seconds, pending_fold_seconds,
+-            elapsed_seconds, incomplete, error_type, tuple(cleanup_errors),
+-        )
+-        if interrupted is not None:
+-            interrupted.session_outcome = result
+-            raise interrupted
+-        return result
++"""Windows 内部单窗 SUP。阻塞 Job 操作仅由 launcher 的专用子进程调用。"""
++
++from __future__ import annotations
++
++import asyncio
++from dataclasses import dataclass
++import math
++import threading
++import time
++from typing import Protocol
++
++from app.activities import ActivityLease, CloseResult, SettleResult, WindowSnapshot
++
++from .command import WorkerCommand
++from .windows_job import ActivityMutex, JobUnknown, NamedJob, job_name
++
++
++_LOCAL_LOCKS_GUARD = threading.Lock()
++_LOCAL_LOCKS: dict[str, threading.Lock] = {}
++
++
++def _local_lock(activity_id: str) -> threading.Lock:
++    with _LOCAL_LOCKS_GUARD:
++        return _LOCAL_LOCKS.setdefault(activity_id, threading.Lock())
++
++
++class WindowLedger(Protocol):
++    async def inspect_window(self, activity_id: str) -> WindowSnapshot: ...
++    async def claim_lease(self, activity_id: str, executor_id: str, *, lease_seconds: int, window_seconds: int) -> ActivityLease | None: ...
++    async def begin_window_close(self, activity_id: str, executor_id: str, execution_generation: int) -> CloseResult: ...
++    async def settle_execution_window(self, activity_id: str, executor_id: str, execution_generation: int, *, window_seconds: int, elapsed_seconds: float) -> SettleResult: ...
++
++
++@dataclass(frozen=True)
++class SessionConfig:
++    window_seconds: int = 90
++    request_timeout_seconds: float = 10.0
++    stop_grace_seconds: float = 5.0
++    startup_limit_seconds: float = 5.0
++    manager_db_timeout_seconds: float = 5.0
++    cleanup_seconds: float = 5.0
++    mutex_wait_seconds: float = 3.0
++    manager_overhead_seconds: float = 30.0
++
++    def __post_init__(self) -> None:
++        if type(self.window_seconds) is not int or not 1 <= self.window_seconds <= 3600:
++            raise ValueError("单窗秒数须在1到3600之间")
++        values = (
++            self.request_timeout_seconds, self.stop_grace_seconds,
++            self.startup_limit_seconds, self.manager_db_timeout_seconds,
++            self.cleanup_seconds, self.mutex_wait_seconds, self.manager_overhead_seconds,
++        )
++        if any(type(x) not in (int, float) or not math.isfinite(x) or x <= 0 for x in values):
++            raise ValueError("监督期限必须是有限正数")
++        if self.window_seconds <= self.startup_limit_seconds + self.request_timeout_seconds + self.stop_grace_seconds:
++            raise ValueError("W必须大于启动上限+请求超时+停止预留")
++        if self.manager_overhead_seconds <= self.mutex_wait_seconds + 3 * self.manager_db_timeout_seconds + self.cleanup_seconds:
++            raise ValueError("管理总余量不足以覆盖互斥、DB与清理等待")
++
++    @property
++    def manager_total_seconds(self) -> float:
++        return self.window_seconds + self.manager_overhead_seconds
++
++
++@dataclass(frozen=True)
++class SessionOutcome:
++    run_tag: str
++    state: str
++    activity_id: str
++    generation: int | None = None
++    job_name: str | None = None
++    pid: int | None = None
++    active_processes_at_end: int | None = None
++    settled_seconds: int | None = None  # 已确认写入 S；未知时为 None。
++    reserved_seconds: int | None = None  # 已确认仍占 R；结算响应未知时为 None。
++    pending_fold_seconds: int | None = None  # 以后按原规则保守折叠，未计入 S。
++    elapsed_seconds: float | None = None
++    cleanup_incomplete: bool = False
++    error_type: str | None = None
++    cleanup_errors: tuple[str, ...] = ()
++    timing_diagnostic: tuple[int, int, int, int, int] | None = None
++    manager_pid: int | None = None
++    manager_created_100ns: int | None = None
++
++
++class _StopSession(Exception):
++    """已记录预期终态，继续统一清理后才构造结果。"""
++
++
++class ManagerDeadline(RuntimeError):
++    pass
++
++
++class SingleWindowSupervisor:
++    """仅供 launcher 子进程执行；任何旧树不明都不认领新代次。"""
++
++    def __init__(self, ledger: WindowLedger, config: SessionConfig):
++        self.ledger = ledger
++        self.config = config
++
++    @staticmethod
++    def _remaining(deadline_ns: int) -> float:
++        remaining = (deadline_ns - time.monotonic_ns()) / 1_000_000_000
++        if remaining <= 0:
++            raise ManagerDeadline("SUP管理总期限已耗尽")
++        return remaining
++
++    async def _db(self, awaitable, deadline_ns: int):
++        try:
++            timeout = min(self.config.manager_db_timeout_seconds, self._remaining(deadline_ns))
++        except BaseException:
++            if hasattr(awaitable, "close"):
++                awaitable.close()
++            raise
++        return await asyncio.wait_for(awaitable, timeout=timeout)
++
++    async def run_once(
++        self,
++        activity_id: str,
++        executor_id: str,
++        command: WorkerCommand,
++        *,
++        run_tag: str,
++        manager_deadline_ns: int,
++    ) -> SessionOutcome:
++        # 产品调用只经 launcher.run_supervised_window；此方法供子进程与纯替身测试。
++        if type(command) is not WorkerCommand:
++            raise TypeError("SUP只接受已校验的WorkerCommand纯数据")
++        if not run_tag or len(run_tag) > 64 or not run_tag.isascii() or not run_tag.replace("-", "").replace("_", "").isalnum():
++            raise ValueError("run_tag须是受限非空ASCII标识")
++        identity_name = job_name(activity_id, 0)  # 在任何副作用前验证 UUID。
++        del identity_name
++        self._remaining(manager_deadline_ns)
++
++        config = self.config
++        lease: ActivityLease | None = None
++        job: NamedJob | None = None
++        owner: ActivityMutex | None = None
++        pid: int | None = None
++        name: str | None = None
++        t0_ns: int | None = None
++        tree_empty = False
++        created_job = False
++        state = "not_started"
++        error_type: str | None = None
++        cleanup_errors: list[str] = []
++        settled_seconds: int | None = 0
++        reserved_seconds: int | None = 0
++        pending_fold_seconds: int | None = 0
++        elapsed_seconds: float | None = None
++        timing_diagnostic: tuple[int, int, int, int, int] | None = None
++        settlement_attempted = False
++        claim_attempted = False
++        interrupted: BaseException | None = None
++
++        local_owner = _local_lock(activity_id)
++        if not local_owner.acquire(blocking=False):
++            return SessionOutcome(run_tag, "local_owner_busy", activity_id)
++        try:
++            owner = ActivityMutex(activity_id, wait_seconds=min(config.mutex_wait_seconds, self._remaining(manager_deadline_ns)))
++            snapshot = await self._db(self.ledger.inspect_window(activity_id), manager_deadline_ns)
++            if snapshot.status == "cancelled":
++                state = "cancelled"
++                raise _StopSession
++            if snapshot.status == "running":
++                old = NamedJob.open_existing(activity_id, snapshot.execution_generation)
++                old_failure: BaseException | None = None
++                try:
++                    old.terminate()
++                    old_deadline = min(manager_deadline_ns, time.monotonic_ns() + int(config.cleanup_seconds * 1e9))
++                    if not old.wait_empty_until(old_deadline):
++                        raise JobUnknown("旧Job整树未确认退出")
++                except BaseException as exc:
++                    old_failure = exc
++                try:
++                    old.close()
++                except BaseException as exc:
++                    if old_failure is None:
++                        old_failure = exc
++                    else:
++                        cleanup_errors.append(type(exc).__name__)
++                if old_failure is not None:
++                    raise old_failure
++            elif snapshot.status != "pending":
++                raise JobUnknown("未知活动状态")
++
++            t0_ns = time.monotonic_ns()  # claim前固定；响应丢失不spawn或重领。
++            claim_attempted = True
++            lease = await self._db(self.ledger.claim_lease(
++                activity_id, executor_id,
++                lease_seconds=config.window_seconds,
++                window_seconds=config.window_seconds,
++            ), manager_deadline_ns)
++            if lease is None:
++                state = "budget_exhausted"
++                raise _StopSession
++            window = lease.window_seconds
++            reserved_seconds = window
++            pending_fold_seconds = window
++            deadline_ns = t0_ns + window * 1_000_000_000
++            stop_ns = min(
++                deadline_ns - int(config.stop_grace_seconds * 1e9),
++                manager_deadline_ns - int(config.cleanup_seconds * 1e9),
++            )
++            if window <= config.startup_limit_seconds + config.request_timeout_seconds + config.stop_grace_seconds:
++                state = "partial_window_too_small"
++                raise _StopSession
++            if time.monotonic_ns() >= min(t0_ns + int(config.startup_limit_seconds * 1e9), stop_ns):
++                state = "startup_deadline"
++                raise _StopSession
++
++            self._remaining(manager_deadline_ns)
++            job = NamedJob.create(activity_id, lease.execution_generation)
++            created_job = True
++            name = job.name
++            pid = job.spawn_suspended(command.argv(), cwd=command.cwd)
++            if time.monotonic_ns() >= min(t0_ns + int(config.startup_limit_seconds * 1e9), stop_ns):
++                state = "startup_deadline"
++                raise _StopSession
++            # 唯一 Job/悬停 worker 已登记且截止固定，才 armed/Resume。
++            job.resume()
++            state = "running"
++            tree_empty = job.wait_empty_until(stop_ns)
++            if not tree_empty:
++                job.terminate()
++                tree_empty = job.wait_empty_until(min(deadline_ns, manager_deadline_ns))
++                state = "stopped_at_deadline" if tree_empty else "overrun_unconfirmed"
++                elapsed_seconds = (time.monotonic_ns() - t0_ns) / 1e9
++                raise _StopSession
++
++            t1_ns = time.monotonic_ns()
++            elapsed_seconds = (t1_ns - t0_ns) / 1e9
++            observed = (t1_ns - t0_ns + 999_999_999) // 1_000_000_000
++            timing_diagnostic = (t0_ns, t1_ns, t1_ns - t0_ns, observed, window)
++            if job.primary_exit_code() != 0:
++                state = "worker_failed_full_reservation"
++                raise _StopSession
++            if not 1 <= observed <= window:
++                state = "elapsed_violation_full_reservation"
++                raise _StopSession
++            # 树已确认0且主进程成功；先关闭自身全部Job/进程句柄，避免
++            # 后续清理失败发生在部分退款之后。活动互斥仍保持到结算结束。
++            job.close()
++            job = None
++            await self._db(self.ledger.begin_window_close(activity_id, executor_id, lease.execution_generation), manager_deadline_ns)
++            settlement_attempted = True
++            try:
++                settled = await self._db(self.ledger.settle_execution_window(
++                    activity_id, executor_id, lease.execution_generation,
++                    window_seconds=window, elapsed_seconds=elapsed_seconds,
++                ), manager_deadline_ns)
++            except Exception:
++                # 首次提交响应可能丢失，仅相同 G/W/C 重试一次。
++                settled = await self._db(self.ledger.settle_execution_window(
++                    activity_id, executor_id, lease.execution_generation,
++                    window_seconds=window, elapsed_seconds=elapsed_seconds,
++                ), manager_deadline_ns)
++            if settled not in (SettleResult.SETTLED, SettleResult.ALREADY_SETTLED):
++                state = "settlement_unconfirmed"
++                reserved_seconds = None
++                pending_fold_seconds = None
++                raise _StopSession
++            state = "settled"
++            settled_seconds = observed
++            reserved_seconds = 0
++            pending_fold_seconds = 0
++        except _StopSession:
++            pass
++        except BaseException as exc:
++            interrupted = exc if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt, SystemExit)) else None
++            error_type = type(exc).__name__
++            state = "cancelled_by_caller" if isinstance(exc, asyncio.CancelledError) else "failed_closed"
++            if settlement_attempted or (claim_attempted and lease is None):
++                settled_seconds = None
++                reserved_seconds = None
++                pending_fold_seconds = None
++        finally:
++            if job is not None:
++                if not tree_empty:
++                    try:
++                        job.terminate()
++                    except BaseException as exc:
++                        cleanup_errors.append(f"terminate:{type(exc).__name__}")
++                    try:
++                        limit = min(manager_deadline_ns, time.monotonic_ns() + int(config.cleanup_seconds * 1e9))
++                        tree_empty = job.wait_empty_until(limit)
++                    except BaseException as exc:
++                        cleanup_errors.append(f"query:{type(exc).__name__}")
++                try:
++                    job.close()
++                except BaseException as exc:
++                    cleanup_errors.append(f"job_close:{type(exc).__name__}")
++            if owner is not None:
++                try:
++                    owner.close()
++                except BaseException as exc:
++                    cleanup_errors.append(f"owner_close:{type(exc).__name__}")
++            try:
++                local_owner.release()
++            except BaseException as exc:
++                cleanup_errors.append(f"local_owner_release:{type(exc).__name__}")
++
++        incomplete = (created_job and not tree_empty) or bool(cleanup_errors)
++        if incomplete and state == "settled":
++            state = "settled_cleanup_error"  # 已确认结算不能伪装成未结算。
++        elif incomplete and state not in ("settlement_unconfirmed", "cancelled_by_caller"):
++            state = "failed_closed"
++        result = SessionOutcome(
++            run_tag, state, activity_id,
++            lease.execution_generation if lease else None,
++            name, pid, 0 if created_job and tree_empty else None,
++            settled_seconds, reserved_seconds, pending_fold_seconds,
++            elapsed_seconds, incomplete, error_type, tuple(cleanup_errors),
++            timing_diagnostic,
++        )
++        if interrupted is not None:
++            interrupted.session_outcome = result
++            raise interrupted
++        return result
++
+--- a/backend/tests/fixtures/task083/job_control.py
++++ b/backend/tests/fixtures/task083/job_control.py
+@@ -13,6 +13,21 @@
+ from uuid import uuid4
+ 
+ from app.worker.windows_job import NamedJob, _FILETIME, job_name
++
++
++ERROR_ALREADY_EXISTS = 183
++
++
++def _new_event_or_reject(kernel, name: str):
++    """Never arm an event that another scenario already created."""
++    ctypes.set_last_error(0)
++    handle = kernel.CreateEventW(None, True, False, name)
++    code = ctypes.get_last_error()
++    if not handle or code == ERROR_ALREADY_EXISTS:
++        if handle:
++            kernel.CloseHandle(handle)
++        raise JobScenarioUnsafe(f"control event create/collision: {name}, error={code}")
++    return handle
+ 
+ 
+ async def verify_last_handle(fixture: Path, backend: Path) -> dict:
+@@ -38,9 +53,7 @@
+     starter.CloseHandle.argtypes = [wintypes.HANDLE]
+     starter.CloseHandle.restype = wintypes.BOOL
+     start_name = f"Local\\RetroLume.Task083.{activity_id}.G{generation}.{run_tag}.Start"
+-    start_event = starter.CreateEventW(None, True, False, start_name)
+-    if not start_event:
+-        raise AssertionError("无法建立独立Start截止控制事件")
++    start_event = _new_event_or_reject(starter, start_name)
+     proc = None
+     try:
+         proc = await asyncio.wait_for(asyncio.create_subprocess_exec(
+@@ -208,13 +221,7 @@
+     try:
+         for suffix in ("Start", "Arm"):
+             name = f"{base}.{suffix}"
+-            ctypes.set_last_error(0)
+-            event = kernel.CreateEventW(None, True, False, name)
+-            if not event or ctypes.get_last_error() == 183:
+-                if event:
+-                    kernel.CloseHandle(event)
+-                raise JobScenarioUnsafe(f"event collision: {suffix}")
+-            events.append(event)
++            events.append(_new_event_or_reject(kernel, name))
+         child = Path(__file__).with_name("scenario_child.py")
+         child_env = os.environ.copy()
+         child_env["__PYVENV_LAUNCHER__"] = sys.executable
+--- a/backend/tests/fixtures/task083/offline_unit.py
++++ b/backend/tests/fixtures/task083/offline_unit.py
+@@ -3,6 +3,8 @@
+ from __future__ import annotations
+ 
+ import asyncio
++import hashlib
++import json
+ from datetime import datetime, timedelta, timezone
+ from pathlib import Path
+ import sys
+@@ -73,6 +75,8 @@
+         self.close_error = close_error
+         self.external_events = external_events
+         self.events = []
++        self.sleep_before_ns = None
++        self.sleep_after_ns = None
+ 
+     def spawn_suspended(self, command, *, cwd):
+         self.events.append("spawn_suspended")
+@@ -84,7 +88,9 @@
+     def wait_empty_until(self, deadline):
+         self.events.append("query")
+         if not self.hang and not self.terminated:
++            self.sleep_before_ns = time.monotonic_ns()
+             time.sleep(0.002)  # 纯替身模拟正耗时；真实C0仍拒绝部分退款。
++            self.sleep_after_ns = time.monotonic_ns()
+         return not self.hang or self.terminated
+ 
+     def terminate(self):
+@@ -161,6 +167,21 @@
+         ledger = Ledger(settle_lost_once=True)
+         job = FakeJob(external_events=ledger.events)
+         result = await self.run_fake(ledger, job)
++        session_module = sys.modules["app.worker.session"]
++        locations = {}
++        for label, source in (("session", Path(session_module.__file__)), ("test", Path(__file__))):
++            locations[label] = {"path": str(source.resolve()), "sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
++        print("TASK083_05_DIAGNOSTIC " + json.dumps({
++            "imports": locations, "state": result.state,
++            "t0_ns": result.timing_diagnostic[0] if result.timing_diagnostic else None,
++            "t1_ns": result.timing_diagnostic[1] if result.timing_diagnostic else None,
++            "delta_ns": result.timing_diagnostic[2] if result.timing_diagnostic else None,
++            "observed": result.timing_diagnostic[3] if result.timing_diagnostic else None,
++            "window": result.timing_diagnostic[4] if result.timing_diagnostic else ledger.window,
++            "job_events": job.events,
++            "sleep_before_ns": job.sleep_before_ns, "sleep_after_ns": job.sleep_after_ns,
++            "elapsed_seconds": result.elapsed_seconds,
++        }, sort_keys=True), flush=True)
+         self.assertEqual(result.state, "settled")
+         self.assertEqual((result.settled_seconds, result.reserved_seconds, result.pending_fold_seconds), (1, 0, 0))
+         self.assertEqual(result.active_processes_at_end, 0)
+@@ -217,127 +238,7 @@
+             await captured[0].call(None, None)
+ 
+ 
+-class LauncherUnitTests(unittest.TestCase):
+-    def test_08_fake_process_timeout_terminates_exact_owner_without_charge_claim(self):
+-        class Pipe:
+-            def close(self): pass
+-            def poll(self, timeout): return False
+-
+-        class Process:
+-            def __init__(self):
+-                self.alive = True
+-                self.calls = []
+-                self.exitcode = None
+-
+-            def start(self): self.calls.append("start")
+-            def join(self, timeout): self.calls.append("join")
+-            def is_alive(self): return self.alive
+-            def terminate(self): self.calls.append("terminate"); self.alive = False
+-            def kill(self): self.calls.append("kill"); self.alive = False
+-            def close(self): self.calls.append("close")
+-
+-        class Context:
+-            def __init__(self): self.process = Process()
+-            def Pipe(self, duplex): return Pipe(), Pipe()
+-            def Process(self, **kwargs): return self.process
+-
+-        context = Context()
+-        with patch("app.worker.launcher.multiprocessing.get_context", return_value=context):
+-            result = run_supervised_window(
+-                PostgresAdmissionLedger("synthetic-not-connected"),
+-                SessionConfig(), str(uuid4()), "worker-1",
+-                WorkerCommand(),
+-                run_tag="offline-launcher",
+-            )
+-        self.assertEqual(result.state, "manager_timeout_unconfirmed")
+-        self.assertIsNone(result.reserved_seconds)
+-        self.assertIn("terminate", context.process.calls)
+-        self.assertNotIn("kill", context.process.calls)
+-        self.assertTrue(result.cleanup_incomplete)
+-        self.assertEqual((result.settled_seconds, result.reserved_seconds, result.pending_fold_seconds), (None, None, None))
+-
+-    def test_09_partial_process_start_failure_stops_exact_owner(self):
+-        class Pipe:
+-            def close(self): pass
+-        class Process:
+-            pid = 123
+-            exitcode = None
+-            def __init__(self): self.alive = True; self.calls = []
+-            def start(self): self.calls.append("start"); raise OSError("partial start")
+-            def is_alive(self): return self.alive
+-            def terminate(self): self.calls.append("terminate"); self.alive = False
+-            def join(self, timeout): self.calls.append(("join", timeout))
+-            def close(self): self.calls.append("close")
+-        class Context:
+-            def __init__(self): self.process = Process()
+-            def Pipe(self, duplex): return Pipe(), Pipe()
+-            def Process(self, **kwargs): return self.process
+-        context = Context()
+-        with patch("app.worker.launcher.multiprocessing.get_context", return_value=context):
+-            result = run_supervised_window(
+-                PostgresAdmissionLedger("synthetic-not-connected"), SessionConfig(),
+-                str(uuid4()), "worker-1", WorkerCommand(), run_tag="partial-start",
+-            )
+-        self.assertEqual(result.state, "launcher_failed_unconfirmed")
+-        self.assertTrue(result.cleanup_incomplete)
+-        self.assertIn("terminate", context.process.calls)
+-        self.assertEqual(result.reserved_seconds, None)
+-
+-    def test_10_recv_failure_is_unconfirmed_and_closes_both_pipes(self):
+-        class Pipe:
+-            def __init__(self): self.closed = False
+-            def close(self): self.closed = True
+-            def poll(self, timeout): return True
+-            def recv(self): raise EOFError("partial frame")
+-        class Process:
+-            pid = 123
+-            exitcode = 0
+-            def start(self): pass
+-            def join(self, timeout): pass
+-            def is_alive(self): return False
+-            def close(self): pass
+-        class Context:
+-            def __init__(self): self.pipes = (Pipe(), Pipe())
+-            def Pipe(self, duplex): return self.pipes
+-            def Process(self, **kwargs): return Process()
+-        context = Context()
+-        with patch("app.worker.launcher.multiprocessing.get_context", return_value=context):
+-            result = run_supervised_window(
+-                PostgresAdmissionLedger("synthetic-not-connected"), SessionConfig(),
+-                str(uuid4()), "worker-1", WorkerCommand(), run_tag="recv-fail",
+-            )
+-        self.assertTrue(result.cleanup_incomplete)
+-        self.assertIsNone(result.settled_seconds)
+-        self.assertTrue(all(pipe.closed for pipe in context.pipes))
+-
+-    def test_11_all_parent_joins_share_deadline(self):
+-        class Pipe:
+-            def close(self): pass
+-        class Process:
+-            pid = 123
+-            exitcode = None
+-            def __init__(self): self.alive = True; self.joins = []
+-            def start(self): pass
+-            def join(self, timeout): self.joins.append(timeout)
+-            def is_alive(self): return self.alive
+-            def terminate(self): pass
+-            def kill(self): self.alive = False
+-            def close(self): pass
+-        class Context:
+-            def __init__(self): self.process = Process()
+-            def Pipe(self, duplex): return Pipe(), Pipe()
+-            def Process(self, **kwargs): return self.process
+-        context = Context()
+-        config = SessionConfig()
+-        with patch("app.worker.launcher.multiprocessing.get_context", return_value=context):
+-            result = run_supervised_window(
+-                PostgresAdmissionLedger("synthetic-not-connected"), config,
+-                str(uuid4()), "worker-1", WorkerCommand(), run_tag="bounded-joins",
+-            )
+-        self.assertTrue(result.cleanup_incomplete)
+-        self.assertEqual(len(context.process.joins), 3)
+-        self.assertLessEqual(context.process.joins[0], config.manager_total_seconds - config.cleanup_seconds)
+-        self.assertTrue(all(0 <= value <= config.manager_total_seconds for value in context.process.joins))
++# The old multiprocessing launcher fakes were retired with the fixed SUP handoff.
+ 
+ 
+ class FixedEntryTests(unittest.IsolatedAsyncioTestCase):
+--- a/backend/tests/fixtures/task083/focused_unit.py
++++ b/backend/tests/fixtures/task083/focused_unit.py
+@@ -0,0 +1,267 @@
++"""TASK-083 focused repair 03: pure substitutes; no OS object or database."""
++
++from __future__ import annotations
++
++import asyncio
++from dataclasses import asdict
++from pathlib import Path
++import sys
++import time
++import unittest
++from unittest.mock import patch
++from uuid import uuid4
++
++BACKEND = Path(__file__).resolve().parents[3]
++sys.path.insert(0, str(BACKEND))
++
++from app.activities import PostgresAdmissionLedger
++from app.worker.command import WorkerCommand
++from app.worker.launcher import ProcessCreationError, run_supervised_window
++from app.worker.session import SessionConfig, SessionOutcome
++from app.worker.supervisor_ipc import IpcUnknown, SLOT_SIZE, pack_frame, unpack_frame
++from app.worker.supervisor_main import _validated_request
++from job_control import JobScenarioUnsafe, _new_event_or_reject
++
++
++class EventControlTests(unittest.TestCase):
++    def test_04_start_collision_closes_only_returned_handle(self):
++        class Kernel:
++            def __init__(self): self.closed = []
++            def CreateEventW(self, *_): return 41
++            def CloseHandle(self, handle): self.closed.append(handle); return True
++            def SetEvent(self, *_): raise AssertionError("foreign event must not be armed")
++        kernel = Kernel()
++        with patch("job_control.ctypes.set_last_error"), patch("job_control.ctypes.get_last_error", return_value=183):
++            with self.assertRaises(JobScenarioUnsafe):
++                _new_event_or_reject(kernel, "Local\\collision")
++        self.assertEqual(kernel.closed, [41])
++
++    def test_04_start_creation_error_and_new_handle(self):
++        class Kernel:
++            def __init__(self, handle): self.handle = handle; self.closed = []
++            def CreateEventW(self, *_): return self.handle
++            def CloseHandle(self, handle): self.closed.append(handle); return True
++        absent = Kernel(0)
++        with patch("job_control.ctypes.set_last_error"), patch("job_control.ctypes.get_last_error", return_value=5):
++            with self.assertRaises(JobScenarioUnsafe): _new_event_or_reject(absent, "Local\\denied")
++        self.assertEqual(absent.closed, [])
++        fresh = Kernel(42)
++        with patch("job_control.ctypes.set_last_error"), patch("job_control.ctypes.get_last_error", return_value=0):
++            self.assertEqual(_new_event_or_reject(fresh, "Local\\new"), 42)
++        self.assertEqual(fresh.closed, [])
++
++
++class FrameTests(unittest.TestCase):
++    def test_d1_bounded_frame_and_half_frame_rejection(self):
++        packed = pack_frame({"protocol": 1, "data": "ok"})
++        self.assertEqual(unpack_frame(packed.ljust(SLOT_SIZE, b"\0"))["data"], "ok")
++        with self.assertRaises(IpcUnknown): pack_frame({"data": "x" * SLOT_SIZE})
++        with self.assertRaises(IpcUnknown): unpack_frame(b"\0" * SLOT_SIZE)
++        corrupt = bytearray(packed.ljust(SLOT_SIZE, b"\0"))
++        corrupt[40] ^= 1
++        with self.assertRaises(IpcUnknown): unpack_frame(bytes(corrupt))
++
++    def test_d1_child_request_rejects_expired_deadline_without_connect(self):
++        config = ConfigFactory.make()
++        ledger = PostgresAdmissionLedger("postgresql://example.invalid/unused")
++        with patch("app.worker.supervisor_main.time.monotonic_ns", return_value=10):
++            request = request_data(ledger, config, deadline_ns=9)
++            with self.assertRaisesRegex(ValueError, "deadline expired"):
++                _validated_request(request, request["mapping_name"])
++
++
++class ConfigFactory:
++    @staticmethod
++    def make():
++        return SessionConfig(window_seconds=6, request_timeout_seconds=.5,
++                             stop_grace_seconds=1, startup_limit_seconds=2,
++                             manager_db_timeout_seconds=.5, cleanup_seconds=1,
++                             mutex_wait_seconds=.5, manager_overhead_seconds=8)
++
++
++def request_data(ledger, config, *, deadline_ns):
++    return {"protocol": 1, "mapping_name": "Local\\RetroLume.SUP." + "a" * 32,
++            "activity_id": str(uuid4()), "executor_id": "exec", "run_tag": "unit",
++            "deadline_ns": deadline_ns, "command": {"task": "idle"},
++            "config": asdict(config),
++            "ledger": {"dsn": ledger._dsn,
++                       "connect_timeout_seconds": ledger._connect_timeout,
++                       "statement_timeout_ms": ledger._statement_timeout_ms,
++                       "lock_timeout_ms": ledger._lock_timeout_ms}}
++
++
++class Mapping:
++    current = None
++    result = None
++    fail_close = False
++    exit_status = 0
++
++    def __init__(self):
++        self.events = []
++        self.request = None
++        Mapping.current = self
++
++    @classmethod
++    def create(cls, name):
++        return cls()
++
++    def write_request(self, data):
++        self.events.append("write_request")
++        self.request = data
++
++    def read_result(self):
++        self.events.append("read_result")
++        if self.result is None: raise IpcUnknown("half frame")
++        return self.result
++
++    def close(self):
++        self.events.append("mapping_close")
++        if self.fail_close: raise IpcUnknown("mapping close failed")
++
++
++class Process:
++    current = None
++    fail_mode = None
++    wait_values = (True, True)
++    fail_close = False
++    exit_status = 0
++
++    def __init__(self):
++        self.events = []
++        self.wait_iter = iter(self.wait_values)
++        Process.current = self
++
++    @classmethod
++    def create(cls, name):
++        assert Mapping.current.request["mapping_name"] == name
++        result = cls()
++        result.events.append("create_suspended")
++        if cls.fail_mode == "partial": raise ProcessCreationError(5, result)
++        return result
++
++    @property
++    def pid(self): return 123
++
++    def creation_time_100ns(self):
++        self.events.append("identity")
++        return 456
++
++    def resume(self): self.events.append("resume")
++
++    def wait(self, seconds):
++        self.events.append(("wait", seconds))
++        return next(self.wait_iter, False)
++
++    def exit_code(self): return self.exit_status
++
++    def terminate(self): self.events.append("terminate")
++
++    def close(self):
++        self.events.append("process_close")
++        if self.fail_close: raise RuntimeError("close failed")
++
++
++class LauncherTests(unittest.TestCase):
++    def setUp(self):
++        Mapping.current = None
++        Mapping.result = None
++        Mapping.fail_close = False
++        Process.current = None
++        Process.fail_mode = None
++        Process.wait_values = (True, True)
++        Process.fail_close = False
++        Process.exit_status = 0
++        self.config = ConfigFactory.make()
++        self.ledger = PostgresAdmissionLedger("postgresql://example.invalid/unused")
++        self.activity = str(uuid4())
++
++    def invoke(self, **patches):
++        with patch("app.worker.launcher.os.name", "nt"), patch("app.worker.launcher.NamedMapping", Mapping), patch(
++            "app.worker.launcher._SuspendedSupervisor", Process
++        ), patch("app.worker.launcher._remaining", side_effect=patches.get("remaining", lambda _: 5.0)):
++            return run_supervised_window(self.ledger, self.config, self.activity,
++                                         "exec", WorkerCommand(), run_tag="unit")
++
++    def settled_frame(self):
++        outcome = SessionOutcome("unit", "settled", self.activity,
++                                 generation=1, active_processes_at_end=0,
++                                 settled_seconds=1, reserved_seconds=0,
++                                 pending_fold_seconds=0)
++        data = asdict(outcome)
++        data["cleanup_errors"] = []
++        return {"protocol": 1, "run_tag": "unit", "activity_id": self.activity,
++                "outcome": data}
++
++    def test_d1_fixed_handoff_reads_only_after_exit_and_preserves_identity(self):
++        Mapping.result = self.settled_frame()
++        outcome = self.invoke()
++        self.assertEqual((outcome.state, outcome.manager_pid, outcome.manager_created_100ns),
++                         ("settled", 123, 456))
++        self.assertEqual(Process.current.events[:3], ["create_suspended", "identity", "resume"])
++        self.assertEqual(Mapping.current.events[:2], ["write_request", "read_result"])
++        self.assertIn(("wait", 5.0), Process.current.events)
++        self.assertFalse(outcome.cleanup_incomplete)
++
++    def test_d1_partial_create_never_resumes_and_remains_unknown(self):
++        Process.fail_mode = "partial"
++        Process.wait_values = (False, True)
++        outcome = self.invoke()
++        self.assertTrue(outcome.cleanup_incomplete)
++        self.assertIsNone(outcome.settled_seconds)
++        self.assertIsNone(outcome.reserved_seconds)
++        self.assertNotIn("resume", Process.current.events)
++        self.assertIn("terminate", Process.current.events)
++
++    def test_d1_deadline_before_resume_terminates_exact_owner(self):
++        Process.wait_values = (False, True)
++        values = iter((5.0, 5.0, 5.0, 0.0, 0.0))
++        outcome = self.invoke(remaining=lambda _: next(values, 0.0))
++        self.assertEqual(outcome.state, "manager_startup_deadline_unconfirmed")
++        self.assertNotIn("resume", Process.current.events)
++        self.assertIn("terminate", Process.current.events)
++
++    def test_d1_timeout_or_half_frame_keeps_all_charges_unknown(self):
++        Process.wait_values = (False, False, False)
++        outcome = self.invoke()
++        self.assertEqual(outcome.state, "manager_timeout_unconfirmed")
++        self.assertTrue(outcome.cleanup_incomplete)
++        self.assertEqual((outcome.settled_seconds, outcome.reserved_seconds, outcome.pending_fold_seconds),
++                         (None, None, None))
++        self.setUp()
++        outcome = self.invoke()
++        self.assertTrue(outcome.cleanup_incomplete)
++        self.assertEqual((outcome.settled_seconds, outcome.reserved_seconds), (None, None))
++
++    def test_d1_child_failure_and_request_write_error_do_not_read_result(self):
++        Process.exit_status = 1
++        outcome = self.invoke()
++        self.assertTrue(outcome.cleanup_incomplete)
++        self.assertEqual((outcome.settled_seconds, outcome.reserved_seconds), (None, None))
++        self.assertNotIn("read_result", Mapping.current.events)
++        self.setUp()
++        def bad_write(self, data): raise IpcUnknown("write failed")
++        with patch.object(Mapping, "write_request", bad_write):
++            outcome = self.invoke()
++        self.assertTrue(outcome.cleanup_incomplete)
++        self.assertIsNone(Process.current)
++        self.assertEqual((outcome.settled_seconds, outcome.reserved_seconds), (None, None))
++    def test_d1_cleanup_failure_and_cancellation_preserve_unknown(self):
++        Mapping.result = self.settled_frame()
++        Process.fail_close = True
++        outcome = self.invoke()
++        self.assertEqual(outcome.state, "settled_cleanup_error")
++        self.assertTrue(outcome.cleanup_incomplete)
++        self.setUp()
++        Process.wait_values = (False, True)
++        calls = iter((5.0, 5.0, 5.0))
++        def cancelled(_):
++            try: return next(calls)
++            except StopIteration: raise asyncio.CancelledError()
++        with self.assertRaises(asyncio.CancelledError) as caught:
++            self.invoke(remaining=cancelled)
++        self.assertTrue(caught.exception.session_outcome.cleanup_incomplete)
++        self.assertIsNone(caught.exception.session_outcome.settled_seconds)
++
++
++if __name__ == "__main__":
++    unittest.main(verbosity=2)

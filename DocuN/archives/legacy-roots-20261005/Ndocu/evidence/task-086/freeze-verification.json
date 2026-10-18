@@ -1,0 +1,36 @@
+{
+  "utc": "2026-09-28",
+  "auditor_scope": "TASK-086/R-080 独立审计；只读；全新隔离会话；未读TASK-085-result.md/delivery-check.json/实现聊天或客户端项目记忆",
+  "actual_executor_identity": "本会话由当前客户端可用模型执行（GLM-5.3，会话内最强可用档）；审计结论由源码与原始证据独立形成",
+  "frozen_input_match": {
+    "post-hashes.json": "4694d1e42ce1b20bc5358a4c0810c30423ee3166a4970b4d1b52cfdd7cdda6df MATCH",
+    "pre-hashes.json": "8253cc4b6de523821fdcbf08ddcefb5b4a0095567396d03975e55b8ca70d31e7 MATCH",
+    "task085.diff": "6177a07ad32ca4ca15790a477ec4597530514f86b3d0131520ba99dd2eeccd17 MATCH",
+    "real-batch manifest.json": "5e1327028abfabfb67b18d3fd0ccfab763bd0ff9080fb8a41a6e13c2f47f16bb MATCH"
+  },
+  "post_52_recheck_vs_current": "52项全部独立重算SHA256与当前实际文件比对：0不符；清单相符不替代审查，实际逐文件完成源码审查",
+  "pre_59_recheck": "pre清单59项独立重算：仅7个worker文件相对pre变化且全部登记于post；无未登记暗改；只读依赖（gate/windows_job/activities.repository/capabilities六文件/runtime.py/001-006迁移/test_worker_session/test_capabilities/main.py/AGENTS.md等）当前hash=pre，未被触碰",
+  "changed_files": [
+    "backend/app/worker/__init__.py",
+    "backend/app/worker/worker_main.py",
+    "backend/app/worker/supervisor_main.py",
+    "backend/app/worker/supervisor_ipc.py",
+    "backend/app/worker/session.py",
+    "backend/app/worker/launcher.py",
+    "backend/app/worker/command.py"
+  ],
+  "new_files": [
+    "backend/app/worker/one_call.py",
+    "backend/tests/test_worker_one_call.py",
+    "backend/tests/fixtures/task085/bootstrap.py",
+    "backend/tests/fixtures/task085/controlled_child.py",
+    "backend/tests/fixtures/task085/real_cases.py",
+    "backend/tests/fixtures/task085/run_offline.py",
+    "backend/tests/fixtures/task085/runner.py",
+    "backend/tests/fixtures/task085/finalize_evidence.py（真实批后新增）"
+  ],
+  "credential_scan": "对task-085证据目录全部.log/.json/.txt扫描 password=/postgresql://…@…/token_urlsafe/synthetic-secret-085/api_key 模式：零命中；DSN与口令仅经环境变量与DACL保护映射传递，日志按口令脱敏",
+  "git_protection": "git-status pre/post逐行一致，仅新增两处卡面允许的未跟踪路径（Ndocu/evidence/task-085/、backend/tests/test_worker_one_call.py）；既有未提交tracked差异（activities/__init__、repository.py、test_activity_time_budget、docu三文件）未被085触碰（hash与085 pre副本一致）",
+  "diff_composition": "不以git空diff证明无变化；完整差异由pre副本+当前源码+新增文件组成，见本目录independent-diff-pre-vs-current.txt（worker 7文件 +46/+…统计在文件内）",
+  "accidental_contact_disclosure": "读取PROJECT_ARCHITECTURE.MD文件头部时意外接触到顶部v0.49『one_call候选回收与独立审计』编排条目（编排验收状态摘要，非实现自评）；除此之外未接触任何禁读材料；所有结论由源码/原始证据独立形成，未采信该条目任何断言"
+}

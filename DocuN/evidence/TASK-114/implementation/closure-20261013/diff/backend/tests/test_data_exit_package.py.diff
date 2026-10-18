@@ -1,0 +1,95 @@
+--- /dev/null
++++ final/backend/tests/test_data_exit_package.py
+@@ -0,0 +1,92 @@
++"""真实 ZIP 文件的有界目录、固定 codec、哈希及损坏拒绝，不代替 PG 恢复。"""
++import json
++import os
++from pathlib import Path
++import sys
++import unittest
++import zipfile
++from uuid import uuid4
++sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
++from app.data_exit.contracts import PROFILE,FORMAT,TABLES,DataError,canonical,digest,Limits
++from app.data_exit.codec import TRANSFORMS
++from app.data_exit.schema import COLUMNS,MIGRATIONS
++from app.data_exit.packages import PackageReader
++
++
++def sample():
++    controls={'dataset_id':str(uuid4()),'schema_profile':PROFILE,'created_at':'2026-10-12T00:00:00+00:00',
++              'source_instance_observed':str(uuid4()),'mode_observed':'normal','source_snapshot_id':None,'source_root_sha256':None}
++    members={'README.txt':'合成包，只测文件结构'.encode('utf-8'),'references/reference_edges.jsonl':b'',
++             'metadata/source_control.json':canonical(controls).encode(),'metadata/operation_history.jsonl':b'',
++             'metadata/tombstones.jsonl':b'',
++             'codec_description.json':canonical({'profile':PROFILE,'columns':COLUMNS,'transformations':TRANSFORMS,
++                 'bigint_encoding':'decimal_string','text_encoding':'UTF-8 原字符串','migration_sha256':MIGRATIONS}).encode()}
++    for table in TABLES:
++        members['records/'+table+'.jsonl']=b'';members['checkpoint/'+table+'.jsonl']=b''
++    contents=[{'path':name,'kind':'synthetic','availability':'present','bytes':str(len(data)),'sha256':digest(data)} for name,data in members.items()]
++    manifest={'format':FORMAT,'format_version':1,'package_id':str(uuid4()),'package_kind':'restore_checkpoint','codec_profile':PROFILE,
++              'source_business_table_count':28,'snapshot_control_domain_count':3,'snapshot':{'source_dataset_id':controls['dataset_id'],
++                  'source_schema_profile':PROFILE,'logical_time_utc':'2026-10-12T00:00:00+00:00','database_snapshot':'1:2:',
++                  'runtime_authority_included':False,'browser_drafts_included':False},
++              'contents':contents,'availability':[],'scope':{'mode':'all'},'completion':'complete','restore_eligible':True}
++    manifest['root_sha256']=digest(canonical(manifest));members['manifest.json']=canonical(manifest).encode()
++    return members,manifest
++
++
++class DataPackageOffline(unittest.TestCase):
++    @classmethod
++    def setUpClass(cls):
++        value=os.environ.get('RETROLUME_TASK114_SCRATCH')
++        if not value:raise RuntimeError('缺专用 scratch')
++        cls.root=Path(value)
++
++    def write(self,members,*,extra=(),compression=zipfile.ZIP_STORED):
++        path=self.root/(str(uuid4())+'.rldata')
++        with zipfile.ZipFile(path,'w',compression=compression,allowZip64=False) as archive:
++            for name,data in members.items():archive.writestr(name,data)
++            for name,data in extra:archive.writestr(name,data)
++        return path
++
++    def test_valid_exact_domains(self):
++        members,manifest=sample();path=self.write(members)
++        with PackageReader(path) as reader:
++            self.assertEqual(reader.manifest['root_sha256'],manifest['root_sha256'])
++            self.assertEqual(list(reader.rows('activities')),[])
++        self.assertEqual(path.read_bytes()[:4],b'PK\x03\x04')
++
++    def test_extra_traversal_case_collision_and_deflate(self):
++        for name in ('../sentinel','C:/sentinel','metadata/source_control.json:ads','README.TXT'):
++            members,_=sample();path=self.write(members,extra=((name,b'bad'),))
++            with self.assertRaises(DataError):
++                with PackageReader(path):pass
++        members,_=sample();path=self.write(members,compression=zipfile.ZIP_DEFLATED)
++        with self.assertRaises(DataError):
++            with PackageReader(path):pass
++
++    def test_modified_bytes_missing_member_and_truncation(self):
++        members,_=sample();members['README.txt']=b'changed';path=self.write(members)
++        with self.assertRaises(DataError):
++            with PackageReader(path):pass
++        members,_=sample();members.pop('metadata/tombstones.jsonl');path=self.write(members)
++        with self.assertRaises(DataError):
++            with PackageReader(path):pass
++        members,_=sample();path=self.write(members)
++        broken=self.root/(str(uuid4())+'.rldata');broken.write_bytes(path.read_bytes()[:-3])
++        with self.assertRaises(DataError):
++            with PackageReader(broken):pass
++
++    def test_unknown_metadata_fields_and_capacity(self):
++        members,manifest=sample()
++        value=json.loads(members['metadata/source_control.json']);value['pin_nonce']='untrusted'
++        members['metadata/source_control.json']=canonical(value).encode()
++        for entry in manifest['contents']:
++            if entry['path']=='metadata/source_control.json':entry.update(bytes=str(len(members[entry['path']])),sha256=digest(members[entry['path']]))
++        manifest.pop('root_sha256');manifest['root_sha256']=digest(canonical(manifest));members['manifest.json']=canonical(manifest).encode()
++        path=self.write(members)
++        with self.assertRaises(DataError):
++            with PackageReader(path):pass
++        with self.assertRaises(DataError):
++            with PackageReader(path,Limits(members=2)):pass
++
++
++if __name__=='__main__':unittest.main(verbosity=2)

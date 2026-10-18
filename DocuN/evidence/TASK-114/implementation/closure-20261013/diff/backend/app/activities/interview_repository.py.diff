@@ -1,0 +1,16 @@
+--- before/backend/app/activities/interview_repository.py
++++ final/backend/app/activities/interview_repository.py
+@@ -63,7 +63,12 @@
+             return 'absent' if (await cursor.fetchone())['n']==0 else 'damaged'
+         if n!=3 or not SCHEMA_FINGERPRINT: return 'damaged'
+         shape=await self._interview_shape(connection)
+-        return 'ready' if sha(canonical(shape))==SCHEMA_FINGERPRINT else 'damaged'
++        expected=SCHEMA_FINGERPRINT
++        if getattr(self,'data_enabled',False):
++            from app.data_exit.schema_checks import schema_mode,legacy_business_shape
++            await schema_mode(connection)
++            shape=legacy_business_shape(shape)
++        return 'ready' if sha(canonical(shape))==expected else 'damaged'
+ 
+     async def _interview_domain(self,connection,activity_id, *, for_write=False):
+         schema=await self._interview_schema_info(connection)

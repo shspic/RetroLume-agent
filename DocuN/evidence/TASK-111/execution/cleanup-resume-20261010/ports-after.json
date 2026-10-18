@@ -1,0 +1,15 @@
+{
+  "args": [
+    "powershell",
+    "-NoProfile",
+    "-Command",
+    "$rows=@(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -in 18111,55451 } | Select-Object LocalAddress,LocalPort,OwningProcess); ConvertTo-Json -InputObject $rows -Compress"
+  ],
+  "code": 0,
+  "cwd": null,
+  "end_ns": 871561218000000,
+  "start_ns": 871556406000000,
+  "stderr_bytes": 0,
+  "stdout_bytes": 4,
+  "stdout_sha256": "a5338d955b09046ec0b16f3a9625b7955c763aae07dc722e474e6078745f932f"
+}

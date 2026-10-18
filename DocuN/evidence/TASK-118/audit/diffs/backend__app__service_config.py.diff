@@ -1,0 +1,29 @@
+--- first-pre/backend/app/service_config.py
++++ current/backend/app/service_config.py
+@@ -119,7 +119,7 @@
+ 
+ class _LearningSection(BaseModel):
+     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+-    profile: str = Field(pattern=r"^learning\.v1$")
++    profile: str = Field(pattern=r"^learning\.v[12]$")
+     max_output_tokens: int = Field(ge=1, le=256)
+ 
+ 
+@@ -141,7 +141,7 @@
+     """G8 教学配置段：{profile, max_output_tokens, enable_calculation}。"""
+ 
+     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+-    profile: str = Field(pattern=r"^teaching\.v1$")
++    profile: str = Field(pattern=r"^teaching\.v[123]$")
+     max_output_tokens: int = Field(ge=1, le=2048)
+     enable_calculation: bool = False
+ 
+@@ -277,7 +277,7 @@
+ 
+ class _InterviewInput(BaseModel):
+     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+-    profile: str = Field(pattern=r"^interview\.v1$")
++    profile: str = Field(pattern=r"^interview\.v[12]$")
+     max_output_tokens: int = Field(ge=1, le=2048)
+     max_followups_per_round: int = Field(ge=1, le=4)
+ 

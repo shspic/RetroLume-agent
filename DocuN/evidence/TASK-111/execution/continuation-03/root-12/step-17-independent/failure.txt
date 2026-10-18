@@ -1,0 +1,24 @@
+Traceback (most recent call last):
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task111\c03_step.py", line 84, in main
+    independent(resource,built,folder)
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task111\c03_independent.py", line 76, in run
+    with asyncio.Runner(loop_factory=psycopg_compatible_loop_factory) as runner:runner.run(data(resource,built,out))
+                                                                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task111\c03_independent.py", line 49, in data
+    item=await diagnostic_artifact(h,'energy',parent_item=parent);artifact=await h.ledger.read_html_artifact(item['activity_id'],item['receipt']['artifact_id'])
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task111\c01_seeds.py", line 98, in diagnostic_artifact
+    row=await h.ledger.accept_html_command(aid,command,runtime_identity()["renderer_sha256"],h.controller.config_sha256)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\preview\repository.py", line 185, in accept_html_command
+    return await self._transaction(transaction)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\activities\repository.py", line 343, in _transaction
+    raise AdmissionUnavailable("持久准入账本暂不可用") from None
+app.capabilities.contracts.AdmissionUnavailable: 持久准入账本暂不可用

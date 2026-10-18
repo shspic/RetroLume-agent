@@ -1,0 +1,25 @@
+--- first-pre/backend/app/memory/context.py
++++ current/backend/app/memory/context.py
+@@ -109,3 +109,22 @@
+     if cfg.reserved_output_tokens>snapshot["max_output_tokens"] or cfg.reserved_output_tokens>service.max_output_tokens_limit:
+         raise MemoryRefusal("memory_context_limit","活动输出容量与背景配置不兼容")
+     return cfg
++
++
++def interview_background(selection,frozen):
++    """v2只材料化固定已选版本；旧作答不是新表现，也不进入源引用目录。"""
++    if frozen.memory_selection_sha256 is None:
++        if selection.get('selected'):raise MemoryRefusal('memory_dependency_invalid','场次背景身份已变化')
++        return []
++    if (not selection.get('eligible') or selection.get('selection_sha256')!=frozen.memory_selection_sha256
++        or selection.get('dependency_sha256')!=frozen.memory_dependency_sha256):raise MemoryRefusal('memory_dependency_invalid','原背景资格已变化')
++    refs=[{k:x[k] for k in ('memory_id','version','revision','body_sha256')} for x in selection['entries']]
++    if refs!=[r.model_dump() for r in frozen.memory_refs]:raise MemoryRefusal('memory_dependency_invalid','原背景版本已变化')
++    result=[]
++    for entry in selection['entries']:
++        body=entry.get('body')
++        if body is None or sha(canonical(body))!=entry['body_sha256']:raise MemoryRefusal('memory_dependency_invalid','原背景正文不可核对')
++        result.append({'memory_id':entry['memory_id'],'version':entry['version'],'kind':body['kind'],'uncertainty':body['uncertainty'],
++          'title':body['title'],'text':body['text'],'use':'仅低信任背景；不作为资料引用、测量、经历核实或本活动新独立表现。'})
++    if len(result)>4 or len(canonical(result).encode('utf-8'))>16384:raise MemoryRefusal('memory_context_limit','背景超过有限容量')
++    return result

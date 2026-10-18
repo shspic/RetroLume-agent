@@ -1,0 +1,2039 @@
+[
+  {
+    "path": "backend/app/activities/repository.py",
+    "methods": [
+      {
+        "name": "_tool_payload_semantics_ok",
+        "line": 62,
+        "end_line": 86,
+        "args": "payload_format: str | None, payload: str | None",
+        "async_method": false
+      },
+      {
+        "name": "__init__",
+        "line": 293,
+        "end_line": 312,
+        "args": "self, dsn: str, *, connect_timeout_seconds: int=3, statement_timeout_ms: int=3000, lock_timeout_ms: int=2000",
+        "async_method": false
+      },
+      {
+        "name": "_transaction",
+        "line": 314,
+        "end_line": 343,
+        "args": "self, operation: Callable[[object], Awaitable[_T]]",
+        "async_method": true
+      },
+      {
+        "name": "_uuid",
+        "line": 346,
+        "end_line": 350,
+        "args": "value: str, field: str",
+        "async_method": false
+      },
+      {
+        "name": "_bounded_name",
+        "line": 353,
+        "end_line": 356,
+        "args": "value: str, field: str, *, maximum: int=128",
+        "async_method": false
+      },
+      {
+        "name": "_validate_spec",
+        "line": 359,
+        "end_line": 403,
+        "args": "cls, spec: ActivitySpec",
+        "async_method": false
+      },
+      {
+        "name": "_source_rows",
+        "line": 405,
+        "end_line": 413,
+        "args": "self, connection: object, activity_id: str",
+        "async_method": true
+      },
+      {
+        "name": "_lock_sources",
+        "line": 415,
+        "end_line": 433,
+        "args": "self, connection: object, snapshots: list[dict] | tuple[SourceSnapshot, ...]",
+        "async_method": true
+      },
+      {
+        "name": "_scope_key",
+        "line": 436,
+        "end_line": 437,
+        "args": "rows",
+        "async_method": false
+      },
+      {
+        "name": "_verify_scope_hint",
+        "line": 439,
+        "end_line": 441,
+        "args": "self, connection, activity_id, hint",
+        "async_method": true
+      },
+      {
+        "name": "_normalize_scope",
+        "line": 444,
+        "end_line": 454,
+        "args": "cls, sources",
+        "async_method": false
+      },
+      {
+        "name": "inspect_scope",
+        "line": 456,
+        "end_line": 467,
+        "args": "self, activity_id: str",
+        "async_method": true
+      },
+      {
+        "name": "revise_scope",
+        "line": 469,
+        "end_line": 487,
+        "args": "self, activity_id: str, expected_scope_revision: int, sources",
+        "async_method": true
+      },
+      {
+        "name": "_apply_scope_locked",
+        "line": 489,
+        "end_line": 506,
+        "args": "self, connection, activity_id, row, locked, expected_scope_revision, sources, force_revision=False",
+        "async_method": true
+      },
+      {
+        "name": "create_activity",
+        "line": 508,
+        "end_line": 572,
+        "args": "self, spec: ActivitySpec, *, memory_selection=None",
+        "async_method": true
+      },
+      {
+        "name": "claim_lease",
+        "line": 574,
+        "end_line": 695,
+        "args": "self, activity_id: str, executor_id: str, *, lease_seconds: int, window_seconds: int, running_owner_session_id: int | None=None, expected_previous_generation: int | None=None",
+        "async_method": true
+      },
+      {
+        "name": "inspect_window",
+        "line": 697,
+        "end_line": 724,
+        "args": "self, activity_id: str",
+        "async_method": true
+      },
+      {
+        "name": "begin_window_close",
+        "line": 726,
+        "end_line": 760,
+        "args": "self, activity_id: str, executor_id: str, execution_generation: int",
+        "async_method": true
+      },
+      {
+        "name": "settle_execution_window",
+        "line": 762,
+        "end_line": 850,
+        "args": "self, activity_id: str, executor_id: str, execution_generation: int, *, window_seconds: int, elapsed_seconds: float",
+        "async_method": true
+      },
+      {
+        "name": "cancel_activity",
+        "line": 852,
+        "end_line": 885,
+        "args": "self, activity_id: str",
+        "async_method": true
+      },
+      {
+        "name": "recover_unknown",
+        "line": 887,
+        "end_line": 924,
+        "args": "self, activity_id: str, *, error_code: str='executor_lost'",
+        "async_method": true
+      },
+      {
+        "name": "list_unresolved_operations",
+        "line": 926,
+        "end_line": 971,
+        "args": "self, activity_id: str, *, limit: int=100, after_operation_id: str | None=None",
+        "async_method": true
+      },
+      {
+        "name": "recover_obsolete_operations",
+        "line": 973,
+        "end_line": 1033,
+        "args": "self, activity_id: str, *, error_code: str='executor_lost', limit: int=100",
+        "async_method": true
+      },
+      {
+        "name": "_intent_fields",
+        "line": 1036,
+        "end_line": 1065,
+        "args": "intent: AdmissionIntent",
+        "async_method": false
+      },
+      {
+        "name": "_activity_allows",
+        "line": 1068,
+        "end_line": 1085,
+        "args": "activity: dict, intent: AdmissionIntent, executor_id: str, *, now: datetime",
+        "async_method": false
+      },
+      {
+        "name": "admit",
+        "line": 1087,
+        "end_line": 1188,
+        "args": "self, intent: AdmissionIntent",
+        "async_method": true
+      },
+      {
+        "name": "_tool_permit_fields",
+        "line": 1193,
+        "end_line": 1215,
+        "args": "cls, permit: ToolAdmissionPermit",
+        "async_method": false
+      },
+      {
+        "name": "_tool_identity_matches",
+        "line": 1218,
+        "end_line": 1229,
+        "args": "operation: dict, fields: tuple",
+        "async_method": false
+      },
+      {
+        "name": "admit_tool_operation",
+        "line": 1231,
+        "end_line": 1345,
+        "args": "self, intent: ToolIntent",
+        "async_method": true
+      },
+      {
+        "name": "mark_tool_started",
+        "line": 1347,
+        "end_line": 1402,
+        "args": "self, permit: ToolAdmissionPermit, call: ToolExecutionInput",
+        "async_method": true
+      },
+      {
+        "name": "record_tool_outcome",
+        "line": 1404,
+        "end_line": 1471,
+        "args": "self, permit: ToolAdmissionPermit, call: ToolExecutionInput, outcome: LedgerOutcome",
+        "async_method": true
+      },
+      {
+        "name": "_locked_operation",
+        "line": 1473,
+        "end_line": 1509,
+        "args": "self, connection: object, permit: AdmissionPermit, *, kind: str='model'",
+        "async_method": true
+      },
+      {
+        "name": "_operation_is_current",
+        "line": 1512,
+        "end_line": 1524,
+        "args": "activity: dict, operation: dict, sources_valid: bool",
+        "async_method": false
+      },
+      {
+        "name": "mark_dispatch_started",
+        "line": 1526,
+        "end_line": 1552,
+        "args": "self, permit: AdmissionPermit",
+        "async_method": true
+      },
+      {
+        "name": "_outcome_values",
+        "line": 1555,
+        "end_line": 1587,
+        "args": "cls, outcome: LedgerOutcome",
+        "async_method": false
+      },
+      {
+        "name": "_payload_values",
+        "line": 1590,
+        "end_line": 1607,
+        "args": "outcome: LedgerOutcome",
+        "async_method": false
+      },
+      {
+        "name": "_stored_outcome",
+        "line": 1610,
+        "end_line": 1623,
+        "args": "call: dict",
+        "async_method": false
+      },
+      {
+        "name": "_stored_payload_row",
+        "line": 1626,
+        "end_line": 1641,
+        "args": "connection: object, call: dict",
+        "async_method": true
+      },
+      {
+        "name": "_terminal_confirmation",
+        "line": 1644,
+        "end_line": 1663,
+        "args": "connection: object, call: dict, values: tuple, payload_triple: tuple[str, str, str] | None",
+        "async_method": true
+      },
+      {
+        "name": "_write_outcome",
+        "line": 1666,
+        "end_line": 1695,
+        "args": "connection: object, call: dict, values: tuple, payload_triple: tuple[str, str, str] | None",
+        "async_method": true
+      },
+      {
+        "name": "record_outcome",
+        "line": 1697,
+        "end_line": 1739,
+        "args": "self, permit: AdmissionPermit, outcome: LedgerOutcome",
+        "async_method": true
+      },
+      {
+        "name": "_read_status",
+        "line": 1769,
+        "end_line": 1785,
+        "args": "row: dict, *, has_result: bool",
+        "async_method": false
+      },
+      {
+        "name": "_snapshot_from_row",
+        "line": 1788,
+        "end_line": 1815,
+        "args": "row: dict, status: ResultReadStatus, payload: str | None",
+        "async_method": false
+      },
+      {
+        "name": "read_committed_result",
+        "line": 1817,
+        "end_line": 1885,
+        "args": "self, activity_id: str, operation_id: str",
+        "async_method": true
+      },
+      {
+        "name": "list_committed_results",
+        "line": 1887,
+        "end_line": 1987,
+        "args": "self, activity_id: str, *, limit: int=100, after_operation_id: str | None=None",
+        "async_method": true
+      },
+      {
+        "name": "_activity_fact_from_row",
+        "line": 2019,
+        "end_line": 2047,
+        "args": "row: dict",
+        "async_method": false
+      },
+      {
+        "name": "probe_storage",
+        "line": 2049,
+        "end_line": 2061,
+        "args": "self",
+        "async_method": true
+      },
+      {
+        "name": "list_activities",
+        "line": 2063,
+        "end_line": 2091,
+        "args": "self, *, limit: int, after_created_at: datetime | None=None, after_activity_id: str | None=None",
+        "async_method": true
+      },
+      {
+        "name": "read_activity_facts",
+        "line": 2093,
+        "end_line": 2107,
+        "args": "self, activity_id: str",
+        "async_method": true
+      },
+      {
+        "name": "read_scope_source_versions",
+        "line": 2109,
+        "end_line": 2124,
+        "args": "self, source_ids: list[str]",
+        "async_method": true
+      },
+      {
+        "name": "_operation_row_from_row",
+        "line": 2172,
+        "end_line": 2211,
+        "args": "self, row: dict",
+        "async_method": false
+      },
+      {
+        "name": "_operation_list_row_from_row",
+        "line": 2213,
+        "end_line": 2252,
+        "args": "self, row: dict",
+        "async_method": false
+      },
+      {
+        "name": "list_operations",
+        "line": 2254,
+        "end_line": 2285,
+        "args": "self, activity_id: str, *, limit: int, after_operation_id: str | None=None",
+        "async_method": true
+      },
+      {
+        "name": "read_operation",
+        "line": 2287,
+        "end_line": 2300,
+        "args": "self, activity_id: str, operation_id: str",
+        "async_method": true
+      },
+      {
+        "name": "read_learning_snapshot",
+        "line": 2302,
+        "end_line": 2334,
+        "args": "self, activity_id: str",
+        "async_method": true
+      },
+      {
+        "name": "find_learning_operation",
+        "line": 2336,
+        "end_line": 2354,
+        "args": "self, activity_id: str, prefix: str",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 458,
+        "end_line": 466,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 474,
+        "end_line": 486,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 513,
+        "end_line": 570,
+        "args": "connection: object",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 625,
+        "end_line": 693,
+        "args": "connection: object",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 701,
+        "end_line": 722,
+        "args": "connection: object",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 739,
+        "end_line": 758,
+        "args": "connection: object",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 812,
+        "end_line": 848,
+        "args": "connection: object",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 860,
+        "end_line": 883,
+        "args": "connection: object",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 891,
+        "end_line": 923,
+        "args": "connection: object",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 947,
+        "end_line": 969,
+        "args": "connection: object",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 995,
+        "end_line": 1031,
+        "args": "connection: object",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 1090,
+        "end_line": 1186,
+        "args": "connection: object",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 1256,
+        "end_line": 1343,
+        "args": "connection: object",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 1365,
+        "end_line": 1400,
+        "args": "connection: object",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 1433,
+        "end_line": 1469,
+        "args": "connection: object",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 1527,
+        "end_line": 1550,
+        "args": "connection: object",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 1711,
+        "end_line": 1737,
+        "args": "connection: object",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 1829,
+        "end_line": 1883,
+        "args": "connection: object",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 1911,
+        "end_line": 1985,
+        "args": "connection: object",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 2052,
+        "end_line": 2059,
+        "args": "connection: object",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 2080,
+        "end_line": 2089,
+        "args": "connection: object",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 2097,
+        "end_line": 2105,
+        "args": "connection: object",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 2117,
+        "end_line": 2122,
+        "args": "connection: object",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 2278,
+        "end_line": 2283,
+        "args": "connection: object",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 2292,
+        "end_line": 2298,
+        "args": "connection: object",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 2306,
+        "end_line": 2332,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 2345,
+        "end_line": 2352,
+        "args": "connection",
+        "async_method": true
+      }
+    ]
+  },
+  {
+    "path": "backend/app/activities/teaching_repository.py",
+    "methods": [
+      {
+        "name": "_now_iso",
+        "line": 62,
+        "end_line": 63,
+        "args": "",
+        "async_method": false
+      },
+      {
+        "name": "_row_receipt",
+        "line": 66,
+        "end_line": 86,
+        "args": "row: dict, head_revision: int, *, record_ids=None, qualification='current', duplicate_of=None",
+        "async_method": false
+      },
+      {
+        "name": "_state_after",
+        "line": 89,
+        "end_line": 102,
+        "args": "revision: int, head: dict",
+        "async_method": false
+      },
+      {
+        "name": "_plain",
+        "line": 105,
+        "end_line": 112,
+        "args": "value",
+        "async_method": false
+      },
+      {
+        "name": "_decode",
+        "line": 115,
+        "end_line": 116,
+        "args": "value",
+        "async_method": false
+      },
+      {
+        "name": "__init__",
+        "line": 58,
+        "end_line": 59,
+        "args": "self, activity, head, command",
+        "async_method": false
+      },
+      {
+        "name": "_teaching_lock",
+        "line": 124,
+        "end_line": 144,
+        "args": "self, connection, activity_id: str, *, original_record_id=None",
+        "async_method": true
+      },
+      {
+        "name": "_teaching_lock_operations",
+        "line": 146,
+        "end_line": 147,
+        "args": "self, connection, activity_id",
+        "async_method": true
+      },
+      {
+        "name": "_teaching_lock_command",
+        "line": 149,
+        "end_line": 155,
+        "args": "self, connection, activity_id: str, business_key: str, *, original_record_id=None",
+        "async_method": true
+      },
+      {
+        "name": "_teaching_replay",
+        "line": 158,
+        "end_line": 159,
+        "args": "command_row: dict, request_sha: str, request_body: str",
+        "async_method": false
+      },
+      {
+        "name": "_teaching_slot_winner",
+        "line": 161,
+        "end_line": 168,
+        "args": "self, connection, activity_id: str, action: str, slot: str",
+        "async_method": true
+      },
+      {
+        "name": "_teaching_counts",
+        "line": 170,
+        "end_line": 180,
+        "args": "self, connection, activity_id: str",
+        "async_method": true
+      },
+      {
+        "name": "_teaching_cas",
+        "line": 183,
+        "end_line": 196,
+        "args": "head, expected_revision: int, expected_goal_version: int, expected_scope_revision: int, activity, action: str",
+        "async_method": false
+      },
+      {
+        "name": "_teaching_gate",
+        "line": 199,
+        "end_line": 204,
+        "args": "activity, *, for_write: bool=True",
+        "async_method": false
+      },
+      {
+        "name": "_teaching_budget",
+        "line": 209,
+        "end_line": 220,
+        "args": "activity, frozen",
+        "async_method": false
+      },
+      {
+        "name": "_teaching_insert_record",
+        "line": 222,
+        "end_line": 239,
+        "args": "self, connection, activity_id, record_id, seq, kind, business_key, ordinal, goal_version, scope_revision, body, body_sha, *, goal_record_id=None, parent_record_id=None, exercise_record_id=None, answer_record_id=None, supersedes_record_id=None, operation_id=None, applied_revision=None, state_after=None, source_refs=None",
+        "async_method": true
+      },
+      {
+        "name": "_teaching_update_head",
+        "line": 241,
+        "end_line": 280,
+        "args": "self, connection, activity_id, head, revision, phase=None, goal_version=None, goal_record_id=None, path_record_id=None, node_id=None, exercise_record_id=None, answer_record_id=None, feedback_record_id=None, reason_record_id=None, pending_business_key='unset', last_seq=None, projection=None",
+        "async_method": true
+      },
+      {
+        "name": "_teaching_create_head",
+        "line": 282,
+        "end_line": 287,
+        "args": "self, connection, activity_id, revision, goal_version, phase, goal_record_id, last_seq",
+        "async_method": true
+      },
+      {
+        "name": "_teaching_obsolete_pending",
+        "line": 289,
+        "end_line": 299,
+        "args": "self, connection, activity_id, *, except_key=None, mark_goal=False",
+        "async_method": true
+      },
+      {
+        "name": "_teaching_fact_result",
+        "line": 301,
+        "end_line": 321,
+        "args": "self, connection, activity_id, row",
+        "async_method": true
+      },
+      {
+        "name": "_teaching_verify_current",
+        "line": 323,
+        "end_line": 412,
+        "args": "self, connection, activity, head, command, frozen",
+        "async_method": true
+      },
+      {
+        "name": "_teaching_rebuild_progress",
+        "line": 414,
+        "end_line": 445,
+        "args": "self, connection, activity_id, head, extra=None",
+        "async_method": true
+      },
+      {
+        "name": "_teaching_original_receipt",
+        "line": 447,
+        "end_line": 461,
+        "args": "self, connection, activity_id, command, head_revision",
+        "async_method": true
+      },
+      {
+        "name": "apply_teaching_local",
+        "line": 465,
+        "end_line": 537,
+        "args": "self, activity_id: str, command: TeachingCommandInput",
+        "async_method": true
+      },
+      {
+        "name": "_teaching_anchors",
+        "line": 539,
+        "end_line": 551,
+        "args": "self, head, command: TeachingCommandInput",
+        "async_method": false
+      },
+      {
+        "name": "_teaching_validate_seed",
+        "line": 553,
+        "end_line": 586,
+        "args": "self, connection, activity_id, activity, body",
+        "async_method": true
+      },
+      {
+        "name": "_teaching_apply_local_effects",
+        "line": 588,
+        "end_line": 931,
+        "args": "self, connection, activity_id, head, activity, command: TeachingCommandInput, request_body, request_sha",
+        "async_method": true
+      },
+      {
+        "name": "_teaching_clear_exercise_pointers",
+        "line": 933,
+        "end_line": 937,
+        "args": "self, connection, activity_id",
+        "async_method": true
+      },
+      {
+        "name": "_teaching_exercise_exposures",
+        "line": 939,
+        "end_line": 950,
+        "args": "self, connection, activity_id, exercise_record_id",
+        "async_method": true
+      },
+      {
+        "name": "_teaching_read_record_row",
+        "line": 952,
+        "end_line": 956,
+        "args": "self, connection, activity_id, record_id",
+        "async_method": true
+      },
+      {
+        "name": "accept_teaching_command",
+        "line": 960,
+        "end_line": 1051,
+        "args": "self, activity_id: str, command: TeachingCommandInput, frozen: TeachingFrozenContext",
+        "async_method": true
+      },
+      {
+        "name": "claim_teaching_launch",
+        "line": 1053,
+        "end_line": 1101,
+        "args": "self, activity_id: str, business_key: str, request_sha256: str",
+        "async_method": true
+      },
+      {
+        "name": "finish_teaching_supervision",
+        "line": 1103,
+        "end_line": 1148,
+        "args": "self, activity_id: str, business_key: str, supervision",
+        "async_method": true
+      },
+      {
+        "name": "_locked_teaching_binding",
+        "line": 1152,
+        "end_line": 1195,
+        "args": "self, connection, activity, operation_id: str, binding: TeachingCallBinding | None, phase: str",
+        "async_method": true
+      },
+      {
+        "name": "_write_teaching_outcome",
+        "line": 1199,
+        "end_line": 1324,
+        "args": "self, connection, activity, call, outcome, payload_triple",
+        "async_method": true
+      },
+      {
+        "name": "_teaching_read_command_row",
+        "line": 1326,
+        "end_line": 1328,
+        "args": "self, connection, activity_id, key, lock=False",
+        "async_method": true
+      },
+      {
+        "name": "_teaching_confirm_integrity",
+        "line": 1330,
+        "end_line": 1344,
+        "args": "self, connection, call, payload_triple",
+        "async_method": true
+      },
+      {
+        "name": "_teaching_set_exercise",
+        "line": 1346,
+        "end_line": 1350,
+        "args": "self, connection, activity_id, record_id",
+        "async_method": true
+      },
+      {
+        "name": "_teaching_result_current",
+        "line": 1353,
+        "end_line": 1357,
+        "args": "head, command, activity",
+        "async_method": false
+      },
+      {
+        "name": "_teaching_read_snapshot",
+        "line": 1361,
+        "end_line": 1463,
+        "args": "self, activity_id, *, limit=20, before=None, record_id=None, business_key=None",
+        "async_method": true
+      },
+      {
+        "name": "read_teaching_workspace",
+        "line": 1465,
+        "end_line": 1474,
+        "args": "self, activity_id: str, history_limit: int=_HISTORY_LIMIT_DEFAULT",
+        "async_method": true
+      },
+      {
+        "name": "read_teaching_command",
+        "line": 1476,
+        "end_line": 1484,
+        "args": "self, activity_id: str, business_key: str",
+        "async_method": true
+      },
+      {
+        "name": "read_teaching_history",
+        "line": 1486,
+        "end_line": 1495,
+        "args": "self, activity_id: str, limit: int=_HISTORY_LIMIT_DEFAULT, before_seq: int | None=None",
+        "async_method": true
+      },
+      {
+        "name": "read_teaching_record",
+        "line": 1497,
+        "end_line": 1508,
+        "args": "self, activity_id: str, record_id: str",
+        "async_method": true
+      },
+      {
+        "name": "read_teaching_exposures",
+        "line": 1510,
+        "end_line": 1516,
+        "args": "self, activity_id: str, exercise_record_id: str",
+        "async_method": true
+      },
+      {
+        "name": "read_teaching_recipe_records",
+        "line": 1518,
+        "end_line": 1534,
+        "args": "self, activity_id, record_ids",
+        "async_method": true
+      },
+      {
+        "name": "read_teaching_head",
+        "line": 1536,
+        "end_line": 1545,
+        "args": "self, activity_id: str",
+        "async_method": true
+      },
+      {
+        "name": "read_teaching_facts",
+        "line": 1547,
+        "end_line": 1576,
+        "args": "self, activity_id: str, *, exercise_record_id: str | None=None, answer_record_id: str | None=None, kinds: tuple[str, ...]=(), limit: int=6",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 472,
+        "end_line": 535,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "next_seq",
+        "line": 598,
+        "end_line": 603,
+        "args": "",
+        "async_method": false
+      },
+      {
+        "name": "bump_revision",
+        "line": 605,
+        "end_line": 608,
+        "args": "",
+        "async_method": false
+      },
+      {
+        "name": "operation",
+        "line": 969,
+        "end_line": 1049,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 1058,
+        "end_line": 1099,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 1108,
+        "end_line": 1146,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 1364,
+        "end_line": 1462,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 1513,
+        "end_line": 1514,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 1523,
+        "end_line": 1533,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 1540,
+        "end_line": 1543,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 1558,
+        "end_line": 1574,
+        "args": "connection",
+        "async_method": true
+      }
+    ]
+  },
+  {
+    "path": "backend/app/activities/interview_repository.py",
+    "methods": [
+      {
+        "name": "_interview_shape",
+        "line": 22,
+        "end_line": 53,
+        "args": "self, connection",
+        "async_method": true
+      },
+      {
+        "name": "_interview_schema_info",
+        "line": 55,
+        "end_line": 66,
+        "args": "self, connection",
+        "async_method": true
+      },
+      {
+        "name": "_interview_domain",
+        "line": 68,
+        "end_line": 81,
+        "args": "self, connection, activity_id, *, for_write=False",
+        "async_method": true
+      },
+      {
+        "name": "require_non_interview",
+        "line": 83,
+        "end_line": 87,
+        "args": "self, activity_id",
+        "async_method": true
+      },
+      {
+        "name": "_interview_require_non_domain",
+        "line": 89,
+        "end_line": 91,
+        "args": "self, connection, activity_id",
+        "async_method": true
+      },
+      {
+        "name": "_interview_require_call",
+        "line": 93,
+        "end_line": 103,
+        "args": "self, connection, activity, op, binding=None, tool=False",
+        "async_method": true
+      },
+      {
+        "name": "_interview_lock",
+        "line": 105,
+        "end_line": 114,
+        "args": "self, connection, aid, extra_sources=()",
+        "async_method": true
+      },
+      {
+        "name": "_interview_gate",
+        "line": 117,
+        "end_line": 124,
+        "args": "state, action",
+        "async_method": false
+      },
+      {
+        "name": "_interview_cas",
+        "line": 127,
+        "end_line": 131,
+        "args": "state, command",
+        "async_method": false
+      },
+      {
+        "name": "_interview_slot",
+        "line": 134,
+        "end_line": 139,
+        "args": "aid, command",
+        "async_method": false
+      },
+      {
+        "name": "_interview_insert_command",
+        "line": 141,
+        "end_line": 151,
+        "args": "self, connection, aid, command, slot, kind, frozen=None, duplicate=None",
+        "async_method": true
+      },
+      {
+        "name": "_interview_replay",
+        "line": 153,
+        "end_line": 165,
+        "args": "self, connection, state, aid, command",
+        "async_method": true
+      },
+      {
+        "name": "_interview_record",
+        "line": 167,
+        "end_line": 169,
+        "args": "self, connection, aid, rid",
+        "async_method": true
+      },
+      {
+        "name": "_interview_obsolete",
+        "line": 171,
+        "end_line": 180,
+        "args": "self, connection, aid, *, ancestor=None",
+        "async_method": true
+      },
+      {
+        "name": "_interview_insert_record",
+        "line": 182,
+        "end_line": 198,
+        "args": "self, connection, aid, key, head, kind, value, sources, *, parents=(), question=None, answer_version=None, supersedes=None, origin=None, model=None, ordinal=0",
+        "async_method": true
+      },
+      {
+        "name": "_interview_put_head",
+        "line": 200,
+        "end_line": 209,
+        "args": "self, connection, aid, head, old_revision=None",
+        "async_method": true
+      },
+      {
+        "name": "_interview_commit_command",
+        "line": 211,
+        "end_line": 213,
+        "args": "self, connection, aid, key, head, records",
+        "async_method": true
+      },
+      {
+        "name": "_interview_sources",
+        "line": 215,
+        "end_line": 221,
+        "args": "self, connection, aid",
+        "async_method": true
+      },
+      {
+        "name": "_interview_roles",
+        "line": 224,
+        "end_line": 227,
+        "args": "roles, sources",
+        "async_method": false
+      },
+      {
+        "name": "apply_interview_local",
+        "line": 229,
+        "end_line": 330,
+        "args": "self, aid, command, *, application_value=None",
+        "async_method": true
+      },
+      {
+        "name": "_interview_record_current",
+        "line": 332,
+        "end_line": 339,
+        "args": "self, connection, row",
+        "async_method": true
+      },
+      {
+        "name": "_interview_ref_body",
+        "line": 342,
+        "end_line": 348,
+        "args": "row, document, action",
+        "async_method": false
+      },
+      {
+        "name": "_interview_verify_frozen",
+        "line": 350,
+        "end_line": 394,
+        "args": "self, connection, state, command, frozen, *, check_budget=True",
+        "async_method": true
+      },
+      {
+        "name": "accept_interview_command",
+        "line": 396,
+        "end_line": 424,
+        "args": "self, aid, command, frozen",
+        "async_method": true
+      },
+      {
+        "name": "claim_interview_launch",
+        "line": 426,
+        "end_line": 440,
+        "args": "self, aid, key, request_sha",
+        "async_method": true
+      },
+      {
+        "name": "_locked_interview_binding",
+        "line": 442,
+        "end_line": 462,
+        "args": "self, connection, activity, op, binding=None, stage='mark'",
+        "async_method": true
+      },
+      {
+        "name": "validate_interview_request",
+        "line": 464,
+        "end_line": 473,
+        "args": "self, context, profile, frozen",
+        "async_method": true
+      },
+      {
+        "name": "_write_interview_outcome",
+        "line": 475,
+        "end_line": 510,
+        "args": "self, connection, activity, call, outcome, payload",
+        "async_method": true
+      },
+      {
+        "name": "_interview_confirm_integrity",
+        "line": 512,
+        "end_line": 519,
+        "args": "self, connection, call, payload",
+        "async_method": true
+      },
+      {
+        "name": "finish_interview_supervision",
+        "line": 521,
+        "end_line": 553,
+        "args": "self, aid, key, facts",
+        "async_method": true
+      },
+      {
+        "name": "_interview_result_sql",
+        "line": 555,
+        "end_line": 562,
+        "args": "self, connection, sql",
+        "async_method": true
+      },
+      {
+        "name": "_interview_snapshot",
+        "line": 564,
+        "end_line": 623,
+        "args": "self, connection, aid, *, key=None, rid=None, limit=20, before=None, details=False",
+        "async_method": true
+      },
+      {
+        "name": "_interview_view",
+        "line": 626,
+        "end_line": 640,
+        "args": "snapshot",
+        "async_method": false
+      },
+      {
+        "name": "read_interview_workspace",
+        "line": 642,
+        "end_line": 644,
+        "args": "self, aid",
+        "async_method": true
+      },
+      {
+        "name": "read_interview_command",
+        "line": 646,
+        "end_line": 665,
+        "args": "self, aid, key",
+        "async_method": true
+      },
+      {
+        "name": "read_interview_frozen_command",
+        "line": 667,
+        "end_line": 677,
+        "args": "self, aid, key, request_body",
+        "async_method": true
+      },
+      {
+        "name": "lookup_interview_replay",
+        "line": 679,
+        "end_line": 684,
+        "args": "self, aid, command",
+        "async_method": true
+      },
+      {
+        "name": "read_interview_identity",
+        "line": 686,
+        "end_line": 692,
+        "args": "self, aid",
+        "async_method": true
+      },
+      {
+        "name": "read_interview_round_refs",
+        "line": 694,
+        "end_line": 711,
+        "args": "self, aid, view_token",
+        "async_method": true
+      },
+      {
+        "name": "read_interview_history",
+        "line": 713,
+        "end_line": 723,
+        "args": "self, aid, limit=20, before_seq=None, view_token=None",
+        "async_method": true
+      },
+      {
+        "name": "read_interview_record",
+        "line": 725,
+        "end_line": 735,
+        "args": "self, aid, rid, view_token=None",
+        "async_method": true
+      },
+      {
+        "name": "read",
+        "line": 84,
+        "end_line": 86,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "write",
+        "line": 231,
+        "end_line": 328,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "accept",
+        "line": 397,
+        "end_line": 422,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "claim",
+        "line": 427,
+        "end_line": 439,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "validate",
+        "line": 465,
+        "end_line": 472,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "unresolved",
+        "line": 525,
+        "end_line": 531,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "finish",
+        "line": 540,
+        "end_line": 551,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "read",
+        "line": 643,
+        "end_line": 643,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "read",
+        "line": 647,
+        "end_line": 662,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "read",
+        "line": 669,
+        "end_line": 676,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "lookup",
+        "line": 680,
+        "end_line": 682,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "read",
+        "line": 687,
+        "end_line": 691,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "read",
+        "line": 695,
+        "end_line": 710,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "read",
+        "line": 716,
+        "end_line": 722,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "read",
+        "line": 726,
+        "end_line": 734,
+        "args": "connection",
+        "async_method": true
+      }
+    ]
+  },
+  {
+    "path": "backend/app/memory/repository.py",
+    "methods": [
+      {
+        "name": "plain",
+        "line": 19,
+        "end_line": 24,
+        "args": "value",
+        "async_method": false
+      },
+      {
+        "name": "impact_token",
+        "line": 27,
+        "end_line": 30,
+        "args": "head, revision",
+        "async_method": false
+      },
+      {
+        "name": "_memory_require_call",
+        "line": 35,
+        "end_line": 45,
+        "args": "activity, operation_id, binding=None, tool=False",
+        "async_method": false
+      },
+      {
+        "name": "_memory_result_sql",
+        "line": 47,
+        "end_line": 65,
+        "args": "self, connection, sql",
+        "async_method": true
+      },
+      {
+        "name": "_memory_teaching_sql",
+        "line": 67,
+        "end_line": 72,
+        "args": "self, connection, sql",
+        "async_method": true
+      },
+      {
+        "name": "_memory_schema_info",
+        "line": 74,
+        "end_line": 120,
+        "args": "self, connection",
+        "async_method": true
+      },
+      {
+        "name": "_memory_shape_hashes",
+        "line": 122,
+        "end_line": 140,
+        "args": "self, connection, tables",
+        "async_method": true
+      },
+      {
+        "name": "_memory_bindings_reliable",
+        "line": 142,
+        "end_line": 159,
+        "args": "self, connection",
+        "async_method": true
+      },
+      {
+        "name": "_memory_no_v2_sql",
+        "line": 161,
+        "end_line": 168,
+        "args": "self, connection, expression",
+        "async_method": true
+      },
+      {
+        "name": "_memory_selected_sql",
+        "line": 170,
+        "end_line": 176,
+        "args": "self, connection, expression",
+        "async_method": true
+      },
+      {
+        "name": "probe_memory",
+        "line": 178,
+        "end_line": 195,
+        "args": "self",
+        "async_method": true
+      },
+      {
+        "name": "_memory_sql_guard",
+        "line": 197,
+        "end_line": 204,
+        "args": "self, connection, activity_expression, result_alias=None",
+        "async_method": true
+      },
+      {
+        "name": "_memory_assert_schema",
+        "line": 206,
+        "end_line": 208,
+        "args": "self, connection",
+        "async_method": true
+      },
+      {
+        "name": "_memory_lock_prefix",
+        "line": 210,
+        "end_line": 279,
+        "args": "self, connection, activity_id, extra_sources=(), memory_ids=(), origin_ids=()",
+        "async_method": true
+      },
+      {
+        "name": "_memory_revision_rows",
+        "line": 281,
+        "end_line": 287,
+        "args": "self, connection, memory_id, version=None",
+        "async_method": true
+      },
+      {
+        "name": "_memory_receipt",
+        "line": 289,
+        "end_line": 297,
+        "args": "self, connection, row, key=None, request_sha=None, duplicate=None",
+        "async_method": true
+      },
+      {
+        "name": "read_memory_command",
+        "line": 299,
+        "end_line": 305,
+        "args": "self, key",
+        "async_method": true
+      },
+      {
+        "name": "read_memory_snapshot",
+        "line": 307,
+        "end_line": 353,
+        "args": "self, memory_id=None, version=None, limit=20, cursor_token=None",
+        "async_method": true
+      },
+      {
+        "name": "preview_memory_change",
+        "line": 355,
+        "end_line": 370,
+        "args": "self, memory_id, expected_revision, action",
+        "async_method": true
+      },
+      {
+        "name": "_memory_capture",
+        "line": 372,
+        "end_line": 433,
+        "args": "self, connection, activity_id, record_id",
+        "async_method": true
+      },
+      {
+        "name": "preview_memory_observation",
+        "line": 435,
+        "end_line": 443,
+        "args": "self, activity_id, record_id",
+        "async_method": true
+      },
+      {
+        "name": "_memory_insert_receipt",
+        "line": 445,
+        "end_line": 450,
+        "args": "self, connection, command, after_revision, after_version, effect, meta, manifest=None",
+        "async_method": true
+      },
+      {
+        "name": "apply_memory_command",
+        "line": 452,
+        "end_line": 582,
+        "args": "self, command: MemoryCommandInput",
+        "async_method": true
+      },
+      {
+        "name": "read_memory_selection",
+        "line": 584,
+        "end_line": 611,
+        "args": "self, activity_id, include_bodies=False",
+        "async_method": true
+      },
+      {
+        "name": "_memory_insert_selection",
+        "line": 613,
+        "end_line": 631,
+        "args": "self, connection, spec, selection, create_sha",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 179,
+        "end_line": 194,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 300,
+        "end_line": 304,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 316,
+        "end_line": 352,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 356,
+        "end_line": 369,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 436,
+        "end_line": 442,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 453,
+        "end_line": 560,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "operation",
+        "line": 585,
+        "end_line": 610,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "confirm",
+        "line": 565,
+        "end_line": 579,
+        "args": "connection",
+        "async_method": true
+      }
+    ]
+  },
+  {
+    "path": "backend/app/preview/repository.py",
+    "methods": [
+      {
+        "name": "plain",
+        "line": 16,
+        "end_line": 20,
+        "args": "value",
+        "async_method": false
+      },
+      {
+        "name": "html_schema_shape",
+        "line": 24,
+        "end_line": 56,
+        "args": "self, connection",
+        "async_method": true
+      },
+      {
+        "name": "_html_assert_schema",
+        "line": 58,
+        "end_line": 64,
+        "args": "self, connection",
+        "async_method": true
+      },
+      {
+        "name": "_html_sources",
+        "line": 66,
+        "end_line": 74,
+        "args": "self, connection, activity_id",
+        "async_method": true
+      },
+      {
+        "name": "_html_parent_locked",
+        "line": 76,
+        "end_line": 154,
+        "args": "self, connection, activity, parent",
+        "async_method": true
+      },
+      {
+        "name": "accept_html_command",
+        "line": 156,
+        "end_line": 191,
+        "args": "self, activity_id, command, renderer_sha256, config_sha256",
+        "async_method": true
+      },
+      {
+        "name": "claim_html_command",
+        "line": 193,
+        "end_line": 200,
+        "args": "self, aid, key",
+        "async_method": true
+      },
+      {
+        "name": "_html_locked_binding",
+        "line": 202,
+        "end_line": 217,
+        "args": "self, connection, activity, op, binding=None, *, allow_invalidated=False",
+        "async_method": true
+      },
+      {
+        "name": "_html_require_call",
+        "line": 219,
+        "end_line": 225,
+        "args": "self, connection, activity, op, binding",
+        "async_method": true
+      },
+      {
+        "name": "verify_html_request",
+        "line": 227,
+        "end_line": 236,
+        "args": "self, profile",
+        "async_method": true
+      },
+      {
+        "name": "_write_html_outcome",
+        "line": 238,
+        "end_line": 256,
+        "args": "self, connection, activity, call, outcome, payload_triple",
+        "async_method": true
+      },
+      {
+        "name": "_html_confirm_integrity",
+        "line": 258,
+        "end_line": 263,
+        "args": "self, connection, call, payload_triple",
+        "async_method": true
+      },
+      {
+        "name": "finish_html_supervision",
+        "line": 265,
+        "end_line": 277,
+        "args": "self, aid, key, supervision",
+        "async_method": true
+      },
+      {
+        "name": "read_html_command",
+        "line": 279,
+        "end_line": 292,
+        "args": "self, aid, key",
+        "async_method": true
+      },
+      {
+        "name": "read_html_artifact",
+        "line": 294,
+        "end_line": 310,
+        "args": "self, aid, artifact_id",
+        "async_method": true
+      },
+      {
+        "name": "_read_html_stop_confirmation",
+        "line": 312,
+        "end_line": 320,
+        "args": "self, aid, pid",
+        "async_method": true
+      },
+      {
+        "name": "list_html_artifacts",
+        "line": 322,
+        "end_line": 330,
+        "args": "self, aid, before=None",
+        "async_method": true
+      },
+      {
+        "name": "reserve_html_preview",
+        "line": 332,
+        "end_line": 353,
+        "args": "self, aid, artifact_id, command, identity, reserve_seconds",
+        "async_method": true
+      },
+      {
+        "name": "update_html_preview",
+        "line": 355,
+        "end_line": 365,
+        "args": "self, pid, control_key, state, *, cid=None, first_receipt=None, confirmation=None, elapsed=None",
+        "async_method": true
+      },
+      {
+        "name": "read_html_preview",
+        "line": 367,
+        "end_line": 378,
+        "args": "self, aid, pid",
+        "async_method": true
+      },
+      {
+        "name": "html_preview_budget",
+        "line": 380,
+        "end_line": 386,
+        "args": "self, aid",
+        "async_method": true
+      },
+      {
+        "name": "transaction",
+        "line": 161,
+        "end_line": 190,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "transaction",
+        "line": 194,
+        "end_line": 199,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "transaction",
+        "line": 228,
+        "end_line": 235,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "transaction",
+        "line": 266,
+        "end_line": 276,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "transaction",
+        "line": 280,
+        "end_line": 291,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "transaction",
+        "line": 295,
+        "end_line": 309,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "transaction",
+        "line": 314,
+        "end_line": 319,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "transaction",
+        "line": 323,
+        "end_line": 329,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "transaction",
+        "line": 333,
+        "end_line": 352,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "transaction",
+        "line": 356,
+        "end_line": 364,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "transaction",
+        "line": 368,
+        "end_line": 377,
+        "args": "connection",
+        "async_method": true
+      },
+      {
+        "name": "transaction",
+        "line": 381,
+        "end_line": 385,
+        "args": "connection",
+        "async_method": true
+      }
+    ]
+  },
+  {
+    "path": "backend/app/worker/launcher.py",
+    "methods": [
+      {
+        "name": "_api",
+        "line": 54,
+        "end_line": 78,
+        "args": "",
+        "async_method": false
+      },
+      {
+        "name": "_remaining",
+        "line": 81,
+        "end_line": 82,
+        "args": "deadline_ns: int",
+        "async_method": false
+      },
+      {
+        "name": "_environment_block",
+        "line": 85,
+        "end_line": 95,
+        "args": "",
+        "async_method": false
+      },
+      {
+        "name": "_request",
+        "line": 184,
+        "end_line": 238,
+        "args": "ledger, config, activity_id, executor_id, command, run_tag, mapping_name, deadline_ns, one_call=None, tool_action=None",
+        "async_method": false
+      },
+      {
+        "name": "_decode_outcome",
+        "line": 241,
+        "end_line": 271,
+        "args": "frame: dict, run_tag: str, activity_id: str",
+        "async_method": false
+      },
+      {
+        "name": "run_supervised_window",
+        "line": 274,
+        "end_line": 410,
+        "args": "ledger: PostgresAdmissionLedger, config: SessionConfig, activity_id: str, executor_id: str, command: WorkerCommand, *, run_tag: str, one_call: OneCallInput | None=None, tool_action: ToolExecutionInput | None=None",
+        "async_method": false
+      },
+      {
+        "name": "__init__",
+        "line": 49,
+        "end_line": 51,
+        "args": "self, error_code: int, partial=None",
+        "async_method": false
+      },
+      {
+        "name": "__init__",
+        "line": 101,
+        "end_line": 104,
+        "args": "self, api, info: _PROCESS_INFORMATION",
+        "async_method": false
+      },
+      {
+        "name": "create",
+        "line": 107,
+        "end_line": 129,
+        "args": "cls, mapping_name: str",
+        "async_method": false
+      },
+      {
+        "name": "pid",
+        "line": 132,
+        "end_line": 133,
+        "args": "self",
+        "async_method": false
+      },
+      {
+        "name": "creation_time_100ns",
+        "line": 135,
+        "end_line": 142,
+        "args": "self",
+        "async_method": false
+      },
+      {
+        "name": "resume",
+        "line": 144,
+        "end_line": 147,
+        "args": "self",
+        "async_method": false
+      },
+      {
+        "name": "wait",
+        "line": 149,
+        "end_line": 158,
+        "args": "self, seconds: float",
+        "async_method": false
+      },
+      {
+        "name": "exit_code",
+        "line": 160,
+        "end_line": 164,
+        "args": "self",
+        "async_method": false
+      },
+      {
+        "name": "terminate",
+        "line": 166,
+        "end_line": 169,
+        "args": "self",
+        "async_method": false
+      },
+      {
+        "name": "close",
+        "line": 171,
+        "end_line": 181,
+        "args": "self",
+        "async_method": false
+      }
+    ]
+  },
+  {
+    "path": "backend/app/worker/gate.py",
+    "methods": [
+      {
+        "name": "__init__",
+        "line": 20,
+        "end_line": 25,
+        "args": "self, gateway: Any",
+        "async_method": false
+      },
+      {
+        "name": "active_calls",
+        "line": 28,
+        "end_line": 29,
+        "args": "self",
+        "async_method": false
+      },
+      {
+        "name": "closed",
+        "line": 32,
+        "end_line": 33,
+        "args": "self",
+        "async_method": false
+      },
+      {
+        "name": "arm",
+        "line": 35,
+        "end_line": 39,
+        "args": "self",
+        "async_method": true
+      },
+      {
+        "name": "call",
+        "line": 41,
+        "end_line": 51,
+        "args": "self, context: Any, request: Any",
+        "async_method": true
+      },
+      {
+        "name": "close",
+        "line": 53,
+        "end_line": 60,
+        "args": "self, *, timeout_seconds: float",
+        "async_method": true
+      }
+    ]
+  }
+]

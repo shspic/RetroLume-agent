@@ -1,0 +1,131 @@
+[
+  {
+    "at": "2026-10-01T21:05:00+0800",
+    "entry": "continuation-01 初始化",
+    "actor": "WorkBuddy（GLM-5.3-Flash），非 095 Claude 窗口、非 096 审计窗口，如实登记",
+    "old_ledger_inherited": {
+      "note": "旧账保留不清零：TASK-095 原实现窗口 7 次入口/6 次精确容器 start；claim 口径 10 与保守 SUP 尝试 14 分开记录；账载业务 173.720 秒/收尾 23.217 秒；abort 漏时保留；旧额外尝试不追认合规；旧 13 不作精确总数",
+      "prior_8h_investment_minutes": "unknown",
+      "prior_8h_note": "095 旧 8 小时主动投入的实际已用分钟数无法可靠读取（原账本仅记录批次运行秒，无投入分钟账）；按卡面规则标未知，本轮以新增 120 分钟为硬上限",
+      "prior_offline_seconds": "原声明少于 1800 秒；具体可证范围不虚算新精确合计"
+    },
+    "this_round_budget": {
+      "new_entries_max": 2,
+      "new_container_starts_max": 2,
+      "cumulative_entries_cap": 9,
+      "cumulative_container_starts_cap": 8,
+      "new_business_seconds_max": 600,
+      "per_batch_business_seconds_max": 300,
+      "cleanup_per_batch_seconds_max": 120,
+      "cleanup_cumulative_seconds_max": 240,
+      "new_offline_seconds_max": 300,
+      "windows_model_sessions": 0,
+      "real_model_external_userdb_cost": 0
+    },
+    "plan": "阶段1 三处修正（D1 materials 默认来源恢复；D2 轮询不重叠/隐藏暂停/卸载清理/迟到保护；O1 list_operations 无正文投影）+ 测试适配；阶段2 离线验证；阶段3 一次最终 PG 批（start #1）；阶段4 一次零 PG 浏览器批（入口 #2）；阶段5 收尾与结果置顶"
+  },
+  {
+    "at": "2026-10-01T21:25:44+0800",
+    "batch": "c01-pg",
+    "phase": "start",
+    "guard": {
+      "id": "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4",
+      "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+      "state_running": false,
+      "pid": 0,
+      "port": "127.0.0.1:55441",
+      "volume": "retrolume-task-088-g3-w1-data"
+    },
+    "note": "pre-batch container state verified stopped before start; entry #1 of 2"
+  },
+  {
+    "at": "2026-10-01T21:25:50+0800",
+    "batch": "c01-pg",
+    "phase": "abort",
+    "container_starts": 1,
+    "reason": "task095 objects identity checks failed",
+    "preflight": {
+      "role_exists": 1,
+      "db_exists": 1,
+      "sessions": 0
+    },
+    "identity": {
+      "owner": "retrolume_task095_synth",
+      "role": [
+        true,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "memberships": 0,
+      "schema_tables": 0
+    },
+    "container_after": {
+      "running": false,
+      "pid": 0
+    }
+  },
+  {
+    "at": "2026-10-01T21:28:25+0800",
+    "batch": "c01-merged",
+    "phase": "start",
+    "guard": {
+      "id": "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4",
+      "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+      "state_running": false,
+      "pid": 0,
+      "port": "127.0.0.1:55441",
+      "volume": "retrolume-task-088-g3-w1-data"
+    },
+    "note": "entry #2 of 2 (merged PG + browser segments); prior entry #1 aborted on runner fixture bug (schema probe in wrong database), failure original preserved"
+  },
+  {
+    "at": "2026-10-01T21:28:56+0800",
+    "batch": "c01-merged",
+    "phase": "end",
+    "container_starts": 1,
+    "pg_seconds": 15.275,
+    "browser_seconds": 16.242,
+    "cleanup_seconds": 0.685,
+    "total_seconds": 31.807,
+    "pg_ok": false,
+    "browser_ok": false,
+    "port_was_free": true,
+    "port_released": true,
+    "container_after": {
+      "running": false,
+      "pid": 0
+    },
+    "result": "fail"
+  },
+  {
+    "at": "2026-10-01T21:46:14+0800",
+    "batch": "c01-merged",
+    "phase": "failure-analysis-and-fixes",
+    "pg_segment_failure": {
+      "test": "ReadProjectionTests.test_activity_list_pagination_cursor",
+      "symptom": "set(seen) 多出活动 d77fe53c-8629-4fc2-8f2e-85fa4a0772ad",
+      "root_cause": "专用库存在 095 批次3 运行期返工中断残留的合成活动行；本用例首次在非空库上运行，恰等断言的空库隔离假设失效（095 批次1 通过时库为全新空库）。非产品缺陷：list_activities/游标逻辑未改动且该例其余断言（limit/游标/倒序）全部成立",
+      "fix": "断言改为：本用例 3 活动必须全部被翻页遍历到 + 首页只含本用例最新创建行 + 无重复 + 全局倒序；库内残留行按卡不删除",
+      "fix_verified": "静态/编译通过；PG 实机复验 not_run（入口预算到限）"
+    },
+    "browser_segment_failure": {
+      "symptom": "首启 ReferenceError: fulfilAfter is not defined（s4 慢响应分支），0 场景完成",
+      "root_cause": "脚本拼写不一致 fulfilAfter(调用)/fulfillAfter(定义)",
+      "fix": "统一拼写；另静态复查修正三处：fulfilments 锚点未实现改用 waitForResponse 精确锚定迟到响应、s1 恒真断言修正为前缀判断、inflightPeak 断言限定 s4 观察窗增量；并加固 safeFulfill（导航竞态）、reload 前 settle、s5/s8 按 t_start 过滤",
+      "fix_verified": "node --check 通过；实机运行 not_run（入口预算到限）"
+    },
+    "budget_close": {
+      "entries_used": "2/2（#1 run_pg_batch.py 预检 runner 夹具错误 abort；#2 run_final_merged.py 合并批）",
+      "container_starts_used": "2/2",
+      "browser_starts_used": "1/2（#2 合并批内首启崩溃；二启额度剩余但无承载入口）",
+      "business_seconds": "PG 段 15.275 + 浏览器段 16.242（合计 31.517 / 600 上限）",
+      "cleanup_seconds": "0.685（/240 上限）；容器批末 Running=false/Pid=0，端口 18095 释放",
+      "offline_seconds": "准备与静态检查（编译/node --check/复制哈希）均在 300 秒上限内；两轮离线 unittest 合计约 10 秒（准备阶段 9.416s + 定向 0.521s）",
+      "stop_rule": "卡面预算到限：完成独立部分并交回，不启动第三个真实入口"
+    }
+  }
+]

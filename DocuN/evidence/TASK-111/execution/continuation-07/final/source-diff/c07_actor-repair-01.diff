@@ -1,0 +1,11 @@
+--- C07_failed_fixture
++++ C07_fixed_fixture
+@@ -48,6 +48,8 @@
+ class ClosedActualStderr:
+     """触发前保留真实读句柄，触发后对已关闭的同一读端执行实际read。"""
+     def __init__(self,raw,c,trigger):self.raw,self.c,self.trigger=raw,c,trigger
++    @property
++    def closed(self):return self.raw.closed
+     def fileno(self):return self.raw.fileno()
+     def close(self):self.raw.close()
+     def read(self,count):

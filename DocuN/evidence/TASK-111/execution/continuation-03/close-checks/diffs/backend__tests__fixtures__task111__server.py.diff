@@ -1,0 +1,39 @@
+--- backend/tests/fixtures/task111/server.py.pre
++++ backend/tests/fixtures/task111/server.py.post
+@@ -8,7 +8,7 @@
+ import sys,threading,time
+ from pydantic import SecretStr
+ import uvicorn
+-from .control import ROOT,EVIDENCE,CONTINUE_ROOT,PERMIT,reserve,event,atomic
++from .control import ROOT,EVIDENCE,CONTINUE_ROOT,PERMIT,reserve,event,atomic,preview_name,synthetic_root
+ 
+ 
+ def main():
+@@ -27,7 +27,7 @@
+     from app.runtime import psycopg_compatible_loop_factory
+     os.environ["RETROLUME_DATABASE_URL"]=database
+     os.environ["RETROLUME_ACTIVITY_CONFIG"]=str(ROOT/"config/activity.example.json")
+-    data=EVIDENCE/"synthetic/data";backup=EVIDENCE/"synthetic/backup";data.mkdir(parents=True,exist_ok=True);backup.mkdir(exist_ok=True)
++    data=synthetic_root()/"data";backup=synthetic_root()/"backup";data.mkdir(parents=True,exist_ok=True);backup.mkdir(exist_ok=True)
+     os.environ["RETROLUME_DATA_DIR"]=str(data);os.environ["RETROLUME_BACKUP_DIR"]=str(backup)
+     app=create_app()
+     app.state.session_token=os.environ["RETROLUME_TASK111_SESSION"]
+@@ -35,16 +35,9 @@
+       model_service=ModelServiceConfig(provider="deepseek_chat_completions",base_url="https://api.deepseek.com",model="task111-synthetic",
+         api_key=SecretStr(secrets.token_urlsafe(32)),timeout_seconds=1.0,max_request_bytes=65536,max_response_bytes=65536,max_output_tokens_limit=4096),
+       create_layer=LayerState(True),continue_layer=LayerState(True),teaching_layer=LayerState(True),teaching_output_tokens=2048,html_generation_layer=LayerState(True),html_output_tokens=4096)
+-    policy=HostPolicy(**policy_data,registry_dir=(EVIDENCE/"synthetic/http-control").resolve(),authorization=PERMIT,owner_name="Global\\RetroLumePreviewV2Task111")
++    policy=HostPolicy(**policy_data,registry_dir=(synthetic_root()/"http-control").resolve(),authorization=PERMIT,owner_name="Global\\RetroLumePreviewV2Task111")
+     def name(pid,generation):
+-        count=reserve("preview_creates",{"preview_id":pid})
+-        plan=CONTINUE_ROOT/"preview-name-plan.json"
+-        if plan.exists():
+-            names=json.loads(plan.read_text(encoding="utf-8"))
+-            if not names or names[0] not in [str(n).zfill(2) for n in range(2,15)]:raise RuntimeError("fixed preview name plan")
+-            chosen=names.pop(0);atomic(plan,names)
+-        else:chosen=str(count).zfill(2)
+-        return "retrolume-task-111-g11-preview-"+chosen
++        return preview_name(pid,generation)
+     def observer(kind,data):
+         if kind=="start_attempt":reserve("preview_starts",data)
+         event("preview_"+kind,data)

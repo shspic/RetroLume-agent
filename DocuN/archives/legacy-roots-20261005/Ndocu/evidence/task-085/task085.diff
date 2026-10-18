@@ -1,0 +1,1598 @@
+--- pre/backend/app/worker/__init__.py
++++ post/backend/app/worker/__init__.py
+@@ -4,6 +4,11 @@
+ from .gate import ClosingCallGate, GateClosed
+ from .launcher import run_supervised_window
+ from .session import SessionConfig, SessionOutcome
+-from .worker_main import run_controlled_worker
++from .one_call import OneCallInput, run_one_call
+ 
+-__all__ = ["WorkerCommand", "ClosingCallGate", "GateClosed", "SessionConfig", "SessionOutcome", "run_controlled_worker", "run_supervised_window"]
++def run_controlled_worker(*args, **kwargs):
++    from .worker_main import run_controlled_worker as run
++    return run(*args, **kwargs)
++
++
++__all__ = ["WorkerCommand", "ClosingCallGate", "GateClosed", "SessionConfig", "SessionOutcome", "OneCallInput", "run_one_call", "run_controlled_worker", "run_supervised_window"]
+--- pre/backend/app/worker/command.py
++++ post/backend/app/worker/command.py
+@@ -13,7 +13,7 @@
+ 
+ @dataclass(frozen=True)
+ class WorkerCommand:
+-    """Only the benign internal task is wired; product gateway injection is separate."""
++    """固定任务枚举；秘密和正文只能走映射。"""
+ 
+     task: str = "idle"
+ 
+@@ -25,7 +25,13 @@
+     def cwd(self) -> str:
+         return str(_BACKEND)
+ 
+-    def argv(self) -> list[str]:
+-        return [str(_INTERPRETER), "-B", "-m", "app.worker.worker_main", self.task]
++    def argv(self, mapping_name: str | None = None) -> list[str]:
++        result = [str(_INTERPRETER), "-B", "-m", "app.worker.worker_main", self.task]
++        if self.task == "one_call":
++            from .supervisor_ipc import validate_name
++            result.append(validate_name(mapping_name))
++        elif mapping_name is not None:
++            raise ValueError("idle does not accept business data")
++        return result
+ 
+ 
+--- pre/backend/app/worker/launcher.py
++++ post/backend/app/worker/launcher.py
+@@ -18,6 +18,8 @@
+ from .command import WorkerCommand, _BACKEND, _INTERPRETER
+ from .session import SessionConfig, SessionOutcome
+ from .supervisor_ipc import NamedMapping
++from .one_call import OneCallInput, decode_receipt, validate_identity
++from app.capabilities.contracts import CallContext
+ from .windows_job import (_FILETIME, _PROCESS_INFORMATION, _STARTUPINFOW,
+                           CREATE_NO_WINDOW, CREATE_SUSPENDED, WAIT_OBJECT_0,
+                           WAIT_TIMEOUT)
+@@ -167,7 +169,7 @@
+             raise ManagerControlError("CloseHandle(SUP): " + ",".join(errors))
+ 
+ 
+-def _request(ledger, config, activity_id, executor_id, command, run_tag, mapping_name, deadline_ns) -> dict:
++def _request(ledger, config, activity_id, executor_id, command, run_tag, mapping_name, deadline_ns, one_call=None) -> dict:
+     if type(ledger) is not PostgresAdmissionLedger or type(config) is not SessionConfig or type(command) is not WorkerCommand:
+         raise TypeError("fixed ledger, config and command required")
+     if type(ledger._dsn) is not str or not 1 <= len(ledger._dsn.encode("utf-8")) <= 4096 or "\x00" in ledger._dsn:
+@@ -178,12 +180,21 @@
+         raise ValueError("executor invalid")
+     if type(run_tag) is not str or not 1 <= len(run_tag) <= 64 or not run_tag.isascii() or not run_tag.replace("-", "").replace("_", "").isalnum():
+         raise ValueError("runTag invalid")
++    if command.task == "one_call":
++        if type(one_call) is not OneCallInput:
++            raise ValueError("one_call requires explicit input")
++        validate_identity(activity_id, executor_id, one_call.operation_id, run_tag)
++        if one_call.service.timeout_seconds > config.request_timeout_seconds:
++            raise ValueError("model timeout exceeds session")
++    elif one_call is not None:
++        raise ValueError("idle cannot carry business data")
+     return {
+-        "protocol": 1, "mapping_name": mapping_name,
++        "protocol": 2, "mapping_name": mapping_name,
+         "activity_id": activity_id, "executor_id": executor_id,
+         "run_tag": run_tag, "deadline_ns": deadline_ns,
+         "command": {"task": command.task},
+         "config": asdict(config),
++        "one_call": one_call.to_wire() if one_call is not None else None,
+         "ledger": {
+             "dsn": ledger._dsn,
+             "connect_timeout_seconds": ledger._connect_timeout,
+@@ -194,7 +205,7 @@
+ 
+ 
+ def _decode_outcome(frame: dict, run_tag: str, activity_id: str) -> SessionOutcome:
+-    if type(frame) is not dict or frame.get("protocol") != 1 or frame.get("run_tag") != run_tag or frame.get("activity_id") != activity_id:
++    if type(frame) is not dict or set(frame) != {"protocol", "run_tag", "activity_id", "outcome"} or frame.get("protocol") != 2 or frame.get("run_tag") != run_tag or frame.get("activity_id") != activity_id:
+         raise ManagerControlError("SUP response identity mismatch")
+     data = frame.get("outcome")
+     if type(data) is not dict or set(data) != {f.name for f in fields(SessionOutcome)}:
+@@ -220,6 +231,7 @@
+     command: WorkerCommand,
+     *,
+     run_tag: str,
++    one_call: OneCallInput | None = None,
+ ) -> SessionOutcome:
+     """Blocking internal entry; no application event-loop or business grant."""
+     if os.name != "nt":
+@@ -235,7 +247,7 @@
+     deadline_ns = started_ns + int(config.manager_total_seconds * 1e9)
+     run_deadline_ns = deadline_ns - int(config.cleanup_seconds * 1e9)
+     mapping_name = "Local\\RetroLume.SUP." + secrets.token_hex(16)
+-    request = _request(ledger, config, activity_id, executor_id, command, run_tag, mapping_name, deadline_ns)
++    request = _request(ledger, config, activity_id, executor_id, command, run_tag, mapping_name, deadline_ns, one_call)
+     mapping = None
+     process = None
+     outcome = None
+@@ -271,7 +283,21 @@
+                         state = "manager_timeout_unconfirmed"
+                     elif process.exit_code() == 0:
+                         outcome = _decode_outcome(mapping.read_result(), run_tag, activity_id)
++                        if outcome.model_receipt is not None:
++                            if one_call is None or outcome.generation is None:
++                                raise ManagerControlError("unexpected business receipt")
++                            context = CallContext.model_validate(outcome.model_receipt.get("context"), strict=True)
++                            if (context.activity_id != activity_id or context.executor_id != executor_id
++                                    or context.operation_id != one_call.operation_id
++                                    or context.execution_generation != outcome.generation):
++                                raise ManagerControlError("business identity mismatch")
++                            result = decode_receipt(outcome.model_receipt, context, run_tag)
++                            if result.provider != one_call.service.provider or result.configured_model != one_call.service.model:
++                                raise ManagerControlError("business model mismatch")
++                        elif one_call is not None and outcome.state == "settled":
++                            raise ManagerControlError("missing business receipt")
+     except BaseException as exc:
++        outcome = None
+         failure = exc
+         errors.append(f"launcher:{type(exc).__name__}")
+     finally:
+--- pre/backend/app/worker/one_call.py
++++ post/backend/app/worker/one_call.py
+@@ -0,0 +1,183 @@
++"""内部单次调用的数据合同；回执只是未提交的模型返回，不是业务写入授权。"""
++from __future__ import annotations
++
++from dataclasses import asdict, dataclass, field, fields
++import json
++import re
++import time
++from uuid import UUID
++
++from pydantic import TypeAdapter
++
++from app.capabilities.contracts import (
++    CallContext, ModelCallRequest, ModelCallResult, ModelServiceConfig,
++)
++
++MAX_BODY_BYTES = 65_536
++MAX_DATA_BYTES = 131_072
++_ID = re.compile(r"[A-Za-z0-9._:/-]{1,128}\Z")
++_TAG = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
++
++
++def bounded(value, limit=MAX_DATA_BYTES):
++    try:
++        raw = json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
++        if len(raw) > limit:
++            raise ValueError
++    except (ValueError, TypeError, RecursionError):
++        raise ValueError("one_call data exceeds contract") from None
++    return value
++
++
++def exact(value, names):
++    if type(value) is not dict or set(value) != set(names):
++        raise ValueError("one_call schema mismatch")
++
++
++def validate_identity(activity_id, executor_id, operation_id, run_tag):
++    if type(activity_id) is not str or str(UUID(activity_id)) != activity_id:
++        raise ValueError("invalid activity identity")
++    if any(type(x) is not str or _ID.fullmatch(x) is None for x in (executor_id, operation_id)):
++        raise ValueError("invalid executor/operation identity")
++    if type(run_tag) is not str or _TAG.fullmatch(run_tag) is None:
++        raise ValueError("invalid run identity")
++
++
++@dataclass(frozen=True)
++class OneCallInput:
++    operation_id: str
++    request: ModelCallRequest = field(repr=False)
++    service: ModelServiceConfig = field(repr=False)
++
++    def to_wire(self):
++        if type(self.operation_id) is not str or _ID.fullmatch(self.operation_id) is None:
++            raise ValueError("invalid operation identity")
++        if type(self.request) is not ModelCallRequest or type(self.service) is not ModelServiceConfig:
++            raise TypeError("typed request and service required")
++        if max(self.service.max_request_bytes, self.service.max_response_bytes) > MAX_BODY_BYTES:
++            raise ValueError("internal one_call supports at most 65536 configured body bytes")
++        if len(self.service.api_key.get_secret_value().encode("utf-8")) > 4096:
++            raise ValueError("credential exceeds internal limit")
++        service = self.service.model_dump(mode="json")
++        service["api_key"] = self.service.api_key.get_secret_value()
++        value = bounded({"operation_id": self.operation_id,
++                         "request": self.request.model_dump(mode="json"), "service": service})
++        # 重新校验，避免 model_construct/model_copy 绕过冻结模型的正常验证。
++        try:
++            ModelServiceConfig.model_validate(service)
++            ModelCallRequest.model_validate(value["request"])
++        except Exception:
++            raise ValueError("invalid one_call configuration/request") from None
++        return value
++
++    @classmethod
++    def from_wire(cls, value):
++        exact(value, ("operation_id", "request", "service"))
++        bounded(value)
++        try:
++            result = cls(value["operation_id"], ModelCallRequest.model_validate(value["request"]),
++                         ModelServiceConfig.model_validate(value["service"]))
++            result.to_wire()
++            return result
++        except Exception:
++            raise ValueError("invalid one_call input") from None
++
++
++def worker_request(call, ledger_data, lease, run_tag, stop_ns, call_seconds):
++    context = CallContext(activity_id=lease.activity_id, executor_id=lease.executor_id,
++                          operation_id=call.operation_id, execution_generation=lease.execution_generation,
++                          scope_revision=lease.scope_revision)
++    return {"protocol": 2, "call": call.to_wire(), "ledger": ledger_data,
++            "context": context.model_dump(), "run_tag": run_tag,
++            "stop_ns": stop_ns, "call_seconds": call_seconds}
++
++
++def decode_worker_request(value):
++    exact(value, ("protocol", "call", "ledger", "context", "run_tag", "stop_ns", "call_seconds"))
++    if type(value["protocol"]) is not int or value["protocol"] != 2:
++        raise ValueError("worker protocol mismatch")
++    call = OneCallInput.from_wire(value["call"])
++    context = CallContext.model_validate(value["context"], strict=True)
++    validate_identity(context.activity_id, context.executor_id, call.operation_id, value["run_tag"])
++    if context.operation_id != call.operation_id or context.execution_generation < 1:
++        raise ValueError("worker identity mismatch")
++    exact(value["ledger"], ("dsn", "connect_timeout_seconds", "statement_timeout_ms", "lock_timeout_ms"))
++    dsn = value["ledger"]["dsn"]
++    if type(dsn) is not str or not 1 <= len(dsn.encode("utf-8")) <= 4096 or "\0" in dsn:
++        raise ValueError("invalid ledger configuration")
++    seconds = value["call_seconds"]
++    if type(seconds) not in (float, int) or not 0 < seconds <= 120 or call.service.timeout_seconds > seconds:
++        raise ValueError("call timeout incompatible with session")
++    if type(value["stop_ns"]) is not int or (value["stop_ns"] - time.monotonic_ns()) / 1e9 <= seconds + 0.25:
++        raise ValueError("insufficient actual call window")
++    return call, context
++
++
++def receipt(result, context, run_tag):
++    return bounded({"protocol": 2, "context": context.model_dump(), "run_tag": run_tag,
++                    "business_commit": "not_committed", "result": asdict(result)})
++
++
++def decode_receipt(value, context, run_tag):
++    exact(value, ("protocol", "context", "run_tag", "business_commit", "result"))
++    bounded(value)
++    try:
++        received_context = CallContext.model_validate(value["context"], strict=True)
++    except Exception:
++        raise ValueError("invalid receipt context") from None
++    if (type(value["protocol"]) is not int or value["protocol"] != 2 or value["context"] != context.model_dump()
++            or value["run_tag"] != run_tag or value["business_commit"] != "not_committed"):
++        raise ValueError("model receipt identity mismatch")
++    data = value["result"]
++    exact(data, (f.name for f in fields(ModelCallResult)))
++    if data["operation_id"] != context.operation_id:
++        raise ValueError("model operation mismatch")
++    for name in ("configured_model", "returned_model", "finish_reason", "error_code", "remote_request_id"):
++        item = data[name]
++        if item is not None and (type(item) is not str or _ID.fullmatch(item) is None):
++            raise ValueError("invalid receipt metadata")
++    if data["usage"] is not None:
++        exact(data["usage"], ("prompt_tokens", "completion_tokens", "total_tokens"))
++        if any(type(n) is not int or n < 0 for n in data["usage"].values()):
++            raise ValueError("invalid usage")
++        if data["usage"]["total_tokens"] < data["usage"]["prompt_tokens"] + data["usage"]["completion_tokens"]:
++            raise ValueError("invalid usage totals")
++    if type(data["tool_plans"]) not in (list, tuple) or len(data["tool_plans"]) > 8:
++        raise ValueError("invalid tool plans")
++    for plan in data["tool_plans"]:
++        exact(plan, ("call_id", "name", "arguments"))
++        from app.capabilities.tools import ToolRegistry
++        try:
++            ToolRegistry().plan(plan["call_id"], plan["name"], json.dumps(plan["arguments"]), frozenset({"finite_calculate"}))
++        except Exception:
++            raise ValueError("invalid receipt tool plan") from None
++    if data["status"] == "succeeded":
++        if bool(data["text"] is not None) == bool(data["json_object"] is not None) or data["tool_plans"]:
++            raise ValueError("invalid successful receipt")
++    elif data["status"] == "tool_plan":
++        if not data["tool_plans"] or data["text"] is not None or data["json_object"] is not None:
++            raise ValueError("invalid plan receipt")
++    elif data["text"] is not None or data["json_object"] is not None or data["tool_plans"]:
++        raise ValueError("failure receipt carries business output")
++    try:
++        return TypeAdapter(ModelCallResult).validate_json(json.dumps(data, allow_nan=False))
++    except Exception:
++        raise ValueError("invalid model receipt") from None
++
++
++def run_one_call(ledger, config, activity_id: str, executor_id: str, operation_id: str,
++                 request: ModelCallRequest, service: ModelServiceConfig, *, run_tag: str):
++    """阻塞受信内部入口。SUCCEEDED 仅为模型返回，业务成果尚未提交。
++
++    调用者不得把本回执当作原子提交凭证；取消/来源/代次可在返回后变化。
++    正文仅存于短生命周期内存，不支持重启后幂等取回。
++    """
++    from .command import WorkerCommand
++    from .launcher import run_supervised_window
++    validate_identity(activity_id, executor_id, operation_id, run_tag)
++    call = OneCallInput(operation_id, request, service)
++    call.to_wire()
++    if service.timeout_seconds > config.request_timeout_seconds:
++        raise ValueError("model timeout exceeds supervised call budget")
++    return run_supervised_window(ledger, config, activity_id, executor_id, WorkerCommand("one_call"),
++                                 run_tag=run_tag, one_call=call)
+--- pre/backend/app/worker/session.py
++++ post/backend/app/worker/session.py
+@@ -3,8 +3,9 @@
+ from __future__ import annotations
+ 
+ import asyncio
+-from dataclasses import dataclass
++from dataclasses import dataclass, field
+ import math
++import secrets
+ import threading
+ import time
+ from typing import Protocol
+@@ -12,6 +13,9 @@
+ from app.activities import ActivityLease, CloseResult, SettleResult, WindowSnapshot
+ 
+ from .command import WorkerCommand
++from .one_call import OneCallInput, decode_receipt, validate_identity, worker_request
++from .supervisor_ipc import NamedMapping
++from app.capabilities.contracts import CallContext
+ from .windows_job import (
+     ActivityMutex, ERROR_FILE_NOT_FOUND, JobOpenError, JobUnknown,
+     NamedJob, current_process_session_id, job_name,
+@@ -89,6 +93,7 @@
+     manager_created_100ns: int | None = None
+     running_owner_session_id: int | None = None
+     worker_created_100ns: int | None = None
++    model_receipt: dict | None = field(default=None, repr=False)
+ 
+ 
+ class _StopSession(Exception):
+@@ -130,10 +135,20 @@
+         *,
+         run_tag: str,
+         manager_deadline_ns: int,
++        one_call: OneCallInput | None = None,
+     ) -> SessionOutcome:
+         # 产品调用只经 launcher.run_supervised_window；此方法供子进程与纯替身测试。
+         if type(command) is not WorkerCommand:
+             raise TypeError("SUP只接受已校验的WorkerCommand纯数据")
++        if command.task == "one_call":
++            if type(one_call) is not OneCallInput:
++                raise ValueError("one_call requires explicit data")
++            validate_identity(activity_id, executor_id, one_call.operation_id, run_tag)
++            one_call.to_wire()
++            if one_call.service.timeout_seconds > self.config.request_timeout_seconds:
++                raise ValueError("model timeout exceeds session")
++        elif one_call is not None:
++            raise ValueError("idle cannot carry one_call data")
+         if not run_tag or len(run_tag) > 64 or not run_tag.isascii() or not run_tag.replace("-", "").replace("_", "").isalnum():
+             raise ValueError("run_tag须是受限非空ASCII标识")
+         identity_name = job_name(activity_id, 0)  # 在任何副作用前验证 UUID。
+@@ -164,6 +179,8 @@
+         settlement_attempted = False
+         claim_attempted = False
+         interrupted: BaseException | None = None
++        exchange = None
++        model_receipt = None
+ 
+         local_owner = _local_lock(activity_id)
+         if not local_owner.acquire(blocking=False):
+@@ -229,6 +246,8 @@
+                 raise _StopSession
+             if lease.running_owner_session_id != session_id:
+                 raise JobUnknown("新代次持久会话身份与 SUP 不一致")
++            if lease.activity_id != activity_id or lease.executor_id != executor_id:
++                raise JobUnknown("claim identity mismatch")
+             window = lease.window_seconds
+             settled_seconds = 0
+             reserved_seconds = window
+@@ -246,10 +265,18 @@
+                 raise _StopSession
+ 
+             self._remaining(manager_deadline_ns)
++            if one_call is not None:
++                exchange = NamedMapping.create("Local\\RetroLume.SUP." + secrets.token_hex(16))
++                exchange.write_request(worker_request(one_call, {
++                    "dsn": self.ledger._dsn,
++                    "connect_timeout_seconds": self.ledger._connect_timeout,
++                    "statement_timeout_ms": self.ledger._statement_timeout_ms,
++                    "lock_timeout_ms": self.ledger._lock_timeout_ms,
++                }, lease, run_tag, stop_ns, config.request_timeout_seconds))
+             job = NamedJob.create(activity_id, lease.execution_generation)
+             created_job = True
+             name = job.name
+-            pid = job.spawn_suspended(command.argv(), cwd=command.cwd)
++            pid = job.spawn_suspended(command.argv(exchange.name) if exchange is not None else command.argv(), cwd=command.cwd)
+             worker_created_100ns = job.process_creation_time_100ns()
+             if time.monotonic_ns() >= min(t0_ns + int(config.startup_limit_seconds * 1e9), stop_ns):
+                 state = "startup_deadline"
+@@ -275,6 +302,18 @@
+             if not 1 <= observed <= window:
+                 state = "elapsed_violation_full_reservation"
+                 raise _StopSession
++            if exchange is not None:
++                candidate = exchange.read_result()
++                context = CallContext(activity_id=activity_id, executor_id=executor_id,
++                                      operation_id=one_call.operation_id,
++                                      execution_generation=lease.execution_generation,
++                                      scope_revision=lease.scope_revision)
++                decoded = decode_receipt(candidate, context, run_tag)
++                if decoded.provider != one_call.service.provider or decoded.configured_model != one_call.service.model:
++                    raise ValueError("model configuration receipt mismatch")
++                model_receipt = candidate
++                exchange.close()
++                exchange = None
+             # 树已确认0且主进程成功；先关闭自身全部Job/进程句柄，避免
+             # 后续清理失败发生在部分退款之后。活动互斥仍保持到结算结束。
+             job.close()
+@@ -327,6 +366,11 @@
+                     job.close()
+                 except BaseException as exc:
+                     cleanup_errors.append(f"job_close:{type(exc).__name__}")
++            if exchange is not None:
++                try:
++                    exchange.close()
++                except BaseException as exc:
++                    cleanup_errors.append(f"exchange_close:{type(exc).__name__}")
+             if owner is not None:
+                 try:
+                     owner.close()
+@@ -351,6 +395,7 @@
+             timing_diagnostic,
+             running_owner_session_id=session_id if lease is not None else None,
+             worker_created_100ns=worker_created_100ns,
++            model_receipt=model_receipt,
+         )
+         if interrupted is not None:
+             interrupted.session_outcome = result
+--- pre/backend/app/worker/supervisor_ipc.py
++++ post/backend/app/worker/supervisor_ipc.py
+@@ -16,7 +16,7 @@
+ import struct
+ 
+ 
+-MAP_SIZE = 16_384
++MAP_SIZE = 1_048_576  # 协议2：两个512KiB槽，业务合同另限128KiB编码数据。
+ SLOT_SIZE = MAP_SIZE // 2
+ REQUEST_OFFSET = 0
+ RESULT_OFFSET = SLOT_SIZE
+@@ -58,8 +58,16 @@
+     if hashlib.sha256(payload).digest() != expected:
+         raise IpcUnknown("SUP frame checksum mismatch")
+     try:
+-        value = json.loads(payload.decode("utf-8"))
+-    except (UnicodeError, ValueError) as exc:
++        def unique(pairs):
++            result = {}
++            for key, item in pairs:
++                if key in result:
++                    raise ValueError("duplicate key")
++                result[key] = item
++            return result
++        value = json.loads(payload.decode("utf-8"), object_pairs_hook=unique,
++                           parse_constant=lambda _: (_ for _ in ()).throw(ValueError("nonfinite")))
++    except (UnicodeError, ValueError, RecursionError) as exc:
+         raise IpcUnknown("SUP frame JSON invalid") from exc
+     if type(value) is not dict:
+         raise IpcUnknown("SUP frame root must be object")
+@@ -91,14 +99,35 @@
+         self.handle = handle
+         self.view = view
+         self.name = name
++        self.owner = False
+ 
+     @classmethod
+     def create(cls, name: str) -> "NamedMapping":
+         validate_name(name)
+         api = _kernel()
+         ctypes.set_last_error(0)
+-        handle = api.CreateFileMappingW(ctypes.c_void_p(-1), None, PAGE_READWRITE, 0, MAP_SIZE, name)
+-        error = ctypes.get_last_error()
++        # 受信边界是当前Windows用户；随机名称/校验和不是身份认证。
++        # 显式受保护DACL只给对象所有者和SYSTEM访问，不继承宽松默认ACL。
++        advapi = ctypes.WinDLL("advapi32", use_last_error=True)
++        advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
++            wintypes.LPCWSTR, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p]
++        advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW.restype = wintypes.BOOL
++        descriptor = ctypes.c_void_p()
++        if not advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW(
++            "D:P(A;;GA;;;OW)(A;;GA;;;SY)", 1, ctypes.byref(descriptor), None
++        ):
++            raise IpcUnknown("mapping security descriptor failed")
++        class SecurityAttributes(ctypes.Structure):
++            _fields_ = [("length", wintypes.DWORD), ("descriptor", ctypes.c_void_p), ("inherit", wintypes.BOOL)]
++        security = SecurityAttributes(ctypes.sizeof(SecurityAttributes), descriptor, False)
++        api.LocalFree.argtypes = [ctypes.c_void_p]
++        api.LocalFree.restype = ctypes.c_void_p
++        try:
++            ctypes.set_last_error(0)
++            handle = api.CreateFileMappingW(ctypes.c_void_p(-1), ctypes.byref(security), PAGE_READWRITE, 0, MAP_SIZE, name)
++            error = ctypes.get_last_error()
++        finally:
++            api.LocalFree(descriptor)
+         if not handle or error == ERROR_ALREADY_EXISTS:
+             if handle:
+                 api.CloseHandle(handle)
+@@ -107,7 +136,9 @@
+         if not view:
+             api.CloseHandle(handle)
+             raise IpcUnknown(f"SUP mapping view: Windows error {ctypes.get_last_error()}")
+-        return cls(api, handle, view, name)
++        result = cls(api, handle, view, name)
++        result.owner = True
++        return result
+ 
+     @classmethod
+     def open_existing(cls, name: str) -> "NamedMapping":
+@@ -147,6 +178,8 @@
+     def close(self) -> None:
+         failures = []
+         if self.view:
++            if self.owner:
++                ctypes.memset(self.view, 0, MAP_SIZE)
+             if self.api.UnmapViewOfFile(self.view):
+                 self.view = 0
+             else:
+--- pre/backend/app/worker/supervisor_main.py
++++ post/backend/app/worker/supervisor_main.py
+@@ -15,13 +15,16 @@
+ from .command import WorkerCommand
+ from .session import SessionConfig, SingleWindowSupervisor
+ from .supervisor_ipc import NamedMapping
++from .one_call import OneCallInput, validate_identity
+ 
+ 
+ _RUN_TAG = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
+ 
+ 
+ def _validated_request(value: dict, mapping_name: str):
+-    if type(value) is not dict or value.get("protocol") != 1 or value.get("mapping_name") != mapping_name:
++    if (type(value) is not dict or set(value) != {"protocol", "mapping_name", "activity_id", "executor_id",
++            "run_tag", "deadline_ns", "command", "config", "ledger", "one_call"}
++            or value.get("protocol") != 2 or value.get("mapping_name") != mapping_name):
+         raise ValueError("SUP request identity mismatch")
+     activity_id = value.get("activity_id")
+     executor_id = value.get("executor_id")
+@@ -52,7 +55,14 @@
+     ledger = PostgresAdmissionLedger(**ledger_data)
+     config = SessionConfig(**config_data)
+     command = WorkerCommand(**command_data)
+-    return ledger, config, activity_id, executor_id, command, run_tag, deadline_ns
++    one_call = OneCallInput.from_wire(value["one_call"]) if value["one_call"] is not None else None
++    if command.task == "one_call":
++        if one_call is None:
++            raise ValueError("missing one_call data")
++        validate_identity(activity_id, executor_id, one_call.operation_id, run_tag)
++    elif one_call is not None:
++        raise ValueError("unexpected business data")
++    return ledger, config, activity_id, executor_id, command, run_tag, deadline_ns, one_call
+ 
+ 
+ def main() -> int:
+@@ -61,15 +71,16 @@
+     mapping = None
+     try:
+         mapping = NamedMapping.open_existing(sys.argv[1])
+-        ledger, config, activity_id, executor_id, command, run_tag, deadline_ns = _validated_request(
++        ledger, config, activity_id, executor_id, command, run_tag, deadline_ns, one_call = _validated_request(
+             mapping.read_request(), sys.argv[1],
+         )
+         with asyncio.Runner(loop_factory=psycopg_compatible_loop_factory) as runner:
+             outcome = runner.run(SingleWindowSupervisor(ledger, config).run_once(
+                 activity_id, executor_id, command, run_tag=run_tag,
+                 manager_deadline_ns=deadline_ns,
++                one_call=one_call,
+             ))
+-        mapping.write_result({"protocol": 1, "run_tag": run_tag, "activity_id": activity_id,
++        mapping.write_result({"protocol": 2, "run_tag": run_tag, "activity_id": activity_id,
+                               "outcome": asdict(outcome)})
+         return 0
+     except BaseException:
+--- pre/backend/app/worker/worker_main.py
++++ post/backend/app/worker/worker_main.py
+@@ -1,13 +1,19 @@
+-"""Fixed internal worker entry. Product supplier routing remains unwired."""
++"""固定worker入口；一次模型调用，正文回执不提交业务成果。"""
+ 
+ from __future__ import annotations
+ 
+ import asyncio
+ from collections.abc import Awaitable, Callable
+ import sys
++import time
+ from typing import Any
+ 
+ from .gate import ClosingCallGate
++from .one_call import decode_worker_request, receipt
++from .supervisor_ipc import NamedMapping
++from app.activities import PostgresAdmissionLedger
++from app.capabilities.gateway import ControlledModelGateway
++from app.runtime import psycopg_compatible_loop_factory
+ 
+ 
+ async def run_controlled_worker(
+@@ -24,7 +30,7 @@
+         await gate.close(timeout_seconds=drain_timeout_seconds)
+ 
+ 
+-async def run_internal_task(gateway: Any, task: str) -> None:
++async def run_internal_task(gateway: Any, task: str, context=None, request=None, *, call_seconds=1.0):
+     """The injected gateway is only handed to work through ClosingCallGate."""
+     if task not in ("idle", "one_call"):
+         raise ValueError("unsupported internal worker task")
+@@ -33,21 +39,51 @@
+         return None
+ 
+     async def one_call(gate: ClosingCallGate) -> None:
+-        await gate.call(None, None)
++        nonlocal result
++        if context is None or request is None:
++            raise ValueError("one_call requires context and request")
++        async with asyncio.timeout(call_seconds):
++            result = await gate.call(context, request)
+ 
++    result = None
+     await run_controlled_worker(gateway, one_call if task == "one_call" else idle, drain_timeout_seconds=1.0)
++    return result
+ 
+ 
+-class _UnwiredGateway:
+-    async def call(self, _context: Any, _request: Any) -> None:
+-        raise RuntimeError("product gateway is not connected")
++async def execute_one_call(value):
++    call, context = decode_worker_request(value)
++    ledger = PostgresAdmissionLedger(**value["ledger"])
++    gateway = ControlledModelGateway(call.service, ledger=ledger)
++    # 单调截止由SUP固定；整体超时包括准入/发送/记账，不靠网络timeout扩窗。
++    seconds = min(value["call_seconds"], (value["stop_ns"] - time.monotonic_ns()) / 1e9 - 0.25)
++    if seconds <= 0:
++        raise ValueError("call window expired")
++    result = await run_internal_task(gateway, "one_call", context, call.request, call_seconds=seconds)
++    return receipt(result, context, value["run_tag"])
+ 
+ 
+ def main() -> int:
+-    if len(sys.argv) != 2 or sys.argv[1] not in ("idle", "one_call"):
+-        return 2
+-    asyncio.run(run_internal_task(_UnwiredGateway(), sys.argv[1]))
+-    return 0
++    mapping = None
++    try:
++        if sys.argv[1:] == ["idle"]:
++            return 0
++        if len(sys.argv) != 3 or sys.argv[1] != "one_call":
++            return 2
++        mapping = NamedMapping.open_existing(sys.argv[2])
++        value = mapping.read_request()
++        with asyncio.Runner(loop_factory=psycopg_compatible_loop_factory) as runner:
++            result = runner.run(execute_one_call(value))
++        mapping.write_result(result)
++        return 0
++    except BaseException:
++        # 包括模型验证异常都不输出消息/traceback/正文。
++        return 1
++    finally:
++        if mapping is not None:
++            try:
++                mapping.close()
++            except BaseException:
++                return 1
+ 
+ 
+ if __name__ == "__main__":
+--- pre/backend/tests/fixtures/task085/bootstrap.py
++++ post/backend/tests/fixtures/task085/bootstrap.py
+@@ -0,0 +1,47 @@
++"""仅测试自举：替换固定SUP启动模块与worker argv；产品无选择器。"""
++from pathlib import Path
++import sys
++BACKEND=Path(__file__).resolve().parents[3]
++sys.path.insert(0,str(BACKEND))
++
++if __name__=="__main__":
++    mode=sys.argv.pop(1)
++    if mode=="sup":
++        from app.worker.command import WorkerCommand, _INTERPRETER
++        original=WorkerCommand.argv
++        def test_argv(self,mapping_name=None):
++            if self.task=="one_call":
++                return [str(_INTERPRETER),"-B",str(Path(__file__).resolve()),"worker","one_call",mapping_name]
++            return original(self,mapping_name)
++        WorkerCommand.argv=test_argv
++        from app.worker.supervisor_main import main
++    elif mode=="worker":
++        import asyncio
++        import json
++        import time
++        from app.capabilities.transport import HttpxModelTransport, TransportResponse, DeliveryUnknown
++        async def send(self,**kwargs):
++            # 模式只从测试合成正文读取；本文件永不进入产品导入链。
++            label=kwargs["payload"]["messages"][0]["content"]
++            if label=="hard":
++                time.sleep(30)
++            if label=="unknown":
++                raise DeliveryUnknown("synthetic")
++            content='{"synthetic":true}' if label=="json" else "synthetic response"
++            message={"role":"assistant","content":content}
++            finish="stop"
++            if label=="tool":
++                finish="tool_calls"
++                message["tool_calls"]=[{"id":"calc","type":"function","function":{
++                    "name":"finite_calculate","arguments":'{"operation":"add","left":1,"right":2}'}}]
++            raw=json.dumps({"model":"synthetic-model","choices":[{"message":message,"finish_reason":finish}],
++                            "usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}).encode()
++            return TransportResponse(200,raw,len(raw))
++        HttpxModelTransport.send=send
++        from app.capabilities.tools import ToolRegistry
++        def forbidden(*args,**kwargs): raise RuntimeError("tool execution forbidden in one_call")
++        ToolRegistry.execute=forbidden
++        from app.worker.worker_main import main
++    else:
++        raise SystemExit(2)
++    raise SystemExit(main())
+--- pre/backend/tests/fixtures/task085/controlled_child.py
++++ post/backend/tests/fixtures/task085/controlled_child.py
+@@ -0,0 +1,204 @@
++"""Test-only suspended child and outer Windows Job owner; never owns a business Job handle."""
++from __future__ import annotations
++
++import ctypes
++from ctypes import wintypes
++import msvcrt
++import os
++from pathlib import Path
++import queue
++import subprocess
++import threading
++import time
++
++from app.worker.windows_job import (
++    _BASIC_ACCOUNTING, _EXTENDED_LIMIT, _FILETIME, _PROCESS_INFORMATION,
++    _STARTUPINFOW, _kernel, CREATE_NO_WINDOW, CREATE_SUSPENDED,
++    JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION_CLASS, JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,
++    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, WAIT_OBJECT_0,
++)
++
++CREATE_UNICODE_ENVIRONMENT = 0x00000400
++STARTF_USESTDHANDLES = 0x00000100
++
++
++class OwnershipUnknown(RuntimeError):
++    pass
++
++
++def remaining(deadline: float, *, reserve: float = 0) -> float:
++    value = deadline - time.monotonic() - reserve
++    if value <= 0:
++        raise TimeoutError("absolute deadline or cleanup reserve exhausted")
++    return value
++
++
++class ControlledChild:
++    def __init__(self, api=None):
++        self.api = api or _kernel()
++        self.job = None
++        self.process = _PROCESS_INFORMATION()
++        self.assigned = False
++        self.resumed = False
++        self.created_100ns = None
++        self.cleanup_confirmed = False
++        self.lines = queue.Queue()
++        self.readers = []
++        self._reads = []
++        self.events = []
++
++    def record(self, event, **values):
++        self.events.append({"event":event,"monotonic":time.monotonic(),**values})
++
++    @staticmethod
++    def _error(operation):
++        return OwnershipUnknown(f"{operation} Windows error {ctypes.get_last_error()}")
++
++    def active(self):
++        if not self.job:
++            raise OwnershipUnknown("outer Job handle unavailable")
++        info = _BASIC_ACCOUNTING()
++        if not self.api.QueryInformationJobObject(self.job, JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION_CLASS,
++                                                   ctypes.byref(info), ctypes.sizeof(info), None):
++            raise self._error("QueryInformationJobObject")
++        return int(info.ActiveProcesses)
++
++    def _creation_time(self):
++        values = [_FILETIME() for _ in range(4)]
++        if not self.api.GetProcessTimes(self.process.hProcess, *(ctypes.byref(x) for x in values)):
++            raise self._error("GetProcessTimes")
++        return (int(values[0].dwHighDateTime) << 32) | int(values[0].dwLowDateTime)
++
++    def _read_stream(self, fd: int, label: str):
++        try:
++            with os.fdopen(fd, "rb", buffering=0) as stream:
++                for raw in stream:
++                    self.lines.put((label, raw.decode("utf-8", errors="replace")))
++        finally:
++            self.lines.put((label, None))
++
++    def start(self, command: list[str], *, cwd: Path, env: dict[str, str], deadline: float):
++        """Create suspended, record exact identity, assign outer Job, then Resume."""
++        remaining(deadline, reserve=1)
++        if not command or not Path(command[0]).is_absolute() or not cwd.is_dir():
++            raise ValueError("absolute executable and existing cwd required")
++        if self.job or self.process.hProcess:
++            raise OwnershipUnknown("controlled child already started")
++        self.job = self.api.CreateJobObjectW(None, None)  # unnamed, non-inheritable, distinct from business Job
++        if not self.job:
++            raise self._error("CreateJobObjectW")
++        limits = _EXTENDED_LIMIT()
++        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
++        if not self.api.SetInformationJobObject(self.job, JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,
++                                                 ctypes.byref(limits), ctypes.sizeof(limits)):
++            error = self._error("SetInformationJobObject")
++            self.close()
++            raise error
++        writes = []
++        devnull = None
++        try:
++            devnull = open(os.devnull, "rb", buffering=0)
++            os.set_handle_inheritable(msvcrt.get_osfhandle(devnull.fileno()), True)
++            for label in ("stdout", "stderr"):
++                read_fd, write_fd = os.pipe()
++                self._reads.append((read_fd, label))
++                writes.append(write_fd)
++                os.set_handle_inheritable(msvcrt.get_osfhandle(write_fd), True)
++            startup = _STARTUPINFOW()
++            startup.cb = ctypes.sizeof(startup)
++            startup.dwFlags = STARTF_USESTDHANDLES
++            startup.hStdInput = msvcrt.get_osfhandle(devnull.fileno())
++            startup.hStdOutput = msvcrt.get_osfhandle(writes[0])
++            startup.hStdError = msvcrt.get_osfhandle(writes[1])
++            cmdline = ctypes.create_unicode_buffer(subprocess.list2cmdline(command))
++            env_block = ctypes.create_unicode_buffer("\0".join(f"{k}={v}" for k, v in sorted(env.items())) + "\0\0")
++            remaining(deadline, reserve=1)
++            if not self.api.CreateProcessW(None, cmdline, None, None, True,
++                                           CREATE_SUSPENDED | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
++                                           ctypes.cast(env_block, ctypes.c_void_p), str(cwd),
++                                           ctypes.byref(startup), ctypes.byref(self.process)):
++                raise self._error("CreateProcessW")
++            self.created_100ns = self._creation_time()
++            if not self.created_100ns or not self.process.dwProcessId:
++                raise OwnershipUnknown("suspended child identity unavailable")
++            self.record("suspended_identity",pid=int(self.process.dwProcessId),created_100ns=self.created_100ns)
++            if not self.api.AssignProcessToJobObject(self.job, self.process.hProcess):
++                raise self._error("AssignProcessToJobObject")
++            self.assigned = True
++            if self.active() != 1:
++                raise OwnershipUnknown("outer Job did not report suspended child")
++            self.record("assigned_outer_job",active_processes=1)
++            remaining(deadline, reserve=1)
++            if self.api.ResumeThread(self.process.hThread) == 0xFFFFFFFF:
++                raise self._error("ResumeThread")
++            self.resumed = True
++            self.record("resumed")
++            for read_fd, label in self._reads:
++                reader = threading.Thread(target=self._read_stream, args=(read_fd, label), daemon=True)
++                reader.start()
++                self.readers.append(reader)
++            self._reads = []
++            return {"pid": int(self.process.dwProcessId), "created_100ns": self.created_100ns}
++        except BaseException:
++            try:
++                self.stop(deadline)
++            finally:
++                self.close()
++            raise
++        finally:
++            for fd in writes:
++                os.close(fd)
++            if devnull is not None:
++                devnull.close()
++
++    def exit_code(self):
++        if not self.process.hProcess or self.api.WaitForSingleObject(self.process.hProcess, 0) != WAIT_OBJECT_0:
++            return None
++        code = wintypes.DWORD()
++        if not self.api.GetExitCodeProcess(self.process.hProcess, ctypes.byref(code)):
++            raise self._error("GetExitCodeProcess")
++        return int(code.value)
++
++    def stop(self, deadline: float):
++        """Terminate only owned handles and prove outer Job ActiveProcesses==0."""
++        if self.process.hProcess and not self.assigned:
++            if not self.api.TerminateProcess(self.process.hProcess, 1):
++                raise self._error("TerminateProcess(suspended)")
++            ms = int(remaining(deadline) * 1000)
++            if ms < 1:
++                raise TimeoutError("suspended child cleanup deadline")
++            if self.api.WaitForSingleObject(self.process.hProcess, ms) != WAIT_OBJECT_0:
++                raise OwnershipUnknown("unassigned suspended child exit not confirmed")
++        if self.assigned:
++            if self.active() and not self.api.TerminateJobObject(self.job, 1):
++                raise self._error("TerminateJobObject(outer)")
++            while self.active():
++                time.sleep(min(.05, remaining(deadline)))
++        self.cleanup_confirmed = True
++        return True
++
++    def wait_empty(self, deadline: float):
++        while True:
++            exit_code = self.exit_code()
++            count = self.active()
++            if exit_code is not None and count == 0:
++                self.cleanup_confirmed = True
++                return exit_code
++            time.sleep(min(.05, remaining(deadline)))
++
++    def close(self):
++        errors = []
++        for holder, field in ((self.process, "hThread"), (self.process, "hProcess"), (self, "job")):
++            handle = getattr(holder, field)
++            if handle:
++                if self.api.CloseHandle(handle):
++                    setattr(holder, field, None)
++                else:
++                    errors.append(field)
++        for fd, _ in self._reads:
++            os.close(fd)
++        self._reads = []
++        if errors:
++            self.cleanup_confirmed = False
++            raise OwnershipUnknown("CloseHandle failed: " + ",".join(errors))
++        self.record("control_handles_closed",tree_zero_confirmed=self.cleanup_confirmed)
+--- pre/backend/tests/fixtures/task085/finalize_evidence.py
++++ post/backend/tests/fixtures/task085/finalize_evidence.py
+@@ -0,0 +1,49 @@
++"""只汇总已有证据和文件差异，不启动测试或资源。"""
++from pathlib import Path
++import difflib
++import hashlib
++import json
++from datetime import datetime,timezone
++from run_offline import ROOT,BACKEND,EVID,hashes
++
++def main():
++    pre=json.loads((EVID/"pre-hashes.json").read_text(encoding="utf-8-sig"))
++    final=hashes()
++    (EVID/"post-hashes.json").write_text(json.dumps(final,indent=2),encoding="utf-8")
++    changed=[];unexpected=[]
++    for item in pre:
++        path=ROOT/item["path"]
++        actual=hashlib.sha256(path.read_bytes()).hexdigest()
++        normalized=Path(item["path"]).as_posix()
++        if actual.lower()!=item["sha256"].lower():
++            changed.append(normalized)
++            if not normalized.startswith("backend/app/worker/"):unexpected.append(normalized)
++    diffs=[]
++    paths=list((BACKEND/"app/worker").glob("*.py"))+[BACKEND/"tests/test_worker_one_call.py"]+list((BACKEND/"tests/fixtures/task085").glob("*.py"))
++    for path in sorted(paths):
++        relative=path.relative_to(ROOT).as_posix()
++        old=EVID/"pre"/relative
++        diffs.extend(difflib.unified_diff(old.read_text(encoding="utf-8").splitlines(True) if old.exists() else [],
++            path.read_text(encoding="utf-8").splitlines(True),fromfile="pre/"+relative,tofile="post/"+relative))
++    (EVID/"task085.diff").write_text("".join(diffs),encoding="utf-8")
++    real=EVID/"20260928T001119Z-77ba1b"
++    manifest=json.loads((real/"manifest.json").read_text(encoding="utf-8"))
++    records=[json.loads(line) for line in (real/"stdout.log").read_text(encoding="utf-8").splitlines() if line.strip()]
++    starts=[r["id"] for r in records if r.get("event")=="scenario_start"]
++    ends=[r["id"] for r in records if r.get("event")=="scenario_complete"]
++    asrun=json.loads((real/"as-run-hashes.json").read_text())
++    drift=[p for p,h in asrun.items() if final.get(p)!=h]
++    offline=[]
++    for p in sorted(EVID.glob("offline-*-meta.json")):
++        item=json.loads(p.read_text());offline.append({"file":p.name,"exit":item["exit"],"seconds":item["seconds"]})
++    report={"utc":datetime.now(timezone.utc).isoformat(),"changed_existing":changed,"unexpected_pre_drift":unexpected,
++            "after_real_drift":drift,"new_since_real":[p for p in final if p not in asrun],
++            "real_start_ids":starts,"real_completed_ids":ends,"scenario_count":len(ends),
++            "batch_exit":manifest["batch_exit"],"resource_seconds":manifest["seconds"],
++            "offline":offline,"offline_total_seconds":sum(r["seconds"] for r in offline),
++            "no_provider_network_executed":True,"no_independent_audit_claimed":True,
++            "resources_stopped_at_recorded_time":manifest["container_stopped"] and manifest["outer_tree_zero"] and manifest["outer_handles_closed"]}
++    (EVID/"delivery-check.json").write_text(json.dumps(report,indent=2,ensure_ascii=False),encoding="utf-8")
++    print(json.dumps(report,ensure_ascii=False))
++
++if __name__=="__main__":main()
+--- pre/backend/tests/fixtures/task085/real_cases.py
++++ post/backend/tests/fixtures/task085/real_cases.py
+@@ -0,0 +1,165 @@
++"""本卡合成PG/Windows场景；被独立外层Job限制，零供应商网络。"""
++from __future__ import annotations
++import asyncio
++import ctypes
++from dataclasses import asdict
++from datetime import datetime, timedelta, timezone
++import json
++from pathlib import Path
++import secrets
++import subprocess
++import sys
++import time
++from unittest.mock import patch
++from uuid import uuid4
++
++BACKEND=Path(__file__).resolve().parents[3]
++sys.path.insert(0,str(BACKEND))
++import psycopg
++from psycopg.rows import dict_row
++from app.activities import ActivitySpec, SourceSnapshot, PostgresAdmissionLedger
++from app.capabilities.contracts import CallContext, ModelCallRequest, ModelServiceConfig
++from app.worker.one_call import run_one_call
++from app.worker.session import SessionConfig
++from app.worker.command import _INTERPRETER
++from app.worker.supervisor_ipc import NamedMapping
++from app.worker.windows_job import NamedJob, JobOpenError, ERROR_FILE_NOT_FOUND
++from app.runtime import psycopg_compatible_loop_factory
++import app.worker.launcher as launcher
++
++def emit(**item): print(json.dumps(item,default=str),flush=True)
++def check(condition,label):
++    if not condition: raise AssertionError(label)
++def run(coro):
++    with asyncio.Runner(loop_factory=psycopg_compatible_loop_factory) as runner: return runner.run(coro)
++
++def synthetic_supervisor(cls,mapping_name):
++    api=launcher._api()
++    executable=str(sys._base_executable)
++    argv=[executable,"-B",str(Path(__file__).with_name("bootstrap.py")),"sup",mapping_name]
++    command=ctypes.create_unicode_buffer(subprocess.list2cmdline(argv))
++    env=launcher._environment_block()
++    startup=launcher._STARTUPINFOW();startup.cb=ctypes.sizeof(startup)
++    info=launcher._PROCESS_INFORMATION()
++    if not api.CreateProcessW(executable,command,None,None,False,
++        launcher.CREATE_SUSPENDED|launcher.CREATE_NO_WINDOW|launcher.CREATE_UNICODE_ENVIRONMENT,
++        ctypes.cast(env,ctypes.c_void_p),str(BACKEND),ctypes.byref(startup),ctypes.byref(info)):
++        raise launcher.ProcessCreationError(ctypes.get_last_error(),cls(api,info) if info.hProcess or info.hThread else None)
++    return cls(api,info)
++
++def row(dsn,query,params=()):
++    with psycopg.connect(dsn,connect_timeout=2,row_factory=dict_row) as conn:
++        return conn.execute(query,params).fetchone()
++
++async def build(dsn,maximum=30):
++    activity,source,version=(str(uuid4()) for _ in range(3))
++    async with await psycopg.AsyncConnection.connect(dsn,connect_timeout=2) as conn:
++        await conn.execute("INSERT INTO material_sources(id,title,revision) VALUES (%s,'task085',0)",(source,))
++        await conn.execute("INSERT INTO material_versions(id,source_id,filename,format,sha256,size) VALUES (%s,%s,'synthetic.txt','txt',%s,1)",(version,source,"8"*64))
++        await conn.execute("UPDATE material_sources SET current_version=%s,revision=1 WHERE id=%s",(version,source))
++    ledger=PostgresAdmissionLedger(dsn,connect_timeout_seconds=1,statement_timeout_ms=500,lock_timeout_ms=200)
++    await ledger.create_activity(ActivitySpec(activity,(SourceSnapshot(source,version,1),),
++        datetime.now(timezone.utc)+timedelta(minutes=5),8,800,100,4096,256,maximum,
++        (("deepseek_chat_completions","synthetic-model"),),("finite_calculate",)))
++    return ledger,activity,source
++
++CONFIG=SessionConfig(window_seconds=10,request_timeout_seconds=2,stop_grace_seconds=1,
++    startup_limit_seconds=3,manager_db_timeout_seconds=2,cleanup_seconds=2,
++    mutex_wait_seconds=1,manager_overhead_seconds=12)
++
++def invoke(ledger,activity,label,*,model="synthetic-model",operation=None):
++    service=ModelServiceConfig(provider="deepseek_chat_completions",base_url="https://api.deepseek.com",
++        model=model,api_key=secrets.token_urlsafe(24),timeout_seconds=.5,max_request_bytes=4096,max_response_bytes=4096)
++    request=ModelCallRequest(messages=[{"role":"user","content":label}],max_output_tokens=40,
++        response_mode="json_object" if label=="json" else "text",
++        allowed_tools={"finite_calculate"} if label=="tool" else set())
++    return run_one_call(ledger,CONFIG,activity,"task085-executor",operation or ("op-"+label),request,service,run_tag="run-"+label)
++
++def record(dsn,activity,label,outcome):
++    data=asdict(outcome)
++    receipt=data.pop("model_receipt")
++    data["model_status"]=receipt["result"]["status"] if receipt else None
++    data["business_commit"]=receipt["business_commit"] if receipt else None
++    if receipt:
++        data["receipt_context"]=receipt["context"]
++    account=row(dsn,"SELECT status,execution_generation,scope_revision,running_reserved_seconds,running_settled_seconds,requests_reserved,dispatch_closed FROM activities WHERE id=%s",(activity,))
++    operations=[]
++    with psycopg.connect(dsn,connect_timeout=2,row_factory=dict_row) as conn:
++        operations=conn.execute("SELECT operation_id,executor_id,execution_generation,scope_revision,state,disposition,error_code FROM activity_operations WHERE activity_id=%s",(activity,)).fetchall()
++    # 精确业务Job在SUP释放全部句柄后必须已销毁。
++    if outcome.job_name:
++        try: job=NamedJob.open_existing(activity,outcome.generation)
++        except JobOpenError as exc: check(exc.code==ERROR_FILE_NOT_FOUND,"job open unexpected")
++        else:
++            try: check(job.active_processes()==0,"business tree residual")
++            finally: job.close()
++            raise AssertionError("business job handle retained")
++    emit(event="scenario_result",id=label,outcome=data,account=account,operations=operations)
++    check(not outcome.cleanup_incomplete or label=="lease_conflict","cleanup incomplete")
++    return receipt,account,operations
++
++def main():
++    if len(sys.argv)!=2:
++        emit(event="skip",reason="dedicated task085 mapping required");return 77
++    mapping=NamedMapping.open_existing(sys.argv[1])
++    try: data=mapping.read_request()
++    finally: mapping.close()
++    dsn=data["dsn"]
++    identity=row(dsn,"SELECT current_database() AS db,current_user AS role")
++    check(identity=={"db":"retrolume_task085_onecall","role":data["role"]},"dedicated database identity mismatch")
++    emit(event="database_identity",**identity)
++    with psycopg.connect(dsn,connect_timeout=2,autocommit=True) as conn:
++        for path in sorted((BACKEND/"migrations").glob("00[1-6]_*.sql")): conn.execute(path.read_text(encoding="utf-8"))
++    # 生产固定入口：合法配置但未获活动模型授权，真实gateway/PG必须拒绝出站。
++    emit(event="scenario_start",id="production_rejected")
++    ledger,activity,_=run(build(dsn))
++    outcome=invoke(ledger,activity,"production_rejected",model="unauthorized-model")
++    receipt,account,ops=record(dsn,activity,"production_rejected",outcome)
++    check(outcome.state=="settled" and receipt["result"]["status"]=="rejected" and not ops,"fixed entry rejection")
++    emit(event="scenario_complete",id="production_rejected")
++
++    unknown_activity=None
++    with patch.object(launcher._SuspendedSupervisor,"create",classmethod(synthetic_supervisor)):
++        for label in ("success","json","tool","unknown","unknown_repeat","hard","no_balance","cancelled","source_invalid","lease_conflict","short"):
++            emit(event="scenario_start",id=label)
++            if label=="unknown_repeat":
++                ledger,activity,_=unknown_activity
++            else:
++                ledger,activity,source=run(build(dsn,maximum=1 if label in ("short","no_balance") else 30))
++            if label=="no_balance":
++                with psycopg.connect(dsn,autocommit=True) as conn: conn.execute("UPDATE activities SET running_settled_seconds=max_running_seconds WHERE id=%s",(activity,))
++            elif label=="cancelled": run(ledger.cancel_activity(activity))
++            elif label=="source_invalid":
++                with psycopg.connect(dsn,autocommit=True) as conn: conn.execute("UPDATE material_sources SET revision=revision+1 WHERE id=%s",(source,))
++            elif label=="lease_conflict":
++                # 当前真实会话由仓储写入，保持有效旧租约；不制造旧业务进程。
++                from app.worker.windows_job import current_process_session_id
++                run(ledger.claim_lease(activity,"other",lease_seconds=20,window_seconds=10,running_owner_session_id=current_process_session_id()))
++            outcome=invoke(ledger,activity,label,operation="op-unknown" if label=="unknown_repeat" else None)
++            receipt,account,ops=record(dsn,activity,label,outcome)
++            if label in ("success","json","tool","unknown"):
++                expected={"success":"succeeded","json":"succeeded","tool":"tool_plan","unknown":"unknown"}[label]
++                check(outcome.state=="settled" and receipt["result"]["status"]==expected,"model/supervision status")
++                check(len(ops)==1 and ops[0]["execution_generation"]==outcome.generation and ops[0]["scope_revision"]==receipt["context"]["scope_revision"],"claim operation binding")
++                check(account["running_reserved_seconds"]==0 and account["running_settled_seconds"]==outcome.settled_seconds,"settled accounting")
++                check(account["requests_reserved"]==1 and account["dispatch_closed"],"exactly one admission and close")
++                check(ops[0]["state"]==("unknown" if label=="unknown" else "received"),"operation final state")
++                if label=="unknown": unknown_activity=(ledger,activity,source)
++            elif label=="unknown_repeat":
++                check(receipt["result"]["status"]=="rejected" and len(ops)==1 and ops[0]["state"]=="unknown" and account["requests_reserved"]==1,"unknown operation resent")
++            elif label=="hard":
++                check(outcome.state=="stopped_at_deadline" and receipt is None and outcome.active_processes_at_end==0,"hard deadline result")
++                check(account["running_reserved_seconds"]==10 and account["running_settled_seconds"]==0 and ops[0]["state"]=="dispatched","conservative hard deadline accounting")
++            else:
++                check(receipt is None and outcome.pid is None and not ops,"rejection spawned or dispatched")
++            emit(event="scenario_complete",id=label)
++    emit(event="complete",scenarios=12)
++    return 0
++
++if __name__=="__main__":
++    try: code=main()
++    except BaseException as exc:
++        # 只保存类型与本夹具的固定断言标签；不打印驱动或数据异常文本。
++        emit(event="error",type=type(exc).__name__,label=str(exc) if type(exc) is AssertionError else None)
++        code=1
++    raise SystemExit(code)
+--- pre/backend/tests/fixtures/task085/run_offline.py
++++ post/backend/tests/fixtures/task085/run_offline.py
+@@ -0,0 +1,38 @@
++"""定向离线批；每命令60秒，保存退出码/实际耗时/当前指纹。"""
++from pathlib import Path
++import hashlib
++import json
++import os
++import subprocess
++import sys
++import time
++from datetime import datetime, timezone
++
++ROOT=Path(__file__).resolve().parents[4]
++BACKEND=ROOT/"backend"
++EVID=ROOT/"Ndocu/evidence/task-085"
++
++def hashes():
++    paths=list((BACKEND/"app").rglob("*.py"))+list((BACKEND/"migrations").glob("*.sql"))
++    paths+=list((BACKEND/"tests/fixtures/task085").glob("*.py"))
++    paths += [BACKEND/"tests/test_worker_one_call.py",BACKEND/"tests/test_worker_session.py",BACKEND/"tests/test_capabilities.py"]
++    return {p.relative_to(ROOT).as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(paths)}
++
++if __name__=="__main__":
++    tag=sys.argv[1]
++    command=[sys.executable,"-B","-m","unittest","-v"]+sys.argv[2:]
++    started=time.monotonic()
++    before=hashes()
++    env=os.environ.copy();env["PYTHONDONTWRITEBYTECODE"]="1"
++    result=subprocess.run(command,cwd=BACKEND,env=env,capture_output=True,timeout=55)
++    elapsed=time.monotonic()-started
++    for label,raw in (("stdout",result.stdout),("stderr",result.stderr)):
++        data=raw.decode("utf-8",errors="replace")
++        for value in ("synthetic-secret-085","synthetic-body-085","synthetic-answer-085","synthetic-dsn"):
++            data=data.replace(value,"[redacted-synthetic]")
++        (EVID/f"{tag}-{label}.log").write_text(data,encoding="utf-8")
++    (EVID/f"{tag}-meta.json").write_text(json.dumps(dict(command=command,exit=result.returncode,
++        seconds=elapsed,utc=datetime.now(timezone.utc).isoformat(),as_run=before,post=hashes()),indent=2),encoding="utf-8")
++    print(json.dumps(dict(tag=tag,exit=result.returncode,seconds=elapsed)))
++    print((EVID/f"{tag}-stderr.log").read_text(encoding="utf-8")[-2500:])
++    sys.exit(result.returncode)
+--- pre/backend/tests/fixtures/task085/runner.py
++++ post/backend/tests/fixtures/task085/runner.py
+@@ -0,0 +1,129 @@
++"""TASK085单批控制者；专用容器/独立外层Job/总期限/精确收尾。"""
++from pathlib import Path
++import json
++import os
++import queue
++import secrets
++import socket
++import subprocess
++import sys
++import time
++from datetime import datetime,timezone
++
++HERE=Path(__file__).resolve().parent
++ROOT=HERE.parents[3]
++BACKEND=ROOT/"backend"
++sys.path.insert(0,str(BACKEND))
++from controlled_child import ControlledChild
++from run_offline import hashes
++from app.worker.supervisor_ipc import NamedMapping
++from psycopg.conninfo import make_conninfo
++
++IMAGE="sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f"
++EVID=ROOT/"Ndocu/evidence/task-085"
++
++def write(path,data): path.write_text(json.dumps(data,indent=2,ensure_ascii=False),encoding="utf-8")
++
++def main():
++    start=time.monotonic();deadline=start+480
++    stamp=datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")+"-"+secrets.token_hex(3)
++    folder=EVID/stamp;folder.mkdir()
++    state={"start_utc":datetime.now(timezone.utc).isoformat(),"attempt":1,"image":IMAGE,
++           "name":"retrolume-task-085-onecall-"+stamp.lower(),"volume":"retrolume-task-085-"+stamp.lower(),
++           "port":"127.0.0.1:55440","cpu":1,"memory":536870912,"pids":128,"restart":"no",
++           "commands":[],"cleanup_incomplete":False,"cid":None}
++    write(folder/"manifest.json",state)
++    before=hashes();write(folder/"as-run-hashes.json",before)
++    child=None;mapping=None;exit_code=1;container_stopped=False
++    password=secrets.token_urlsafe(36)
++    role="task085_"+secrets.token_hex(4)
++    env=os.environ.copy();env["POSTGRES_PASSWORD"]=password
++    def docker(args,*,timeout=20,required=True):
++        began=time.monotonic()
++        result=subprocess.run(["docker",*args],env=env,capture_output=True,timeout=min(timeout,max(.1,deadline-time.monotonic())))
++        state["commands"].append({"args":args,"exit":result.returncode,"seconds":time.monotonic()-began})
++        write(folder/"manifest.json",state)
++        # 不保存原始Docker错误，避免环境变量/连接串意外回显。
++        if required and result.returncode: raise RuntimeError("docker command failed: "+args[0])
++        return result.stdout.decode().strip(),result.returncode
++    try:
++        found,_=docker(["image","inspect",IMAGE,"--format","{{.Id}}"])
++        if found!=IMAGE: raise RuntimeError("required local image absent")
++        with socket.socket() as check:
++            check.setsockopt(socket.SOL_SOCKET,socket.SO_EXCLUSIVEADDRUSE,1)
++            check.bind(("127.0.0.1",55440))
++        cid,_=docker(["create","--name",state["name"],"--cpus","1","--memory","512m","--pids-limit","128",
++            "--restart","no","--security-opt","no-new-privileges","--publish","127.0.0.1:55440:5432",
++            "--mount","type=volume,source="+state["volume"]+",target=/var/lib/postgresql/data",
++            "--env","POSTGRES_PASSWORD","--env","POSTGRES_USER="+role,
++            "--env","POSTGRES_DB=retrolume_task085_onecall",IMAGE])
++        if len(cid)!=64 or any(c not in "0123456789abcdef" for c in cid): raise RuntimeError("unknown created container")
++        state["cid"]=cid;write(folder/"manifest.json",state)
++        inspect,_=docker(["inspect",cid,"--format",'{{json .Id}}|{{json .Image}}|{{json .HostConfig.NanoCpus}}|{{json .HostConfig.Memory}}|{{json .HostConfig.PidsLimit}}|{{json .HostConfig.Privileged}}|{{json .HostConfig.RestartPolicy.Name}}|{{json .HostConfig.PortBindings}}|{{json .Mounts}}'])
++        values=[json.loads(x) for x in inspect.split("|")]
++        if values[:7]!=[cid,IMAGE,1000000000,536870912,128,False,"no"]: raise RuntimeError("resource limits mismatch")
++        if values[7]!={"5432/tcp":[{"HostIp":"127.0.0.1","HostPort":"55440"}]}: raise RuntimeError("port mismatch")
++        if len(values[8])!=1 or values[8][0]["Type"]!="volume" or values[8][0]["Name"]!=state["volume"]: raise RuntimeError("volume mismatch")
++        state["inspect"]=values;write(folder/"manifest.json",state)
++        docker(["start",cid])
++        ready_deadline=time.monotonic()+30
++        while True:
++            _,code=docker(["exec",cid,"pg_isready","-U",role,"-d","retrolume_task085_onecall"],required=False)
++            if code==0:break
++            if time.monotonic()>ready_deadline:raise TimeoutError("database readiness")
++            time.sleep(.3)
++        dsn=make_conninfo(host="127.0.0.1",port=55440,dbname="retrolume_task085_onecall",user=role,password=password,
++                         connect_timeout=2,options="-c statement_timeout=3000 -c lock_timeout=1000")
++        mapping=NamedMapping.create("Local\\RetroLume.SUP."+secrets.token_hex(16))
++        mapping.write_request({"dsn":dsn,"role":role})
++        child=ControlledChild()
++        child_env=os.environ.copy();child_env["PYTHONDONTWRITEBYTECODE"]="1"
++        # 环境中不加入DSN/key，合成凭据仅经内存映射交被测进程。
++        state["process"]=child.start([sys.executable,"-B",str(HERE/"real_cases.py"),mapping.name],
++            cwd=BACKEND,env=child_env,deadline=deadline-120)
++        write(folder/"manifest.json",state)
++        exit_code=child.wait_empty(deadline-120)
++        state["batch_exit"]=exit_code
++        state["outer_tree_zero"]=child.active()==0
++    except BaseException as exc:
++        state["error_type"]=type(exc).__name__
++        # 仅本控制者自定义稳定错误标签。
++        if type(exc) in (RuntimeError,TimeoutError): state["error"]=str(exc).replace(password,"[redacted]")
++    finally:
++        if child is not None:
++            try:
++                child.stop(deadline-30)
++                state["outer_tree_zero"]=child.active()==0
++                child.close()
++                state["outer_handles_closed"]=True
++            except BaseException as exc:
++                state["cleanup_incomplete"]=True;state["child_cleanup_error"]=type(exc).__name__
++            for thread in child.readers: thread.join(timeout=1)
++            logs={"stdout":[],"stderr":[]}
++            while True:
++                try: label,line=child.lines.get_nowait()
++                except queue.Empty:break
++                if line is not None: logs[label].append(line.replace(password,"[redacted]"))
++            for label,lines in logs.items(): (folder/f"{label}.log").write_text("".join(lines),encoding="utf-8")
++            state["process_events"]=child.events
++        if mapping is not None:
++            try:mapping.close();state["mapping_closed"]=True
++            except BaseException as exc:state["cleanup_incomplete"]=True;state["mapping_error"]=type(exc).__name__
++        if state["cid"]:
++            try:
++                docker(["stop","--time","10",state["cid"]],timeout=20)
++                running,_=docker(["inspect",state["cid"],"--format","{{.State.Running}}"])
++                container_stopped=running=="false"
++                if not container_stopped:state["cleanup_incomplete"]=True
++            except BaseException as exc:state["cleanup_incomplete"]=True;state["container_cleanup_error"]=type(exc).__name__
++        state["container_stopped"]=container_stopped
++        state["seconds"]=time.monotonic()-start
++        state["end_utc"]=datetime.now(timezone.utc).isoformat()
++        after=hashes();write(folder/"post-hashes.json",after)
++        state["source_unchanged"]=before==after
++        write(folder/"manifest.json",state)
++        print(json.dumps({k:state.get(k) for k in ("batch_exit","error_type","error","seconds","cleanup_incomplete","container_stopped","source_unchanged")}))
++        print(str(folder))
++    return 0 if exit_code==0 and container_stopped and not state["cleanup_incomplete"] and before==after else 1
++
++if __name__=="__main__": raise SystemExit(main())
+--- pre/backend/tests/test_worker_one_call.py
++++ post/backend/tests/test_worker_one_call.py
+@@ -0,0 +1,261 @@
++"""TASK085离线合同与真实gateway核心；不访问网络/数据库。"""
++import asyncio
++from dataclasses import asdict
++import json
++import hashlib
++import struct
++from pathlib import Path
++import time
++import unittest
++from unittest.mock import patch
++from uuid import uuid4
++
++from app.capabilities.contracts import *
++from app.capabilities.gateway import ControlledModelGateway
++from app.capabilities.transport import DeliveryUnknown, TransportResponse
++from app.worker.one_call import *
++from app.worker.worker_main import execute_one_call, run_internal_task
++from app.worker.command import WorkerCommand
++from app.worker.supervisor_ipc import pack_frame, unpack_frame, SLOT_SIZE, IpcUnknown
++from app.worker.session import SessionConfig
++from app.worker.launcher import _request
++from app.worker.supervisor_main import _validated_request
++from app.activities import ActivityLease, PostgresAdmissionLedger
++from datetime import datetime, timezone
++
++
++def service(**kw):
++    values = dict(provider="deepseek_chat_completions", base_url="https://api.deepseek.com",
++                  model="synthetic-model", api_key="synthetic-secret-085", timeout_seconds=.03,
++                  max_request_bytes=4096, max_response_bytes=4096)
++    return ModelServiceConfig(**(values | kw))
++
++
++def request(**kw):
++    return ModelCallRequest(**(dict(messages=[{"role":"user", "content":"synthetic-body-085"}],
++                                   max_output_tokens=40, response_mode="text") | kw))
++
++
++def frame():
++    lease = ActivityLease(str(uuid4()), "executor", 7, 3, datetime.now(timezone.utc), 12, 1)
++    call = OneCallInput("operation-085", request(), service())
++    return worker_request(call, dict(dsn="synthetic-dsn", connect_timeout_seconds=1,
++                          statement_timeout_ms=500, lock_timeout_ms=100), lease,
++                          "run-085", time.monotonic_ns()+10_000_000_000, .5)
++
++
++class Ledger:
++    def __init__(self, denied=False):
++        self.events = []
++        self.context = None
++        self.seen = set()
++        self.denied = denied
++
++    async def admit(self, intent):
++        self.events.append("admit")
++        self.context = intent.context
++        if self.denied or intent.context.operation_id in self.seen:
++            raise AdmissionDenied()
++        self.seen.add(intent.context.operation_id)
++        return AdmissionPermit("permit", intent.context.operation_id, intent.context.executor_id)
++
++    async def mark_dispatch_started(self, permit):
++        self.events.append("mark")
++
++    async def record_outcome(self, permit, outcome):
++        self.events.append(outcome.disposition.value)
++
++
++class Transport:
++    def __init__(self, ledger, mode="success"):
++        self.ledger, self.mode, self.calls = ledger, mode, 0
++
++    async def send(self, **kw):
++        self.calls += 1
++        self.ledger.events.append("send")
++        if self.mode == "unknown":
++            raise DeliveryUnknown()
++        if self.mode == "timeout":
++            await asyncio.sleep(.2)
++        if self.mode == "failed":
++            return TransportResponse(503, b"{}", 2)
++        message = {"role":"assistant", "content":"synthetic-answer-085"}
++        finish = "stop"
++        if self.mode == "tool":
++            finish = "tool_calls"
++            message["tool_calls"] = [{"id":"calc", "type":"function", "function":{
++                "name":"finite_calculate", "arguments":'{"operation":"add","left":1,"right":2}'}}]
++        raw = json.dumps({"model":"synthetic-model", "choices":[{"message":message,"finish_reason":finish}],
++                          "usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}).encode()
++        return TransportResponse(200, raw, len(raw))
++
++
++class OneCallTests(unittest.IsolatedAsyncioTestCase):
++    def test_fixed_worker_idle_and_missing_configuration_fail_closed(self):
++        import sys
++        from app.worker.worker_main import main
++        with patch.object(sys,"argv",["worker_main","idle"]):
++            self.assertEqual(main(),0)
++        with patch.object(sys,"argv",["worker_main","one_call"]), \
++             patch("app.worker.worker_main.PostgresAdmissionLedger",side_effect=AssertionError("implicit fallback")):
++            self.assertEqual(main(),2)
++
++    def test_public_rejection_before_launcher_and_bounded_result_roundtrip(self):
++        from app.worker.session import SessionOutcome
++        from app.worker.launcher import _decode_outcome
++        from app.worker.one_call import run_one_call
++        value=frame()
++        call,ctx=decode_worker_request(value)
++        ledger=PostgresAdmissionLedger("synthetic-dsn")
++        with patch("app.worker.launcher.run_supervised_window",side_effect=AssertionError("launched")):
++            with self.assertRaises(ValueError):
++                run_one_call(ledger,SessionConfig(),ctx.activity_id,ctx.executor_id,"op",request(),
++                             service(timeout_seconds=20),run_tag="run")
++        for result in (
++            ModelCallResult(CallStatus.SUCCEEDED,ctx.operation_id,call.service.provider,call.service.model,
++                            text="synthetic-answer-085",usage=Usage(2,1,3)),
++            ModelCallResult(CallStatus.SUCCEEDED,ctx.operation_id,call.service.provider,call.service.model,
++                            json_object={"answer":42},usage=Usage(2,1,3)),
++            ModelCallResult(CallStatus.TOOL_PLAN,ctx.operation_id,call.service.provider,call.service.model,
++                            tool_plans=(ToolCallPlan("calc","finite_calculate",{"operation":"add","left":1,"right":2}),)),
++        ):
++            original=receipt(result,ctx,"run")
++            raw=pack_frame(original).ljust(SLOT_SIZE,b"\0")
++            decoded=decode_receipt(unpack_frame(raw),ctx,"run")
++            self.assertEqual(json.loads(json.dumps(asdict(decoded))),json.loads(json.dumps(asdict(result))))
++            outcome=SessionOutcome("run","settled",ctx.activity_id,generation=ctx.execution_generation,model_receipt=original)
++            self.assertNotIn("synthetic-answer",repr(outcome))
++            self.assertNotIn("answer",repr(outcome))
++            recovered=_decode_outcome(json.loads(json.dumps({"protocol":2,"run_tag":"run",
++                "activity_id":ctx.activity_id,"outcome":asdict(outcome)})),"run",ctx.activity_id)
++            self.assertEqual(json.loads(json.dumps(asdict(recovered))),json.loads(json.dumps(asdict(outcome))))
++
++    def test_new_sources_compile_without_pyc(self):
++        backend=Path(__file__).resolve().parents[1]
++        for path in list((backend/"app/worker").glob("*.py"))+list((backend/"tests/fixtures/task085").glob("*.py")):
++            compile(path.read_text(encoding="utf-8"),str(path),"exec")
++
++    def test_mapping_owned_lifetime_and_malformed_json(self):
++        from app.worker.supervisor_ipc import NamedMapping
++        name="Local\\RetroLume.SUP."+uuid4().hex
++        owner=NamedMapping.create(name)
++        peer=None
++        try:
++            owner.write_request({"protocol":2})
++            peer=NamedMapping.open_existing(name)
++            self.assertEqual(peer.read_request(),{"protocol":2})
++            peer.close();peer=None
++        finally:
++            if peer is not None:peer.close()
++            owner.close()
++        with self.assertRaises(IpcUnknown):NamedMapping.open_existing(name)
++        for body in (b'{"a":1,"a":2}',b'{"a":NaN}'):
++            raw=struct.pack("<I",len(body))+hashlib.sha256(body).digest()+body
++            with self.assertRaises(IpcUnknown):unpack_frame(raw.ljust(SLOT_SIZE,b"\0"))
++
++    async def test_real_gateway_single_send_claim_context_and_redaction(self):
++        value = frame()
++        ledger = Ledger()
++        transport = Transport(ledger)
++        with patch("app.worker.worker_main.PostgresAdmissionLedger", return_value=ledger), \
++             patch("app.capabilities.gateway.HttpxModelTransport", return_value=transport):
++            result = await execute_one_call(value)
++        self.assertEqual(ledger.events, ["admit","mark","send","received"])
++        self.assertEqual(transport.calls, 1)
++        self.assertEqual((ledger.context.execution_generation,ledger.context.scope_revision), (7,3))
++        parsed = decode_receipt(result, ledger.context, "run-085")
++        self.assertEqual(parsed.status, CallStatus.SUCCEEDED)
++        self.assertNotIn("synthetic-answer", repr(parsed))
++        self.assertNotIn("synthetic-body", repr(OneCallInput.from_wire(value["call"])))
++        self.assertNotIn("synthetic-secret", repr(OneCallInput.from_wire(value["call"])))
++        self.assertEqual(result["business_commit"], "not_committed")
++
++    async def test_unknown_timeout_failure_denial_and_no_operation_retry(self):
++        for mode, status in (("unknown",CallStatus.UNKNOWN),("timeout",CallStatus.UNKNOWN),
++                             ("failed",CallStatus.FAILED),("denied",CallStatus.REJECTED)):
++            with self.subTest(mode=mode):
++                ledger = Ledger(denied=mode=="denied")
++                transport = Transport(ledger,mode)
++                value = frame()
++                call, ctx = decode_worker_request(value)
++                gateway = ControlledModelGateway(call.service,ledger=ledger,transport=transport)
++                result = await run_internal_task(gateway,"one_call",ctx,call.request,call_seconds=.5)
++                self.assertEqual(result.status,status)
++                second = await run_internal_task(gateway,"one_call",ctx,call.request,call_seconds=.5)
++                self.assertEqual(second.status,CallStatus.REJECTED)
++                self.assertEqual(transport.calls,0 if mode=="denied" else 1)
++                if mode in ("unknown","timeout"):
++                    self.assertIn("unknown",ledger.events)
++                    self.assertNotIn("not_sent",ledger.events)
++
++    async def test_tool_plan_never_executes(self):
++        ledger = Ledger()
++        transport = Transport(ledger,"tool")
++        value=frame()
++        call,ctx=decode_worker_request(value)
++        gateway=ControlledModelGateway(call.service,ledger=ledger,transport=transport)
++        with patch("app.capabilities.tools.ToolRegistry.execute",side_effect=AssertionError("executed")):
++            result=await run_internal_task(gateway,"one_call",ctx,request(allowed_tools={"finite_calculate"}))
++        self.assertEqual(result.status,CallStatus.TOOL_PLAN)
++        self.assertEqual(transport.calls,1)
++
++    async def test_missing_data_idle_and_actual_short_window(self):
++        with self.assertRaises(ValueError):
++            await run_internal_task(None,"one_call")
++        self.assertIsNone(await run_internal_task(None,"idle"))
++        value=frame()
++        value["stop_ns"]=time.monotonic_ns()+100_000_000
++        with patch("app.worker.worker_main.PostgresAdmissionLedger",side_effect=AssertionError("constructed")):
++            with self.assertRaises(ValueError):
++                await execute_one_call(value)
++
++    def test_frame_limits_tamper_and_schema(self):
++        raw=pack_frame({"x":"a"*(SLOT_SIZE-44)})
++        self.assertEqual(len(raw),SLOT_SIZE)
++        self.assertEqual(len(unpack_frame(raw)["x"]),SLOT_SIZE-44)
++        with self.assertRaises(IpcUnknown): pack_frame({"x":"a"*(SLOT_SIZE-43)})
++        with self.assertRaises(IpcUnknown): unpack_frame(raw[:-1]+b"x")
++        value=frame()
++        value["unexpected"]=True
++        with self.assertRaises(ValueError): decode_worker_request(value)
++        value=frame()
++        value["context"]["operation_id"]="other"
++        with self.assertRaises(ValueError): decode_worker_request(value)
++
++    def test_input_bounds_and_fixed_argv(self):
++        with self.assertRaises(ValueError): OneCallInput("op",request(),service(max_response_bytes=65537)).to_wire()
++        with self.assertRaises(ValueError): OneCallInput("op",request(messages=[{"role":"user","content":"文"*50000}]),service()).to_wire()
++        with self.assertRaises(ValueError): WorkerCommand("one_call").argv()
++        argv=WorkerCommand("one_call").argv("Local\\RetroLume.SUP."+"a"*32)
++        self.assertNotIn("synthetic-secret"," ".join(argv))
++        self.assertNotIn("synthetic-body"," ".join(argv))
++        for invalid in ("bad\nexecutor","bad executor",""):
++            with self.assertRaises(ValueError): validate_identity(str(uuid4()),invalid,"op","run")
++
++    async def test_receipt_wrong_identity_generation_missing_unknown_and_overlimit(self):
++        ledger=Ledger()
++        call,ctx=decode_worker_request(frame())
++        result=await ControlledModelGateway(call.service,ledger=ledger,transport=Transport(ledger)).call(ctx,call.request)
++        original=receipt(result,ctx,"run")
++        for field,value in (("execution_generation",6),("scope_revision",2),("executor_id","wrong"),("execution_generation",True)):
++            item=json.loads(json.dumps(original));item["context"][field]=value
++            with self.assertRaises(ValueError): decode_receipt(item,ctx,"run")
++        for mutate in (lambda x:x.update(extra=1),lambda x:x["result"].update(extra=1),
++                       lambda x:x["result"].pop("status"),lambda x:x["result"].update(text="x"*131073)):
++            item=json.loads(json.dumps(original));mutate(item)
++            with self.assertRaises(ValueError): decode_receipt(item,ctx,"run")
++
++    def test_sup_protocol_roundtrip_and_missing_configuration(self):
++        from app.worker.launcher import _request
++        name="Local\\RetroLume.SUP."+"a"*32
++        ledger=PostgresAdmissionLedger("synthetic-dsn")
++        cfg=SessionConfig()
++        call=OneCallInput("op",request(),service())
++        value=_request(ledger,cfg,str(uuid4()),"executor",WorkerCommand("one_call"),"run",name,time.monotonic_ns()+10**10,call)
++        self.assertEqual(_validated_request(value,name)[-1].operation_id,"op")
++        for mutate in (lambda x:x.update(protocol=1),lambda x:x.update(extra=1),lambda x:x.update(one_call=None)):
++            item=json.loads(json.dumps(value));mutate(item)
++            with self.assertRaises(ValueError): _validated_request(item,name)
++
++
++if __name__ == "__main__": unittest.main()

@@ -1,0 +1,12 @@
+--- pre/backend/tests/test_activity_recovery.py
++++ post/backend/tests/test_activity_recovery.py
+@@ -70,6 +70,9 @@
+             async with connection.transaction():
+                 for activity_id in activity_ids:
+                     for sql in (
++                        # 007 子表存在时先删本例子表行再删父表（旧 schema 无该表则跳过）。
++                        """DELETE FROM activity_operation_results WHERE activity_id = %s
++                             AND to_regclass('public.activity_operation_results') IS NOT NULL""",
+                         "DELETE FROM activity_operations WHERE activity_id = %s",
+                         "DELETE FROM activity_allowed_models WHERE activity_id = %s",
+                         "DELETE FROM activity_scope_sources WHERE activity_id = %s",

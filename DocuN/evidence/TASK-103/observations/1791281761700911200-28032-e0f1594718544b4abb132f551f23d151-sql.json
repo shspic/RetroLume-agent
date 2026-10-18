@@ -1,0 +1,9 @@
+{
+  "kind": "sql",
+  "pid": 28032,
+  "value": {
+    "tag": "memory-detail",
+    "sql": "SELECT c.relname,a.attname,format_type(a.atttypid,a.atttypmod),a.attnotnull\n            FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_attribute a ON a.attrelid=c.oid\n            WHERE n.nspname='public' AND c.relname=ANY(%s) AND a.attnum>0 AND NOT a.attisdropped ORDER BY c.relname,a.attnum",
+    "arguments_saved": false
+  }
+}

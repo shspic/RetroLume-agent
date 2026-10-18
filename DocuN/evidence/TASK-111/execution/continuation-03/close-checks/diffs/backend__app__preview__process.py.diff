@@ -1,0 +1,25 @@
+--- backend/app/preview/process.py.pre
++++ backend/app/preview/process.py.post
+@@ -7,6 +7,7 @@
+ from pathlib import Path
+ import secrets
+ import base64
++import time
+ 
+ 
+ class OwnershipUnknown(RuntimeError):pass
+@@ -84,7 +85,13 @@
+     path=Path(path);temporary=path.with_name(path.name+"."+secrets.token_hex(8)+".new")
+     with temporary.open("x",encoding="utf-8") as stream:
+         json.dump(value,stream,ensure_ascii=False,sort_keys=True,separators=(",",":"),allow_nan=False);stream.flush();os.fsync(stream.fileno())
+-    os.replace(temporary,path)
++    # Windows读者短暂持有旧文件时，替换可能返回共享拒绝；有界等待不延业务截止。
++    until=time.monotonic()+.1
++    while True:
++        try:os.replace(temporary,path);break
++        except PermissionError:
++            if time.monotonic()>=until:raise
++            time.sleep(.005)
+ 
+ 
+ class GlobalOwner:

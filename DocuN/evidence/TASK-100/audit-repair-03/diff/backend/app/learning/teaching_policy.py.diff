@@ -1,0 +1,86 @@
+--- pre/backend/app/learning/teaching_policy.py
++++ post/backend/app/learning/teaching_policy.py
+@@ -5,7 +5,8 @@
+ """
+ from __future__ import annotations
+ 
+-from decimal import Decimal, InvalidOperation
++from decimal import Decimal, InvalidOperation, localcontext
++import re
+ 
+ from .teaching_contracts import (
+     ALL_ACTIONS,
+@@ -75,6 +76,36 @@
+     if tolerance is None:
+         return left == right
+     return abs(left - right) <= tolerance
++
++
++_ANSWER_UNITS = {
++    "m/s": ("speed", 1, 1), "米/秒": ("speed", 1, 1), "米每秒": ("speed", 1, 1),
++    "m/min": ("speed", 1, 60),
++    "s": ("time", 1, 1), "秒": ("time", 1, 1),
++    "min": ("time", 60, 1), "分钟": ("time", 60, 1),
++    "m": ("distance", 1, 1), "米": ("distance", 1, 1),
++}
++_ANSWER_NUMBER = r"(?<![0-9A-Za-z_.+\-])(-?[0-9]+(?:\.[0-9]+)?)"
++_ANSWER_QUANTITY = re.compile(_ANSWER_NUMBER + r"\s*(m\s*/\s*min|m\s*/\s*s|米\s*/\s*秒|米每秒|min|分钟|秒|s|m|米)(?![A-Za-z0-9/])")
++
++
++def _answer_quantity(text: str, unit: str | None):
++    """仅核一个明确的有限数值量；多值/开放语义/程序原文不猜结论。"""
++    unit = re.sub(r"\s+", "", unit or "")
++    candidates = [(Decimal(m[1]), re.sub(r"\s+", "", m[2])) for m in _ANSWER_QUANTITY.finditer(text)]
++    if unit in _ANSWER_UNITS:
++        family = _ANSWER_UNITS[unit][0]
++        same = [c for c in candidates if _ANSWER_UNITS[c[1]][0] == family]
++        if len(same) == 1:
++            return same[0]
++        if not same and len(candidates) == 1:
++            return candidates[0]
++        return None
++    if not unit:
++        match = re.fullmatch(r"\s*(?:约\s*)?(-?[0-9]+(?:\.[0-9]+)?)\s*", text)
++        if match:
++            return Decimal(match[1]), ""
++    return None
+ 
+ 
+ def derive_support_checks(exercise_body: dict, answer_text: str) -> list[dict]:
+@@ -127,10 +158,35 @@
+         except (InvalidOperation, ZeroDivisionError, OverflowError, ValueError):
+             checks.append({"point_id": point.get("point_id"), "status": "unchecked"})
+             continue
++        reference_match = _decimal_equal(computed, expected, tolerance)
++        actual = None if exercise_body.get("exercise_type") == "program" else _answer_quantity(answer_text, numeric.get("unit"))
++        answer_status = "unchecked"
++        detail = {}
++        if actual is not None:
++            number, unit = actual
++            expected_unit = re.sub(r"\s+", "", numeric.get("unit") or "")
++            unit_match = unit == expected_unit
++            if unit in _ANSWER_UNITS and expected_unit in _ANSWER_UNITS:
++                family, numerator, denominator = _ANSWER_UNITS[unit]
++                expected_family, expected_numerator, expected_denominator = _ANSWER_UNITS[expected_unit]
++                unit_match = family == expected_family
++                if unit_match:
++                    with localcontext() as context:
++                        context.prec = 64
++                        number = number * numerator * expected_denominator / (denominator * expected_numerator)
++            value_match = unit_match and _decimal_equal(number, expected, tolerance)
++            answer_status = "matched" if value_match else "conflict"
++            detail = {"answer_value_decimal": format(number, "f"), "answer_unit": unit,
++                      "unit_matched": unit_match, "value_matched": value_match}
+         checks.append({
+             "point_id": point.get("point_id"),
+-            "status": "matched" if _decimal_equal(computed, expected, tolerance) else "conflict",
++            "status": "conflict" if not reference_match or answer_status == "conflict" else answer_status,
++            "reference_status": "matched" if reference_match else "conflict",
++            "answer_status": answer_status,
++            "dimension_ids": [d["id"] for d in exercise_body.get("dimensions", [])
++                              if point.get("point_id") in d.get("point_ids", [])],
+             "computed": format(computed.normalize(), "f"),
++            **detail,
+         })
+     return checks
+ 

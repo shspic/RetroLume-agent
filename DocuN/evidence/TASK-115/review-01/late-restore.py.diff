@@ -1,0 +1,11 @@
+--- as-run/backend/app/data_exit/restore.py
++++ final/backend/app/data_exit/restore.py
+@@ -558,7 +558,7 @@
+ 
+     async def _activate_readonly(self, job_id, plan_sha, confirmation_key, expected_generation):
+         restore_job = self.hub.state()["jobs"].get(uuid(job_id))
+-        if restore_job is None or restore_job["state"] != "verified": raise DataError("target_not_verified")
++        if restore_job is None or self.hub.get(job_id)['state'] != 'verified': raise DataError("target_not_verified")
+         plan = self.plan(restore_job["scope"]["plan_id"], plan_sha)
+         origin = self.maintenance.gate.context()
+         command = DataJobCommand("activate", confirmation_key, {"restore_job_id": job_id, "plan_sha256": plan_sha, "expected_generation": expected_generation})

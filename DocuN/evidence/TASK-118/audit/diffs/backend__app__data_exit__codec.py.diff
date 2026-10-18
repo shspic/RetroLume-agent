@@ -1,0 +1,67 @@
+--- first-pre/backend/app/data_exit/codec.py
++++ current/backend/app/data_exit/codec.py
+@@ -52,19 +52,26 @@
+     return value
+ 
+ 
+-def encode_row(table, row):
+-    from .schema import COLUMNS
++def encode_row(table, row,profile='data_exit.v1.r01'):
++    from .schema_profiles import get_profile
++    COLUMNS=get_profile(profile).columns
+     encoded = {}
+     for column, kind in COLUMNS[table].items():
+         value = row[column]
+         if value is not None and kind == "bigint":
+             value = str(value)
++        elif value is not None and kind=='vector(512)':
++            from app.capabilities.embedding import float32_values,vector_digest
++            value=list(float32_values(json.loads(value) if isinstance(value,str) else value))
++            if vector_digest(value)!=row['vector_sha256']:raise DataError('integrity_failed',422)
+         encoded[column] = plain(value)
+     return encoded
+ 
+ 
+-def decode_row(table, row):
+-    from .schema import COLUMNS
++def decode_row(table, row,profile='data_exit.v1.r01'):
++    from .schema_profiles import get_profile
++    COLUMNS=get_profile(profile).columns
++    if table not in COLUMNS:raise DataError('codec_mismatch',422)
+     if not isinstance(row, dict) or set(row) != set(COLUMNS[table]):
+         raise DataError("codec_mismatch", 422)
+     result = {}
+@@ -73,7 +80,14 @@
+         if value is None:
+             result[column] = None
+             continue
+-        if kind.endswith("[]"):
++        if kind=='vector(512)':
++            from app.capabilities.embedding import float32_values,vector_digest
++            try:
++                values=float32_values(value)
++                if list(values)!=value or vector_digest(values)!=row['vector_sha256']:raise ValueError()
++                value=canonical(list(values))
++            except (ValueError,TypeError,KeyError):raise DataError('integrity_failed',422) from None
++        elif kind.endswith("[]"):
+             if not isinstance(value, list): raise DataError("codec_mismatch", 422)
+             if kind == "uuid[]":
+                 if any(not isinstance(v, str) or str(UUID(v)) != v for v in value): raise DataError("codec_mismatch", 422)
+@@ -149,7 +163,7 @@
+                   'cleanup_state_observed','manifest_sha256','hash_size_targets'}
+ 
+ 
+-def validate_metadata(name,row):
++def validate_metadata(name,row,profile='data_exit.v1.r01'):
+     from .contracts import PROFILE,uuid
+     expected=CONTROL_FIELDS if name=='source_control' else HISTORY_FIELDS if name=='operation_history' else TOMBSTONE_FIELDS
+     if not isinstance(row,dict) or set(row)!=expected:raise DataError('codec_mismatch',422)
+@@ -165,7 +179,7 @@
+         if not isinstance(value,str) or re.fullmatch(r'[0-9a-f]{64}',value) is None:raise DataError('codec_mismatch',422)
+     if name=='source_control':
+         uuid(row['dataset_id']);uuid(row['source_instance_observed'])
+-        if row['schema_profile']!=PROFILE or row['mode_observed'] not in ('normal','loading','frozen','restored_readonly'):raise DataError('codec_mismatch',422)
++        if row['schema_profile']!=profile or row['mode_observed'] not in ('normal','loading','frozen','restored_readonly'):raise DataError('codec_mismatch',422)
+         timestamp('created_at');hex_value('source_root_sha256',True)
+         if row['source_snapshot_id'] is not None:uuid(row['source_snapshot_id'])
+     elif name=='operation_history':

@@ -1,0 +1,33 @@
+name: retrolume-local
+services:
+  pg:
+    image: pgvector/pgvector@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f
+    pull_policy: never
+    container_name: ${RETROLUME_PG_NAME:?explicit own container required}
+    environment:
+      POSTGRES_USER: ${RETROLUME_PG_USER:?explicit user required}
+      POSTGRES_PASSWORD: ${RETROLUME_PG_PASSWORD:?inject only through safe process environment}
+      POSTGRES_DB: ${RETROLUME_PG_DATABASE:?explicit database required}
+    ports:
+      - "127.0.0.1:${RETROLUME_PG_PORT:?explicit loopback port required}:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    cpus: 1
+    mem_limit: 512m
+    pids_limit: 128
+    restart: "no"
+  renderer-build:
+    profiles: [build]
+    image: ${RETROLUME_RENDERER_TAG:?explicit renderer tag required}
+    build:
+      context: ${RETROLUME_RENDERER_CONTEXT:?project prepared context required}
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: cached_base
+      additional_contexts:
+        cached_base: ${RETROLUME_RENDERER_BASE_OCI:?explicit fixed local OCI required}
+      network: none
+    # 仅构建入口，预览由外部监督按session/额度动态create，禁止compose常驻预览。
+volumes:
+  pg-data:
+    name: ${RETROLUME_PG_VOLUME:?explicit own volume required}

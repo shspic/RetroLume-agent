@@ -1,0 +1,28 @@
+--- as-run-5e541e22
++++ current-ee9074b8
+@@ -303,9 +303,14 @@
+   const slice3b = log.slice(beforeS3b);
+   summary.checks.s3_explicit_post_exactly_one = postTotal - postBefore === 1;
+   summary.checks.s3_read_after_explicit_action = slice3b.some(item => item.group === "list" && item.method === "GET");
+   (postTotal - postBefore === 1) || summary.failures.push(`s3 explicit POST count ${postTotal - postBefore}`);
+-  slice3b.some(item => item.method === "POST") && summary.failures.push("s3 after-action slice contains POST");
++  // after-action 窗口（beforeS3b 记录于点击前）必然包含显式 POST 请求自身；
++  // 真实预期 = 窗口内 POST 恰 1 个（显式动作本身），其余请求全部 GET。
++  summary.checks.s3_after_action_single_post = slice3b.filter(item => item.method === "POST").length === 1
++    && slice3b.filter(item => item.method !== "POST").every(item => item.method === "GET");
++  (slice3b.filter(item => item.method === "POST").length === 1)
++    || summary.failures.push(`s3 after-action slice POST count ${slice3b.filter(item => item.method === "POST").length}`);
+   summary.checks.s3_detail_after_success = (await page.getByText("尚无操作。此版本等待学习入口接入").count()) > 0;
+   summary.steps.push("s3-submitted-intent-explicit-post");
+   await page.screenshot({ path: `${SHOTS}/c01-s3-explicit-post.png`, fullPage: true });
+   await page.evaluate(() => localStorage.removeItem("retrolume.pending-intents.v1"));
+@@ -427,8 +432,9 @@
+     if (value !== true) summary.failures.push(`check false: ${key}`);
+   }
+   summary.console_errors = consoleErrors;
+   summary.page_errors = pageErrors;
++  summary.post_total = postTotal; // 同步全局计数到报告字段（续作02 实跑发现缺此同步）
+   summary.ok = summary.failures.length === 0;
+ } catch (error) {
+   summary.failures.push(`exception: ${error && error.stack ? String(error.stack).slice(0, 800) : String(error)}`);
+   summary.ok = false;

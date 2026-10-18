@@ -1,0 +1,102 @@
+"""数据操作固定合同和有界输入。"""
+from dataclasses import dataclass, field
+import hashlib
+import json
+import re
+from uuid import UUID
+
+PROFILE = "data_exit.v1.r01"
+FORMAT = "retrolume.data-package"
+TABLES = (
+    "material_sources", "material_versions", "activities", "activity_scope_sources",
+    "activity_allowed_models", "activity_operations", "pdf_review_candidates",
+    "pdf_extracted_pages", "pdf_review_pages", "pdf_user_supplements",
+    "activity_operation_results", "teaching_commands", "teaching_records", "teaching_heads",
+    "learning_memories", "learning_memory_commands", "learning_memory_revisions",
+    "learning_memory_dependencies", "learning_memory_bodies", "activity_memory_bindings",
+    "activity_memory_choices", "interview_commands", "interview_records", "interview_heads",
+    "html_commands", "html_artifacts", "html_preview_sessions", "html_preview_budgets",
+)
+VIEWS = ("data_export_control_v1", "data_export_job_history_v1", "data_export_tombstones_v1")
+
+
+class DataError(RuntimeError):
+    def __init__(self, code, status=409):
+        self.code, self.status = code, status
+        super().__init__(code)
+
+
+@dataclass(frozen=True)
+class Limits:
+    package_bytes: int = 2 * 1024**3
+    members: int = 20000
+    manifest_bytes: int = 8 * 1024**2
+    directory_bytes: int = 8 * 1024**2
+    json_line_bytes: int = 1024**2
+    json_depth: int = 32
+    chunk_bytes: int = 32 * 1024**2
+    rows: int = 500000
+    component_rows: int = 50000
+    component_bytes: int = 64 * 1024**2
+    snapshot_seconds: int = 60
+    component_seconds: int = 30
+    operation_seconds: int = 1800
+    upload_seconds: int = 300
+    original_bytes: int = 5 * 1024**2
+
+
+def canonical(value):
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def digest(value):
+    return hashlib.sha256(value if isinstance(value, bytes) else value.encode("utf-8")).hexdigest()
+
+
+def uuid(value):
+    try:
+        result = str(UUID(str(value)))
+    except (ValueError, TypeError, AttributeError):
+        raise DataError("invalid_input", 400) from None
+    if result != str(value):
+        raise DataError("invalid_input", 400)
+    return result
+
+
+def business_key(value):
+    if not isinstance(value, str) or re.fullmatch(r"[A-Za-z0-9._-]{1,128}", value) is None:
+        raise DataError("invalid_input", 400)
+    return value
+
+
+@dataclass(frozen=True)
+class DataContext:
+    control_id: str
+    generation: int
+    dataset_id: str
+    instance_id: str
+    mode: str
+    target_id: str | None = None
+
+    def public(self):
+        return {"control_id": self.control_id, "selection_generation": self.generation,
+                "dataset_id": self.dataset_id, "instance_id": self.instance_id,
+                "current_mode": self.mode, "read_only": self.mode != "normal"}
+
+
+@dataclass(frozen=True)
+class DataJobCommand:
+    kind: str
+    business_key: str
+    scope: dict = field(default_factory=lambda: {"mode": "all"})
+
+    def normalized(self):
+        if self.kind not in ("portable_export", "restore_checkpoint", "restore", "activate", "source_delete", "upload"):
+            raise DataError("invalid_input", 400)
+        business_key(self.business_key)
+        if not isinstance(self.scope, dict):
+            raise DataError("invalid_input", 400)
+        raw = canonical({"kind": self.kind, "scope": self.scope})
+        if len(raw.encode("utf-8")) > 16384:
+            raise DataError("capacity_exceeded", 413)
+        return raw

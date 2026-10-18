@@ -1,0 +1,137 @@
+
+backend/app/learning/teaching_service.py
+432:             if answer_row is None or answer_row["kind"] != "answer":
+433:                 raise TeachingRefusal("record_not_found", "作答不存在，无法评价")
+434:             if exercise_row.get("operation_id"):
+435:                 facts["exercise_projection"] = await seven_summary(
+436:                     exercise_row["operation_id"], lambda r: {
+437:                         "exercise_type": r.get("exercise_type"), "difficulty": r.get("difficulty"),
+438:                         "stem": r.get("stem"), "dimensions": r.get("dimensions"),
+439:                         "reference_points": r.get("reference_points"),
+440:                         "reference_explanation": r.get("reference_explanation")})
+441:             if answer_row["body"]:
+442:                 try:
+443:                     facts["answer_text"] = json.loads(answer_row["body"]).get("text")
+444:                 except ValueError:
+445:                     raise TeachingRefusal("record_not_found", "作答正文不可解析") from None
+446:             # 本题反馈（前史与纠错链锚点），限 2 条。
+447:             feedback_rows = await self.ledger.read_teaching_facts(
+448:                 activity_id, exercise_record_id=exercise_id, answer_record_id=answer_id,
+449:                 kinds=("feedback",), limit=2)
+450:             feedback_ids = {str(r["record_id"]) for r in feedback_rows}
+451:             correction_id=command.body.get('correction_record_id')
+452:             if correction_id:
+453:                 correction=await collect(await self.ledger.read_teaching_record(activity_id,correction_id))
+454:                 if correction is None or correction['kind']!='correction':
+455:                     raise TeachingRefusal('record_not_found','纠错事实不存在')
+456:                 target=await collect(await self.ledger.read_teaching_record(activity_id,str(correction['parent_record_id'])))
+457:                 if target is None or target['kind'] not in ('feedback','progress') or str(target['answer_record_id'])!=answer_id:
+458:                     raise TeachingRefusal('answer_changed','纠错不属于本次作答')
+459:                 facts['correction_texts'].append(correction['body'][:1024])
+460:             calcs = await self.ledger.read_teaching_facts(
+461:                 activity_id, answer_record_id=answer_id, kinds=("calculation",), limit=1)
+462:             for row in calcs:
+463:                 await collect(row)
+464:                 if row.get("operation_id"):
+465:                     calculation = await self.ledger.read_operation(activity_id,row["operation_id"])
+466:                     if calculation is None or not calculation.payload:
+467:                         raise TeachingRefusal("integrity_error","核算正文缺失")
+468:                     facts["calculation_summary"] = {"operation_id":row["operation_id"],
+469:                         "payload_sha256":row["body_sha256"],"value_decimal":json.loads(calculation.payload)["value"]}
+470:             for row in feedback_rows:
+471:                 await collect(row)
+472:                 if row.get("operation_id"):
+473:                     facts["prior_observations"].append(await seven_summary(
+474:                         row["operation_id"],
+475:                         lambda r: {"message": _clip(r.get("message"), 200),
+476:                                    "dimensions": r.get("dimension_observations")}))
+477:             # 纠错链：parent 指向本题 feedback 的 correction（O08 合法锚）。
+478:             if feedback_ids:
+479:                 for row in await self.ledger.read_teaching_facts(
+480:                         activity_id, kinds=("correction",), limit=6):
+481:                     if str(row.get("parent_record_id")) in feedback_ids:
+482:                         if str(row['record_id'])==correction_id:continue
+483:                         await collect(row)
+484:                         if row["body"]:
+485:                             facts["correction_texts"].append(row["body"][:512])
+486:                         if len(facts["correction_texts"]) >= 2:
+487:                             break
+
+backend/app/learning/teaching_service.py
+594:             record = await self.ledger.read_teaching_record(activity_id, command.body["exercise_record_id"])
+595:             if record is None or record["kind"] != "exercise":
+596:                 raise TeachingRefusal("record_not_found", "练习不存在，无法核算")
+597:             # 参考正文在 007：读取已暴露的 reference point 数值。
+598:             exposures = await self.ledger.read_teaching_exposures(activity_id, command.body["exercise_record_id"])
+599:             if "reference" not in exposures:
+600:                 raise TeachingRefusal("source_invalid", "参考要点尚未暴露，先查看参考再核算")
+601:             numeric = await self._reference_numeric(activity_id, record, command.body["reference_point_id"])
+602:             if numeric is None:
+603:                 raise TeachingRefusal("source_invalid", "该题无可核算数值参考点")
+604:             point_id, operation, left, right = numeric
+605:             if point_id != command.body["reference_point_id"]:
+606:                 raise TeachingRefusal("record_not_found", "指定参考点不匹配")
+607:             arguments = {"operation": operation, "left": left, "right": right}
+608:             from app.capabilities.contracts import canonical_tool_arguments
+609:             arguments_json, arguments_sha = canonical_tool_arguments(arguments)
+610:             operation_id = command.operation_id(activity_id)
+611:             # DEF-004：工具冻结上下文同样携带真实引用 hash（题/答），接受时
+612:             # 锁内核对；作答必须存在且匹配。
+613:             head = await self.ledger.read_teaching_head(activity_id)
+614:             references = [ReferenceHash(record_id=str(record["record_id"]),
+615:                                         body_sha256=record["body_sha256"])]
+616:             for rid in (head["goal_record_id"],head["path_record_id"]):
+617:                 parent = await self.ledger.read_teaching_record(activity_id,str(rid))
+618:                 if parent is None:
+619:                     raise TeachingRefusal("integrity_error","核算缺少当前目标或路径")
+620:                 references.append(ReferenceHash(record_id=str(rid),body_sha256=parent["body_sha256"]))
+621:             answer_id = command.body.get("answer_record_id")
+622:             if answer_id:
+623:                 answer_row = await self.ledger.read_teaching_record(activity_id, answer_id)
+624:                 if answer_row is None or answer_row["kind"] != "answer":
+625:                     raise TeachingRefusal("record_not_found", "作答不存在，无法核算")
+626:                 references.append(ReferenceHash(record_id=str(answer_row["record_id"]),
+627:                                                 body_sha256=answer_row["body_sha256"]))
+628:             from .teaching_contracts import frozen_context_digest
+629:             frozen = TeachingFrozenContext(
+630:                 kind="tool", reference_hashes=references,
+631:                 operation_id=operation_id,
+632:                 context_sha256=sha(canonical({"kind": "tool", "operation_id": operation_id,
+633:                                               "arguments_sha256": arguments_sha})),
+634:                 call=ToolFrozenCall(call_id="tc-" + command.business_key[:8], name="finite_calculate",
+635:                                     arguments_json=arguments_json, arguments_sha256=arguments_sha))
+636:             frozen = parse_frozen_context(frozen.model_dump(by_alias=True) | {"context_sha256":frozen_context_digest(frozen)})
+637:             receipt = await self.ledger.accept_teaching_command(activity_id, command, frozen)
+638:         else:
+639:             current, frozen = recovered
+640:             if frozen.kind != "tool" or frozen.call is None:
+641:                 raise TeachingRefusal("integrity_error", "持久工具上下文不一致")
+642:             arguments = json.loads(frozen.call.arguments_json)
+643:             operation_id = frozen.operation_id
+644:             receipt = self._read_receipt(current)
+645:         if receipt.status != "accepted" or receipt.duplicate_of:
+646:             return receipt
+647:         decision = await self.ledger.claim_teaching_launch(activity_id, command.business_key,
+648:                                                            receipt.request_sha256)
+649:         if not decision.get("launch_allowed"):
+650:             return receipt
+651:         plan = ToolCallPlan(call_id=frozen.call.call_id, name="finite_calculate", arguments=arguments)
+652:         outcome = await ActivityService(self.ledger).execute_tool_action(
+653:             activity_id, operation_id, plan, self.session_config or SessionConfig(), "local-ui", run_tag)
+654:         status = outcome.status
+655:         current = await self.ledger.read_teaching_command(activity_id, command.business_key)
+656:         row = current["command"] if current else None
+657:         if current is not None:
+658:             return self._read_receipt(current)
+659:         return TeachingCommandReceipt(
+660:             activity_id=activity_id, business_key=command.business_key, action=command.action,
+661:             request_sha256=receipt.request_sha256,
+662:             status="unknown",
+663:             duplicate_of=receipt.duplicate_of, record_ids=[], operation_id=operation_id,
+664:             head_revision_now=current["head_revision"] if current else 0,
+665:             qualification="current", error_code=row["error_code"] if row else None,
+666:             model_called=False, tool_called=True, retry_policy="none")
+667: 
+668:     async def _reference_numeric(self, activity_id, exercise_record, point_id):
+669:         """从已提交 007 教学正文读 reference_points 的首个 numeric。"""
+670:         try:

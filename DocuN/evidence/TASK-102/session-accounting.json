@@ -1,0 +1,237 @@
+{
+  "task": "TASK-102",
+  "round": "R-096",
+  "scope": "只读完整A-D合同，授权终点为文档交付",
+  "clock_start_utc": "2026-10-06 01:31:13 UTC",
+  "clock_checkpoint_utc": "2026-10-06 02:20:15 UTC",
+  "user_timezone": "Asia/Shanghai",
+  "observed_continuous_wall_seconds": 2942,
+  "initial_unmeasured_read_charge_seconds": 120,
+  "final_packaging_and_reply_reserve_seconds": 60,
+  "active_upper_charge_seconds": 3122,
+  "active_limit_seconds": 10800,
+  "active_remaining_after_conservative_charge": 7678,
+  "metadata_known_exec_wall_seconds": 10.957144700000002,
+  "metadata_exec_records": [
+    {
+      "label": "snapshots",
+      "seconds": 0.0000162
+    },
+    {
+      "label": "public rules",
+      "seconds": 0.0000142
+    },
+    {
+      "label": "project state",
+      "seconds": 0.3476314
+    },
+    {
+      "label": "public AGENTS",
+      "seconds": 0.4124631
+    },
+    {
+      "label": "parent navigation",
+      "seconds": 0.2819048
+    },
+    {
+      "label": "applicable rules",
+      "seconds": 0.3601679
+    },
+    {
+      "label": "current decisions",
+      "seconds": 0.4192903
+    },
+    {
+      "label": "input hashes and output paths",
+      "seconds": 0.5575119
+    },
+    {
+      "label": "hashes and migrations",
+      "seconds": 0.474576
+    },
+    {
+      "label": "parent conclusions and parameters",
+      "seconds": 0.3976054
+    },
+    {
+      "label": "approved parent and repository map",
+      "seconds": 0.3157356
+    },
+    {
+      "label": "source maps",
+      "seconds": 0.380611
+    },
+    {
+      "label": "lock and qualification",
+      "seconds": 0.334193
+    },
+    {
+      "label": "source locks and local auth",
+      "seconds": 0.4236025
+    },
+    {
+      "label": "teaching freeze and profile",
+      "seconds": 0.3683506
+    },
+    {
+      "label": "teaching entities and intent binding",
+      "seconds": 0.3178324
+    },
+    {
+      "label": "outcomes reads and gateway",
+      "seconds": 0.4619297
+    },
+    {
+      "label": "materials and activity creation",
+      "seconds": 0.4409891
+    },
+    {
+      "label": "legacy learning and gateway",
+      "seconds": 0.4263095
+    },
+    {
+      "label": "frontend maps",
+      "seconds": 0.3217284
+    },
+    {
+      "label": "frontend identity adapter config",
+      "seconds": 0.5016029
+    },
+    {
+      "label": "public read integration",
+      "seconds": 0.4796363
+    },
+    {
+      "label": "parent lock contract and transaction semantics",
+      "seconds": 0.3379226
+    },
+    {
+      "label": "minimum contract remainder",
+      "seconds": 0.3242112
+    },
+    {
+      "label": "direct dependency hashes and function facts",
+      "seconds": 0.6459596
+    },
+    {
+      "label": "tool and parent functions necessary facts",
+      "seconds": 0.4141145
+    },
+    {
+      "label": "final necessary function details",
+      "seconds": 0.4037565
+    },
+    {
+      "label": "one document consistency check and final input hashes",
+      "seconds": 0.4549888
+    },
+    {
+      "label": "single table-count checker correction and document binding",
+      "seconds": 0.3524893
+    }
+  ],
+  "metadata_conservative_charge_seconds": 300,
+  "metadata_limit_seconds": 600,
+  "metadata_note": "300为包含首读、工具/壳开销、文档写入和最终封装的保守记账额，非准确实测；逐段总开销不完整，不把已知exec时间冒充全部。",
+  "unknown": [
+    "固定时点之前的逐段阅读耗时",
+    "全部工具/壳及apply_patch逐段开销未完整测量",
+    "实际PG版本/角色/用户库与服务状态未运行查询",
+    "精确部署型号和原TASK100聊天同窗身份不可核实"
+  ],
+  "metadata_issues": [
+    {
+      "kind": "read_path",
+      "objects": [
+        "backend/tests/test_teaching_pg.py"
+      ],
+      "resolution": "按实际目录定位test_teaching_repository.py/recovery.py/api.py",
+      "product_run": false
+    },
+    {
+      "kind": "read_path",
+      "objects": [
+        "backend/app/worker/one_call_session.py",
+        "backend/app/worker/protocol.py"
+      ],
+      "resolution": "实际worker/one_call.py",
+      "product_run": false
+    },
+    {
+      "kind": "read_path",
+      "objects": [
+        "backend/app/worker/one_call_input.py"
+      ],
+      "resolution": "实际OneCallInput在one_call.py",
+      "product_run": false
+    },
+    {
+      "kind": "doc_checker_pattern",
+      "first_result": "seven-table text count false",
+      "cause": "遗漏learning_memories复数表名",
+      "resolution": "只补正确切七表计数，保留首次检查，不重跑其余检查",
+      "product_change": false
+    }
+  ],
+  "output_truncation_note": "部分读取被工具截断，按必要小范围补缺；未把截断结果当完整证据。",
+  "document_check": {
+    "passes": 1,
+    "automated_text_checks": 16,
+    "effective_passed": 16,
+    "checker_corrections": 1,
+    "initial_source_function_targets": 26,
+    "final_input_hashes_unchanged": 59,
+    "evidence_level": "B，不是DDL/行为测试"
+  },
+  "ordinary_document_review_corrections": [
+    "同内容修订收据不占有效CAS槽",
+    "收据与记忆用复合FK绑定",
+    "已撤销头禁止重插正文",
+    "资格可消费与只读历史分开",
+    "清理角色SELECT与正文行锁最小权限",
+    "真实TeachingRefusal默认422",
+    "独立派生记忆及整库恢复保留边界"
+  ],
+  "runtime_counts": {
+    "ddl": 0,
+    "compile": 0,
+    "unittest": 0,
+    "pg": 0,
+    "http_application": 0,
+    "windows_job": 0,
+    "docker_inspect_start": 0,
+    "browser_driver": 0,
+    "build": 0,
+    "model_tool": 0,
+    "provider_paid": 0,
+    "git_write": 0,
+    "installation": 0,
+    "subagents": 0
+  },
+  "writes_scope": [
+    "D:/shspic/project_NO3_RetroLume-agent/DocuN/results/TASK-102-result.md",
+    "D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-102/自有hash/字段/一致性/计量证据"
+  ],
+  "official_readonly": {
+    "unique_pages": 4,
+    "limit": 6,
+    "date": "2026-10-06",
+    "purpose": "仅核必要PG文档事实，无私有查询"
+  },
+  "inherited_budget_facts": {
+    "task100_repair04": {
+      "tests_batches": "1/3",
+      "offline_seconds": 1.6463436,
+      "active_final_upper_seconds": 1779.265,
+      "permission_ended": true
+    },
+    "task101_review03": {
+      "active_upper_seconds": 2002.341,
+      "metadata_conservative_seconds": 180,
+      "business_runs": 0,
+      "permission_ended": true
+    },
+    "note": "原初轮/续作/修复03及101更早FAIL/漏时/未知继续原记录；不重置、不借余额。"
+  },
+  "outcome": "A-D文档交付完成；G9-P待编排核证/必要批准；G9产品未实现未动态验证。"
+}

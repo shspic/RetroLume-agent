@@ -1,0 +1,19 @@
+--- C06/deploy/preview/renderer-protocol.cjs
++++ C07/deploy/preview/renderer-protocol.cjs
+@@ -6,7 +6,7 @@
+ function boundedJSON(bytes,max){
+  if(bytes.length<1||bytes.length>max)throw new Error('protocol_size');
+  const text=new TextDecoder('utf-8',{fatal:true}).decode(bytes),value=JSON.parse(text);
+- if(runtime.canonical(value)!==text)throw new Error('protocol_noncanonical');return value;
++ if(!Buffer.from(runtime.canonical(value),'utf8').equals(Buffer.from(bytes)))throw new Error('protocol_noncanonical');return value;
+ }
+ function decodeHeader(bytes){
+  const h=boundedJSON(bytes,2048);
+@@ -20,6 +20,7 @@
+  exact(body,['schema','description','description_sha256','renderer_sha256','viewport']);
+  if(body.schema!=='retrolume.preview.init.v2'||body.renderer_sha256!==renderer||body.viewport?.width!==640||body.viewport?.height!==480||
+     runtime.canonical(body.viewport)!=='{"height":480,"width":640}')throw new Error('init_identity');
++ if(body.description&&Object.hasOwn(body.description,'constraints')&&!Array.isArray(body.description.constraints))throw new Error('description_constraints_type');
+  runtime.validate(body.description);
+  if(crypto.createHash('sha256').update(runtime.canonical(body.description),'utf8').digest('hex')!==body.description_sha256)throw new Error('description_hash');
+ }

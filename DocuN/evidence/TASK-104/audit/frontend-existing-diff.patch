@@ -1,0 +1,224 @@
+--- a/frontend/src/activities/ActivityWorkspace.tsx
++++ b/frontend/src/activities/ActivityWorkspace.tsx
+@@ -3,6 +3,9 @@
+ import { isLearningDocument, LearningResult } from "./LearningResult";
+ import { compareLearningIntent } from "./learningIntentMatch";
+ import { TeachingWorkspace } from "./TeachingWorkspace";
++import { MemoryWorkspace } from "./MemoryWorkspace";
++import type { MemoryChoice } from "./memoryApi";
++import { submitTrackedMemoryCreate } from "./memoryIntents";
+ import { getTeachingSeed, type TeachingSeed } from "./teachingApi";
+ import {
+   appendIntent, clearIntents, loadIntents, newActivityId, newOperationKey,
+@@ -17,6 +20,7 @@
+   learning?: { available: boolean; reason: string | null; max_input_chars: number; max_output_tokens: number | null };
+   teaching?: { available: boolean; reason: string | null; profile: string; max_output_tokens: number | null };
+   teaching_calculation?: { available: boolean; reason: string | null; tool: string };
++  memory_model?: { available: boolean; reason: string | null };
+   quota_preview: Record<string, number | string[] | null> | null;
+   provider: { provider: string; model: string } | null;
+   supervision_management_budget_seconds: number;
+@@ -35,6 +39,7 @@
+   source_count: number; source_titles: string[];
+   allowed_models?: { provider: string; model: string }[];
+   sources?: { source_id: string; title: string; valid: boolean }[];
++  memory_selection?: { selected: boolean; eligible: boolean } | null;
+ };
+ 
+ type OperationRow = {
+@@ -108,6 +113,7 @@
+     case "committed_history_cancelled": return "已提交（活动已取消，仅供历史查看）";
+     case "invalidated_scope_changed": return "已失效，活动范围已变化";
+     case "invalidated_source": return "已失效，资料已被替换或移除";
++    case "invalidated_memory": return "已失效，所选学习记忆或其依据已变化";
+     case "unresolved": return row.state === "unknown" ? "结果未知，可能已发出；不会自动重发" : "进行中，结果尚未提交";
+     case "terminal_without_payload": return "已结束但无正文记录";
+     default: return "尚无此项操作";
+@@ -153,6 +159,7 @@
+   const [intentsOk, setIntentsOk] = useState(true);
+   const [materials, setMaterials] = useState<MaterialOption[]>([]);
+   const [picked, setPicked] = useState<string[]>([]);
++  const [memoryChoices, setMemoryChoices] = useState<MemoryChoice[]>([]);
+   const [followup, setFollowup] = useState("");
+   const [goal, setGoal] = useState("");
+   const [goalConfirmed, setGoalConfirmed] = useState(false);
+@@ -435,6 +442,18 @@
+   }
+ 
+   async function createActivity() {
++    if (memoryChoices.length) {
++      if (busy || !picked.length) return;
++      setBusy("create-memory"); setError("");
++      try {
++        const activityId=crypto.randomUUID();
++        await submitTrackedMemoryCreate(activityId,normalizeSourceIds(picked),memoryChoices,token);
++        setMemoryChoices([]);setPicked([]);setNotice("活动已创建，学习背景固定为明确选择的版本。");
++        await refreshList(true);await selectActivity(activityId);
++      } catch(reason) { setError(reason instanceof Error?reason.message:"创建未确认，请先核对"); }
++      finally { setBusy(""); }
++      return;
++    }
+     if (busy) return;
+     if (!caps?.create.available) { setError(`新建未开放：${reasonText(caps?.create.reason)}`); return; }
+     if (!intentsOk) { setError("恢复记录不可用：为避免出现无法核对的重复动作，新建已暂停；请优先清除本机恢复记录。"); return; }
+@@ -725,6 +744,8 @@
+       )}
+ 
+       {caps?.storage_ready && (
++        <>
++        <MemoryWorkspace token={token} choices={memoryChoices} onChoicesChange={setMemoryChoices} />
+         <section className="ws-create">
+           <h2>新建活动</h2>
+           <p className="quiet">新建只确定资料范围与有限预算，不会立即产生模型调用。创建后确认目标并显式开始学习。</p>
+@@ -765,6 +786,7 @@
+             <p className="quiet">新建未开放：{reasonText(caps.create.reason)}。只读与取消不受影响。</p>
+           )}
+         </section>
++        </>
+       )}
+ 
+       <div className="content-grid">
+@@ -878,6 +900,7 @@
+                   scopeRevision={detail.scope_revision}
+                   teachingAvailable={Boolean(caps?.teaching?.available)}
+                   calculationAvailable={Boolean(caps?.teaching_calculation?.available)}
++                  memoryModelAvailable={Boolean(caps?.memory_model?.available)}
+                   seed={teachingSeed?.activity_id===detail.activity_id?teachingSeed:null}
+                 />
+                 {!caps?.teaching?.available && (
+--- a/frontend/src/activities/teachingApi.ts
++++ b/frontend/src/activities/teachingApi.ts
+@@ -44,6 +44,8 @@
+   schema: string;
+   activity_id: string;
+   view_token: string;
++  memory_invalid?: boolean;
++  memory_selected?: boolean;
+   read_at: string;
+   head: {
+     revision: number;
+--- a/frontend/src/activities/TeachingCitations.tsx
++++ b/frontend/src/activities/TeachingCitations.tsx
+@@ -16,15 +16,15 @@
+   return [...ids];
+ }
+ 
+-export function TeachingCitations({activityId, recordId, ids, token, label}: {
+-  activityId: string; recordId?: string; ids: string[]; token: string; label: string;
++export function TeachingCitations({activityId, recordId, ids, token, label, viewToken}: {
++  activityId: string; recordId?: string; ids: string[]; token: string; label: string; viewToken?: string;
+ }) {
+   const [citation, setCitation] = useState<TeachingCitation | null>(null);
+   const [error, setError] = useState("");
+   const [loading, setLoading] = useState(false);
+   const sequence = useRef(0);
+   const controller = useRef<AbortController | null>(null);
+-  const identity = `${activityId}|${recordId}|${ids.join("|")}`;
++  const identity = `${activityId}|${recordId}|${ids.join("|")}|${viewToken ?? ""}`;
+   useEffect(() => {
+     ++sequence.current; controller.current?.abort(); setCitation(null); setError(""); setLoading(false);
+     return () => { ++sequence.current; controller.current?.abort(); };
+--- a/frontend/src/activities/TeachingWorkspace.tsx
++++ b/frontend/src/activities/TeachingWorkspace.tsx
+@@ -12,6 +12,8 @@
+   type TeachingRegion, type TeachingWorkspace,
+ } from "./teachingApi";
+ import { buildTeachingCommand, newTeachingKey } from "./teachingDrafts";
++import { memoryRequest } from "./memoryApi";
++import { submitTrackedMemory } from "./memoryIntents";
+ import {
+   appendTeachingIntent, loadTeachingIntents, removeTeachingIntent, saveTeachingDraft,
+   updateTeachingIntent, readTeachingDraft, removeTeachingDraft, type TeachingIntentSummary,
+@@ -107,7 +109,7 @@
+ }
+ 
+ export function TeachingWorkspace({
+-  activityId, token, scopeRevision, teachingAvailable, calculationAvailable,
++  activityId, token, scopeRevision, teachingAvailable, calculationAvailable, memoryModelAvailable = false,
+   onCapabilitiesDirty, seed,
+ }: {
+   activityId: string;
+@@ -115,11 +117,14 @@
+   scopeRevision: number;
+   teachingAvailable: boolean;
+   calculationAvailable: boolean;
++  memoryModelAvailable?: boolean;
+   onCapabilitiesDirty?: () => void;
+   seed?: TeachingSeed | null;
+ }) {
+   const [workspace, setWorkspace] = useState<TeachingWorkspace | null>(null);
+   const [feedback, setFeedback] = useState<FeedbackView | null>(null);
++  const [memoryPreview,setMemoryPreview]=useState<{capture:Record<string,unknown>;observation:Record<string,unknown>}|null>(null);
++  const memoryReadSeq=useRef(0);
+   const [goalText, setGoalText] = useState("");
+   const [answerText, setAnswerText] = useState("");
+   const [correctionText, setCorrectionText] = useState("");
+@@ -164,6 +169,8 @@
+     return () => { mounted.current = false; abort.current?.abort(); ++historySeq.current; historyAbort.current?.abort();
+       ++pageSeq.current; pageAbort.current?.abort(); };
+   }, []);
++
++  useEffect(()=>{++memoryReadSeq.current;setMemoryPreview(null);},[activityId,workspace?.memory_invalid]);
+ 
+   const reloadIntents = useCallback(() => {
+     const current = loadTeachingIntents();
+@@ -490,11 +497,12 @@
+     ||Number(budgets.cost_reserved_microunits)>=Number(budgets.max_cost_microunits)
+     ||Number(budgets.running_reserved_seconds)+Number(budgets.running_settled_seconds)>=Number(budgets.max_running_seconds)));
+   const canLocal = Boolean(workspace) && !readError && !overlay?.cancelled && !overlay?.expired;
+-  const canModel = canLocal && Boolean(teachingAvailable) && !exhausted && !overlay?.source_invalid && !overlay?.processing && !overlay?.unknown;
+-  const canTool = canLocal && calculationAvailable && !overlay?.source_invalid && !overlay?.processing && !overlay?.unknown
++  const memoryModelBlocked=Boolean(workspace?.memory_selected&&!memoryModelAvailable);
++  const canModel = !memoryModelBlocked && !workspace?.memory_invalid && canLocal && Boolean(teachingAvailable) && !exhausted && !overlay?.source_invalid && !overlay?.processing && !overlay?.unknown;
++  const canTool = !workspace?.memory_invalid && canLocal && calculationAvailable && !overlay?.source_invalid && !overlay?.processing && !overlay?.unknown
+     && Number(budgets?.tools_reserved)<Number(budgets?.max_tool_calls)
+     && Number(budgets?.running_reserved_seconds)+Number(budgets?.running_settled_seconds)<Number(budgets?.max_running_seconds);
+-  const noModelReason = !teachingAvailable ? "教学层未配置" : overlay?.processing ? "有在途命令" : overlay?.unknown ? "存在未知结果" : "";
++  const noModelReason = memoryModelBlocked ? "学习背景使用尚未配置" : !teachingAvailable ? "教学层未配置" : overlay?.processing ? "有在途命令" : overlay?.unknown ? "存在未知结果" : "";
+   const reasonBody=(workspace?.reason?.body??{}) as Record<string,unknown>;
+   const reasonObservations=(reasonBody.observations??{}) as Record<string,unknown>;
+   const reasonCount=(key:string)=>Array.isArray(reasonObservations[key])?(reasonObservations[key] as unknown[]).length:0;
+@@ -508,6 +516,25 @@
+         </span>
+       </div>
+       <button className="secondary" disabled={busy!==""} onClick={()=>void refresh()}>刷新教学工作区（只读）</button>
++      {workspace?.memory_selected && <p>本活动固定使用明确选择的背景版本。旧作答不算本活动的新独立表现。</p>}
++      {memoryModelBlocked && <p role="status">学习背景使用尚未配置，模型动作暂不可用。</p>}
++      {workspace?.memory_invalid && <p role="alert" className="failure">所选背景已更新或撤销，相关教学内容停用。原始作答仍保留，可新建活动重新选择。</p>}
++      {workspace?.reason?.kind==='progress' && !workspace.memory_invalid && <button className="secondary" disabled={busy!==""}
++        onClick={()=>{const aid=activityId;const identity=contextKey.current;const seq=++memoryReadSeq.current;
++          void memoryRequest<{capture:Record<string,unknown>;observation:Record<string,unknown>}>(
++            "/api/activities/"+aid+"/teaching/records/"+workspace.head.reason_record_id+"/memory-preview",token)
++          .then(value=>{if(mounted.current&&activityRef.current===aid&&contextKey.current===identity&&seq===memoryReadSeq.current)setMemoryPreview(value);})
++          .catch(reason=>{if(activityRef.current===aid)setError(reason.message);});}}>查看学习记忆保存预览</button>}
++      {memoryPreview && <div role="dialog" aria-label="学习观察保存预览">
++        <p>保存的是当时有限活动观察，长期掌握仍未知，不覆盖原始作答与反馈。</p>
++        <pre style={{whiteSpace:"pre-wrap"}}>{JSON.stringify(memoryPreview.observation,null,2)}</pre>
++        <button disabled={busy!==""} onClick={()=>{const aid=activityId;const preview=memoryPreview;
++          void submitTrackedMemory({business_key:crypto.randomUUID(),memory_id:crypto.randomUUID(),expected_revision:0,action:'save',
++            body:{kind:'learning_observation',title:'本轮学习观察',text:'仍需更多独立复测',capture:preview.capture}},token)
++          .then(()=>{if(activityRef.current===aid){setNotice('学习记忆已零费保存；原始事实保留。');setMemoryPreview(null);}})
++          .catch(reason=>{if(activityRef.current===aid)setError(reason.message);});}}>确认保存为学习记忆</button>
++        <button className="secondary" onClick={()=>setMemoryPreview(null)}>保留，仅查看</button>
++      </div>}
+       {readError && <p role="alert" className="failure">{readError}</p>}
+       {error && <p role="alert" className="failure">{error}<button onClick={() => setError("")}>关闭</button></p>}
+       {notice && <p role="status" className="notice">{notice}<button className="secondary" onClick={() => setNotice("")}>知道了</button></p>}
+@@ -556,7 +583,7 @@
+           <p>{String(workspace.proposal?.message??"已接受当前路径")}</p>
+           <ol>{((workspace.proposal?.nodes??workspace.path?.nodes??[]) as Record<string,unknown>[]).map((node,index)=><li key={String(node.node_id??index)}>
+             <strong>{String(node.title)}</strong>：{String(node.objective)}<p>依据与理由：{String(node.rationale)}</p>
+-            <TeachingCitations activityId={activityId} recordId={workspace.proposal?.record_id??workspace.path?.record_id}
++            <TeachingCitations viewToken={workspace?.view_token} activityId={activityId} recordId={workspace.proposal?.record_id??workspace.path?.record_id}
+               ids={citationIds(node)} token={token} label={`路径 n${index+1}`} />
+             <p>前置节点：{(node.prerequisites as number[]).map(n=>`n${n+1}`).join("、")||"无"} · {workspace.nodes?.[`n${index+1}`]?.status??"尚未观察"}</p>
+             {workspace.head.path_record_id&&<button className="secondary" disabled={busy!==""||!canLocal||overlay?.processing||overlay?.unknown}
+@@ -735,7 +762,7 @@
+         {historyNext&&<button className="secondary" disabled={historyLoading} onClick={()=>void loadEarlier()}>查看更早历史（只读）</button>}
+         {historyNotice&&<p role="status">{historyNotice}</p>}
+         {historyDetail&&<div aria-label="历史记录正文" data-record-id={String(historyDetail.record_id)}><p>读取资格：{String(historyDetail.qualification)}</p><pre style={{whiteSpace:"pre-wrap"}}>{JSON.stringify(historyDetail.public_body,null,2)}</pre></div>}
+-        {historyDetail&&<TeachingCitations activityId={activityId} recordId={String(historyDetail.record_id)} ids={citationIds(historyDetail.public_body)} token={token} label="所选历史" />}
++        {historyDetail&&<TeachingCitations viewToken={workspace?.view_token} activityId={activityId} recordId={String(historyDetail.record_id)} ids={citationIds(historyDetail.public_body)} token={token} label="所选历史" />}
+       </div>
+ 
+       {intents.length > 0 && (

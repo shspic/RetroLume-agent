@@ -1,0 +1,25 @@
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\.venv\Lib\site-packages\uvicorn\protocols\http\h11_impl.py", line 416, in run_asgi
+    result = await app(  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\.venv\Lib\site-packages\uvicorn\middleware\proxy_headers.py", line 63, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\.venv\Lib\site-packages\fastapi\applications.py", line 1163, in __call__
+    await super().__call__(scope, receive, send)
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\.venv\Lib\site-packages\starlette\applications.py", line 96, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\.venv\Lib\site-packages\starlette\middleware\errors.py", line 186, in __call__
+    raise exc
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\.venv\Lib\site-packages\starlette\middleware\errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task106\server.py", line 20, in __call__
+    await self.app(scope,receive,observed if cut else send)
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\.venv\Lib\site-packages\starlette\middleware\base.py", line 194, in __call__
+    await response(scope, wrapped_receive, send)
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\.venv\Lib\site-packages\starlette\middleware\base.py", line 238, in __call__
+    await send({"type": "http.response.body", "body": chunk, "more_body": True})
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task106\server.py", line 18, in observed
+    raise RuntimeError('TASK106 declared response disconnect after original committed route')
+RuntimeError: TASK106 declared response disconnect after original committed route

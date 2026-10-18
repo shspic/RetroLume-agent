@@ -1,0 +1,47 @@
+# 有限交互解释部署候选
+
+当前生产入口默认关闭。TASK-111候选有原生生成和持久保存证据，尚没有远端正常交互、导航、资格竞争和完整停止恢复通过证据；本目录的代码与镜像不能作为用户运行许可。完整边界与原件见[D:/shspic/project_NO3_RetroLume-agent/DocuN/results/TASK-111-result.md](D:/shspic/project_NO3_RetroLume-agent/DocuN/results/TASK-111-result.md)。旧109代码、镜像和runner保持封存。
+
+## 产物与加载身份
+
+正式程序为runtime.cjs、runtime.css、runtime.html、descriptor.schema.json、renderer-host.cjs和renderer-bootstrap.cjs；正式Playwright包为vendor/playwright-core，版本1.62.1。模型数据经过Python与Node两处封闭语法校验，固定HTML仅用hash CSP与固定程序，参数不插入代码或markup。帧、输入、ACK均通过限长匿名管道，容器没有公开端口。
+
+build_renderer.prepare只读取明确提供的本地OCI材料，要求新的项目内context。基础manifest固定为sha256:c091b21d9fae78c76e85cd4356431e9b018402f172a214fc7d7a5e9a7e29d8ac，config为sha256:fee853fafa59550d162cef52bca02d907694b44ebf6ef9fb075bcc0c65d8dedb。生成的load-manifest.json逐文件记录固定程序与vendor字节，并绑定Node v24.18.1、Playwright1.62.1及浏览器binary hash。renderer hash只包含四个固定runtime文件，不含自身hash、会话或未来image，避免循环。
+
+Dockerfile.production使用已准备的context，无网络安装和pull。build_renderer.build_args给出linux/amd64、network none、pull false及本地named OCI context；deploy/compose.local.yml提供PG配置和build profile入口。不得通过compose up启动常驻renderer。构建后operator应分别记录实际image/index与config digest、平台和load manifest，不将metadata的一个字段假称完整image身份。产品运行只依赖正式程序、已构建镜像和业务配置，历史cache不是运行依赖。
+
+TASK-111实际构建了retrolume-task-111-g11-renderer:v2-01，image/index为sha256:8ec35cf6df9c13eef0c3b15567e72ac0cd7382c19b586469cb4aaca48e8ef015，config为sha256:24f911d87f7375cf2dc31b8d1431957d7f2fec4a6de531885109e0ad28e9b043。load manifest为3df2280c8a135f0ac51c1df55c341d269d2439c855ff3a5c8819d6123ac44cf2，renderer为6cc300164a6cb364d9bd0bae4897f06d3f6a65cf5d4272477d2bccde67312597。该镜像未启动浏览器验证；这些身份不构成审核票据。
+
+## 数据与配置
+
+012_html_explanations.sql新增html_commands、html_artifacts、html_preview_budgets和html_preview_sessions及retrolume_html_owner/retrolume_html_app两个NOLOGIN角色，普通应用通过有限producer函数写入。用户库升级另需明确授权，应用不会自动执行DDL。schema-fingerprint.json绑定候选的实际catalog与ACL形状；不同、partial或未知结构失败关闭，不自动学习新基线。非空旧库升级与坏schema反例尚未真实验证。
+
+应用读取RETROLUME_PREVIEW_CONFIG指向的operator配置。公开preview.example.json只有占位，配置须具有固定schema、实际image_id、load_manifest_sha256、renderer_sha256、kernel_release、绝对Docker CLI路径、审核票据路径及review_key_env。审核票据须是独立终审的approved事实，经operator管理的至少32 UTF-8字节环境密钥HMAC认证，并绑定三个加载身份和实际结果SHA。缺失、坏签名或身份不同均保持关闭；本卡没有生成批准票据，也没有公开candidate或fault开关。
+
+活动另需html.profile=html_explanation.v2和正整数max_output_tokens，至多4096，实际取活动与模型服务更小限额。公开示例为0。普通学习、教学及模型四账仍独立生效。生成调用继续使用原Windows OneCall与Job，容器不持有模型服务、资料DSN或应用会话秘密。
+
+Compose PG通过限定子进程环境获得明确用户、数据库、独占name/volume与loopback端口。不要把展开后的docker compose config或Config.Env写入证据；只保存白名单身份。backend继续在Windows主机运行，不挂Docker socket。start_local.py优先向本次创建的uvicorn进程组发Ctrl+Break并等待lifespan关闭；超时只终止本次Popen，保留恢复收据并报告未确认。这个退出修正已离线检查，实际Windows退出链待续作验证。
+
+## 动态预览与恢复
+
+Supervisor先登记唯一name/image/nonce/parent birth与固定deadline，独立Reaper READY后才create；CID绑定后才start。UID/GID10001、network none、read-only、cap-drop ALL、NNP、固定seccomp、private IPC、init、restart no、CPU1、1GiB内存等swap、pids256、SHM64MiB，只有限量私有tmpfs，没有bind、端口或host namespace。PID保持Docker默认独立namespace，创建后要求HostConfig.PidMode为空且实际namespace/init出生证据一致。Docker的--pid选项支持host和container，共有CLI不接受private值，依据[Docker官方PID说明](https://docs.docker.com/reference/cli/docker/container/run/#pid-settings---pid)。
+
+每活动3次/180秒，预扣前不足30秒拒绝。t0先固定，准备、事务和启动均计D=t0+reserve；ready不晚于t0+8和D-10，输入在D-10关闭。次数在预扣时消耗，失败不返次数；只有未启动或物理树结束组合确认才可结preview秒数，未知保留全部reserve。预览结算不改变模型费用、工具账或原生时间退款权。
+
+控制收据在RETROLUME_DATA_DIR/preview-control，只有DPAPI控制密文持久化，控制密钥和前端input owner只在内存；不得把密钥发到日志、argv或资料正文。重启先核旧parent出生与独占mutex，旧parent仍活或身份未知不能抢占。对已保存的精确CLI PID参数解析拒绝，只在无start、无attach、精确name/nonce不存在且拥有的救援者结束时形成never_started候选；普通非零回包或空CID仍是未知。恢复按全reserve保守结算，不追补退款。
+
+真正运行后的停止证明须同时绑定内核来源、private PID/init机制适用、实际namespace与出生、精确CID/image/nonce外部kill/wait/events、无restart和拥有的CLI/管道/Reaper结束。Stopped/Pid0、SQL状态或源码单独均不充分。没有证明不能清空current.json、换owner或开启新预览，也不宣称cgroup目录删除或内存全部释放。不要手动全局taskkill、stop Docker daemon、删除卷或改写原失败收据。
+
+## 许可材料与验证状态
+
+正式许可准备新增resolve_license_materials.py与license_resources.cjs。方法先继承已核普通copyright原字节，再按逻辑镜像路径、层覆盖和whiteout核OpenSSL链接与common-licenses；不在Windows创建链接。基础镜像的openssl/copyright指向缺失的libssl3路径，实际libssl3t64版权与对应OpenSSL3.0.13官方完整许可证分别保留，不伪称原链接已经存在。
+
+主Chrome151.0.7922.34的实际Credits从该发行包resources.pak中解压为普通文字，资源40571、Brotli、19780622字节，SHA256为742d2697efcc77a25a89d17ee0816c0d98c03821f82888431696bed0adc98a07。它与headless_shell及Widevine材料分别登记，未用后二者冒主Chrome覆盖。当前正式材料目录licenses/base-c091b21d-c02-resolved-02有531份可核普通文字、共28556213字节，inventory保留来源层、PAK位置、官方URL及原dangling事实；这是材料提取结论，不是所有许可义务兼容性裁定。
+
+build_renderer.prepare将该正式目录复制进独立context，逐文字与inventory核SHA，Dockerfile复制到/opt/preview/licenses；load-manifest逐文件绑定。四runtime的renderer identity不随许可材料改变，image和load identity必须使用实际新构建值。该context已离线准备验证，尚未构建新image或签生产通过；旧v2-01加载身份保留。产品构建、启动不读取任务证据或公共提示词库。
+
+以下次数与状态为原111历史交回描述；当前唯一任务状态以DocuS/执行动态文档.MD为准，不以本说明恢复封存许可。
+
+vendor/playwright-core保留包发布的LICENSE、NOTICE及ThirdPartyNotices.txt。collect_licenses.py按锁定OCI层顺序和whiteout语义读取发布自带的系统copyright、Node/浏览器许可文字，逐文件保存SHA与来源层到licenses下的inventory.json；不运行cache镜像或下载替代发行包。链接缺失、Node或浏览器核心许可缺口要如实保留，不把清单生成当成许可兼容性或全部分发义务结论。
+
+本任务真实验证批6/6和Reaper验证批2/2已耗尽，所有TASK-111 runner需要新的精确续作合同才能再作真实动作。现有4次OneCall和32类离线拒绝原件可按source差异复用；后续应先完成实际remote正常两会话与停止，再补权限/事务rollback、准确cache-before-query资格race、升级/坏schema与故障组合，稳定完整成果再交新隔离A+终审。

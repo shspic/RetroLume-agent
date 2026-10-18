@@ -1,0 +1,70 @@
+--- pre/backend/app/learning/teaching_views.py
++++ post/backend/app/learning/teaching_views.py
+@@ -8,14 +8,45 @@
+ from app.capabilities.contracts import validate_business_payload
+ 
+ 
+-def source_invalid(sources):
+-    return not sources or len(sources)>10 or any(not s.get("valid") or not s.get("ready",True) for s in sources)
+-
+-
+-def view_token(view):
++def source_invalid(sources):
++    return not sources or len(sources)>10 or any(not s.get("valid") or not s.get("ready",True) for s in sources)
++
++
++def bound_references(row):
++    """逐事实原来源身份；坏单项不使整个读取快照解析失败。"""
++    try:
++        refs = row.get('source_refs')
++        refs = json.loads(refs) if isinstance(refs, str) else refs
++        if not isinstance(refs, list) or not 1 <= len(refs) <= 32:
++            return None
++        from uuid import UUID
++        for ref in refs:
++            if (not isinstance(ref, dict) or set(ref) != {'source_id', 'version_id', 'source_revision', 'original_sha256'}
++                    or str(UUID(ref['source_id'])) != ref['source_id']
++                    or str(UUID(ref['version_id'])) != ref['version_id']
++                    or type(ref['source_revision']) is not int or ref['source_revision'] < 0
++                    or not isinstance(ref['original_sha256'], str) or len(ref['original_sha256']) != 64):
++                return None
++        return refs
++    except (ValueError, TypeError, KeyError, AttributeError):
++        return None
++
++
++def record_sources_valid(row, sources):
++    refs = bound_references(row)
++    if refs is None:
++        return False
++    actual = {(s['source_id'], s['version_id']): s for s in sources}
++    return all((s := actual.get((r['source_id'], r['version_id']))) is not None
++               and s.get('valid') and s.get('ready')
++               and s['source_revision'] == r['source_revision'] and s['sha256'] == r['original_sha256']
++               for r in refs)
++
++
++def view_token(view):
+     head=view.get("head") or {}
+     return compute_view_token(head.get("revision",0),head.get("last_seq",0),view["activity"]["scope_revision"],
+-        sha(canonical(view.get("sources",[]))),sha(canonical({"pending":view.get("pending",[]),
++        sha(canonical({'current':view.get("sources",[]),'bound':view.get('record_sources',[])})),sha(canonical({"pending":view.get("pending",[]),
+         "pending_business_key":head.get("pending_business_key")})))
+ 
+ 
+@@ -71,7 +102,7 @@
+ def public_record(row,sources,exposures,head,activity):
+     kind=row["kind"]
+     derived=kind not in {"goal","answer","correction","exposure"}
+-    if source_invalid(sources) and derived:
++    if derived and (source_invalid(sources) or row.get('source_qualified') is False):
+         return "source_invalid",None
+     try:
+         value=verified_document(row)
+@@ -122,5 +153,5 @@
+             elif isinstance(body,dict): value.update(body)
+             else: value["body"]=body
+         result[region]=value
+-    result["nodes"]=[] if source_invalid(view.get("sources",[])) else projection.get("nodes",[])
++    result["nodes"]=[] if source_invalid(view.get("sources",[])) or result.get('path',{}).get('qualification') in ('source_invalid','integrity_error') else projection.get("nodes",[])
+     return result

@@ -1,0 +1,14 @@
+--- pre/backend/tests/fixtures/task114/generate_profile.py
++++ final/backend/tests/fixtures/task114/generate_profile.py
+@@ -57,7 +57,10 @@
+                       + "MIGRATIONS = " + repr(identities) + "\n", encoding="utf-8")
+     changes = {
+       "memory_head_guard": [("IF NEW.revision<>1 OR NEW.current_version<>1 OR NEW.state<>'active' THEN", "IF NOT public.data_loading_allowed() AND (NEW.revision<>1 OR NEW.current_version<>1 OR NEW.state<>'active') THEN")],
+-      "memory_body_guard": [("IF h.state IS DISTINCT FROM 'active' OR NEW.version NOT IN(h.current_version,h.current_version+1) THEN", "IF NOT public.data_loading_allowed() AND (h.state IS DISTINCT FROM 'active' OR NEW.version NOT IN(h.current_version,h.current_version+1)) THEN")],
++      "memory_body_guard": [
++        ("SELECT state,current_version INTO h FROM public.learning_memories WHERE memory_id=NEW.memory_id FOR KEY SHARE;",
++         "IF public.data_loading_allowed() THEN\n  SELECT state,current_version INTO h FROM public.learning_memories WHERE memory_id=NEW.memory_id;\n ELSE\n  SELECT state,current_version INTO h FROM public.learning_memories WHERE memory_id=NEW.memory_id FOR KEY SHARE;\n END IF;"),
++        ("IF h.state IS DISTINCT FROM 'active' OR NEW.version NOT IN(h.current_version,h.current_version+1) THEN", "IF NOT public.data_loading_allowed() AND (h.state IS DISTINCT FROM 'active' OR NEW.version NOT IN(h.current_version,h.current_version+1)) THEN")],
+       "interview_command_guard": [("IF NEW.effect_applied OR NEW.launch_claimed THEN", "IF NOT public.data_loading_allowed() AND (NEW.effect_applied OR NEW.launch_claimed) THEN")],
+       "interview_record_insert_guard": [
+         ("OR c.effect_applied OR c.status NOT IN ('accepted','started')", "OR (NOT public.data_loading_allowed() AND (c.effect_applied OR c.status NOT IN ('accepted','started')))"),

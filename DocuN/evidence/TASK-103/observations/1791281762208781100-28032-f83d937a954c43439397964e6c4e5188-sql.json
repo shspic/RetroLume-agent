@@ -1,0 +1,9 @@
+{
+  "kind": "sql",
+  "pid": 28032,
+  "value": {
+    "tag": "history",
+    "sql": "SELECT\n          NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname=ANY(%s) AND\n            (rolcanlogin OR rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls)) AS roles_safe,\n          NOT EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace\n             WHERE n.nspname='public' AND c.relname=ANY(%s)\n             AND c.relowner<>(SELECT oid FROM pg_roles WHERE rolname='retrolume_memory_owner')) AS owner_safe,\n          EXISTS(SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace\n            WHERE n.nspname='public' AND p.proname='purge_learning_memory' AND p.prosecdef\n             AND p.proowner=(SELECT oid FROM pg_roles WHERE rolname='retrolume_memory_purger')\n             AND NOT EXISTS(SELECT 1 FROM aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) a\n               WHERE a.grantee=0 AND a.privilege_type='EXECUTE')) AS purge_safe",
+    "arguments_saved": false
+  }
+}

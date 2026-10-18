@@ -1,0 +1,47 @@
+--- C03-prepared
++++ C03-renewed
+@@ -19,7 +19,7 @@
+ from contracts import read_observation
+ from supervisor import PERMIT, atomic_json, clean_env, docker_call, inspect_owned, process_birth
+ 
+-AREA = ROOT / "DocuN/evidence/TASK-109/execution/continuation-03"
++AREA = ROOT / "DocuN/evidence/TASK-109/execution/continuation-03/resume-01"
+ IMAGE = "sha256:aa824fa25eb0aae09cee50c10372fb218a7d86ffb10124b46074a5c1e977cc66"
+ CONFIG = "sha256:e881d12c9e682de7e535386b9db353bfc95838c3bcea04332bcdffd9cc30e6ea"
+ 
+@@ -49,7 +49,7 @@
+     name = "retrolume-task-109-g11-preview-" + str(attempt_index + 1).zfill(2)
+     cleanup_deadline = None
+     def call(args, timeout=8):
+-        if time.monotonic_ns() >= min(cleanup_deadline or root_deadline, session["original_deadline_ns"]):
++        if time.monotonic_ns() >= min(cleanup_deadline or root_deadline, session["effective_deadline_ns"]):
+             raise RuntimeError("真实根硬截止")
+         result = docker_call(docker, args, timeout)
+         calls.append(result)
+@@ -200,7 +200,7 @@
+         failure = str(error)[:2000]
+     finally:
+         cleanup_start = time.monotonic_ns()
+-        cleanup_deadline = min(cleanup_start + 300000000000, session["original_deadline_ns"])
++        cleanup_deadline = min(cleanup_start + 300000000000, session["effective_deadline_ns"])
+         cleanup = {"cid": cid, "image": image, "nonce": nonce, "physical_tree": "unconfirmed"}
+         if cid and image:
+             try:
+@@ -255,12 +255,14 @@
+ def main():
+     session_path = AREA / "session.json"
+     session = json.loads(session_path.read_text(encoding="utf-8"))
++    if session.get("renewal_permit") != "TASK-109-G11-C03-RESUME01-20261009":
++        raise RuntimeError("缺少已确认续窗许可")
+     now = time.monotonic_ns()
+-    if now >= min(session["deadline_ns"], session["original_deadline_ns"]):
+-        raise RuntimeError("原总期或C03子窗已过，禁止真实启动；需明确新时窗，不自动重置")
++    if now >= min(session["effective_deadline_ns"], session["effective_deadline_ns"]):
++        raise RuntimeError("已确认有效续窗到期，禁止真实启动，不自动重置")
+     if session["roots"]:
+         raise RuntimeError("C03根已计，不开第二根")
+-    root_deadline = min(now + 600000000000, session["deadline_ns"], session["original_deadline_ns"])
++    root_deadline = min(now + 600000000000, session["effective_deadline_ns"], session["effective_deadline_ns"])
+     root_record = {"id": "H0-R05", "global_ordinal": 75, "start_ns": now, "deadline_ns": root_deadline, "state": "started", "pid": os.getpid(), "birth": process_birth(os.getpid()), "prechecks_counted": True}
+     session["roots"].append(root_record)
+     session["stage"] = "C03_real_root"

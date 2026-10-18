@@ -1,0 +1,17 @@
+TASK-083 fixture-repair-04 final targeted offline batch; pure substitutes only; no real event/Job/spawn/subprocess/PG/Docker/network/model/config.
+Python: backend/.venv/Scripts/python.exe -B. Per-command <=60s, total <=120s. Stop on first failed command; no retry, no recheck.
+Changed-source SHA256 (full values in final-hashes.txt): job_control.py 5bc35bf185de71e3ce94aa1a12e3e2a1466e6fd372e5c3f5d6aca196233980d2 / focused_unit.py 1e58eb039eb54e0400a8a730b649fb7e450bb558bb983d27e1db1a24c2a8ce08 / offline_unit.py 3029a709f615ab068d65004d1083568d0a96e577417380b26109defaf0a64c5c.
+
+Command 1 (5 test methods):
+  backend/.venv/Scripts/python.exe -B backend/tests/fixtures/task083/focused_unit.py EventControlTests.test_04_start_collision_closes_only_returned_handle EventControlTests.test_04_start_creation_error_and_new_handle StartLifecycleTests.test_04_start_handle_closes_after_identity_receipt StartLifecycleTests.test_04_start_handle_release_exactly_once_on_failure LauncherTests.test_d1_deadline_before_resume_terminates_exact_owner
+  Expected: 5 ok, exit 0. 04 lifecycle asserts parent Start handle closed after verifiable suspended identity receipt (success) and exactly once on early-spawn-error and empty-receipt failure branches; D1 asserts manager_startup_deadline_unconfirmed with exact event sequence create_suspended→identity→wait(0)→terminate→wait(5.0)→process_close, no resume, unknown charges, no read_result.
+Command 2 (only if command 1 passes; 1 test method):
+  backend/.venv/Scripts/python.exe -B backend/tests/fixtures/task083/offline_unit.py OfflineRepairTests.test_05_early_success_uses_tree_zero_close_then_same_g_settle_retry
+  Expected: ok, exit 0. Deterministic local clock: t1>t0, delta=400000000ns, observed=1 (ceil), window=6; job_closed precedes close_db; settle x2 same G; (settled,reserved,pending)=(1,0,0).
+
+OS-substitute coverage confirmation (gate before running):
+- StartLifecycleTests patch job_control.ctypes.WinDLL (both kernel32 loads), job_control.asyncio.create_subprocess_exec, job_control.NamedJob.open_existing; job_name is pure string building; time.monotonic_ns read-only; os.environ.copy pure copy.
+- LauncherTests D1 patches app.worker.launcher os.name/NamedMapping/_SuspendedSupervisor/_remaining; PostgresAdmissionLedger constructed only (no connect).
+- offline test_05 patches app.worker.session.time and __main__.time to local _TestClock; ActivityMutex/NamedJob.create patched; Ledger/Owner/FakeJob in-memory.
+EventControl collision pair unchanged from review-03 PASS state (fake kernel + patched last-error functions).
+Item 12 not rerun (command/worker_main/gate unchanged; reusable per card); other 9 items reused by dependency; old 05 diagnostic not repeated.

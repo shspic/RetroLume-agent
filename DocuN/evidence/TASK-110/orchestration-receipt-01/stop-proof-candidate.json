@@ -1,0 +1,40 @@
+{
+  "at": "2026-10-10T02:37:12.706665+08:00",
+  "status": "主控方案细化候选，包含在待采用包实施条件内；非实际停止验证",
+  "source_basis": [
+    {
+      "url": "https://man7.org/linux/man-pages/man7/pid_namespaces.7.html",
+      "scope": "init终止、嵌套命名空间和禁止返回祖先的规范"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/microsoft/WSL2-Linux-Kernel/linux-msft-wsl-6.6.114.1/kernel/pid_namespace.c",
+      "function": "zap_pid_ns_processes",
+      "scope": "与此前实测kernel版本对应的固定tag，禁止新PID、发送SIGKILL并等待namespace其余任务退出"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/torvalds/linux/v6.6/kernel/pid_namespace.c",
+      "function": "zap_pid_ns_processes",
+      "scope": "同主版本标准源旁证"
+    }
+  ],
+  "supported_mechanism": "private PID namespace init结束时内核清理本namespace任务；init回收前等待其余任务退出。子namespace及无祖先迁入能力需结合对象前提核证",
+  "proof_requires": [
+    "实际平台/kernel来源版本与机制适用",
+    "privatePID且init=1的真实身份/出生/namespace，工作均在该namespace及其子树",
+    "无host/sharedPID/其它namespaceFD或任务迁移途径、原最小权限和受信启动链",
+    "同CID/image/nonce外部kill与init退出/wait及events相互绑定",
+    "无restart、所有拥有的CLI/管道/控制器结束且时序完整",
+    "完整候选合成验证与独立安全/一致性终审核证适用"
+  ],
+  "never_sufficient_alone": [
+    "HTTP200",
+    "一次docker kill返回0",
+    "Stopped或Pid0字段",
+    "数据库状态",
+    "只公开源码未核本对象"
+  ],
+  "output_scope": "可核证自有工作任务树停止，不声称cgroup目录删除或内存完全释放",
+  "if_incomplete": "cleanup_unconfirmed/tree_unconfirmed，全reserve保留、后续start封闭；不加特权或制造空值",
+  "avoid_unnecessary_gate": "不把停后cgroup文件直接可读取作为唯一证据路径，不单独复现109或开额外准备批",
+  "old109_dynamic_verdict_unchanged": true
+}

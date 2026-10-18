@@ -1,0 +1,188 @@
+"""新image的六个定向实际管道方法；注入仅在本有界夹具，不进入产品配置。"""
+import asyncio,hashlib,json,msvcrt,os,secrets,struct,sys,threading,time,traceback
+from pathlib import Path
+from uuid import uuid4
+from .control import ROOT,CONTINUE_ROOT,PERMIT,atomic,source_snapshot,reserve,registry_root
+from .core import Harness
+from .c01_seeds import diagnostic_artifact
+from .c03_matrix import Session
+from .resources import DOCKER
+from app.preview import production_supervisor as ps,docker_control as dc
+from app.preview.description import canonical,digest
+from app.preview.business_contracts import OpenPreview,PreviewInput,HtmlRefusal
+from app.preview.process import birth
+from app.runtime import psycopg_compatible_loop_factory
+
+def packet(c,kind,seq,body,*,bom=None):
+    raw=canonical(body).encode('utf-8')
+    if bom=='body':raw=b'\xef\xbb\xbf'+raw
+    h=dict(protocol='retrolume.preview.v2',type=kind,preview_id=c['preview_id'],generation=c['generation'],artifact_sha256=c['artifact_sha256'],
+        channel_nonce=c['channel_nonce'],seq=seq,body_bytes=len(raw),body_sha256=hashlib.sha256(raw).hexdigest())
+    header=canonical(h).encode('utf-8')
+    if bom=='header':header=b'\xef\xbb\xbf'+header
+    return struct.pack('!I',len(header))+header+raw,h,raw
+
+class DelayedReadyRead:
+    """延迟真实ready的body读取，头/后续流仍是同一实际attach stdout。"""
+    def __init__(self,raw,c,out):self.raw,self.c,self.out=raw,c,out;self.stage='prefix';self.collected=bytearray();self.need=4;self.head=None;self.delayed=False
+    def read(self,count):
+        before=time.monotonic_ns()
+        if self.stage=='body' and self.head.get('type')=='ready' and not self.delayed:
+            self.delayed=True;release=self.c['t0_ns']+8050000000
+            atomic(self.out/'late-ready-read-enter.json',dict(t0_ns=self.c['t0_ns'],deadline_ns=self.c['deadline_ns'],ready_deadline_ns=min(self.c['t0_ns']+8000000000,self.c['deadline_ns']-10000000000),
+                before_delay_ns=before,planned_release_ns=release,actual_header=self.head,source='同一实际attach stdout；body尚未完整读取'))
+            time.sleep(max(0,(release-time.monotonic_ns())/1e9))
+        data=self.raw.read(count);self.collected.extend(data);self.need-=len(data)
+        if self.need==0:
+            if self.stage=='prefix':self.need=struct.unpack('!I',self.collected)[0];self.stage='header'
+            elif self.stage=='header':self.head=json.loads(self.collected);self.need=self.head['body_bytes'];self.stage='body'
+            else:
+                if self.head.get('type')=='ready':
+                    (self.out/'actual-late-ready-body.bin').write_bytes(self.collected)
+                    atomic(self.out/'late-ready-read-complete.json',dict(t0_ns=self.c['t0_ns'],deadline_ns=self.c['deadline_ns'],complete_body_read_ns=time.monotonic_ns(),
+                        body_bytes=len(self.collected),body_sha256=hashlib.sha256(self.collected).hexdigest(),actual_header=self.head))
+                self.stage='prefix';self.need=4
+            self.collected=bytearray()
+        return data
+
+class ClosedActualStderr:
+    """触发前保留真实读句柄，触发后对已关闭的同一读端执行实际read。"""
+    def __init__(self,raw,c,trigger):self.raw,self.c,self.trigger=raw,c,trigger
+    def fileno(self):return self.raw.fileno()
+    def close(self):self.raw.close()
+    def read(self,count):
+        remaining=max(0,(self.c['deadline_ns']+15000000000-time.monotonic_ns())/1e9)
+        if not self.trigger.wait(remaining):raise TimeoutError('fixed stderr trigger not received')
+        self.raw.close()
+        return self.raw.read(count)
+
+async def opened(h,item,out,*,expect_ready):
+    owner=secrets.token_hex(32);aid=item['activity_id'];command=OpenPreview(start_key=str(uuid4()),expected_artifact_sha256=item['receipt']['artifact_sha256'],input_owner_key=owner,confirmed=True)
+    row=await h.controller.open(aid,item['receipt']['artifact_id'],command);c=h.controller.current;pid=row['preview_id'];generation=row['generation']
+    async def keep():
+        while True:await h.controller.status(aid,pid,owner);await asyncio.sleep(.1)
+    beat=asyncio.create_task(keep());until=c['t0_ns']+12*10**9
+    while time.monotonic_ns()<until:
+        row=await h.controller.status(aid,pid,owner)
+        if row['state'] in ('ready','stopped','cleanup_unconfirmed','failed_unstarted'):break
+        await asyncio.sleep(.02)
+    if expect_ready:assert row['state']=='ready',row['state']
+    atomic(out/'opened.json',dict(row=row,t0_ns=c['t0_ns'],deadline_ns=c['deadline_ns'],at_ns=time.monotonic_ns(),runtime_folder=str(c['folder'])))
+    return c,pid,generation,owner,beat
+
+async def finish(h,item,c,pid,generation,beat,out,*,request_stop=False,unknown=False):
+    if request_stop:await h.controller.stop(item['activity_id'],pid,generation)
+    until=c['deadline_ns']+14*10**9
+    while time.monotonic_ns()<until and not (c['folder']/'supervisor-result.json').is_file():await asyncio.sleep(.03)
+    await asyncio.to_thread(c['thread'].join,3);assert not c['thread'].is_alive()
+    beat.cancel();await asyncio.gather(beat,return_exceptions=True)
+    row=await h.ledger.read_html_preview(item['activity_id'],pid);result=json.loads((c['folder']/'supervisor-result.json').read_text(encoding='utf-8'))
+    budget=await h.ledger.html_preview_budget(item['activity_id'])
+    atomic(out/'stop-and-budget.json',dict(row=row,result=result,budget=budget,runtime_folder=str(c['folder']),at_ns=time.monotonic_ns()))
+    if unknown:
+        assert row['state']=='cleanup_unconfirmed' and row['elapsed_seconds'] is None and budget['reserved_seconds']==row['reserve_seconds']
+        assert not result['confirmed'] and not result['proof']['attach_eof_confirmed']
+        try:await h.controller.open(item['activity_id'],item['receipt']['artifact_id'],OpenPreview(start_key=str(uuid4()),expected_artifact_sha256=item['receipt']['artifact_sha256'],input_owner_key='1'*64,confirmed=True))
+        except HtmlRefusal as e:assert e.code=='cleanup_unconfirmed';atomic(out/'new-start-refused.json',dict(code=e.code,state=row['state'],reserve_preserved=row['reserve_seconds']))
+        else:raise AssertionError('stderr缺EOF仍授新start')
+    else:
+        assert row['state']=='stopped' and result['confirmed'] and result['proof']['tree_confirmation']=='private_pid_init_terminated'
+        obs=result['proof']['pipe_observation'];assert obs['stdout_eof'] and obs['stderr_eof'] and not obs['stdout_read_error'] and not obs['stderr_read_error']
+        assert budget['reserved_seconds']==0 and row['elapsed_seconds']<row['reserve_seconds']
+    return row,result
+
+async def scenario(resource,built,out,name):
+    h=Harness(resource,built,out);c=None;beat=None;trigger=threading.Event();old_read=ps.read_packet;old_send=ps.send_packet
+    old_stderr=h.controller._stderr
+    if name=='late_ready':
+        streams={}
+        def read(stream,identity):
+            if id(stream) not in streams:streams[id(stream)]=DelayedReadyRead(stream,identity,out)
+            return old_read(streams[id(stream)],identity)
+        ps.read_packet=read
+    if name=='null_init':
+        def send(stream,identity,kind,seq,body):
+            if kind=='init':
+                body={**body,'description':{**body['description'],'constraints':None}};body['description_sha256']=digest(body['description'])
+                raw,head,data=packet(identity,kind,seq,body);(out/'actual-null-init-wire.bin').write_bytes(raw)
+                atomic(out/'null-init-wire.json',dict(header=head,description_sha256=body['description_sha256'],DB_artifact_unchanged=True,bytes=len(raw)))
+                stream.write(raw);stream.flush();return
+            return old_send(stream,identity,kind,seq,body)
+        ps.send_packet=send
+    if name=='stderr_no_eof':
+        def stderr(current):
+            raw=current['attach'].stderr;current['attach'].stderr=ClosedActualStderr(raw,current,trigger)
+            return old_stderr(current)
+        h.controller._stderr=stderr
+    try:
+        await h.controller.recover();assert not h.controller.blocked
+        item=await diagnostic_artifact(h,'energy');atomic(out/'fixture-item.json',item)
+        c,pid,generation,owner,beat=await opened(h,item,out,expect_ready=name not in ('late_ready','null_init'))
+        if name in ('normal_bom_header','bom_body'):
+            until=time.monotonic_ns()+2*10**9
+            while c['frame'] is None and time.monotonic_ns()<until:await asyncio.sleep(.02)
+            assert c['frame'] is not None
+            if name=='normal_bom_header':
+                action=dict(type='set_number',control_id='hctl_h',value='4');reserve('internal_inputs',dict(case=name,seq=1))
+                ack=await h.controller.input(item['activity_id'],pid,PreviewInput(preview_generation=generation,seq=1,payload_sha256=digest(action),event=action),owner)
+                assert ack['accepted'] and ack['readouts'][0]['value']=='78.4'
+                atomic(out/'actual-normal-ACK.json',ack)
+                after=c['frame_seq'];until=time.monotonic_ns()+2*10**9
+                while c['frame_seq']<=after and time.monotonic_ns()<until:await asyncio.sleep(.02)
+                frame=await h.controller.frame(item['activity_id'],pid,generation,0,owner);assert frame is not None
+                (out/'actual-normal.png').write_bytes(frame[1]);atomic(out/'actual-normal-frame.json',dict(header=frame[0],sha256=hashlib.sha256(frame[1]).hexdigest(),image_id=built['image']['id'],ready_accepted_ns=c['ready_accepted_ns']))
+            bom='header' if name=='normal_bom_header' else 'body';seq=c['input_seq']+1;body=dict(type='set_number',control_id='hctl_h',value='3')
+            raw,head,data=packet(c,'input',seq,body,bom=bom);(out/'actual-BOM-wire.bin').write_bytes(raw)
+            atomic(out/'BOM-injection.json',dict(bom=bom,header=head,bytes=len(raw),at_ns=time.monotonic_ns(),prior_ack_seq=c['input_seq'],input_seq=seq))
+            reserve('internal_inputs',dict(case=name,seq=seq,invalid_BOM=bom))
+            with h.controller._writer:c['attach'].stdin.write(raw);c['attach'].stdin.flush()
+        elif name=='stderr_overflow':
+            facts=c['kernel_ready']['processes'];own=next(x for x in facts['rows'] if x['pid']==facts['own_pid'])
+            script="const fs=require('fs'),p="+str(own['pid'])+",s=fs.readFileSync('/proc/'+p+'/stat','utf8').split(') ')[1].trim().split(/\\s+/);if(s[19]!=="+json.dumps(own['birth_ticks'])+")throw Error('birth');fs.writeFileSync('/proc/'+p+'/fd/2',Buffer.alloc(12289,120));process.stdout.write('finite stderr injection completed');"
+            before=dc.inspect_owned(DOCKER,c['cid'],c['intent']);atomic(out/'stderr-before-injection.json',dict(cid=c['cid'],nonce=c['nonce'],kernel=c['kernel_ready'],before=before,actual_pid=own,finite_bytes=12289,at_ns=time.monotonic_ns()))
+            result=dc.call(DOCKER,['exec',c['cid'],'node','-e',script]);atomic(out/'actual-stderr-injection.json',result);assert result['code']==0
+        elif name=='stderr_no_eof':
+            row=dict(scenario=name,activity_id=item['activity_id'],preview_id=pid,cid=c['cid'],nonce=c['nonce'],image_id=built['image']['id'],
+                runtime_folder=str(c['folder']),t0_ns=c['t0_ns'],deadline_ns=c['deadline_ns'],actor_pid=os.getpid(),actor_birth=birth(os.getpid())['birth'],
+                parent=c['registry']['parent'],attach=dict(pid=c['registry']['attach_pid'],birth=c['registry']['attach_birth']),reaper_owner=c['reaper_owner'],
+                kernel=c['kernel_ready'],job_premises=c['registry']['job_premises'],pipe_handles=[msvcrt.get_osfhandle(c['attach'].stdout.fileno()),msvcrt.get_osfhandle(c['attach'].stderr.fileno())])
+            atomic(out/'pretrigger.json',row)
+            until=min(c['deadline_ns']-10*10**9,time.monotonic_ns()+5*10**9)
+            while not (out/'witness-bound.json').exists():
+                if time.monotonic_ns()>=until:raise RuntimeError('预排PassiveWitness未绑定')
+                await asyncio.sleep(.02)
+            atomic(out/'trigger.json',dict(**row,at_ns=time.monotonic_ns(),method='关闭实际attach stderr读端后实际read触发ValueError；PassiveWitness触发前持有读副本，零额外Job/写端'))
+            trigger.set()
+        row,result=await finish(h,item,c,pid,generation,beat,out,unknown=name=='stderr_no_eof')
+        if name=='late_ready':
+            assert result['ready_accepted_ns'] is None and result['ready_received_ns']>=c['t0_ns']+8*10**9 and result['state']=='stopped'
+            assert c['kernel_ready'] is not None and row['elapsed_seconds']>=8
+            action=dict(type='set_number',control_id='hctl_h',value='4');reserve('internal_inputs',dict(case=name,expected='refused_after_late_ready'))
+            try:await h.controller.input(item['activity_id'],pid,PreviewInput(preview_generation=generation,seq=1,payload_sha256=digest(action),event=action),owner)
+            except HtmlRefusal as error:assert error.code=='source_invalid';atomic(out/'late-ready-input-refusal.json',dict(code=error.code,submitted_to_pipe=False,ready_accepted_ns=c['ready_accepted_ns']))
+            else:raise AssertionError('迟到ready仍有输入资格')
+        if name=='null_init':assert result['ready_accepted_ns'] is None and result['error_code']=='host_failed';assert b'description_constraints_type' in (c['folder']/'container-stderr.bin').read_bytes()
+        if name=='stderr_overflow':
+            obs=result['pipe_observation'];assert obs['stderr_overflow'] and obs['stderr_observed_bytes']==12289 and obs['stderr_captured_bytes']==8192 and result['error_code']=='stderr_limit'
+        if name in ('normal_bom_header','bom_body'):assert result['error_code']=='protocol_failed'
+        atomic(out/'actor-result.json',dict(status='PASS_EXPECTED_UNKNOWN_RESERVE' if name=='stderr_no_eof' else 'PASS_TARGETED_REAL_CASE',scenario=name,row=row,result=result,source_image=built['image']['id']))
+    finally:
+        ps.read_packet=old_read;ps.send_packet=old_send;trigger.set()
+        if beat:beat.cancel();await asyncio.gather(beat,return_exceptions=True)
+        await h.controller.close()
+
+def main():
+    assert os.environ.get('RETROLUME_TASK111_FIXTURE')==PERMIT
+    out=Path(sys.argv[2]).resolve();assert out.is_relative_to(CONTINUE_ROOT.resolve());name=sys.argv[1]
+    assert name in ('normal_bom_header','late_ready','stderr_overflow','null_init','bom_body','stderr_no_eof')
+    resource=json.loads(os.environ['RETROLUME_TASK111_RESOURCE']);built=json.loads((CONTINUE_ROOT/'active-build.json').read_text(encoding='utf-8'))
+    atomic(out/'actor-owner.json',dict(pid=os.getpid(),birth=birth(os.getpid())['birth']));source_snapshot(out)
+    try:
+        with asyncio.Runner(loop_factory=psycopg_compatible_loop_factory) as runner:runner.run(scenario(resource,built,out,name))
+    except Exception:
+        text=traceback.format_exc()
+        for secret in [resource.get(k,'') for k in ('admin','app','denied')]+list(resource.get('passwords',[])):
+            if secret:text=text.replace(secret,'[redacted-task-secret]')
+        (out/'actor-failure.txt').write_text(text,encoding='utf-8');raise SystemExit(1)
+
+if __name__=='__main__':main()

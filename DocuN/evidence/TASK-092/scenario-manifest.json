@@ -1,0 +1,107 @@
+{
+  "task": "TASK-092",
+  "frozen_utc": "2026-10-01T00:05:00+08:00",
+  "note": "批前冻结的场景清单；批内连续运行，不隐藏自动整批重试；失败批保留原目录。",
+  "pg": {
+    "batch": 1,
+    "database": "retrolume_task092_tools",
+    "deadline_seconds": 600,
+    "scenarios": [
+      "新建合成库应用001-008并核验列与五个具名约束标记",
+      "tests.test_activity_tools.ToolPostgresTests C1约束反例/重复008回滚",
+      "C2参数与凭证绑定(mark/record身份、跨kind凭证、二次mark)",
+      "C3白名单/NULL/零额/正额2两次/重连不重置/预扣不退款",
+      "C4同键两连接竞争单凭证、实际execute计数1、model占键、崩溃0执行T1",
+      "C5类型隔离(read/list kind元数据、service与ledger.admit双层拒tool父、model父对照)",
+      "C6 admit/mark提交前后故障(reserved/dispatched/T1, execute0, unknown收敛)",
+      "C7执行后未提交(dispatched/T1/无正文/不能覆盖/确定失败received无正文/独立结算)",
+      "C8 record已提交丢响应(ALREADY_PRESENT无写/异文拒绝/无正文补写拒绝/非规范工具正文拒绝)",
+      "C9 scope CAS两种竞争/旧context拒scope_changed/mark后变化/cancel一次折叠/UNKNOWN诊断",
+      "C12目标项 close丢响应不退款、settle丢响应ALREADY_SETTLED一次、业务UNKNOWN与时间结算独立",
+      "旧model定向回归: test_activity_results 03/05/16 + test_activity_time_budget 01"
+    ],
+    "fault_injection": "trigger真实事务回滚/BEFORE INSERT|UPDATE；子类super()后抛AdmissionUnavailable模拟COMMIT后响应丢失；屏障用事件与wait_for，不用sleep猜顺序"
+  },
+  "final": {
+    "batch": 3,
+    "database": "retrolume_task092_tools + retrolume_task092_upgrade",
+    "deadline_seconds": 1100,
+    "scenarios": [
+      "定向复验 real-01 两处夹具缺陷修复项（c7/c9），产品源码与real-01逐hash一致",
+      "upgrade子批：合法非空001-007→008、旧model生命线、重复008回滚、篡改约束失败回滚、缺前置拒绝",
+      "windows子批六场景：tool_chain/model_regression/tool_stop/tool_recovery/old_sup_reject/old_worker_reject",
+      "real-02预检因runner自身prior-manifest解析缺陷失败（TypeError,未运行子批）；本批为修复后唯一剩余完整批次"
+    ],
+    "fault_injection": "合并三子批冻结清单；失败不清空后续场景，不重试失败子批"
+  },
+  "retry_upgrade": {
+    "batch": 2,
+    "database": "retrolume_task092_tools + retrolume_task092_upgrade",
+    "deadline_seconds": 700,
+    "scenarios": [
+      "定向重验 real-01 中两处夹具缺陷修复项：test_c7(执行后record提交前失败,execute1,dispatched,T1,不可覆盖)与 test_c9(两种scope竞争/mark拒绝/cancel一次折叠)",
+      "产品源码自 real-01 未变；仅测试夹具修复，其余15项按real-01原适用范围沿用",
+      "upgrade子批：合法非空001-007→008、旧model生命线、重复008回滚、篡改约束失败回滚、缺前置拒绝"
+    ],
+    "fault_injection": "同pg与upgrade清单；本批为有证据修正后的定向复验"
+  },
+  "upgrade": {
+    "batch": 2,
+    "database": "retrolume_task092_upgrade",
+    "deadline_seconds": 480,
+    "scenarios": [
+      "s1: 合法非空001-007(旧received有/无正文、unknown、白名单非空、额度NULL)应用008；旧行仅新增kind=model与两列默认；结果字节不变",
+      "s1: 008后旧model生命周期(claim/admit tool_names非空/mark/record/read/close/settle)仍可用；未配置额度拒工具且零预扣",
+      "s1: 重复008报错并整体回滚",
+      "s2: 成本约束被篡改→识别失败→完整回滚(无新列/约束数不变/行不变)",
+      "s3: 空schema缺前置→ALTER前拒绝、schema零对象"
+    ],
+    "fault_injection": "s2预先篡改约束定义诱导识别失败；s3缺前置；失败注入用独立连接"
+  },
+  "windows": {
+    "batch": 3,
+    "database": "retrolume_task092_tools",
+    "deadline_seconds": 600,
+    "session_config": "window=10s, request_timeout=2s, startup=3s, stop_grace=1s, cleanup=2s, overhead=12s, single_host_single_session_recovery=true",
+    "scenarios": [
+      "tool_chain: service→真实launcher/SUP/worker→真实finite_calculate→真实PG；外3/内4；execute1；T1；model计数0；树零→句柄→关门→结算；read/list类型一致",
+      "model_regression: 旧无工具model外2/内3端到端(合成transport一次发送)；父P不受影响",
+      "tool_stop: mark确认后执行边界同步阻塞→SUP截止硬终止Job；树零；无部分退款；T1不退；无伪正文",
+      "tool_recovery: 租约到期后同会话显式接续新键T2；旧R只折叠一次；旧操作收敛unknown不重执行",
+      "old_sup_reject: 旧SUP收到外3真实会话拒绝、无claim、零副作用",
+      "old_worker_reject: 旧worker拒one_tool退出2；新SUP已claim时间预扣保留T0"
+    ],
+    "fault_injection": "bootstrap按场景替换worker执行边界(同步阻塞)/transport(合成答复)/legacy worker行为；外2/外3与内3/内4由产品代码不替换"
+  },
+  "continuation_01": {
+    "batch": 4,
+    "database": "retrolume_task092_upgrade + retrolume_task092_tools",
+    "deadline_seconds": 420,
+    "business_seconds": 300,
+    "cleanup_seconds": 120,
+    "frozen_utc": "2026-09-30T23:18:56.630849+08:00",
+    "note": "续作01真实批冻结。原批frozen_utc=2026-10-01T00:05:00+08:00为书写时投影值，与real-01实际时间2026-09-30T22:51:47+08:00不一致，据真实manifest披露，不回改旧值；本条目使用真实时点。",
+    "scenarios": [
+      "upgrade收尾子批（修复F-U2后）：合法非空001-007→008全量断言、旧model生命线、重复008回滚、篡改约束失败回滚、缺前置拒绝；三schema先摘要后定向重建",
+      "windows六方向（5场景函数，含两会话组合）：tool_chain/model_regression/tool_stop/tool_recovery/old_sup_reject/old_worker_reject",
+      "清理不全即停止后续场景；stop失败则recovery标not_run；不重跑pg_retry/离线全量"
+    ],
+    "fault_injection": "同前冻结清单；本轮修正F-U2、win场景清单函数映射与清理纪律；产品/迁移/backend测试全部冻结于final-product-hashes.json"
+  },
+  "continuation_02": {
+    "batch": "real-05（必要时real-06定向）",
+    "database": "retrolume_task092_upgrade",
+    "deadline_seconds": 300,
+    "business_seconds": 180,
+    "cleanup_seconds": 120,
+    "frozen_utc": "2026-10-01T01:28:24.667618+08:00",
+    "scenarios": [
+      "s1：重建happy schema一次走通001-007→008、旧行逐字段不变、旧model生命线（未配置拒工具零副作用）、重复008命中008自身RAISE且schema/数据不变",
+      "s2：独立基线+篡改成本约束→008唯一识别失败整事务回滚；无五新列、无部分DDL、旧行不变、篡改约束仍在",
+      "s3：独立空schema→008前置不存在拒绝；显式零目标对象",
+      "阴性识别：SQLSTATE=P0001且命中008自身有限识别文本；非DSN/权限/语法/夹具表缺失",
+      "real-06仅为范围内夹具/控制缺陷且过两次修正门后定向重测失败/未运行项；real-05全过即止"
+    ],
+    "fault_injection": "s2篡改成本约束定义诱导识别失败；s3缺前置；失败注入用独立连接并在finally关闭"
+  }
+}

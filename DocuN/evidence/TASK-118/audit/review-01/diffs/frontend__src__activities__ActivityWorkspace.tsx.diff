@@ -1,0 +1,19 @@
+--- first-audit/frontend/src/activities/ActivityWorkspace.tsx
++++ current/frontend/src/activities/ActivityWorkspace.tsx
+@@ -851,7 +851,7 @@
+                 </div>
+               )}
+ 
+-              {(variant === "interview" || detail.business_domain === "interview") ? detail.activity_id === selectedId ? <InterviewWorkspace key={detail.activity_id} activityId={detail.activity_id} token={token} scopeRevision={detail.scope_revision} onChanged={() => { void refreshDetail(detail.activity_id, true); }}/> : <p role="status">正在读取选中的面试活动…</p> : detail.business_domain === "unknown" ? <p role="alert">活动领域资格不可核对，保持只读；请核对服务状态。</p> : <>
++              {(variant === "interview" || detail.business_domain === "interview") ? detail.activity_id === selectedId ? <InterviewWorkspace key={detail.activity_id} activityId={detail.activity_id} token={token} scopeRevision={detail.scope_revision} modelService={caps?.provider??null} onChanged={() => { void refreshDetail(detail.activity_id, true); }}/> : <p role="status">正在读取选中的面试活动…</p> : detail.business_domain === "unknown" ? <p role="alert">活动领域资格不可核对，保持只读；请核对服务状态。</p> : <>
+               <div className="ws-block">
+                 <h4>资料范围 · 范围修订 {detail.scope_revision}</h4>
+                 {(detail.sources ?? []).map(source => (
+@@ -910,6 +910,7 @@
+                   activityId={detail.activity_id}
+                   token={token}
+                   scopeRevision={detail.scope_revision}
++                  modelService={caps?.provider??null}
+                   teachingAvailable={Boolean(caps?.teaching?.available)}
+                   calculationAvailable={Boolean(caps?.teaching_calculation?.available)}
+                   memoryModelAvailable={Boolean(caps?.memory_model?.available)}

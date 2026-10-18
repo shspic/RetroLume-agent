@@ -1,0 +1,138 @@
+--- pre/backend/app/activities/service.py
++++ final/backend/app/activities/service.py
+@@ -0,0 +1,135 @@
++"""受信内部范围与持久成果续接；每次显式意图最多一次受监督调用。
++
++这是内部应用边界，不能作为任意外部客户端的权限凭证。读取不出站，
++取消历史只展示；线程中的监督必须完成自身有界收尾才传播调用方取消。
++"""
++from __future__ import annotations
++
++import asyncio
++from dataclasses import dataclass
++import json
++from pydantic import ValidationError
++from app.capabilities.contracts import AdmissionUnavailable, ModelCallRequest, ModelServiceConfig, ResultConsumptionRef, validate_business_payload
++from .repository import PostgresAdmissionLedger, CommittedResultSnapshot, ResultReadStatus, ResultIntegrityError
++
++
++@dataclass(frozen=True)
++class ReadOutcome:
++    status: str
++    snapshot: CommittedResultSnapshot | None = None
++
++
++@dataclass(frozen=True)
++class SettlementFacts:
++    settled_seconds: int | None
++    reserved_seconds: int | None
++    pending_fold_seconds: int | None
++    cleanup_incomplete: bool
++
++
++@dataclass(frozen=True)
++class ContinuationOutcome:
++    status: str
++    business: ReadOutcome | None = None
++    supervision: object | None = None
++    settlement: SettlementFacts | None = None
++
++
++class ActivityService:
++    def __init__(self, ledger: PostgresAdmissionLedger):
++        self.ledger=ledger
++
++    async def read_result(self, activity_id, operation_id) -> ReadOutcome:
++        try:
++            snapshot=await self.ledger.read_committed_result(activity_id,operation_id)
++            return ReadOutcome(snapshot.read_status.value,snapshot)
++        except AdmissionUnavailable:
++            return ReadOutcome("read_unavailable")
++        except ResultIntegrityError:
++            return ReadOutcome("integrity_error")
++        except (ValueError,TypeError):
++            return ReadOutcome("invalid_input")
++
++    async def resume_result(self, activity_id, operation_id) -> ReadOutcome:
++        return await self.read_result(activity_id,operation_id)
++
++    async def read_scope(self, activity_id):
++        # None明确表示不存在，数据库未知继续以脱敏unavailable异常区分。
++        return await self.ledger.inspect_scope(activity_id)
++
++    async def revise_scope(self, activity_id, expected_scope_revision, sources):
++        return await self.ledger.revise_scope(activity_id,expected_scope_revision,sources)
++
++    async def continue_from_result(self, activity_id, parent_operation_id, new_operation_id,
++                                   followup, service, config, executor_id, run_tag) -> ContinuationOutcome:
++        from app.worker.one_call import OneCallInput,run_one_call,validate_identity
++        from app.worker.session import SessionConfig
++        try:
++            validate_identity(activity_id,executor_id,new_operation_id,run_tag)
++            self.ledger._bounded_name(parent_operation_id,"parent_operation_id")
++            if parent_operation_id==new_operation_id or type(followup) is not str or not followup.strip():
++                return ContinuationOutcome("invalid_input")
++        except (ValueError,TypeError,AttributeError):
++            return ContinuationOutcome("invalid_input")
++        # 同键只核事实；无正文、未知或不可读都不生成替代新键、不重发。
++        existing=await self.read_result(activity_id,new_operation_id)
++        if existing.status != ResultReadStatus.NO_OPERATION.value:
++            return ContinuationOutcome(existing.status,existing)
++        parent=await self.read_result(activity_id,parent_operation_id)
++        if parent.status != ResultReadStatus.COMMITTED_CURRENT.value:
++            mapping={"committed_history_cancelled":"cancelled","invalidated_scope_changed":"result_invalidated","invalidated_source":"source_invalid"}
++            return ContinuationOutcome(mapping.get(parent.status,parent.status),parent)
++        if type(service) is not ModelServiceConfig or type(config) is not SessionConfig:
++            return ContinuationOutcome("invalid_input")
++        # 确定的 one_call 配置冲突在监督线程及任何 launcher 副作用之前拒绝。
++        if config.request_timeout_seconds > 120 or service.timeout_seconds > config.request_timeout_seconds:
++            return ContinuationOutcome("invalid_input")
++        snapshot=parent.snapshot
++        try:
++            validate_business_payload(snapshot.payload,snapshot.payload_format,snapshot.payload_sha256)
++        except (ValueError,TypeError,AttributeError):
++            return ContinuationOutcome("integrity_error",parent)
++        try:
++            value=json.loads(snapshot.payload)["value"]
++            content=value if snapshot.payload_format=="text" else json.dumps(value,ensure_ascii=False,separators=(",",":"),allow_nan=False)
++            ref=ResultConsumptionRef(activity_id=activity_id,operation_id=parent_operation_id,
++                scope_revision=snapshot.scope_revision,payload_sha256=snapshot.payload_sha256)
++            request=ModelCallRequest(messages=[{"role":"assistant","content":content},
++                {"role":"user","content":followup}],max_output_tokens=min(256,service.max_output_tokens_limit),
++                input_result=ref,allowed_tools=frozenset())
++            OneCallInput(new_operation_id,request,service).to_wire()
++        except ValidationError as exc:
++            too_large=any(x["type"] in {"string_too_long","too_long"} for x in exc.errors(include_input=False))
++            return ContinuationOutcome("input_too_large" if too_large else "invalid_input")
++        except ValueError as exc:
++            too_large=str(exc) in {"one_call data exceeds contract","internal one_call supports at most 65536 configured body bytes"}
++            return ContinuationOutcome("input_too_large" if too_large else "invalid_input")
++        except (TypeError,AttributeError,RecursionError):
++            return ContinuationOutcome("invalid_input")
++        task=asyncio.create_task(asyncio.to_thread(run_one_call,self.ledger,config,activity_id,
++            executor_id,new_operation_id,request,service,run_tag=run_tag))
++        cancelled=False
++        # shield只隔离调用方取消；监督线程由既有deadline/自有Job收尾，禁止后台遗留。
++        while True:
++            try:
++                supervision=await asyncio.shield(task)
++                break
++            except Exception:
++                if cancelled:raise asyncio.CancelledError
++                return ContinuationOutcome("supervision_unknown",await self.read_result(activity_id,new_operation_id))
++            except asyncio.CancelledError:
++                cancelled=True
++                if task.done():
++                    supervision=task.result()
++                    break
++        if cancelled:raise asyncio.CancelledError
++        business=await self.read_result(activity_id,new_operation_id)
++        settlement=SettlementFacts(supervision.settled_seconds,supervision.reserved_seconds,
++            supervision.pending_fold_seconds,supervision.cleanup_incomplete)
++        status=business.status
++        if business.status in ("no_operation","unresolved"):
++            status=supervision.state if supervision.state in {"cancelled","budget_exhausted"} else "supervision_unknown"
++            receipt=supervision.model_receipt
++            if receipt and receipt["result"].get("error_code"):
++                status=receipt["result"]["error_code"]
++        return ContinuationOutcome(status,business,supervision,settlement)

@@ -1,0 +1,30 @@
+{
+  "at": "2026-10-09T08:46:47.900921+08:00",
+  "observed": [
+    "两根都发生在browser之前",
+    "裸FROM被解析成registry仓库名",
+    "正确repo digest源改好但未build",
+    "host/counter没有生产NavigationGate，终态即使无反证也NOT_FULL_H0"
+  ],
+  "next_method": "一次本地OCI layout命名上下文，精确缓存config与layer绑定，避免registry FROM解析；本机支持仍须实际一次验证",
+  "primary_sources": [
+    {
+      "url": "https://docs.docker.com/reference/cli/docker/buildx/build/",
+      "supports": "--build-context接受本地OCI layout，FROM名字使用指定上下文，可按manifest digest固定"
+    },
+    {
+      "url": "https://docs.docker.com/reference/cli/docker/image/build/",
+      "supports": "--network的范围是构建RUN；该页还描述legacy模式，但不将它当本机必然可用"
+    },
+    {
+      "url": "https://docs.docker.com/engine/storage/containerd/",
+      "supports": "实际driver-status识别containerd；不切换store，不重启daemon"
+    }
+  ],
+  "review_web_pages": 4,
+  "actor_old_pages_used": 4,
+  "not_reset_old_research_budget": true,
+  "review_metadata_error": "buildx inspect没有--format，已用plain只读输出核；无build/create/启动效果",
+  "not_proven": "新OCI构建Windows URI/上传支持、真实加载与浏览器安全仍not_run",
+  "legacy_builder_or_store_switch_not_selected": true
+}

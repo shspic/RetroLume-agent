@@ -1,0 +1,270 @@
+{
+  "attempt": 3,
+  "utc": "2026-09-29T06:51:47.966506+00:00",
+  "cid": "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4",
+  "commands": [
+    {
+      "args": [
+        "inspect",
+        "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4",
+        "--format",
+        "{{json .Id}}|{{json .Name}}|{{json .Image}}|{{json .Mounts}}|{{json .HostConfig.PortBindings}}|{{json .HostConfig.NanoCpus}}|{{json .HostConfig.Memory}}|{{json .HostConfig.PidsLimit}}|{{json .HostConfig.RestartPolicy.Name}}|{{json .HostConfig.Privileged}}|{{json .State.Running}}|{{json .State.Pid}}|{{json .State.StartedAt}}"
+      ],
+      "started_utc": "2026-09-29T06:51:47.979996+00:00",
+      "exit": 0,
+      "seconds": 0.20300000003771856
+    },
+    {
+      "args": [
+        "start",
+        "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4"
+      ],
+      "started_utc": "2026-09-29T06:51:48.172873+00:00",
+      "exit": 0,
+      "seconds": 0.34399999998277053
+    },
+    {
+      "args": [
+        "inspect",
+        "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4",
+        "--format",
+        "{{json .Id}}|{{json .Name}}|{{json .Image}}|{{json .Mounts}}|{{json .HostConfig.PortBindings}}|{{json .HostConfig.NanoCpus}}|{{json .HostConfig.Memory}}|{{json .HostConfig.PidsLimit}}|{{json .HostConfig.RestartPolicy.Name}}|{{json .HostConfig.Privileged}}|{{json .State.Running}}|{{json .State.Pid}}|{{json .State.StartedAt}}"
+      ],
+      "started_utc": "2026-09-29T06:51:48.521166+00:00",
+      "exit": 0,
+      "seconds": 0.15600000001722947
+    },
+    {
+      "args": [
+        "exec",
+        "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4",
+        "pg_isready",
+        "-U",
+        "retrolume_task088_synth",
+        "-d",
+        "postgres"
+      ],
+      "started_utc": "2026-09-29T06:51:48.685251+00:00",
+      "exit": 0,
+      "seconds": 0.23499999998603016
+    },
+    {
+      "args": [
+        "exec",
+        "-i",
+        "-e",
+        "PGOPTIONS=-c statement_timeout=10000 -c lock_timeout=2000",
+        "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4",
+        "psql",
+        "-X",
+        "-q",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-U",
+        "retrolume_task088_synth",
+        "-d",
+        "postgres",
+        "-t",
+        "-A"
+      ],
+      "started_utc": "2026-09-29T06:51:48.914484+00:00",
+      "exit": 0,
+      "seconds": 0.21799999999348074
+    },
+    {
+      "args": [
+        "exec",
+        "-i",
+        "-e",
+        "PGOPTIONS=-c statement_timeout=10000 -c lock_timeout=2000",
+        "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4",
+        "psql",
+        "-X",
+        "-q",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-U",
+        "retrolume_task088_synth",
+        "-d",
+        "postgres",
+        "-t",
+        "-A"
+      ],
+      "started_utc": "2026-09-29T06:51:49.136864+00:00",
+      "exit": 0,
+      "seconds": 0.23499999998603016
+    },
+    {
+      "args": [
+        "stop",
+        "--time",
+        "10",
+        "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4"
+      ],
+      "started_utc": "2026-09-29T06:51:52.457704+00:00",
+      "exit": 0,
+      "seconds": 0.4380000000237487
+    },
+    {
+      "args": [
+        "inspect",
+        "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4",
+        "--format",
+        "{{json .Id}}|{{json .Name}}|{{json .Image}}|{{json .Mounts}}|{{json .HostConfig.PortBindings}}|{{json .HostConfig.NanoCpus}}|{{json .HostConfig.Memory}}|{{json .HostConfig.PidsLimit}}|{{json .HostConfig.RestartPolicy.Name}}|{{json .HostConfig.Privileged}}|{{json .State.Running}}|{{json .State.Pid}}|{{json .State.StartedAt}}"
+      ],
+      "started_utc": "2026-09-29T06:51:52.894274+00:00",
+      "exit": 0,
+      "seconds": 0.1720000000204891
+    }
+  ],
+  "cleanup_incomplete": false,
+  "exit": 0,
+  "new_containers": 0,
+  "new_volumes": 0,
+  "windows_sessions": 1,
+  "credential_lifecycle": "explicitly authorized task role password rotation only owner memory, psql stdin and controlled child env; never argv/log; no old Env read",
+  "preflight": {
+    "Id": "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4",
+    "Name": "/retrolume-task-088-g3-w1",
+    "Image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+    "Mounts": [
+      {
+        "Destination": "/var/lib/postgresql/data",
+        "Driver": "local",
+        "Mode": "z",
+        "Name": "retrolume-task-088-g3-w1-data",
+        "Propagation": "",
+        "RW": true,
+        "Source": "/var/lib/docker/volumes/retrolume-task-088-g3-w1-data/_data",
+        "Type": "volume"
+      }
+    ],
+    "HostConfig.PortBindings": {
+      "5432/tcp": [
+        {
+          "HostIp": "127.0.0.1",
+          "HostPort": "55441"
+        }
+      ]
+    },
+    "HostConfig.NanoCpus": 1000000000,
+    "HostConfig.Memory": 536870912,
+    "HostConfig.PidsLimit": 128,
+    "HostConfig.RestartPolicy.Name": "no",
+    "HostConfig.Privileged": false,
+    "State.Running": false,
+    "State.Pid": 0,
+    "State.StartedAt": "2026-09-29T06:49:18.000259777Z"
+  },
+  "started": {
+    "Id": "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4",
+    "Name": "/retrolume-task-088-g3-w1",
+    "Image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+    "Mounts": [
+      {
+        "Destination": "/var/lib/postgresql/data",
+        "Driver": "local",
+        "Mode": "z",
+        "Name": "retrolume-task-088-g3-w1-data",
+        "Propagation": "",
+        "RW": true,
+        "Source": "/var/lib/docker/volumes/retrolume-task-088-g3-w1-data/_data",
+        "Type": "volume"
+      }
+    ],
+    "HostConfig.PortBindings": {
+      "5432/tcp": [
+        {
+          "HostIp": "127.0.0.1",
+          "HostPort": "55441"
+        }
+      ]
+    },
+    "HostConfig.NanoCpus": 1000000000,
+    "HostConfig.Memory": 536870912,
+    "HostConfig.PidsLimit": 128,
+    "HostConfig.RestartPolicy.Name": "no",
+    "HostConfig.Privileged": false,
+    "State.Running": true,
+    "State.Pid": 594,
+    "State.StartedAt": "2026-09-29T06:51:48.261238987Z"
+  },
+  "database_preflight": {
+    "owner": "retrolume_task089_synth",
+    "role": [
+      true,
+      false,
+      false,
+      false,
+      false,
+      false
+    ],
+    "sessions": 0,
+    "memberships": 0
+  },
+  "credential_rotated_once": true,
+  "process": {
+    "pid": 8908,
+    "created_100ns": 134351383095712604
+  },
+  "outer_tree_zero": true,
+  "outer_handles_closed": true,
+  "process_events": [
+    {
+      "event": "suspended_identity",
+      "monotonic": 418019.921,
+      "pid": 8908,
+      "created_100ns": 134351383095712604
+    },
+    {
+      "event": "assigned_outer_job",
+      "monotonic": 418019.921,
+      "active_processes": 1
+    },
+    {
+      "event": "resumed",
+      "monotonic": 418019.921
+    },
+    {
+      "event": "control_handles_closed",
+      "monotonic": 418022.796,
+      "tree_zero_confirmed": true
+    }
+  ],
+  "final_resource": {
+    "Id": "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4",
+    "Name": "/retrolume-task-088-g3-w1",
+    "Image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+    "Mounts": [
+      {
+        "Destination": "/var/lib/postgresql/data",
+        "Driver": "local",
+        "Mode": "z",
+        "Name": "retrolume-task-088-g3-w1-data",
+        "Propagation": "",
+        "RW": true,
+        "Source": "/var/lib/docker/volumes/retrolume-task-088-g3-w1-data/_data",
+        "Type": "volume"
+      }
+    ],
+    "HostConfig.PortBindings": {
+      "5432/tcp": [
+        {
+          "HostIp": "127.0.0.1",
+          "HostPort": "55441"
+        }
+      ]
+    },
+    "HostConfig.NanoCpus": 1000000000,
+    "HostConfig.Memory": 536870912,
+    "HostConfig.PidsLimit": 128,
+    "HostConfig.RestartPolicy.Name": "no",
+    "HostConfig.Privileged": false,
+    "State.Running": false,
+    "State.Pid": 0,
+    "State.StartedAt": "2026-09-29T06:51:48.261238987Z"
+  },
+  "container_stopped": true,
+  "seconds": 5.110000000044238,
+  "end_utc": "2026-09-29T06:51:53.060673+00:00"
+}

@@ -1,0 +1,14 @@
+--- pre/backend/tests/fixtures/task100/bootstrap/sitecustomize.py
++++ post/backend/tests/fixtures/task100/bootstrap/sitecustomize.py
+@@ -1,7 +1,10 @@
+ """本卡显式白名单才激活；失败即退出本卡进程，防真实外发。"""
+ import os
+-if os.environ.get('RETROLUME_TASK100_FIXTURE')=='TASK-100-continuation-02-20261004':
++if os.environ.get('RETROLUME_TASK100_FIXTURE'):
+     try:
++        if (os.environ.get('RETROLUME_TASK100_FIXTURE')!='TASK-100-audit-repair-03-20261005'
++                or os.environ.get('RETROLUME_TASK100_PERMIT')!='TASK-100-audit-repair-03-20261005'):
++            raise RuntimeError('current fixture permit required; old permit ended')
+         import socket
+         _connect=socket.socket.connect
+         _connect_ex=socket.socket.connect_ex

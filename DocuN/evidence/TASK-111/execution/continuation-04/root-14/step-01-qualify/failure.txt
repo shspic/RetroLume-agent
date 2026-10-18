@@ -1,0 +1,12 @@
+Traceback (most recent call last):
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task111\c04_step.py", line 79, in main
+    apply(resource,out)
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task111\c04_qualify.py", line 66, in apply
+    pdf_cases(resource,out)
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task111\c04_qualify.py", line 95, in pdf_cases
+    conn.execute('SAVEPOINT case_check');conn.execute("UPDATE pdf_review_candidates SET status='pending' WHERE id=%s",(cid,));observe('unconfirmed',False);conn.execute('ROLLBACK TO SAVEPOINT case_check')
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\.venv\Lib\site-packages\psycopg\connection.py", line 300, in execute
+    raise ex.with_traceback(None)
+psycopg.errors.CheckViolation: new row for relation "pdf_review_candidates" violates check constraint "pdf_review_candidates_check"
+DETAIL:  Failing row contains (3ef511a0-35df-485c-87a1-815dbee6c140, f036bd78-29b3-4a00-ab2a-cfa4e95369be, 8d4fa7a3-2dde-4325-bca6-cf692cebb558, null, 0, pending, 2, pypdf-6.17.0, 2026-10-11 04:42:10.082547+00, 2026-10-11 04:42:10.119338+00).

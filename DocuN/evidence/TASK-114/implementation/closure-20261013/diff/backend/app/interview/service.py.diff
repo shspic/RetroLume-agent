@@ -1,0 +1,17 @@
+--- before/backend/app/interview/service.py
++++ final/backend/app/interview/service.py
+@@ -1,5 +1,6 @@
+ """Explicit commands only. Native SUP owns stops and budget reconciliation."""
+ from __future__ import annotations
++from app.data_exit.maintenance import owned_service
+ import asyncio
+ from datetime import datetime,timezone
+ from anyio import CancelScope
+@@ -69,6 +70,7 @@
+             identity=identity,limits=limits)
+         return frozen
+ 
++    @owned_service
+     async def submit_command(self,aid,command,config, *, run_tag):
+         if command.action not in ('ask','review'):
+             return await self.ledger.apply_interview_local(aid,command)

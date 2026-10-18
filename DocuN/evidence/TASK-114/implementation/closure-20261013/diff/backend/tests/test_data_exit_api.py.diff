@@ -1,0 +1,68 @@
+--- /dev/null
++++ final/backend/tests/test_data_exit_api.py
+@@ -0,0 +1,65 @@
++"""真实 FastAPI 管线的认证、只读拒写与持久 GET；不冒充真实 PG。"""
++import os
++from pathlib import Path
++import sys
++from types import SimpleNamespace
++from unittest.mock import patch
++import unittest
++from uuid import uuid4
++sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
++from fastapi.testclient import TestClient
++from app.main import create_app
++from app.data_exit.contracts import DataContext,DataJobCommand,canonical
++from app.data_exit.control import ControlHub
++from app.data_exit.maintenance import MutationGate
++
++
++class MaterialsRead:
++    def list(self,**kwargs):return []
++
++
++class DataApiOffline(unittest.TestCase):
++    @classmethod
++    def setUpClass(cls):
++        raw=os.environ.get('RETROLUME_TASK114_SYNTHETIC')
++        if not raw:raise RuntimeError('缺本卡 synthetic 目录')
++        cls.root=Path(raw)
++        cls.hub=ControlHub(cls.root/'control-root')
++        cls.context=DataContext(cls.hub.control_id,0,str(uuid4()),str(uuid4()),'restored_readonly')
++
++    def app(self):
++        env={'RETROLUME_DATA_DIR':str(self.root/'source-root'),'RETROLUME_BACKUP_DIR':str(self.root/'backup-root')}
++        with patch.dict(os.environ,env):
++            with patch.dict(os.environ):
++                for name in ('RETROLUME_DATABASE_URL','RETROLUME_DATA_EXIT_CONFIG','RETROLUME_PREVIEW_CONFIG'):os.environ.pop(name,None)
++                app=create_app(MaterialsRead())
++        context=self.context;gate=MutationGate(self.hub,lambda:context)
++        app.state.data_exit=SimpleNamespace(context=lambda:context,gate=gate,hub=self.hub,packages=None,factory=None,
++            caps=lambda:{**context.public(),'format':'data_exit.v1.r01','backup_available':False,'restore_executor_configured':False})
++        return app
++
++    def test_authentication_and_get_do_not_change_journal(self):
++        key=str(uuid4());job=self.hub.create_or_get_job(DataJobCommand('restore_checkpoint',key,{'mode':'all'}),self.context)
++        before=self.hub.path.read_bytes()
++        with TestClient(self.app()) as client:
++            token=client.get('/api/session').json()['token'];headers={'X-RetroLume-Session':token}
++            self.assertEqual(client.get('/api/data/jobs/by-key/'+key).status_code,403)
++            self.assertEqual(client.get('/api/data/jobs/by-key/'+key,headers=headers).json()['job_id'],job['job_id'])
++            self.assertEqual(client.get('/api/data/jobs/'+job['job_id'],headers=headers).status_code,200)
++            self.assertEqual(client.get('/api/data/capabilities',headers={**headers,'Sec-Fetch-Site':'cross-site'}).status_code,403)
++        self.assertEqual(before,self.hub.path.read_bytes())
++
++    def test_readonly_rejects_business_writes_and_stale_context(self):
++        with TestClient(self.app()) as client:
++            token=client.get('/api/session').json()['token']
++            headers={'X-RetroLume-Session':token,'X-RetroLume-Data-Context':canonical(self.context.public()),'Origin':'http://127.0.0.1:8000'}
++            self.assertEqual(client.get('/api/materials',headers=headers).status_code,200)
++            for path in ('/api/materials?filename=x.txt','/api/activities','/api/activities/'+str(uuid4())+'/cancel'):
++                response=client.post(path,headers=headers,content=b'x')
++                self.assertEqual(response.status_code,409,path)
++                self.assertEqual(response.json()['code'],'data_readonly')
++            response=client.post('/api/materials?filename=x.txt',headers={'X-RetroLume-Session':token},content=b'x')
++            self.assertEqual(response.json()['code'],'selection_changed')
++
++
++if __name__=='__main__':unittest.main(verbosity=2)

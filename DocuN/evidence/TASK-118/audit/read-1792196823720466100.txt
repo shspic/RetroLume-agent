@@ -1,0 +1,272 @@
+
+backend/app/data_exit/readability.py
+1: """同一只读事务内的正文资格；原记录、头、哈希和墓碑不改写。"""
+2: import json
+3: from .contracts import DataError, uuid
+4: 
+5: 
+6: def memory_projection(connection, memory_id, version):
+7:     row = connection.execute("""WITH RECURSIVE lineage(mid,ver) AS(
+8:       SELECT %s::uuid,%s::integer UNION
+9:       SELECT d.upstream_memory_id,d.upstream_version FROM public.learning_memory_dependencies d
+10:       JOIN lineage l ON d.memory_id=l.mid AND d.version=l.ver WHERE d.dependency_kind='memory'
+11:     ), qualification AS(SELECT public.memory_revision_readable(%s,%s) AS readable), facts AS(
+12:       SELECT EXISTS(SELECT 1 FROM public.data_tombstones t WHERE t.entity_kind='memory' AND t.entity_id=%s) AS revoked,
+13:       EXISTS(SELECT 1 FROM lineage l JOIN public.learning_memory_dependencies d ON d.memory_id=l.mid AND d.version=l.ver
+14:         JOIN public.data_tombstones t ON t.entity_kind='source' AND t.entity_id=d.source_id) AS source_deleted,
+15:       EXISTS(SELECT 1 FROM lineage l JOIN public.data_tombstones t ON t.entity_kind='memory' AND t.entity_id=l.mid) AS upstream_deleted
+16:     ) SELECT h.state,q.readable,f.revoked,f.source_deleted,f.upstream_deleted,
+17:       CASE WHEN q.readable IS TRUE AND h.state='active' AND NOT(f.revoked OR f.source_deleted OR f.upstream_deleted)
+18:            THEN b.body ELSE NULL END AS body
+19:     FROM qualification q CROSS JOIN facts f
+20:     LEFT JOIN public.learning_memories h ON h.memory_id=%s
+21:     LEFT JOIN public.learning_memory_bodies b ON b.memory_id=h.memory_id AND b.version=%s""",
+22:         (memory_id, version, memory_id, version, memory_id, memory_id, version)).fetchone()
+23:     if row is None or row['readable'] is None: return None, 'qualification_unknown'
+24:     if row['state'] == 'revoked' or row['revoked']: return None, 'revoked'
+25:     if row['source_deleted']: return None, 'source_deleted'
+26:     if row['readable'] is not True or row['upstream_deleted']: return None, 'dependency_invalid'
+27:     return (row['body'], 'present') if row['body'] is not None else (None, 'unavailable')
+28: 
+29: 
+30: def source_qualification(connection, ref):
+31:     try:
+32:         sid, vid = uuid(str(ref['source_id'])), uuid(str(ref['version_id']))
+33:     except (KeyError, DataError): return 'qualification_unknown'
+34:     row = connection.execute("""SELECT s.current_version::text,s.revision,v.sha256,
+35:       EXISTS(SELECT 1 FROM public.data_tombstones WHERE entity_kind='source' AND entity_id=%s) AS deleted,
+36:       (v.format<>'pdf' OR EXISTS(SELECT 1 FROM public.pdf_review_candidates c WHERE c.version_id=v.id AND c.status='confirmed'
+37:         AND c.page_count BETWEEN 1 AND 50 AND(SELECT count(*) FROM public.pdf_review_pages p WHERE p.candidate_id=c.id)=c.page_count
+38:         AND(SELECT count(*) FROM public.pdf_extracted_pages p WHERE p.version_id=c.version_id)=c.page_count)) AS ready
+39:       FROM public.material_sources s LEFT JOIN public.material_versions v ON v.source_id=s.id AND v.id=%s WHERE s.id=%s""",
+40:         (sid, vid, sid)).fetchone()
+41:     if row is None: return 'dependency_invalid'
+42:     if row['deleted']: return 'source_deleted'
+43:     if (row['current_version'] != vid or row['ready'] is not True
+44:         or ('source_revision' in ref and ref['source_revision'] != row['revision'])
+45:         or ('original_sha256' in ref and ref['original_sha256'] != row['sha256'])):
+46:         return 'dependency_invalid'
+47:     return 'present'
+48: 
+49: 
+50: def history_qualification(connection, table, row):
+51:     """查原事实自己的sources/catalog/memory_refs/reference_hashes，非当前scope代替。"""
+52:     derived = table == 'activity_operation_results' or (table == 'teaching_records' and row.get('kind') not in ('goal','answer','correction','exposure'))
+53:     if derived and row.get('activity_id') is not None:
+54:         selected = connection.execute('SELECT public.activity_memory_eligible(%s) AS eligible', (row['activity_id'],)).fetchone()
+55:         if selected is None or selected['eligible'] is not True: return 'dependency_invalid'
+56:     documents = []
+57:     for name in ('source_refs', 'payload', 'body', 'local_body'):
+58:         value = row.get(name)
+59:         if value is None: continue
+60:         if isinstance(value, str):
+61:             try: value = json.loads(value)
+62:             except (ValueError, TypeError):
+63:                 if name in ('source_refs', 'payload'): return 'qualification_unknown'
+64:                 continue  # 用户保存的纯文本没有结构化依赖。
+65:         documents.append(value)
+66:     refs, memories, events = [], [], []
+67:     def walk(value, depth=0):
+68:         if depth > 32: raise ValueError()
+69:         if isinstance(value, list):
+70:             for item in value: walk(item, depth+1)
+71:         elif isinstance(value, dict):
+72:             if 'source_id' in value and 'version_id' in value: refs.append(value)
+73:             if 'memory_id' in value and 'version' in value: memories.append(value)
+74:             if 'reference_hashes' in value:
+75:                 if not isinstance(value['reference_hashes'], list): raise ValueError()
+76:                 events.extend(value['reference_hashes'])
+77:             for child in value.values(): walk(child, depth+1)
+78:     try:
+79:         for document in documents: walk(document)
+80:         for ref in refs:
+81:             reason = source_qualification(connection, ref)
+82:             if reason != 'present': return reason
+83:         for ref in memories:
+84:             mid, ver = uuid(str(ref['memory_id'])), ref['version']
+85:             if type(ver) is not int: return 'qualification_unknown'
+86:             body, reason = memory_projection(connection, mid, ver)
+87:             if reason != 'present': return reason
+88:             head = connection.execute('SELECT current_version FROM public.learning_memories WHERE memory_id=%s', (mid,)).fetchone()
+89:             revision = connection.execute('SELECT body_sha256 FROM public.learning_memory_revisions WHERE memory_id=%s AND version=%s', (mid, ver)).fetchone()
+90:             if head is None or head['current_version'] != ver or revision is None or ref.get('body_sha256', revision['body_sha256']) != revision['body_sha256']:
+91:                 return 'dependency_invalid'
+92:         for ref in events:
+93:             if not isinstance(ref, dict): return 'qualification_unknown'
+94:             rid, aid = uuid(str(ref['record_id'])), row.get('activity_id')
+95:             if aid is None: return 'qualification_unknown'
+96:             event = connection.execute("""SELECT body_sha256 FROM public.teaching_records t WHERE t.activity_id=%s AND t.record_id=%s
+97:               AND NOT EXISTS(SELECT 1 FROM public.teaching_records x WHERE x.activity_id=t.activity_id
+98:                 AND((x.kind='correction' AND x.parent_record_id=t.record_id) OR(x.kind='answer' AND x.supersedes_record_id=t.record_id)
+99:                 OR(x.kind='feedback' AND t.kind IN('feedback','progress') AND x.answer_record_id=t.answer_record_id AND x.seq>t.seq)))""",
+100:                 (aid, rid)).fetchone()
+101:             if event is None or event['body_sha256'] != ref.get('body_sha256'): return 'dependency_invalid'
+102:     except (KeyError, ValueError, TypeError, DataError): return 'qualification_unknown'
+103:     return 'present'
+
+backend/app/activities/repository.py
+1801:        o.finish_reason, o.returned_model, o.remote_request_id,
+1802:        o.prompt_tokens, o.completion_tokens, o.response_bytes,
+1803:        o.kind, o.tool_call_id, o.arguments_sha256, o.tool_names,
+1804:        r.admission_id AS result_admission_id, r.execution_generation AS result_generation,
+1805:        r.scope_revision AS result_scope, r.payload_format, r.payload_sha256, r.committed_at,
+1806:        a.status AS activity_status_now, a.scope_revision AS activity_scope_revision_now,
+1807:        (r.payload_sha256 IS NOT NULL
+1808:         AND r.admission_id = o.admission_id
+1809:         AND r.execution_generation = o.execution_generation
+1810:         AND r.scope_revision = o.scope_revision) AS binding_consistent,
+1811:        (r.payload_sha256 IS NOT NULL AND a.scope_revision = r.scope_revision) AS scope_current,
+1812:        (EXISTS (SELECT 1 FROM activity_scope_sources s WHERE s.activity_id = o.activity_id)
+1813:         AND NOT EXISTS (
+1814:             SELECT 1 FROM activity_scope_sources s
+1815:               LEFT JOIN material_sources m ON m.id = s.source_id
+1816:              WHERE s.activity_id = o.activity_id
+1817:                AND (m.id IS NULL OR m.current_version IS NULL
+1818:                     OR m.current_version <> s.version_id
+1819:                     OR m.revision <> s.source_revision)
+1820:         )) AS sources_valid, /*memory*/TRUE AS memory_qualified, /*interview*/TRUE AS interview_qualified"""
+1821: 
+1822:     @staticmethod
+1823:     def _read_status(row: dict, *, has_result: bool) -> ResultReadStatus:
+1824:         """行内绑定不一致抛完整性错误；scope 检查先于来源检查。"""
+1825:         if row["payload_sha256"] is not None and not row["binding_consistent"]:
+1826:             raise ResultIntegrityError("结果行与操作权威绑定不一致")
+1827:         if not has_result:
+1828:             return ResultReadStatus.UNRESOLVED
+1829:         if not row["scope_current"]:
+1830:             return ResultReadStatus.INVALIDATED_SCOPE_CHANGED
+1831:         if not row["sources_valid"]:
+1832:             return ResultReadStatus.INVALIDATED_SOURCE
+1833:         if not row.get("memory_qualified", True):
+1834:             return ResultReadStatus.INVALIDATED_MEMORY
+1835:         if not row.get("interview_qualified",True):
+1836:             return ResultReadStatus.INVALIDATED_INTERVIEW
+1837:         if row["activity_status_now"] == "cancelled":
+1838:             return ResultReadStatus.COMMITTED_HISTORY_CANCELLED
+1839:         return ResultReadStatus.COMMITTED_CURRENT
+1840: 
+1841:     @staticmethod
+1842:     def _snapshot_from_row(row: dict, status: ResultReadStatus, payload: str | None) -> CommittedResultSnapshot:
+1843:         has_result = row["payload_sha256"] is not None
+1844:         return CommittedResultSnapshot(
+1845:             activity_id=str(row["activity_id"]),
+1846:             operation_id=row["operation_id"],
+1847:             read_status=status,
+1848:             admission_id=str(row["result_admission_id"] if has_result else row["op_admission_id"]),
+1849:             execution_generation=row["result_generation"] if has_result else row["op_generation"],
+1850:             scope_revision=row["result_scope"] if has_result else row["op_scope"],
+1851:             provider=row["provider"],
+1852:             configured_model=row["configured_model"],
+1853:             finish_reason=row["finish_reason"],
+1854:             returned_model=row["returned_model"],
+1855:             remote_request_id=row["remote_request_id"],
+1856:             prompt_tokens=row["prompt_tokens"],
+1857:             completion_tokens=row["completion_tokens"],
+1858:             response_bytes=row["response_bytes"],
+1859:             payload_format=row["payload_format"],
+1860:             payload=payload,
+1861:             payload_sha256=row["payload_sha256"],
+1862:             committed_at=row["committed_at"],
+1863:             activity_status_now=row["activity_status_now"],
+1864:             activity_scope_revision_now=row["activity_scope_revision_now"],
+1865:             kind=row["kind"],
+1866:             tool_call_id=row["tool_call_id"],
+1867:             arguments_sha256=row["arguments_sha256"],
+1868:             tool_names=tuple(row["tool_names"]) if row["tool_names"] is not None else None,
+1869:         )
+1870: 
+1871:     async def read_committed_result(self, activity_id: str, operation_id: str) -> CommittedResultSnapshot:
+1872:         """内部只读恢复接口（无 HTTP）；失败关闭，失效分支不投影正文。
+1873: 
+1874:         有效正文需要：结果行与操作/活动/admission/G/scope 完整绑定；结果
+1875:         scope 与活动当前 scope 一致；来源快照非空且每项来源存在、版本与
+1876:         revision 一致。有效返回前重算存储字节 hash 并复查合法封套；不以
+1877:         hash 正确替代来源授权。取消后的历史成果仅来源/scope 有效才可读，
+1878:         不授予新写/发送资格；快照之后的变化不声称可撤回已返回字节。
+1879:         """
+1880:         activity_id = self._uuid(activity_id, "activity_id")
+1881:         operation_id = self._bounded_name(operation_id, "operation_id")
+1882: 
+1883:         async def operation(connection: object) -> CommittedResultSnapshot:
+1884:             cursor = await connection.execute(
+1885:                 await self._interview_result_sql(connection,await self._memory_result_sql(connection,f"""{self._RESULT_READ_SQL},
+1886:        CASE WHEN r.payload_sha256 IS NOT NULL
+1887:              AND r.admission_id = o.admission_id
+1888:              AND r.execution_generation = o.execution_generation
+1889:              AND r.scope_revision = o.scope_revision
+1890:              AND a.scope_revision = r.scope_revision
+1891:              AND EXISTS (SELECT 1 FROM activity_scope_sources s WHERE s.activity_id = o.activity_id)
+1892:              AND NOT EXISTS (
+1893:                  SELECT 1 FROM activity_scope_sources s
+1894:                    LEFT JOIN material_sources m ON m.id = s.source_id
+1895:                   WHERE s.activity_id = o.activity_id
+1896:                     AND (m.id IS NULL OR m.current_version IS NULL
+1897:                          OR m.current_version <> s.version_id
+1898:                          OR m.revision <> s.source_revision))
+1899:             AND /*interview*/TRUE THEN r.payload ELSE NULL END AS payload,
+1900:        o.activity_id
+1901:   FROM activity_operations o
+1902:   JOIN activities a ON a.id = o.activity_id
+1903:   LEFT JOIN activity_operation_results r
+1904:          ON r.activity_id = o.activity_id AND r.operation_id = o.operation_id
+1905:  WHERE o.activity_id = %s AND o.operation_id = %s""")),
+1906:                 (activity_id, operation_id),
+1907:             )
+1908:             row = await cursor.fetchone()
+1909:             if row is None:
+1910:                 # 无操作行：仅已知请求 ID，不伪造 admission/G/provider；
+1911:                 # 缺失活动同样明确返回未找到。
+1912:                 return CommittedResultSnapshot(
+1913:                     activity_id=activity_id,
+1914:                     operation_id=operation_id,
+1915:                     read_status=ResultReadStatus.NO_OPERATION,
+1916:                 )
+1917:             if row["payload_sha256"] is None:
+1918:                 status = (
+1919:                     ResultReadStatus.UNRESOLVED
+1920:                     if row["state"] in ("reserved", "dispatched", "unknown")
+1921:                     else ResultReadStatus.TERMINAL_WITHOUT_PAYLOAD
+1922:                 )
+1923:                 return self._snapshot_from_row(row, status, None)
+1924:             status = self._read_status(row, has_result=True)
+1925:             payload: str | None = None
+1926:             if status in (ResultReadStatus.COMMITTED_CURRENT, ResultReadStatus.COMMITTED_HISTORY_CANCELLED):
+1927:                 payload = row["payload"]
+1928:                 if payload is None:
+1929:                     raise ResultIntegrityError("payload_integrity")
+1930:                 try:
+1931:                     validate_business_payload(payload, row["payload_format"], row["payload_sha256"])
+1932:                 except ValueError:
+1933:                     raise ResultIntegrityError("payload_integrity") from None
+1934:                 if row["kind"] == "tool" and not _tool_payload_semantics_ok(row["payload_format"], payload):
+1935:                     # 工具结果语义复查；同表 model json 许可不自动给 tool。
+1936:                     raise ResultIntegrityError("payload_integrity")
+1937:             return self._snapshot_from_row(row, status, payload)
+1938: 
+1939:         return await self._transaction(operation)
+1940: 
+1941:     async def list_committed_results(
+1942:         self,
+1943:         activity_id: str,
+1944:         *,
+1945:         limit: int = 100,
+1946:         after_operation_id: str | None = None,
+1947:     ) -> tuple[CommittedResultSnapshot, ...]:
+1948:         """只列真正 results 行（含失效记录的轻量元数据，不含正文）。
+1949: 
+1950:         operation_id 稳定游标有界分页，limit 1..200；整页轻量元数据编码
+1951:         超过 256KiB 明确拒绝，不静默丢项；不把无正文操作混成已提交列表。
+1952:         """
+1953:         activity_id = self._uuid(activity_id, "activity_id")
+1954:         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
+1955:             raise ValueError("limit 必须是 1 到 200 之间的整数")
+1956:         if after_operation_id is not None:
+1957:             after_operation_id = self._bounded_name(after_operation_id, "after_operation_id")
+1958:         conditions = "r.activity_id = %s"
+1959:         params: list[object] = [activity_id]
+1960:         if after_operation_id is not None:
+1961:             conditions += " AND r.operation_id > %s"
+1962:             params.append(after_operation_id)
+1963:         params.append(limit)
+1964: 
+1965:         async def operation(connection: object) -> tuple[CommittedResultSnapshot, ...]:

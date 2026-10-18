@@ -1,0 +1,619 @@
+--- pre/DocuN/evidence/TASK-117/execution/control.py
++++ post/DocuN/evidence/TASK-117/execution/control.py
+@@ -53,6 +53,7 @@
+             if kind=='offline' and segment.get('offline_cursor_mono_ns') is not None:
+                 used+=(time.monotonic_ns()-segment['offline_cursor_mono_ns'])/1e9
+             if used>=cap:raise RuntimeError(segment.get('stage','S02')+'_'+kind+'_time_cap')
++            if kind=='offline' and used>=segment.get('offline_no_new_repairs_after_seconds',cap):raise RuntimeError('offline_save_reserve_only')
+         offline_used=sum(x['seconds'] for x in value['offline_intervals'])
+         if segment.get('offline_cursor_mono_ns') is not None:
+             offline_used+=(time.monotonic_ns()-segment['offline_cursor_mono_ns'])/1e9
+@@ -78,7 +79,7 @@
+     effective_cap=root_cap if name=='roots' else amendments[-1].get('API_cumulative_cap',limits.get(name)) if name=='api_starts' and amendments else limits.get(name)
+     if name not in limits or number<1 or value['counts'][name]+number>effective_cap:raise RuntimeError('次数门关闭：'+name)
+     scheduling_override=bool(amendments and (name=='roots' or name=='api_starts' and 'API_cumulative_cap' in amendments[-1]))
+-    if segment and name in segment['segment_caps'] and (not scheduling_override or segment.get('stage') in ('S03','S04') or 'S03' in segment['permit']) and value['counts'][name]+number-segment['baseline_counts'][name]>segment['segment_caps'][name]:raise RuntimeError('当前段次数门关闭：'+name)
++    if segment and name in segment['segment_caps'] and (not scheduling_override or segment.get('stage') in ('S03','S04','S05') or 'S03' in segment['permit']) and value['counts'][name]+number-segment['baseline_counts'][name]>segment['segment_caps'][name]:raise RuntimeError('当前段次数门关闭：'+name)
+     value['counts'][name]+=number;write(HERE/'budget.json',value);event('attempt_reserved',counter=name,number=number,total=value['counts'][name])
+ 
+ 
+@@ -122,7 +123,7 @@
+     if root.get('segment'):interval['segment']=root['segment']
+     value[key].append(interval)
+     segment=active_segment(value)
+-    if segment and segment.get('stage')=='S04':segment['offline_cursor_mono_ns']=root['end']['mono_ns']
++    if segment and segment.get('stage') in ('S04','S05'):segment['offline_cursor_mono_ns']=root['end']['mono_ns']
+     value['active_root']=None;value['phase']='implementation';write(HERE/'budget.json',value);event('root_end',root=number,seconds=seconds,result=result)
+ 
+ 
+@@ -145,7 +146,7 @@
+     value=state();segment=active_segment(value)
+     if segment is None or segment.get('offline_cursor_mono_ns') is None:return
+     now=time.monotonic_ns();start=segment['offline_cursor_mono_ns']
+-    value['offline_intervals'].append({'root':None,'segment':segment['permit'],'start_mono_ns':start,'end_mono_ns':now,'seconds':(now-start)/1e9,'basis':'S04无资源期间连续离线投入；启动根前结算，不另占真实根'})
++    value['offline_intervals'].append({'root':None,'segment':segment['permit'],'start_mono_ns':start,'end_mono_ns':now,'seconds':(now-start)/1e9,'basis':segment.get('stage','S04')+'无资源期间连续离线投入；阶段采样结算，不另占真实根'})
+     segment['offline_cursor_mono_ns']=None;write(HERE/'budget.json',value)
+ 
+ 
+--- pre/README.md
++++ post/README.md
+@@ -2,9 +2,11 @@
+ 
+ 本目录为 RetroLume 本地工程，提供资料、学习、文字面试、低信任记忆和隔离只读恢复入口。STEP018 的混合检索集成仍在 TASK117 合成候选收口中；实际验收状态以 [执行动态文档](DocuS/执行动态文档.MD) 为准。合成传输与真实供应商语义分别验证。
+ 
+-TASK117 S03 当前仍为部分交付，尚未形成稳定 S 候选，真实供应商调用保持关闭。面试须先开始场次，再明确确认资料索引；模型动作等待持久目标正文核对就绪，并使用该版本的目标构造查询。合成 source/compat 已应用记忆资格的传递只读授权及删源触发器别名修补，通过受信目录与业务行不变检查。该事实只适用于本次两个合成库，不授权自动迁移用户库。
++TASK117 当前仍为部分交付，尚未形成稳定 S 候选，真实供应商调用保持关闭。面试须先开始场次，再明确确认资料索引；模型动作等待持久目标正文核对就绪，并使用该版本的目标构造查询。合成 source/compat 已应用记忆资格的传递只读授权及删源触发器别名修补，通过受信目录与业务行不变检查。该事实只适用于本次两个合成库，不授权自动迁移用户库。
+ 
+-本次已完成两域的持久业务余项、同库应用重开及记忆／删源传播。正式 bundle6 已构建并经 HTTP 核字节，尚缺该版本的浏览器验证；PDF、固定预览、R01 新 reader 的应用查看及 R02 成功往返仍有缺口。R02 有效包装载触发 component 时间上限，两个失败目标保留且均未激活，不能清空复用。具体输入、源码身份、失败及资源停止证明见 [TASK117 结果](DocuN/results/TASK-117-result.md)；不要执行历史 runner 或按旧 key 重发未知调用。
++本次已完成两域的持久业务、同库应用重开及记忆／删源传播。正式 bundle7 已取得浏览器实际装载、三类丢回包后原键核对、同键／晚到视图／复制owner隔离，以及仅剩1请求时整步拒绝的证据。R01 隔离 reader 已通过真实封印库的 HTTP 历史读取及写入拒绝；它的浏览器查看仍未验证。R02 的617行固定包已成功装载并永久封印，独立记忆删除合同和依赖的正式切换按用户确认保留。PDF HTTP 解析及固定宿主 ACK/PNG 仍未闭。两个历史失败目标保持停止，不能清空复用。具体输入、源码身份、失败及资源停止证明见 [TASK117 结果](DocuN/results/TASK-117-result.md)；不要执行历史 runner 或按旧 key 重发未知调用。
++
++公开仓库为 [shspic/RetroLume-agent](https://github.com/shspic/RetroLume-agent)。本轮只关联本地 `origin`，不代表已有提交或上传。发布须显式选取产品源码、迁移、依赖锁、通用夹具、无秘密的配置样例及说明；本地配置、连接串、密钥、资料、备份、运行日志、原始执行证据和浏览器存储不随工程发布。不能把整个工作目录加入版本同步。
+ 
+ ## 环境与依赖恢复
+ 
+@@ -35,6 +37,8 @@
+ ```
+ 
+ 访问 `http://127.0.0.1:8000/health`。`start-local.cmd` 会在数据库配置有效且容器镜像一致时启动既有本地容器；它只停止本次启动的容器和应用。构建后的前端由后端同源提供；开发前端可在 `frontend/` 运行 `npm.cmd run dev`，实际模型动作使用同源工作区。
++
++低内存设备应分时运行数据库、应用、浏览器和固定预览，不并行启动全部验证服务。TASK117 合成验证在 Docker 暖机后逐次实测：单数据库／应用至少512 MiB、浏览器／第二数据库768 MiB、固定预览1024 MiB；连续两次低于256 MiB时拒绝新动作并关闭本次自有资源。这是受控验证的资源门，不是自动迁移或清理用户程序的权限。
+ 
+ ## 活动与首次学习
+ 
+@@ -117,6 +121,10 @@
+ 
+ 恢复先上传并核对计划，再明确验证隔离副本。“副本已验证”表示当前应用仍使用原数据。选择“切换为当前只读数据”后，原工作按原监督链收尾，源数据冻结并保留，新副本只读；新副本不可用时不回退源库开写。若计划之后出现新的源删除，切换要求重新核对计划，围栏不会超时自动解除。缺停止证明或模式未知时只读核对原收据，不能宣布切换完成。
+ 
++只读副本兼容查看与正式切换是两种部署入口。兼容查看只能使用已封印目标的只读账户，不配置源库写连接、装载账户或维护秘密；不能以它冒充正式切换。正式切换由原控制根唯一选择器提交，之后永久只读，不支持在同一控制根连续切换其它目标。新删除或撤销必须包含在当前恢复计划的墓碑覆盖中，不能清除墓碑或改用备份时点模式规避。
++
++隔离查看的配置结构见 `config/data-exit-reader.example.json`。将 `RETROLUME_DATA_EXIT_CONFIG` 指向本机私有 `config/data-exit.local.json`（已排除版本同步），`RETROLUME_DATABASE_URL` 与 reader 指定的环境变量均只提供同一个已封印目标的只读连接。配置中目标、数据集、实例和 R01/R02 profile 必须来自原验证收据；启动时逐项核对封印身份与真实写入拒绝。资料根指向该目标已核验的原件目录，另外使用独立的本机备份、恢复和控制根；此控制根不能已有工作、目标、维护围栏或选择器。reader 配置不接受 factory、快照或维护秘密，provider／预览配置留空。该入口不写原控制根的选择器、不开放备份执行，也不恢复旧任务。
++
+ 默认尊重当前已删除内容。按备份时点查看需要显式确认，可能显示旧包中的已删除内容，仅限隔离只读副本，源墓碑仍保留。删除资料先展示全部版本、依赖和共享原件影响，再提交明确确认。墓碑生效后回查不可用；只清理该条已无其他保留引用的准确原件，未确认时保持待清理。历史关系、原正文哈希、WAL 和旧备份保留，不承诺彻底擦除。
+ 
+ 已保存记忆和派生历史在同一读取时点核对来源、事件与上游关系。资格失效、已删除或无法核对时隐藏正文，保留头、版本和原哈希。页面刷新只接受当前身份的新鲜回复；旧实例的材料、记录与未提交草稿不会自动迁到新只读身份。
+--- pre/backend/tests/fixtures/step018/sitecustomize.py
++++ post/backend/tests/fixtures/step018/sitecustomize.py
+@@ -1,6 +1,6 @@
+ """只有本卡显式合成env才加载有限传输，产品默认路径不会包含此目录。"""
+ import os,sys
+-if (os.environ.get('RETROLUME_TASK117_SYNTHETIC') in ('TASK-117-STEP018-INTEGRATION-S01-20261014','TASK-117-STEP018-INTEGRATION-S02-20261015','TASK-117-STEP018-INTEGRATION-S03-20261015','TASK-117-STEP018-INTEGRATION-S04-20261016')
++if (os.environ.get('RETROLUME_TASK117_SYNTHETIC') in ('TASK-117-STEP018-INTEGRATION-S01-20261014','TASK-117-STEP018-INTEGRATION-S02-20261015','TASK-117-STEP018-INTEGRATION-S03-20261015','TASK-117-STEP018-INTEGRATION-S04-20261016','TASK-117-STEP018-INTEGRATION-S05-20261016')
+         and 'app.pdf_import.worker' not in sys.orig_argv):
+     from runtime_fixture import install
+     install()
+--- pre/backend/tests/fixtures/step018/runtime_fixture.py
++++ post/backend/tests/fixtures/step018/runtime_fixture.py
+@@ -11,7 +11,7 @@
+ def install():
+     if os.environ.get('RETROLUME_TASK117_SYNTHETIC') not in (
+         'TASK-117-STEP018-INTEGRATION-S01-20261014',
+-        'TASK-117-STEP018-INTEGRATION-S02-20261015','TASK-117-STEP018-INTEGRATION-S03-20261015','TASK-117-STEP018-INTEGRATION-S04-20261016',
++        'TASK-117-STEP018-INTEGRATION-S02-20261015','TASK-117-STEP018-INTEGRATION-S03-20261015','TASK-117-STEP018-INTEGRATION-S04-20261016','TASK-117-STEP018-INTEGRATION-S05-20261016',
+     ):return False
+     from app.capabilities.transport import HttpxModelTransport,TransportResponse
+     async def send(self,*,endpoint,api_key,payload,timeout_seconds,max_response_bytes):
+--- pre/backend/app/preview/production_supervisor.py
++++ post/backend/app/preview/production_supervisor.py
+@@ -74,6 +74,7 @@
+                         status=birth(owned["pid"])
+                         if status["state"]=="unknown" or status["state"]=="running" and status["birth"]==owned["birth"]:
+                             raise OwnershipUnknown("settled_owned_process_not_ended")
++                    self._end_recovered_owned(registry,saved)
+                     self.blocked=False;return
+                 if settled["state"]=="stopped":
+                     saved=await self.ledger._read_html_stop_confirmation(registry["activity_id"],registry["preview_id"])
+@@ -100,6 +101,7 @@
+                             raise OwnershipUnknown("settled_owned_process_not_ended")
+                     atomic_json(folder/("recovery-reused-"+self.boot_id+".json"),{"tree_confirmation":saved["tree_confirmation"],"cid":registry["cid"],
+                       "source_receipt_sha256":digest(saved),"same_started_finished_identity":True,"current_owned_instances_ended":True,"current_inspect":actual})
++                    self._end_recovered_owned(registry,saved)
+                     self.blocked=False;return
+             recovery_stage="parent";old_parent=birth(registry["parent"]["pid"])
+             if old_parent["state"]=="unknown" or (old_parent["state"]=="running" and old_parent["birth"]==registry["parent"]["birth"]):
+@@ -183,11 +185,33 @@
+                 await self.ledger.update_html_preview(registry["preview_id"],key,"failed_unstarted" if proof["tree_confirmation"]=="never_started" else "stopped",
+                     confirmation=proof,elapsed=row["reserve_seconds"])
+             registry["complete"]=True;atomic_json(folder/"registry.json",registry);atomic_json(folder/"recovery-proof.json",proof)
++            self._end_recovered_owned(registry,proof)
+             atomic_json(self.current_file,{"folder":str(folder),"preview_id":registry["preview_id"],"complete":True});self.blocked=False
+         except Exception as error:
+             self.blocked=True
+             code=str(error)[:128] if isinstance(error,(OwnershipUnknown,DockerUnknown,HtmlRefusal)) else "bounded_recovery_error"
+             atomic_json(self.root/("recovery-error-"+self.boot_id+".json"),{"stage":recovery_stage,"error_type":type(error).__name__,"code":code})
++
++    def _end_recovered_owned(self,registry,proof):
++        """Only a verified normal recovery can close its exact durable data work."""
++        gate=getattr(self,'mutation_gate',None)
++        if gate is None:return
++        if (registry.get('complete') is not True or proof.get('tree_confirmation') not in ('never_started','private_pid_init_terminated')
++            or proof.get('cid')!=registry.get('cid') or proof.get('image_id')!=registry['intent']['image_id']
++            or proof.get('nonce')!=registry['intent']['nonce']
++            or registry.get('cid') is None and (proof.get('parent_lifetime_ended') is not True
++                or not (proof.get('owned_reaper_ended') is True or proof.get('reaper_never_registered') is True and proof.get('registered_launcher_ended') is True))):
++            raise OwnershipUnknown('recovery_data_owned_proof')
++        matches=[r for r in gate.hub.state()['owned'].values() if r.get('kind')=='preview'
++                 and r.get('identity',{}).get('preview_id')==registry['preview_id']]
++        if not matches:return
++        if len(matches)!=1:raise OwnershipUnknown('recovery_data_owned_ambiguous')
++        row=matches[0];identity=row['identity']
++        if (identity.get('native_registry_id')!=registry['preview_id'] or identity.get('parent')!=registry['parent']
++            or identity.get('generation')!=registry['generation']
++            or identity.get('boot_id')!=registry['intent']['labels'].get('retrolume.boot')):
++            raise OwnershipUnknown('recovery_data_owned_identity')
++        if row.get('state')!='ended':gate.end_owned(row['owned_id'],confirmed=True,proof_sha256=digest(proof))
+ 
+     def _event(self,kind,value):
+         if self._event_sink:self._event_sink(kind,value)
+@@ -225,10 +249,12 @@
+         reserve=min(60,180-budget["settled_seconds"]-budget["reserved_seconds"])
+         if reserve<30 or budget["starts_used"]>=3:raise HtmlRefusal("html_preview_budget_exhausted")
+         now=time.monotonic_ns();pid=str(uuid4());control_key=secrets.token_hex(32)
++        stages=[{'stage':'t0_reserve_begin','at_ns':now}]
+         identity={"preview_id":pid,"owner_id":str(uuid4()),"boot_id":self.boot_id,"nonce":secrets.token_hex(32),
+           "control_key":control_key,"image_id":self.policy.image_id,"config_sha256":self.config_sha256,"t0_ns":now,
+           "deadline_at":datetime.now(timezone.utc)+timedelta(seconds=reserve)}
+         row,created=await self.ledger.reserve_html_preview(aid,artifact_id,command,identity,reserve)
++        stages.append({'stage':'reserve_end','at_ns':time.monotonic_ns()})
+         if not created:return await self.status(aid,row["preview_id"])
+         name=self._name_supplier(pid,row["generation"]) if self._name_supplier else "retrolume-preview-v2-"+pid.replace("-","")
+         parent=birth(os.getpid())
+@@ -244,7 +270,7 @@
+            "kernel_ready":None,"received_ready":None,"ready_received_ns":None,"ready_accepted_ns":None,
+            "pipe_eof":False,"stderr_eof":False,"stdout_read_error":None,"stderr_read_error":None,
+            "stderr_observed_bytes":0,"stderr_captured_bytes":0,"stderr_overflow":False,
+-           "error_code":None,"last_contact_ns":now,"reaper_owner":None}
++           "error_code":None,"last_contact_ns":now,"reaper_owner":None,"stage_times":stages}
+         current["input_times"]=deque();current["rate_exceeded_since"]=None
+         current["intent"]={"name":name,"image_id":self.policy.image_id,"nonce":identity["nonce"],"docker":self.policy.docker,
+           "kernel_release":self.policy.kernel_release,"created_unix":str(int(time.time())-1),
+@@ -255,10 +281,12 @@
+                   "intent":current["intent"],"cid":None,"complete":False,"control_key_blob":protect_control_key(control_key),
+                   "activity_id":aid,"preview_id":pid,"generation":row["generation"],"attach_pid":None,"attach_birth":None}
+         current["registry"]=registry;atomic_json(folder/"registry.json",registry);atomic_json(self.current_file,{"folder":str(folder),"preview_id":pid})
++        stages.append({'stage':'registry_end','at_ns':time.monotonic_ns()})
+         gate=getattr(self,'mutation_gate',None)
+         if gate is not None:
+             current['data_owned_id']=gate.register_owned('preview',{'parent':registry['parent'],'preview_id':pid,
+                 'boot_id':self.boot_id,'generation':row['generation'],'native_registry_id':pid})
++        stages.append({'stage':'data_owned_end','at_ns':time.monotonic_ns()})
+         with self._lock:
+             if self.current is not None:raise OwnershipUnknown("physical_owner_conflict")
+             self.current=current
+@@ -394,6 +422,7 @@
+         if gate is not None:
+             with gate.close_lane(c['data_owned_id']):
+                 with gate.acquire():
++                    c['stage_times'].append({'stage':'supervisor_gate_acquired','at_ns':time.monotonic_ns()})
+                     try:self._run_data_owned(c)
+                     finally:
+                         gate.end_owned(c['data_owned_id'],confirmed=c['registry'].get('complete') is True,
+@@ -403,12 +432,14 @@
+ 
+     def _run_data_owned(self,c):
+         with HostJob(job_name(c["preview_id"],c["nonce"],"SUP")) as job:
++            c['stage_times'].append({'stage':'SUP_job_created','at_ns':time.monotonic_ns()})
+             c["host_job"]=job;c["reaper_job"]=None
+             with scope(job):self._run_owned(c)
+ 
+     def _run_owned(self,c):
+         proof=None;started=False;registry=c["folder"]/"registry.json";stage="reaper_start"
+         try:
++            c['stage_times'].append({'stage':'reaper_Popen_begin','at_ns':time.monotonic_ns()})
+             reaper=subprocess.Popen([str(BACKEND/".venv"/"Scripts"/"python.exe"),"-B","-m","app.preview.production_reaper",str(registry)],
+                 cwd=BACKEND,env=clean_env(),stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,creationflags=subprocess.CREATE_NO_WINDOW)
+             c["reaper"]=reaper
+@@ -419,6 +450,7 @@
+                 if reaper.poll() is not None or time.monotonic_ns()>min(c["t0_ns"]+3000000000,c["deadline_ns"]-10000000000):raise OwnershipUnknown("reaper_not_ready")
+                 time.sleep(.02)
+             ready_owner=json.loads((c["folder"]/"reaper-ready.json").read_text(encoding="utf-8"))
++            c['stage_times'].append({'stage':'reaper_ready_observed','at_ns':time.monotonic_ns()})
+             expected_job=job_name(c["preview_id"],c["nonce"],"REAP")
+             if ready_owner.get("job_name")!=expected_job:raise OwnershipUnknown("reaper_job_identity")
+             lineage=child_lineage(ready_owner["pid"],ready_owner["birth"],reaper.pid,launcher["birth"])
+@@ -549,6 +581,7 @@
+                          "ready_received_ns":c.get("ready_received_ns"),"ready_accepted_ns":c.get("ready_accepted_ns"),
+                          "pipe_observation":self._pipe_observation(c),"at_ns":time.monotonic_ns()})
+             self._observe(c,"finished",{"preview_id":c["preview_id"],"state":c["state"],"confirmed":confirmed,"error_code":c["error_code"]})
++            self._save_observation(c,c['folder']/'stage-times.json',{'t0_ns':c['t0_ns'],'deadline_ns':c['deadline_ns'],'stages':c['stage_times']})
+             if not published:self.blocked=True;confirmed=False
+             if confirmed:
+                 if not self._save_observation(c,self.current_file,{"folder":str(c["folder"]),"preview_id":c["preview_id"],"complete":True}):
+--- pre/backend/app/data_exit/control.py
++++ post/backend/app/data_exit/control.py
+@@ -107,7 +107,7 @@
+             elif kind=='source.register':state['source']=p
+         return state
+ 
+-    def _current_snapshot(self, job_id=None):
++    def _current_snapshot(self, job_id=None, *, writable=False):
+         with self.lock.acquire():
+             # 每次仍在真实锁内读取当前完整字节；仅复用同一文件对象和摘要的已验投影。
+             info = regular(self.path)
+@@ -127,10 +127,14 @@
+             identity = (opened.st_dev, opened.st_ino, digest(raw))
+             cached = getattr(self, '_state_cache', None)
+             if cached is None or cached[0] != identity:
+-                events, _ = self._read(raw)
++                events, tail = self._read(raw)
++                if not events or events[0]['kind']!='hub.init' or events[0]['payload'].get('control_id')!=self.control_id:
++                    raise DataError('control_corrupt',503)
+                 state = self.replay(events)
+-                cached = (identity, canonical(state), {key: canonical(job) for key, job in state['jobs'].items()})
++                cached = (identity, canonical(state), {key: canonical(job) for key, job in state['jobs'].items()}, tail)
+                 self._state_cache = cached
++            if writable and cached[3]:
++                raise DataError('control_tail_unconfirmed', 503)
+             # 不把可变的日志payload或缓存对象交给调用者。
+             return json.loads(cached[1] if job_id is None else cached[2][job_id])
+ 
+@@ -152,11 +156,7 @@
+             return self._append(events, kind, payload)
+ 
+     def assert_writable(self):
+-        with self.lock.acquire():
+-            events, tail = self._read()
+-            if tail:
+-                raise DataError("control_tail_unconfirmed", 503)
+-            return self.replay(events)
++        return self._current_snapshot(writable=True)
+ 
+     @staticmethod
+     def receipt(job):
+--- pre/backend/tests/test_step018_control_snapshot.py
++++ post/backend/tests/test_step018_control_snapshot.py
+@@ -57,5 +57,31 @@
+         self.op.deadline_ns = time.monotonic_ns()-1
+         with self.assertRaises(DataError): self.op.check()
+ 
++    def test_writable_snapshot_rejects_new_tail_even_after_read_cache(self):
++        self.hub.assert_writable()
++        with self.hub.path.open('ab') as stream: stream.write(b'\x00\x00')
++        self.hub.state()  # GET may expose only the last complete committed prefix.
++        with self.assertRaises(DataError) as caught: self.hub.assert_writable()
++        self.assertEqual(caught.exception.code, 'control_tail_unconfirmed')
++
++    def test_valid_foreign_hub_replacement_cannot_keep_writable_identity(self):
++        self.hub.assert_writable()
++        foreign=ControlHub(Path(mkdtemp(prefix='retrolume-foreign-hub-')))
++        try:
++            self.hub.path.write_bytes(foreign.path.read_bytes())
++            with self.assertRaises(DataError):self.hub.assert_writable()
++        finally:foreign.lock.close();foreign.operation_lock.close()
++
++    def test_writable_snapshot_observes_peer_fence_and_current_tamper(self):
++        self.hub.assert_writable()
++        peer = ControlHub(self.root)
++        try:
++            peer.commit('maintenance.fence', {'state':'frozen'})
++            self.assertEqual(self.hub.assert_writable()['fence'], {'state':'frozen'})
++            path=self.hub.path; info=path.stat(); raw=bytearray(path.read_bytes())
++            raw[40] ^= 1; path.write_bytes(raw); os.utime(path, ns=(info.st_atime_ns,info.st_mtime_ns))
++            with self.assertRaises(DataError): self.hub.assert_writable()
++        finally: peer.lock.close(); peer.operation_lock.close()
++
+ 
+ if __name__ == '__main__': unittest.main()
+--- pre/frontend/tests/step018-s05.mjs
++++ post/frontend/tests/step018-s05.mjs
+@@ -0,0 +1,69 @@
++// Actual final bundle and PG. Delay only real responses; never fabricate business data.
++import {chromium} from 'playwright';
++import fs from 'node:fs';
++import path from 'node:path';
++import {createHash} from 'node:crypto';
++const dir=path.join(process.env.RETROLUME_TASK117_EVIDENCE,`browser-${process.env.RETROLUME_TASK117_BROWSER_ATTEMPT}`);
++fs.mkdirSync(dir);
++const intent=JSON.parse(fs.readFileSync(path.join(process.env.RETROLUME_TASK117_EVIDENCE,'ui-boundaries-intent.json')));
++const proof={status:'running',real_backend:true,final_bundle:true,posts:[],assets:[],observed_requests:0};
++const save=()=>fs.writeFileSync(path.join(dir,'proof.json'),JSON.stringify(proof,null,2));
++let browser,context,page,held=null,release=null,holdAid=null,capture=null,closing=false;
++const observations=new Set();
++function observe(work){const p=Promise.resolve().then(work).catch(e=>{if(!closing){proof.observation_errors??=[];proof.observation_errors.push(String(e));}}).finally(()=>observations.delete(p));observations.add(p);}
++try{
++ browser=await chromium.launch({headless:true});
++ process.stdin.on('data',()=>void browser.close());process.stdin.on('end',()=>void browser.close());process.stdin.resume();
++ context=await browser.newContext({viewport:{width:1440,height:1000}});page=await context.newPage();page.setDefaultTimeout(18000);
++ context.on('request',r=>{if(new URL(r.url()).pathname.startsWith('/api/'))proof.observed_requests++;});
++ context.on('response',r=>{if(/\/assets\/.*\.js$/.test(new URL(r.url()).pathname))observe(async()=>proof.assets.push({url:r.url(),sha256:createHash('sha256').update(await r.body()).digest('hex')}));});
++ await context.route('**/api/**',async route=>{
++  const req=route.request(),u=new URL(req.url());
++  if(req.method()==='GET'&&holdAid&&u.pathname===`/api/activities/${holdAid}/teaching/workspace`){
++   holdAid=null;const actual=await route.fetch();held={url:u.pathname,status:actual.status(),body_sha256:createHash('sha256').update(await actual.body()).digest('hex')};save();
++   await new Promise(resolve=>{release=resolve;});try{await route.fulfill({response:actual});}catch{}return;
++  }
++  if(req.method()==='POST'&&u.pathname.endsWith('/teaching/commands')){
++   const body=req.postDataJSON();proof.posts.push({path:u.pathname,body});
++   if(!capture){capture={url:req.url(),body,headers:await req.allHeaders()};const actual=await route.fetch();proof.first={http:actual.status(),receipt:await actual.json()};save();await new Promise(resolve=>setTimeout(resolve,800));return route.fulfill({response:actual});}
++  }
++  return route.continue();
++ });
++ await page.goto('http://127.0.0.1:18118',{waitUntil:'networkidle'});
++ await page.getByRole('navigation').getByRole('button',{name:/学习活动/}).click();
++ const open=async aid=>{await page.locator(`[data-activity-id="${aid}"]`).click();await page.locator('section.ws-teaching').waitFor();};
++ await open(intent.a);await page.locator('#teaching-goal').fill('S05同键目标：只核对当前单位换算。');
++ const saveGoal=page.getByRole('button',{name:'保存目标（不调用模型）',exact:true});await saveGoal.click();
++ await page.waitForFunction(()=>document.querySelector('section.ws-teaching button.primary')?.disabled===true);
++ proof.double_submit_gate_disabled=await saveGoal.isDisabled();
++ await page.waitForTimeout(1400);if(proof.first?.http!==200||proof.first?.receipt.status!=='committed')throw new Error('real_goal_not_committed');
++ // Replays through actual local-session and DataContext middleware, same real PG key.
++ proof.same_key=await page.evaluate(async command=>{
++  const call=async body=>{const r=await fetch(command.url,{method:'POST',headers:command.headers,body:JSON.stringify(body)});return {http:r.status,body:await r.json()};};
++  const same=await Promise.all([call(command.body),call(command.body)]);
++  const different=await call({...command.body,body:{...command.body.body,goal:'S05异文冲突，不覆盖原目标'}});return {same,different};
++ },capture);
++ if(proof.same_key.same.some(x=>x.http!==200||x.body.request_sha256!==proof.first.receipt.request_sha256)||proof.same_key.different.http!==409)throw new Error('same_key_identity_failed');
++ holdAid=intent.b;await open(intent.b);
++ const end=Date.now()+15000;while(!held){if(Date.now()>end)throw new Error('late_read_not_started');await page.waitForTimeout(50);}
++ await open(intent.a);await page.locator('#teaching-goal').waitFor();release();release=null;
++ await page.waitForTimeout(1100);
++ const text=await page.locator('#teaching-goal').inputValue();if(!text.includes('S05同键目标')||text.includes('S05另一个'))throw new Error('late_view_polluted_current');
++ proof.late_view={held,current_a:intent.a,current_goal:text,old_response_released:true,old_body_not_shown:true};
++ // A copied sessionStorage owner must receive a distinct live Web Lock identity.
++ const stored=await page.evaluate(()=>Object.fromEntries(Object.entries(sessionStorage)));
++ const second=await context.newPage();await second.addInitScript(saved=>{if(location.origin==='http://127.0.0.1:18118')for(const [k,v]of Object.entries(saved))sessionStorage.setItem(k,v);},stored);
++ await second.goto('http://127.0.0.1:18118',{waitUntil:'networkidle'});await second.getByRole('navigation').getByRole('button',{name:/学习活动/}).click();await second.locator(`[data-activity-id="${intent.a}"]`).click();await second.locator('#teaching-goal').waitFor();await second.waitForTimeout(700);
++ const owners=await Promise.all([page,second].map(p=>p.evaluate(()=>Object.fromEntries(Object.entries(sessionStorage).filter(([k])=>k.includes('teaching-editor-owner'))))));
++ const own=owners.map(x=>Object.values(x)[0]);if(!own[0]||!own[1]||own[0]===own[1])throw new Error('copied_owner_not_isolated');proof.owner_isolation={copied_session:true,distinct_live_owners:true,owners};await second.close();
++ const body=await page.locator('body').innerText();for(const label of ['模型请求：已预扣','费用：已预扣','时间：上限','工具次数：'])if(!body.includes(label))throw new Error('missing_ledger_display:'+label);
++ proof.four_ledgers_visible=true;await page.screenshot({path:path.join(dir,'same-key-late-view-four-ledgers.png'),fullPage:true});
++ const before=proof.posts.length;await page.reload({waitUntil:'networkidle'});await page.waitForTimeout(600);if(proof.posts.length!==before)throw new Error('reload_reposted');proof.reload_get_only=true;
++ if(!proof.assets.some(x=>x.sha256===intent.bundle_sha256))throw new Error('wrong_bundle');proof.status='passed';save();
++}catch(e){proof.status='failed';proof.error=String(e);save();throw e;}
++finally{
++ release?.();closing=true;
++ await Promise.race([Promise.allSettled([...observations]),new Promise(r=>setTimeout(r,3000))]);
++ if(context)await context.close();if(browser)await browser.close();proof.browser_closed=true;save();
++ process.stdin.removeAllListeners();process.stdin.pause();process.stdin.unref?.();
++}
+--- pre/backend/app/data_exit/config.py
++++ post/backend/app/data_exit/config.py
+@@ -23,9 +23,21 @@
+     from .files import regular
+     regular(path)
+     value = load_json(Path(path).read_bytes())
+-    if set(value) - {"enabled", "snapshot_url_env", "maintenance_key_env", "factory", "limits"}:
++    if set(value) - {"enabled", "snapshot_url_env", "maintenance_key_env", "factory", "limits", "reader"}:
+         raise DataError("restore_executor_missing", 503)
+     if value.get("enabled") is not True: return None
++    if 'reader' in value:
++        reader=value['reader']
++        if (set(value)!={'enabled','reader'} or not isinstance(reader,dict)
++            or set(reader)!={'readonly_url_env','target_id','dataset_id','instance_id','schema_profile'}):
++            raise DataError('restore_executor_missing',503)
++        from .contracts import uuid
++        from .schema_profiles import get_profile
++        for field in ('target_id','dataset_id','instance_id'):uuid(reader[field])
++        get_profile(reader['schema_profile'])
++        name=reader['readonly_url_env']
++        if not isinstance(name,str) or not name.startswith('RETROLUME_'):raise DataError('restore_executor_missing',503)
++        return value
+     for field in ("snapshot_url_env", "maintenance_key_env"):
+         name = value.get(field)
+         if not isinstance(name, str) or not name.startswith("RETROLUME_"):
+@@ -47,6 +59,9 @@
+                                                            os.environ[required[1]], os.environ[required[0]])
+         self.hub = ControlHub(control_root)
+         self.limits = Limits(**profile.get("limits", {}))
++        if 'reader' in profile:
++            self._configure_reader(profile['reader'])
++            return
+         source_dsn=os.environ.get('RETROLUME_DATABASE_URL')
+         self.source = DataRepository(source_dsn) if source_dsn else None
+         self.maintenance_key = os.environ.get(profile["maintenance_key_env"])
+@@ -96,6 +111,7 @@
+             self._configure_source()
+ 
+     def context(self):
++        if hasattr(self,'_reader_context'):return self._reader_context
+         state = self.hub.state()
+         selection = state["selection"]
+         if selection:
+@@ -105,6 +121,35 @@
+         mode = self.source_state["mode"]
+         if state["fence"] is not None and state["fence"].get("state") == "frozen": mode = "frozen"
+         return DataContext(self.hub.control_id, 0, self.source_state["dataset_id"], self.source_state["instance_id"], mode)
++
++    def _configure_reader(self,reader):
++        """An isolated sealed reader has no source, loader, maintenance or selector authority."""
++        from types import SimpleNamespace
++        dsn=os.environ.get(reader['readonly_url_env'])
++        if not dsn or os.environ.get('RETROLUME_DATABASE_URL')!=dsn:
++            raise DataError('target_seal_unconfirmed',503)
++        # The original control hub and its selector are not adopted by a reader.
++        state=self.hub.state()
++        if state['selection'] is not None or state['fence'] is not None or any(state[k] for k in ('jobs','targets','owned','plans','deletions','source')):
++            raise DataError('selection_changed')
++        target=SimpleNamespace(**{k:reader[k] for k in ('target_id','dataset_id','instance_id','schema_profile')},data_root=self.settings.data_dir)
++        # A deployment mistake must be refused before even probing denied writes.
++        with DataRepository(dsn).connection(readonly=True) as connection:
++            role=connection.execute('SELECT rolsuper,rolcreaterole,rolcreatedb,rolreplication,rolbypassrls FROM pg_roles WHERE rolname=current_user').fetchone()
++            writes=connection.execute("SELECT coalesce(bool_or(has_table_privilege(current_user,c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,TRIGGER,REFERENCES')),false) AS allowed FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','f')").fetchone()
++            create=connection.execute("SELECT has_schema_privilege(current_user,'public','CREATE') AS allowed").fetchone()
++            if role is None or any(role.values()) or writes['allowed'] or create['allowed']:
++                raise DataError('target_seal_unconfirmed',503)
++        TargetFactory._probe_readonly(dsn,target)
++        self._reader_context=DataContext(self.hub.control_id,0,target.dataset_id,target.instance_id,'restored_readonly',target.target_id)
++        self._reader_profile=target.schema_profile
++        self.source=self.factory=self.restore=self.maintenance=None
++        self.source_state=None;self.source_error=None;self.target_error=None
++        self.snapshot_dsn=self.maintenance_key=None
++        self.gate=MutationGate(self.hub,self.context)
++        self.tasks={};self.incoming=self.settings.backup_dir/'incoming'
++        self.references=self.deletions=None
++        self.bind_readonly(target,{'readonly_dsn':dsn},None)
+ 
+     def validate_source(self,context,operation=None):
+         if self.source is None:raise DataError('mode_unknown',503)
+@@ -186,13 +231,14 @@
+         app.state.activities_ledger.data_enabled = True
+         app.state.activities_ledger.data_readonly = True
+         app.state.preview_controller = None
+-        snapshot = SnapshotCoordinator(credentials["snapshot_dsn"], app.state.originals, RootLease(app.state.originals.root), self.settings.backup_dir, self.limits)
++        snapshot = SnapshotCoordinator(credentials["snapshot_dsn"], app.state.originals, RootLease(app.state.originals.root), self.settings.backup_dir, self.limits) if credentials.get('snapshot_dsn') else None
+         self.packages = DataPackageService(self.hub, snapshot, self.settings.backup_dir, self.limits)
+ 
+     def caps(self):
+-        return {**self.context().public(), "format": self.source_state['schema_profile'] if self.source_state else PROFILE, "scope": ["all", "selected"],
++        return {**self.context().public(), "format": getattr(self,'_reader_profile',None) or (self.source_state['schema_profile'] if self.source_state else PROFILE), "scope": ["all", "selected"],
+                 "backup_available": self.packages is not None and self.packages.snapshot is not None, "restore_executor_configured": self.factory is not None,
+                 'source_delete_available':self.deletions is not None and self.hub.state()['fence'] is None,
+                 'source_observation_status':'unknown' if self.source_error else 'configured',
+                 'target_observation_status':'unknown' if self.target_error else 'configured',
+-                "limits": self.limits.__dict__, "browser_drafts_included": False, "permanent_readonly_restore": True}
++                "limits": self.limits.__dict__, "browser_drafts_included": False, "permanent_readonly_restore": True,
++                "binding_kind":'isolated_sealed_reader' if hasattr(self,'_reader_context') else 'original_control_hub'}
+--- pre/config/data-exit-reader.example.json
++++ post/config/data-exit-reader.example.json
+@@ -0,0 +1,10 @@
++{
++  "enabled": true,
++  "reader": {
++    "readonly_url_env": "RETROLUME_READER_DATABASE_URL",
++    "target_id": "00000000-0000-4000-8000-000000000001",
++    "dataset_id": "00000000-0000-4000-8000-000000000002",
++    "instance_id": "00000000-0000-4000-8000-000000000003",
++    "schema_profile": "data_exit.v1.r01"
++  }
++}
+--- pre/backend/app/data_exit/api.py
++++ post/backend/app/data_exit/api.py
+@@ -79,6 +79,8 @@
+     local_session(request, allow_own_origin=True)
+     value = getattr(request.app.state, "data_exit", None)
+     if value is None: raise DataError("storage_unavailable", 503)
++    if hasattr(value,'_reader_context') and request.method not in ('GET','HEAD','OPTIONS'):
++        raise DataError('data_readonly')
+     return value
+ 
+ 
+--- pre/frontend/tests/step018-s05-reader.mjs
++++ post/frontend/tests/step018-s05-reader.mjs
+@@ -0,0 +1,29 @@
++import {chromium} from 'playwright';
++import fs from 'node:fs';import path from 'node:path';import {createHash} from 'node:crypto';
++const evidence=process.env.RETROLUME_TASK117_EVIDENCE;
++const dir=path.join(evidence,`browser-${process.env.RETROLUME_TASK117_BROWSER_ATTEMPT}`);fs.mkdirSync(dir);
++const proof={status:'running',observed_requests:0,posts:[],records:[],assets:[],real_backend:true};
++const save=()=>fs.writeFileSync(path.join(dir,'proof.json'),JSON.stringify(proof,null,2));
++let browser,context;const pending=new Set();let closing=false;
++try{
++ browser=await chromium.launch({headless:true});process.stdin.on('data',()=>void browser.close());process.stdin.on('end',()=>void browser.close());process.stdin.resume();
++ context=await browser.newContext({viewport:{width:1440,height:1000}});const page=await context.newPage();page.setDefaultTimeout(18000);
++ context.on('request',r=>{if(new URL(r.url()).pathname.startsWith('/api/')){proof.observed_requests++;if(r.method()==='POST')proof.posts.push(new URL(r.url()).pathname);}});
++ context.on('response',r=>{const url=new URL(r.url());if(url.pathname.includes('saved-records')||/\/assets\/.*\.js$/.test(url.pathname)){
++  const work=(async()=>{if(url.pathname.includes('saved-records'))proof.records.push({category:url.searchParams.get('category'),http:r.status(),value:await r.json()});else proof.assets.push({path:url.pathname,sha256:createHash('sha256').update(await r.body()).digest('hex')});})().catch(e=>{if(!closing)proof.error=String(e);}).finally(()=>pending.delete(work));pending.add(work);
++ }});
++ await page.goto('http://127.0.0.1:18118',{waitUntil:'networkidle'});await page.getByRole('button',{name:'数据与备份',exact:true}).click();
++ await page.getByText('当前仅供只读查看',{exact:false}).waitFor();await page.getByRole('heading',{name:'已保存记录',exact:true}).waitFor();
++ const types=page.getByLabel('记录类型');
++ for(const category of ['activities','learning','teaching','interview','memories','preview_history','versions']){
++  if(category!=='activities')await types.selectOption(category);
++  const until=Date.now()+15000;while(!proof.records.some(x=>x.category===category&&x.http===200)){if(Date.now()>until)throw new Error('records_not_read:'+category);await page.waitForTimeout(60);}
++ }
++ proof.export_disabled=await page.getByRole('button',{name:'导出这些已保存内容',exact:true}).isDisabled();
++ proof.backup_disabled=await page.getByRole('button',{name:'保存当前时点的恢复备份',exact:true}).isDisabled();
++ proof.restore_disabled=await page.locator('input[type=file]').isDisabled();
++ if(!proof.export_disabled||!proof.backup_disabled||!proof.restore_disabled||proof.posts.length)throw new Error('readonly_gate_open');
++ await page.screenshot({path:path.join(dir,'R01-real-readonly-records.png'),fullPage:true});
++ if(!proof.assets.some(x=>x.sha256==='58a87abf5ff4b02b33aab5dc3735507f4f097791e021aeb4ddfbf0b62ac115e8'))throw new Error('wrong_bundle');proof.status='passed';
++}catch(e){proof.status='failed';proof.error=String(e);save();throw e;}
++finally{closing=true;await Promise.race([Promise.allSettled([...pending]),new Promise(r=>setTimeout(r,3000))]);if(context)await context.close();if(browser)await browser.close();proof.browser_closed=true;save();process.stdin.removeAllListeners();process.stdin.pause();process.stdin.unref?.();}
+--- pre/frontend/tests/step018-s05-budget.mjs
++++ post/frontend/tests/step018-s05-budget.mjs
+@@ -0,0 +1,19 @@
++import {chromium} from 'playwright';import fs from 'node:fs';import path from 'node:path';import {createHash} from 'node:crypto';
++const evidence=process.env.RETROLUME_TASK117_EVIDENCE,attempt=process.env.RETROLUME_TASK117_BROWSER_ATTEMPT;
++const dir=path.join(evidence,`browser-${attempt}`);fs.mkdirSync(dir);const intent=JSON.parse(fs.readFileSync(path.join(evidence,'one-request-intent.json')));
++const proof={status:'running',observed_requests:0,posts:[],assets:[],actual_budget:1,real_backend:true};const save=()=>fs.writeFileSync(path.join(dir,'proof.json'),JSON.stringify(proof,null,2));
++let browser,context;const pending=new Set();let closing=false;
++try{
++ browser=await chromium.launch({headless:true});process.stdin.on('data',()=>void browser.close());process.stdin.on('end',()=>void browser.close());process.stdin.resume();context=await browser.newContext({viewport:{width:1440,height:1000}});const page=await context.newPage();page.setDefaultTimeout(18000);
++ context.on('request',r=>{if(new URL(r.url()).pathname.startsWith('/api/')){proof.observed_requests++;if(r.method()==='POST')proof.posts.push({path:new URL(r.url()).pathname,body:r.postDataJSON()});}});
++ context.on('response',r=>{if(/\/assets\/.*\.js$/.test(new URL(r.url()).pathname)){const work=r.body().then(bytes=>proof.assets.push({sha256:createHash('sha256').update(bytes).digest('hex')})).catch(e=>{if(!closing)proof.error=String(e);}).finally(()=>pending.delete(work));pending.add(work);}});
++ await page.goto('http://127.0.0.1:18118',{waitUntil:'networkidle'});await page.getByRole('navigation').getByRole('button',{name:/学习活动/}).click();await page.locator(`[data-activity-id="${intent.activity_id}"]`).click();const work=page.locator('section.ws-teaching');await work.waitFor();
++ const plan=work.getByRole('button',{name:'生成/重订路径（1 次模型）',exact:true});await plan.waitFor();
++ const until=Date.now()+10000;while(!await plan.isEnabled()){if(Date.now()>until)throw new Error('plan_gate_never_ready');await page.waitForTimeout(80);}await plan.click();
++ await work.getByText('剩余额度不足以完成本步，查询和后续动作均未发送。',{exact:false}).waitFor();await page.waitForTimeout(500);
++ if(proof.posts.length)throw new Error('partial_query_or_model_sent');proof.whole_query_plus_model_refused_before_POST=true;
++ await page.screenshot({path:path.join(dir,'one-request-cannot-start-two-call-step.png'),fullPage:true});
++ await page.reload({waitUntil:'networkidle'});await page.waitForTimeout(600);if(proof.posts.length)throw new Error('reload_resubmitted');proof.reload_get_only=true;
++ if(!proof.assets.some(x=>x.sha256==='58a87abf5ff4b02b33aab5dc3735507f4f097791e021aeb4ddfbf0b62ac115e8'))throw new Error('wrong_bundle');proof.status='passed';
++}catch(e){proof.status='failed';proof.error=String(e);save();throw e;}
++finally{closing=true;await Promise.race([Promise.allSettled([...pending]),new Promise(r=>setTimeout(r,3000))]);if(context)await context.close();if(browser)await browser.close();proof.browser_closed=true;save();process.stdin.removeAllListeners();process.stdin.pause();process.stdin.unref?.();}
+--- pre/backend/tests/test_step018_preview_data_recovery.py
++++ post/backend/tests/test_step018_preview_data_recovery.py
+@@ -0,0 +1,40 @@
++"""Only the data-owned adapter; physical StopProof verification remains the normal recovery's job."""
++from pathlib import Path
++from tempfile import mkdtemp
++import unittest
++from uuid import uuid4
++from app.data_exit.control import ControlHub
++from app.data_exit.maintenance import MutationGate
++from app.data_exit.contracts import DataContext
++from app.preview.production_supervisor import PreviewController
++from app.preview.process import OwnershipUnknown
++
++class RecoveryDataTests(unittest.TestCase):
++    def setUp(self):
++        self.hub=ControlHub(Path(mkdtemp(prefix='retrolume-owned-recovery-')))
++        context=DataContext(self.hub.control_id,0,str(uuid4()),str(uuid4()),'normal')
++        self.gate=MutationGate(self.hub,lambda:context)
++        self.registry={'preview_id':str(uuid4()),'generation':1,'parent':{'pid':123,'birth':456},'cid':None,'complete':True,
++                       'intent':{'image_id':'sha256:'+'a'*64,'nonce':'b'*64,'labels':{'retrolume.boot':str(uuid4())}}}
++        r=self.registry
++        with self.gate.acquire():
++            self.owned=self.gate.register_owned('preview',{'preview_id':r['preview_id'],'native_registry_id':r['preview_id'],
++                'parent':r['parent'],'generation':r['generation'],'boot_id':r['intent']['labels']['retrolume.boot']})
++        self.gate.end_owned(self.owned,confirmed=False)
++        self.controller=object.__new__(PreviewController);self.controller.mutation_gate=self.gate
++        self.proof={'tree_confirmation':'never_started','cid':None,'image_id':r['intent']['image_id'],'nonce':r['intent']['nonce'],
++                    'parent_lifetime_ended':True,'owned_reaper_ended':True}
++    def tearDown(self):self.hub.lock.close();self.hub.operation_lock.close()
++    def test_exact_verified_adapter_closes_unknown_and_replay_is_readonly(self):
++        self.controller._end_recovered_owned(self.registry,self.proof)
++        self.assertEqual(self.hub.state()['owned'][self.owned]['state'],'ended')
++        before=self.hub.path.read_bytes();self.controller._end_recovered_owned(self.registry,self.proof)
++        self.assertEqual(self.hub.path.read_bytes(),before)
++    def test_foreign_nonce_or_registered_birth_never_closes_work(self):
++        before=self.hub.path.read_bytes()
++        with self.assertRaises(OwnershipUnknown):self.controller._end_recovered_owned(self.registry,{**self.proof,'nonce':'c'*64})
++        changed={**self.registry,'parent':{'pid':123,'birth':457}}
++        with self.assertRaises(OwnershipUnknown):self.controller._end_recovered_owned(changed,self.proof)
++        self.assertEqual(self.hub.path.read_bytes(),before)
++
++if __name__=='__main__':unittest.main()
+--- pre/backend/tests/test_step018_reader_config.py
++++ post/backend/tests/test_step018_reader_config.py
+@@ -0,0 +1,31 @@
++"""The sealed-reader profile cannot adopt writer configuration."""
++import json,os,unittest
++from pathlib import Path
++from tempfile import mkdtemp
++from unittest.mock import patch
++from app.data_exit.config import load_profile
++from app.data_exit.contracts import DataError
++
++class ReaderConfigTests(unittest.TestCase):
++    def setUp(self):
++        self.path=Path(mkdtemp(prefix='retrolume-reader-config-'))/'reader.json'
++        self.value={'enabled':True,'reader':{'readonly_url_env':'RETROLUME_READER_DATABASE_URL',
++            'target_id':'00000000-0000-4000-8000-000000000001','dataset_id':'00000000-0000-4000-8000-000000000002',
++            'instance_id':'00000000-0000-4000-8000-000000000003','schema_profile':'data_exit.v1.r01'}}
++    def load(self,value):
++        self.path.write_text(json.dumps(value),encoding='utf-8')
++        with patch.dict(os.environ,{'RETROLUME_DATA_EXIT_CONFIG':str(self.path)}):return load_profile()
++    def test_reader_without_source_snapshot_or_maintenance(self):
++        self.assertEqual(self.load(self.value),self.value)
++    def test_writer_capabilities_cannot_be_mixed_with_reader(self):
++        for field in ('factory','snapshot_url_env','maintenance_key_env','limits'):
++            with self.subTest(field=field):
++                with self.assertRaises(DataError):self.load({**self.value,field:{}})
++    def test_missing_identity_and_unknown_profile_fail_closed(self):
++        for field in ('target_id','dataset_id','instance_id','schema_profile'):
++            reader=dict(self.value['reader']);reader.pop(field)
++            with self.subTest(missing=field):
++                with self.assertRaises(DataError):self.load({**self.value,'reader':reader})
++        with self.assertRaises(DataError):self.load({**self.value,'reader':{**self.value['reader'],'schema_profile':'untrusted.v99'}})
++
++if __name__=='__main__':unittest.main()

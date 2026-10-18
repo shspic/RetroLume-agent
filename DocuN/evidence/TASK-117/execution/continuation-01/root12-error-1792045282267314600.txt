@@ -1,0 +1,20 @@
+Traceback (most recent call last):
+  File "D:\shspic\project_NO3_RetroLume-agent\DocuN\evidence\TASK-117\execution\continuation-01\root12_batch.py", line 5, in <module>
+    try:main(12)
+        ^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\DocuN\evidence\TASK-117\execution\continuation-01\root11_batch.py", line 41, in main
+    feedback=evaluate(flow,TEACHING) if current['head']['phase']=='answer_saved' else current
+             ^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\DocuN\evidence\TASK-117\execution\continuation-01\http_remaining.py", line 19, in evaluate
+    return flow.teaching(aid,'evaluate',{'confirmed':True,'exercise_record_id':h['exercise_record_id'],'answer_record_id':h['answer_record_id']})
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\DocuN\evidence\TASK-117\execution\continuation-01\frozen_http.py", line 94, in teaching
+    if action in ('plan','exercise','evaluate'):command['retrieval_ref']=self.query(aid,h,query)
+                                                                         ^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\DocuN\evidence\TASK-117\execution\continuation-01\frozen_http.py", line 87, in query
+    value=self.call('POST',f'/api/activities/{aid}/retrieval/commands',{'business_key':str(uuid4()),'action':'query','expected_scope_revision':head.get('scope_revision',1),'expected_domain_revision':head['revision'],'query':query,'confirmed':True},native=1)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\DocuN\evidence\TASK-117\execution\continuation-01\frozen_http.py", line 47, in call
+    if r.status_code!=expected:raise RuntimeError(f'HTTP_{r.status_code}:{path}:{str(value)[:250]}')
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: HTTP_503:/api/activities/b7f32142-b5b3-4a5c-b561-f927bcbe1b6d/retrieval/commands:{'detail': {'code': 'controller_stopping', 'message': '本轮已停止接收新动作，请只读核对'}}

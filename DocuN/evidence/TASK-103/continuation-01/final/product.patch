@@ -1,0 +1,536 @@
+--- pre/backend/app/activities/api.py
++++ post/backend/app/activities/api.py
+@@ -218,9 +218,18 @@
+         "available": bool(storage_ready and cont.available),
+         "reason": cont.reason if not cont.available else (None if storage_ready else storage_reason),
+     }
+-    provider_info = None
+-    if config.provider is not None and config.model is not None:
+-        provider_info = {"provider": config.provider, "model": config.model}
++    provider_info = None
++    if config.provider is not None and config.model is not None:
++        provider_info = {"provider": config.provider, "model": config.model}
++    memory_layer=getattr(config,'memory_layer',None)
++    memory_available=False
++    memory_reason=memory_layer.reason if memory_layer else 'memory_not_configured'
++    if memory_layer and memory_layer.available and storage_ready and ledger is not None:
++        try:
++            memory_status=await ledger.probe_memory()
++            memory_available=bool(memory_status['read'])
++            memory_reason=None if memory_available else memory_status['reason']
++        except Exception:memory_reason='memory_schema_not_ready'
+     return {
+         "storage_ready": storage_ready,
+         "storage_reason": storage_reason,
+@@ -249,8 +258,8 @@
+                        else (None if storage_ready else storage_reason)) or "teaching_not_configured",
+             "tool": "finite_calculate",
+         },
+-        "memory_model":{"available":getattr(config,"memory_layer",None).available if getattr(config,"memory_layer",None) else False,
+-            "reason":getattr(config,"memory_layer",None).reason if getattr(config,"memory_layer",None) else "memory_not_configured",
++        "memory_model":{"available":memory_available,
++            "reason":memory_reason,
+             "selected_items":4,"max_memory_bytes":4096},
+         "quota_preview": config.quota_preview,
+         "provider": provider_info,
+--- pre/backend/app/activities/teaching_repository.py
++++ post/backend/app/activities/teaching_repository.py
+@@ -1512,7 +1512,25 @@
+ 
+         return await self._transaction(operation)
+ 
+-    async def read_teaching_head(self, activity_id: str) -> dict | None:
++    async def read_teaching_recipe_records(self,activity_id,record_ids):
++        """v2有限recipe一次资格快照复取全部引用，避免逐项重复schema探测。"""
++        activity_id=self._uuid(activity_id,'activity_id')
++        if not 1<=len(record_ids)<=12 or len(set(record_ids))!=len(record_ids):raise ValueError('invalid_input')
++        ids=[self._uuid(rid,'record_id') for rid in record_ids]
++        async def operation(connection):
++            guard=await self._memory_sql_guard(connection,'r.activity_id')
++            cursor=await connection.execute("""SELECT r.record_id::text,r.kind,r.body_sha256,r.exercise_record_id::text,
++              r.answer_record_id::text,r.operation_id,
++              CASE WHEN r.kind IN('goal','answer','correction') OR """+guard+""" THEN r.body ELSE NULL END AS body,
++              CASE WHEN """+guard+""" THEN p.payload ELSE NULL END AS payload,
++              p.payload_format,p.payload_sha256 AS operation_payload_sha256
++              FROM teaching_records r LEFT JOIN activity_operation_results p
++               ON p.activity_id=r.activity_id AND p.operation_id=r.operation_id
++              WHERE r.activity_id=%s AND r.record_id=ANY(%s::uuid[]) ORDER BY r.seq""",(activity_id,ids))
++            return list(await cursor.fetchall())
++        return await self._transaction(operation)
++
++    async def read_teaching_head(self, activity_id: str) -> dict | None:
+         """当前教学 head 只读快照（锁前组包用；锁内以 CAS/核对为准）。"""
+         activity_id = self._uuid(activity_id, "activity_id")
+ 
+--- pre/backend/app/learning/teaching_api.py
++++ post/backend/app/learning/teaching_api.py
+@@ -21,12 +21,13 @@
+     TeachingRefusal,
+     validate_exposed_part,
+ )
+-from .teaching_service import TeachingService
++from .teaching_service import TeachingService
++from .evidence import LearningRefusal
+ 
+ router = APIRouter(prefix="/api/activities")
+ 
+ _STATUS_MAP = {
+-    "invalid_input": 400, "clarification_required": 400,
++    "invalid_input": 400, "clarification_required": 400, "no_evidence": 409,
+     "memory_dependency_invalid":409,"memory_invalid":409,"memory_profile_required":409,"memory_context_limit":409,
+     "context_version_unavailable":409,"memory_not_configured":503,"memory_schema_not_ready":503,
+     "not_found": 404, "record_not_found": 404, "citation_not_found": 404,
+@@ -42,7 +43,7 @@
+ }
+ 
+ 
+-def _teaching_error(exc: TeachingRefusal):
++def _teaching_error(exc: TeachingRefusal | LearningRefusal):
+     status = _STATUS_MAP.get(exc.code, 422)
+     return _error(status, exc.code, exc.message)
+ 
+@@ -107,9 +108,9 @@
+         receipt = await _service(request).submit_command(
+             activity_id, command, _config(request),
+             run_tag="teach-" + __import__("secrets").token_hex(12))
+-    except TeachingRefusal as exc:
+-        raise _teaching_error(exc) from None
+-    except (AdmissionUnavailable, DatabaseUnavailable):
++    except (TeachingRefusal, LearningRefusal) as exc:
++        raise _teaching_error(exc) from None
++    except (AdmissionUnavailable, DatabaseUnavailable):
+         raise _error(503, "database_unavailable", "教学数据暂不可用") from None
+     return JSONResponse(_receipt_payload(receipt), status_code=200)
+ 
+--- pre/backend/app/memory/context.py
++++ post/backend/app/memory/context.py
+@@ -18,16 +18,25 @@
+     if not selection.get("selected") or not selection.get("eligible"):
+         raise MemoryRefusal("memory_dependency_invalid","所选学习背景已更新或撤销")
+     activity_id=recipe["activity_id"];rows={}
++    records=await ledger.read_teaching_recipe_records(activity_id,[r['record_id'] for r in recipe['references']])
++    by_id={row['record_id']:row for row in records}
+     for ref in recipe["references"]:
+-        row=await ledger.read_teaching_record(activity_id,ref["record_id"])
++        row=by_id.get(ref['record_id'])
+         if row is None or row["body_sha256"]!=ref["body_sha256"]:
+             raise MemoryRefusal("memory_dependency_invalid","教学背景事实身份已变化")
+         rows[ref["record_id"]]=row
+     def document(rid):
+         row=rows.get(rid)
+         if row is None:raise MemoryRefusal("memory_dependency_invalid","原上下文缺少必要记录")
+-        if row.get("body") is not None:return json.loads(row["body"])
+-        if row.get("payload"):return json.loads(row["payload"])["value"].get("result",json.loads(row["payload"])["value"])
++        if row.get("body") is not None:
++            if sha(row['body'])!=row['body_sha256']:raise MemoryRefusal('memory_dependency_invalid','原事实正文身份不可核对')
++            return json.loads(row["body"])
++        if row.get("payload"):
++            from app.capabilities.contracts import validate_business_payload
++            validate_business_payload(row['payload'],row['payload_format'],row['operation_payload_sha256'])
++            if row['operation_payload_sha256']!=row['body_sha256']:raise MemoryRefusal('memory_dependency_invalid','派生正文身份不可核对')
++            value=json.loads(row['payload'])['value']
++            return value.get('result',value) if isinstance(value,dict) else value
+         raise MemoryRefusal("memory_dependency_invalid","原派生内容目前不可用")
+     identity=recipe["identity"];body=recipe["command_body"];action=recipe["action"]
+     goal=document(identity["goal_record_id"])
+@@ -100,4 +109,3 @@
+     if cfg.reserved_output_tokens>snapshot["max_output_tokens"] or cfg.reserved_output_tokens>service.max_output_tokens_limit:
+         raise MemoryRefusal("memory_context_limit","活动输出容量与背景配置不兼容")
+     return cfg
+-
+--- pre/backend/app/memory/repository.py
++++ post/backend/app/memory/repository.py
+@@ -8,8 +8,9 @@
+ 
+ TABLES=("learning_memories","learning_memory_revisions","learning_memory_bodies","learning_memory_dependencies",
+         "learning_memory_commands","activity_memory_bindings","activity_memory_choices")
++BINDING_FINGERPRINTS={'tables':'18ec6224b24bbe495fd5ddd98530e6ef1408ecab94c2e982324f14c6b2793f26','constraints':'9ebae3afa28bab399d6fd1b49abe0f2910e76c83cd3f46633a36fee07feb54bb','triggers':'fcd57dd714c48dbd0fa40c6127fe7c549802ee35b038f60c3d4a776dd55678bb'}
+ SCHEMA_FINGERPRINTS={'tables': '93583d47f23a7d9530554c3f49801328c7f21f6c325eaa3892182c2f0203ef2a', 'constraints': '0ee5a68a453bac88c8abf705178fd837b61f2474d62a86adfb32194ee2a51bbc', 'triggers': 'a4a9d8c4daa95ed6b2e721df999305e0f2ab82bba8c0f2de8323ef516b9abf54'}
+-FUNCTION_FINGERPRINTS={'memory_dependency_line': '6fd98bae92a118ad22c6b5a11645ce95f71d52cf2ffc2c1711f51587461d0f66', 'memory_dependency_digest': '60a5ce8dc4deb0c3919a75d949b5f9a552f9822640caf25200f0f7002589fac7', 'memory_scope_digest': '6a1a25099f395b6cffc1a7fa97a0d97ef754e57f848ed999e5f9608aac4d15a3', 'memory_choice_digest': 'f4303f3117a83db2c24d02184b7d1dccbccfa4791bf8f2838d8b536929947d12', 'memory_revision_readable': '2b67c4c85c714dae7c181d67acfccbb3b60e6fe5d39bc43e8ff533487fdd2f3f', 'memory_revision_eligible': '69d4e1a885ce570ff6466546ab1807a875db87c06e0312da28deab27460374bb', 'activity_memory_eligible': '103632ed8c37c1ffce17281e1cd7ac915b96ca09cb6dffece890e04777ff6c36', 'memory_immutable_guard': 'f2fe3bed7332630c92ea998fbbd4937633a720b4b7749ab5ab9f8f55b551fa45', 'memory_head_guard': '76a8dd4d0c5ab879a8c9b8f58818f5b6a7e7573dbac64a57d165140b7772dd5d', 'memory_body_guard': '868cb3cf8bb7319b8c7dc60094db97d799cbf20e4967b8ac3af7ea3b38f9ba47', 'memory_final_shape_guard': '38fff0e20e9deecd1938c31cb97a006d105bcfd44432e0a882126534963372fd', 'purge_learning_memory': 'b8927752476771593bf51d0dd69894af1ea9fae4f1e786e3320138ec11665bb9'}
++FUNCTION_FINGERPRINTS={'memory_dependency_line': '6fd98bae92a118ad22c6b5a11645ce95f71d52cf2ffc2c1711f51587461d0f66', 'memory_dependency_digest': '60a5ce8dc4deb0c3919a75d949b5f9a552f9822640caf25200f0f7002589fac7', 'memory_scope_digest': '6a1a25099f395b6cffc1a7fa97a0d97ef754e57f848ed999e5f9608aac4d15a3', 'memory_choice_digest': 'f4303f3117a83db2c24d02184b7d1dccbccfa4791bf8f2838d8b536929947d12', 'memory_revision_readable': '2b67c4c85c714dae7c181d67acfccbb3b60e6fe5d39bc43e8ff533487fdd2f3f', 'memory_revision_eligible': '69d4e1a885ce570ff6466546ab1807a875db87c06e0312da28deab27460374bb', 'activity_memory_eligible': '103632ed8c37c1ffce17281e1cd7ac915b96ca09cb6dffece890e04777ff6c36', 'memory_immutable_guard': 'f2fe3bed7332630c92ea998fbbd4937633a720b4b7749ab5ab9f8f55b551fa45', 'memory_head_guard': '76a8dd4d0c5ab879a8c9b8f58818f5b6a7e7573dbac64a57d165140b7772dd5d', 'memory_body_guard': '868cb3cf8bb7319b8c7dc60094db97d799cbf20e4967b8ac3af7ea3b38f9ba47', 'memory_final_shape_guard': '2ae3b5b54cc9d1a6f0d488e1d3f10ccbd4cbf2422e3b99a56cb967d6760291d2', 'purge_learning_memory': 'b8927752476771593bf51d0dd69894af1ea9fae4f1e786e3320138ec11665bb9'}
+ DEP_COLUMNS=("dependency_kind","source_id","source_version_id","source_revision","original_sha256",
+  "origin_activity_id","record_id","record_kind","record_sha256","origin_scope_revision","origin_goal_version",
+  "upstream_memory_id","upstream_version","upstream_body_sha256")
+@@ -59,7 +60,7 @@
+         if '/*learning_memory*/' in sql:
+             guard=await self._memory_sql_guard(connection,'a.id')
+             schema=await self._memory_schema_info(connection)
+-            selected="EXISTS(SELECT 1 FROM public.activity_memory_bindings mb WHERE mb.activity_id=a.id)" if schema=='ready' else ('TRUE' if schema=='damaged' else 'FALSE')
++            selected=await self._memory_selected_sql(connection,'a.id')
+             sql=sql.replace('/*learning_memory*/TRUE',guard).replace('/*learning_selected*/FALSE',selected)
+         return sql
+ 
+@@ -67,7 +68,7 @@
+         schema=await self._memory_schema_info(connection)
+         guard=await self._memory_sql_guard(connection,'(SELECT id FROM a)')
+         record_guard=await self._memory_sql_guard(connection,'r.activity_id')
+-        selected="EXISTS(SELECT 1 FROM public.activity_memory_bindings mb WHERE mb.activity_id=(SELECT id FROM a))" if schema=='ready' else ('TRUE' if schema=='damaged' else 'FALSE')
++        selected=await self._memory_selected_sql(connection,'(SELECT id FROM a)')
+         return sql.replace('/*teach_memory*/TRUE',guard).replace('/*teach_selected*/FALSE',selected).replace('/*teach_record_memory*/TRUE',record_guard)
+ 
+     async def _memory_schema_info(self, connection):
+@@ -103,6 +104,22 @@
+             (["retrolume_memory_owner","retrolume_memory_app","retrolume_memory_purger"],list(TABLES)))
+         safety=await cursor.fetchone()
+         if not all(safety.values()):return 'damaged'
++        shapes=await self._memory_shape_hashes(connection,list(TABLES))
++        if shapes!=SCHEMA_FINGERPRINTS:return 'damaged'
++        cursor=await connection.execute("""SELECT p.proname,p.prosrc,p.provolatile,p.prosecdef,p.proconfig,
++            EXISTS(SELECT 1 FROM aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) a WHERE a.grantee=0 AND a.privilege_type='EXECUTE') AS public_execute
++          FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
++          WHERE n.nspname='public' AND p.proname=ANY(%s)""",(list(FUNCTION_FINGERPRINTS),))
++        import re
++        functions=await cursor.fetchall()
++        if len(functions)!=len(FUNCTION_FINGERPRINTS):return 'damaged'
++        for function in functions:
++            if sha(re.sub(r'\s+','',function['prosrc']))!=FUNCTION_FINGERPRINTS[function['proname']]:return 'damaged'
++            if function['public_execute'] or function['proconfig']!=['search_path=pg_catalog, pg_temp']:return 'damaged'
++            if function['prosecdef']!=(function['proname']=='purge_learning_memory'):return 'damaged'
++        return 'ready'
++
++    async def _memory_shape_hashes(self,connection,tables):
+         queries={
+           'tables':"""SELECT c.relname,a.attname,format_type(a.atttypid,a.atttypmod),a.attnotnull
+             FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_attribute a ON a.attrelid=c.oid
+@@ -116,22 +133,47 @@
+             AND t.tgname IN('memory_binding_immutable','memory_binding_shape','memory_choice_immutable','memory_choices_shape',
+              'memory_head_identity','memory_body_integrity','memory_command_immutable','memory_dependencies_shape',
+              'memory_dependency_immutable','memory_revision_immutable','memory_revision_shape') ORDER BY c.relname,t.tgname"""}
++        result={}
+         for section,query in queries.items():
+-            cursor=await connection.execute(query,(list(TABLES),))
+-            rows=[list(row.values()) for row in await cursor.fetchall()]
+-            if sha(canonical(rows))!=SCHEMA_FINGERPRINTS[section]:return 'damaged'
+-        cursor=await connection.execute("""SELECT p.proname,p.prosrc,p.provolatile,p.prosecdef,p.proconfig,
+-            EXISTS(SELECT 1 FROM aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) a WHERE a.grantee=0 AND a.privilege_type='EXECUTE') AS public_execute
+-          FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+-          WHERE n.nspname='public' AND p.proname=ANY(%s)""",(list(FUNCTION_FINGERPRINTS),))
++            cursor=await connection.execute(query,(tables,))
++            result[section]=sha(canonical([list(row.values()) for row in await cursor.fetchall()]))
++        return result
++
++    async def _memory_bindings_reliable(self,connection):
++        cursor=await connection.execute("""SELECT
++          EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
++            JOIN pg_roles r ON r.oid=c.relowner WHERE n.nspname='public' AND c.relname='activity_memory_bindings'
++             AND c.relkind='r' AND r.rolname='retrolume_memory_owner' AND NOT r.rolcanlogin AND NOT r.rolsuper) AS owned,
++          has_table_privilege(current_user,to_regclass('public.activity_memory_bindings'),'SELECT') AS readable,
++          NOT has_table_privilege(current_user,to_regclass('public.activity_memory_bindings'),'DELETE')
++           AND NOT has_table_privilege(current_user,to_regclass('public.activity_memory_bindings'),'TRUNCATE') AS immutable_role,
++          NOT (SELECT rolsuper FROM pg_roles WHERE rolname=current_user) AS ordinary""")
++        if not all((await cursor.fetchone()).values()):return False
++        if await self._memory_shape_hashes(connection,['activity_memory_bindings'])!=BINDING_FINGERPRINTS:return False
++        cursor=await connection.execute("""SELECT p.proname,p.prosrc,p.prosecdef,p.proconfig,p.provolatile,
++          r.rolname AS owner FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_roles r ON r.oid=p.proowner
++          WHERE n.nspname='public' AND p.proname=ANY(%s)""",(['memory_immutable_guard','memory_final_shape_guard'],))
++        rows=await cursor.fetchall()
+         import re
+-        functions=await cursor.fetchall()
+-        if len(functions)!=len(FUNCTION_FINGERPRINTS):return 'damaged'
+-        for function in functions:
+-            if sha(re.sub(r'\s+','',function['prosrc']))!=FUNCTION_FINGERPRINTS[function['proname']]:return 'damaged'
+-            if function['public_execute'] or function['proconfig']!=['search_path=pg_catalog, pg_temp']:return 'damaged'
+-            if function['prosecdef']!=(function['proname']=='purge_learning_memory'):return 'damaged'
+-        return 'ready'
++        return len(rows)==2 and all(not r['prosecdef'] and r['owner']=='retrolume_memory_owner' and r['provolatile']=='v'
++          and r['proconfig']==['search_path=pg_catalog, pg_temp'] and sha(re.sub(r'\s+','',r['prosrc']))==FUNCTION_FINGERPRINTS[r['proname']] for r in rows)
++
++    async def _memory_no_v2_sql(self,connection,expression):
++        cursor=await connection.execute("SELECT to_regclass('public.activity_operation_results') IS NOT NULL AS results,to_regclass('public.teaching_commands') IS NOT NULL AS commands")
++        objects=await cursor.fetchone();parts=[]
++        if objects['results']:
++            parts.append(f"NOT EXISTS(SELECT 1 FROM public.activity_operation_results mr WHERE mr.activity_id={expression} AND mr.payload_format='json' AND mr.payload::jsonb->'value'->>'profile'='teaching.v2')")
++        if objects['commands']:
++            parts.append(f"NOT EXISTS(SELECT 1 FROM public.teaching_commands mt WHERE mt.activity_id={expression} AND mt.context_body IS NOT NULL AND mt.context_body::jsonb->>'schema'='teaching.context.v2')")
++        return ' AND '.join(parts) or 'TRUE'
++
++    async def _memory_selected_sql(self,connection,expression):
++        schema=await self._memory_schema_info(connection)
++        if schema=='ready' or (schema=='damaged' and await self._memory_bindings_reliable(connection)):
++            clean=await self._memory_no_v2_sql(connection,expression)
++            return f"(EXISTS(SELECT 1 FROM public.activity_memory_bindings mb WHERE mb.activity_id={expression}) OR NOT ({clean}))"
++        if schema=='absent':return 'NOT ('+await self._memory_no_v2_sql(connection,expression)+')'
++        return 'TRUE'
+ 
+     async def probe_memory(self):
+         async def operation(connection):
+@@ -144,23 +186,22 @@
+               AND NOT has_table_privilege(current_user,'public.learning_memory_bodies','DELETE')
+               AND NOT has_table_privilege(current_user,'public.learning_memory_bodies','TRUNCATE')
+               AND has_table_privilege(current_user,'public.learning_memory_bodies','INSERT') AS app,
+-              has_function_privilege(current_user,'public.purge_learning_memory(uuid,text,uuid,text)','EXECUTE') AS cleanup""")
++              has_function_privilege(current_user,'public.purge_learning_memory(uuid,text,uuid,text)','EXECUTE') AS cleanup,
++              NOT EXISTS(SELECT 1 FROM unnest(%s::text[]) table_name
++                WHERE NOT has_table_privilege(current_user,'public.'||table_name,'SELECT')) AS readable""",(list(TABLES),))
+             row=await cursor.fetchone()
+-            return {"read":True,"write":bool(row["app"]),"cleanup":bool(row["app"] and row["cleanup"]),
+-                    "reason":None if row["app"] else "memory_permissions_not_ready"}
++            return {"read":bool(row['readable']),"write":bool(row["app"] and row['readable']),"cleanup":bool(row["app"] and row["cleanup"] and row['readable']),
++                    "reason":None if row["app"] and row['readable'] else "memory_permissions_not_ready"}
+         return await self._transaction(operation)
+ 
+     async def _memory_sql_guard(self,connection,activity_expression, result_alias=None):
+         schema=await self._memory_schema_info(connection)
+         if schema=="ready":return f"public.activity_memory_eligible({activity_expression})"
+-        if schema=="damaged":return "FALSE"
+-        if result_alias:
+-            return f"NOT ({result_alias}.payload_format='json' AND COALESCE({result_alias}.payload::jsonb->'value'->>'profile','')='teaching.v2')"
+-        guard=f"NOT EXISTS (SELECT 1 FROM activity_operation_results mr WHERE mr.activity_id={activity_expression} AND mr.payload_format='json' AND mr.payload::jsonb->'value'->>'profile'='teaching.v2')"
+-        cursor=await connection.execute("SELECT to_regclass('public.teaching_commands') IS NOT NULL AS present")
+-        if (await cursor.fetchone())['present']:
+-            guard+=f" AND NOT EXISTS(SELECT 1 FROM teaching_commands mt WHERE mt.activity_id={activity_expression} AND mt.context_body IS NOT NULL AND mt.context_body::jsonb->>'schema'='teaching.context.v2')"
+-        return guard
++        no_v2=await self._memory_no_v2_sql(connection,activity_expression)
++        if schema=='damaged':
++            if not await self._memory_bindings_reliable(connection):return 'FALSE'
++            return f"(NOT EXISTS(SELECT 1 FROM public.activity_memory_bindings mb WHERE mb.activity_id={activity_expression}) AND {no_v2})"
++        return no_v2
+ 
+     async def _memory_assert_schema(self,connection):
+         if await self._memory_schema_info(connection)!="ready":
+@@ -226,7 +267,10 @@
+         else:
+             legacy=await self._memory_sql_guard(connection,"%s")
+             cursor=await connection.execute("SELECT "+legacy+" AS valid",tuple(activity_id for _ in range(legacy.count('%s'))))
+-            state={"valid":(await cursor.fetchone())["valid"],"selected":schema=="damaged"}
++            state={"valid":(await cursor.fetchone())["valid"]}
++            selected=await self._memory_selected_sql(connection,'%s')
++            cursor=await connection.execute('SELECT '+selected+' AS selected',tuple(activity_id for _ in range(selected.count('%s'))))
++            state['selected']=(await cursor.fetchone())['selected']
+         row=activities.get(activity_id)
+         if row is not None:
+             row["_memory_eligible"]=bool(state["valid"])
+@@ -540,11 +584,11 @@
+     async def read_memory_selection(self,activity_id,include_bodies=False):
+         async def operation(connection):
+             schema=await self._memory_schema_info(connection)
+-            if schema=="absent":
++            if schema!="ready":
+                 guard=await self._memory_sql_guard(connection,"%s")
+                 cursor=await connection.execute("SELECT "+guard+" AS valid",tuple(activity_id for _ in range(guard.count('%s'))))
+                 eligible=(await cursor.fetchone())["valid"]
+-                return {"selected":not eligible,"eligible":bool(eligible),"selection_sha256":None,"entries":[]}
++                return {"selected":not eligible,"eligible":bool(eligible),"selection_sha256":None,"entries":[],"classification":"legacy" if eligible else "unavailable","reason":None if eligible else "memory_schema_not_ready"}
+             await self._memory_assert_schema(connection)
+             cursor=await connection.execute("""SELECT b.selection_sha256,b.bound_scope_revision,
+              public.activity_memory_eligible(b.activity_id) AS eligible,
+--- pre/backend/migrations/010_learning_memory.sql
++++ post/backend/migrations/010_learning_memory.sql
+@@ -347,7 +347,20 @@
+   IF r.dependency_count IS DISTINCT FROM(SELECT count(*)::smallint FROM public.learning_memory_dependencies WHERE memory_id=NEW.memory_id AND version=NEW.version)
+   OR r.dependencies_sha256 IS DISTINCT FROM public.memory_dependency_digest(NEW.memory_id,NEW.version)
+   OR(r.claim_kind='learning_observation' AND NOT EXISTS(SELECT 1 FROM public.learning_memory_dependencies WHERE memory_id=NEW.memory_id AND version=NEW.version AND dependency_kind='event')) THEN
+-   RAISE EXCEPTION '记忆依赖数量/摘要不符'; END IF;
++   RAISE EXCEPTION '记忆依赖数量/摘要不符'; END IF;
++  IF (SELECT count(*) FROM public.learning_memory_dependencies WHERE memory_id=NEW.memory_id AND version=NEW.version AND dependency_kind='source')>10
++   OR (SELECT count(*) FROM public.learning_memory_dependencies WHERE memory_id=NEW.memory_id AND version=NEW.version AND dependency_kind='event')>8
++   OR (SELECT count(*) FROM public.learning_memory_dependencies WHERE memory_id=NEW.memory_id AND version=NEW.version AND dependency_kind='memory')>14 THEN
++   RAISE EXCEPTION '记忆依赖种类容量不符'; END IF;
++  IF EXISTS(SELECT 1 FROM public.learning_memory_dependencies d WHERE d.memory_id=NEW.memory_id AND d.version=NEW.version
++    AND d.dependency_kind='memory' AND(
++     NOT EXISTS(SELECT 1 FROM public.learning_memory_dependencies e JOIN public.activity_memory_choices c
++      ON c.activity_id=e.origin_activity_id AND c.memory_id=d.upstream_memory_id AND c.version=d.upstream_version
++       AND c.body_sha256=d.upstream_body_sha256 WHERE e.memory_id=NEW.memory_id AND e.version=NEW.version AND e.dependency_kind='event')
++     OR EXISTS(SELECT 1 FROM public.learning_memory_dependencies p WHERE p.memory_id=d.upstream_memory_id AND p.version=d.upstream_version
++      AND NOT EXISTS(SELECT 1 FROM public.learning_memory_dependencies child WHERE child.memory_id=NEW.memory_id AND child.version=NEW.version
++        AND public.memory_dependency_line(child)=public.memory_dependency_line(p))))) THEN
++   RAISE EXCEPTION '记忆上游缺选用事实或完整闭包'; END IF;
+  END IF;
+  RETURN NULL;
+ END $f$;
+--- pre/frontend/src/activities/MemoryWorkspace.tsx
++++ post/frontend/src/activities/MemoryWorkspace.tsx
+@@ -23,7 +23,11 @@
+   const [notice, setNotice] = useState("");
+   const [impact, setImpact] = useState<MemoryImpact | null>(null);
+   const [impactAction, setImpactAction] = useState<"revise" | "revoke" | null>(null);
+-  const [conflict, setConflict] = useState(false);
++  const [conflict, setConflict] = useState(false);
++  const [reading,setReading]=useState(false);
++  const [pendingView,setPendingView]=useState<MemoryView|null>(null);
++  const [ownerReady,setOwnerReady]=useState(false);
++  const [readUnconfirmed,setReadUnconfirmed]=useState(false);
+   const [intents, setIntents] = useState<MemoryIntent[]>([]);
+   const [intentsOk, setIntentsOk] = useState(true);
+   const owner = useRef<string | null>(null);
+@@ -46,14 +50,15 @@
+   useEffect(() => {
+     mounted.current = true;
+     void memoryEditorOwner().then(async value => {
+-      owner.current=value;
++      owner.current=value;
++      setOwnerReady(Boolean(value));
+       if(!value||!mounted.current||binding.current)return;
+       const key="retrolume.memory-new-id.v1:"+value;
+       let id=sessionStorage.getItem(key);
+       if(!id){id=crypto.randomUUID();sessionStorage.setItem(key,id);}
+-      newId.current=id;binding.current={id,version:0,revision:0,sha:""};
+-      const edited=editSequence.current;const draft=await readMemoryDraft(["edit",id,0,0,"",value].join("|"));
+-      if(draft&&mounted.current&&edited===editSequence.current&&!view) {
++      newId.current=id;binding.current={id,version:0,revision:0,sha:""};
++      const edited=editSequence.current,sequence=readSequence.current;const draft=await readMemoryDraft(["edit",id,0,0,"",value].join("|"));
++      if(draft&&mounted.current&&sequence===readSequence.current&&binding.current?.id===id&&edited===editSequence.current&&!view) {
+         const content=JSON.parse(draft.content);setTitle(content.title);setText(content.text);setKind(content.kind);dirty.current=true;
+       }
+     });
+@@ -64,27 +69,42 @@
+     return () => { mounted.current = false; controller.current?.abort(); window.removeEventListener("storage", storage); };
+   }, [token]);
+ 
+-  async function select(id: string, explicit = false, keep = false) {
+-    const sequence = ++readSequence.current; controller.current?.abort();
+-    const active = new AbortController(); controller.current = active;
+-    const editedAt = editSequence.current;
+-    try {
+-      const row = await getMemory(id, token, active.signal);
+-      if (!mounted.current || sequence !== readSequence.current) return;
+-      setView(row); setImpact(null); setImpactAction(null); setError("");
+-      if (!explicit && dirty.current && binding.current && (binding.current.id !== row.memory_id || binding.current.revision !== row.revision)) {
+-        setConflict(true); return;
+-      }
+-      binding.current = { id: row.memory_id, version: row.version, revision: row.revision, sha: row.body_sha256 };
+-      const key = draftKey(); const draft = key ? await readMemoryDraft(key) : null;
+-      if (sequence !== readSequence.current || !mounted.current || editedAt !== editSequence.current) return;
+-      if (!keep) {
++  async function select(id: string, explicit = false, keep = false) {
++    const sequence = ++readSequence.current; controller.current?.abort();
++    const active = new AbortController(); controller.current = active;
++    const editedAt = editSequence.current;
++    setReading(true);setImpact(null);setImpactAction(null);setError("");setReadUnconfirmed(false);
++    try {
++      const row = await getMemory(id, token, active.signal);
++      if (!mounted.current || sequence !== readSequence.current) return;
++      const key=owner.current?["edit",row.memory_id,row.version,row.revision,row.body_sha256,owner.current].join("|"):null;
++      const draft=key?await readMemoryDraft(key):null;
++      if (sequence !== readSequence.current || !mounted.current) return;
++      if(!row.body&&!explicit&&binding.current?.id!==row.memory_id&&(dirty.current||editedAt!==editSequence.current)){
++        setPendingView(row);setConflict(true);return;
++      }
++      if(!row.body){
++        binding.current={id:row.memory_id,version:row.version,revision:row.revision,sha:row.body_sha256};
++        setView(row);setTitle("");setText("");setPendingView(null);setConflict(false);dirty.current=false;return;
++      }
++      if(editedAt!==editSequence.current||(!explicit&&dirty.current&&binding.current&&
++        (binding.current.id!==row.memory_id||binding.current.revision!==row.revision||binding.current.sha!==row.body_sha256))){
++        setPendingView(row);setConflict(true);return;
++      }
++      binding.current = { id: row.memory_id, version: row.version, revision: row.revision, sha: row.body_sha256 };
++      setView(row);setPendingView(null);
++      if (!keep) {
+         const content = draft ? JSON.parse(draft.content) as { title: string; text: string; kind: string } : row.body;
+         setTitle(content?.title ?? ""); setText(content?.text ?? ""); setKind(content?.kind ?? row.claim_kind);
+-        dirty.current = Boolean(draft);
+-      }
+-      setConflict(false);
+-    } catch (reason) { if (sequence === readSequence.current && mounted.current) setError(reason instanceof Error ? reason.message : "记忆未确认"); }
++        dirty.current = Boolean(draft);
++      }else if(key&&owner.current){
++        dirty.current=true;
++        await saveMemoryDraft({id:key,memory_id:row.memory_id,owner:owner.current,version:row.version,revision:row.revision,
++          body_sha:row.body_sha256,content:JSON.stringify({title,text,kind})});
++      }
++      setConflict(false);
++    } catch (reason) { if (sequence === readSequence.current && mounted.current) {setReadUnconfirmed(true);setError(reason instanceof Error ? reason.message : "记忆未确认");} }
++    finally{if(sequence===readSequence.current&&mounted.current)setReading(false);}
+   }
+   function persistEdit(nextTitle: string, nextText: string, nextKind: string) {
+     dirty.current = true; ++editSequence.current;
+@@ -97,12 +117,13 @@
+     ++readSequence.current; controller.current?.abort(); newId.current = crypto.randomUUID();
+     if(owner.current)sessionStorage.setItem("retrolume.memory-new-id.v1:"+owner.current,newId.current);
+     binding.current = { id: newId.current, version: 0, revision: 0, sha: "" };
+-    dirty.current = false; setView(null); setTitle(""); setText(""); setKind("self_report");
+-    setConflict(false); setImpact(null); setImpactAction(null);
++    dirty.current = false; setView(null); setTitle(""); setText(""); setKind("self_report");
++    setConflict(false);setPendingView(null);setReading(false);setReadUnconfirmed(false); setImpact(null); setImpactAction(null);setNotice("");setError("");
+   }
+   async function execute(command: MemoryCommand) {
+     if (busy || !intentsOk || conflict) return;
+-    const submittedSequence=readSequence.current;
++    const submittedSequence=readSequence.current;
++    const submittedEdit=editSequence.current,submittedDraft=draftKey();
+     const identity = command.memory_id; setBusy(true); setError(""); setNotice("");
+     try {
+       const receipt = await submitTrackedMemory(command, token);
+@@ -110,17 +131,24 @@
+       reloadIntents();
+       if (receipt.status !== "committed") throw new Error("保存结果未确认，原意图保留");
+       if(readSequence.current!==submittedSequence){await refresh();return;}
+-      dirty.current = false;
++      if(submittedEdit!==editSequence.current){
++        setNotice("保存已确认，读取期间的新输入仍保留，请核对版本。");await refresh();await select(identity);return;
++      }
++      dirty.current = false;
++      if(submittedDraft)await removeMemoryDraft(submittedDraft);
++      if(command.action==='save'&&newId.current===identity&&owner.current){
++        newId.current=crypto.randomUUID();sessionStorage.setItem("retrolume.memory-new-id.v1:"+owner.current,newId.current);
++      }
+       setNotice(command.action === "revoke" ? (receipt.purge_state_now === "done" ? "已撤销，本条在线记忆正文已清理；原始事实和保留副本仍在。" : "已撤销，内容清理待核对；不会再用于生成。") : "已确认保存，未调用模型。");
+       setImpact(null); setImpactAction(null);
+       await refresh();
+-      if(readSequence.current===submittedSequence)await select(identity, true);
++      if(readSequence.current===submittedSequence)await select(identity, submittedEdit===editSequence.current);
+     } catch (reason) {
+       if (mounted.current) { setError(reason instanceof Error ? reason.message : "动作未确认"); reloadIntents(); }
+     } finally { if (mounted.current) setBusy(false); }
+   }
+   async function preview(action: "revise" | "revoke") {
+-    if (!view || busy || conflict) return;
++    if (!view || busy || conflict || reading || readUnconfirmed) return;
+     setError("");
+     const sequence=readSequence.current;
+     try {
+@@ -131,7 +159,8 @@
+   }
+   function save() {
+     const current = binding.current ?? { id: newId.current, revision: 0, sha: "", version: 0 };
+-    if (view) { void preview("revise"); return; }
++    if(reading||conflict)return;
++    if (view) { void preview("revise"); return; }
+     void execute({ business_key: crypto.randomUUID(), memory_id: current.id, expected_revision: 0, action: "save", body: { kind, title, text } });
+   }
+   async function choose(item: MemoryItem) {
+@@ -190,12 +219,16 @@
+         {next && <button className="secondary" onClick={() => void listMemories(token, next).then(page => { setItems(old => [...old, ...page.items]); setNext(page.next_cursor); }).catch(reason => setError(reason.message))}>读取更早记忆</button>}
+         {onChoicesChange && <p>新活动已明确选择 {choices.length} 条，版本固定，不自动切换新版。</p>}
+       </div>
+-      <div className="memory-detail">
++      <div className="memory-detail" aria-busy={reading} data-memory-id={binding.current?.id??""}
++        data-memory-revision={binding.current?.revision??0} data-memory-version={binding.current?.version??0}
++        data-memory-sha={binding.current?.sha??""} data-editor-owner={owner.current??""}>
++        {reading&&<p role="status">正在核对记忆与本机草稿，当前输入仍保留。</p>}
+         {view && <p>{kinds[view.claim_kind]} · 版本 {view.version} · {view.uncertainty === "limited" ? "有限观察，长期能力未知" : "用户陈述，尚未验证"}
+           · {states[view.qualification] ?? "依据不可用"}</p>}
+         {conflict && <div role="alert"><p>记忆身份已有变化，原草稿未改绑。请核对后明确选择。</p>
+-          {view && <><button onClick={() => void select(view.memory_id, true)}>明确载入新版</button>
+-          <button onClick={() => void select(view.memory_id, true, true)}>明确沿用草稿至新版</button></>}</div>}
++          {pendingView && <><p>待核对版本 {pendingView.version} · {pendingView.body?.title??"不可用记忆"}</p>
++          <button disabled={reading} onClick={() => void select(pendingView.memory_id, true)}>明确载入新版</button>
++          <button disabled={reading} onClick={() => void select(pendingView.memory_id, true, true)}>明确沿用草稿至新版</button></>}</div>}
+         {(!view || view.body) && <>
+           <label>记忆标题<input aria-label="记忆标题" value={title} maxLength={80} onChange={e => { setTitle(e.target.value); persistEdit(e.target.value, text, kind); }} /></label>
+           <label>记忆性质<select value={kind} disabled={view?.claim_kind === "learning_observation"} onChange={e => { setKind(e.target.value); persistEdit(title, text, e.target.value); }}>
+@@ -207,11 +240,11 @@
+           {view?.dependencies && <details><summary>来源与事件身份</summary>{view.dependencies.map((d, i) =>
+             <p key={i}>{d.dependency_kind === "source" ? "资料版本 " + d.source_version_id :
+               d.dependency_kind === "event" ? "活动 " + d.origin_activity_id + " · 事件 " + d.record_id : "上游记忆 " + d.upstream_memory_id}</p>)}</details>}
+-          <button className="primary" disabled={!caps?.write || busy || conflict || !title.trim() || (kind !== "learning_observation" && !text.trim())} onClick={save}>{view ? "预览记忆修正影响" : "保存用户记忆"}</button>
++          <button className="primary" disabled={!caps?.write || busy || reading || readUnconfirmed || conflict || !ownerReady || !title.trim() || (kind !== "learning_observation" && !text.trim())} onClick={save}>{view ? "预览记忆修正影响" : "保存用户记忆"}</button>
+         </>}
+-        {view?.state === "active" && <button className="secondary" disabled={busy || conflict || !caps?.write} onClick={() => void preview("revoke")}>预览撤销并清理</button>}
++        {view?.state === "active" && <button className="secondary" disabled={busy || reading || readUnconfirmed || conflict || !caps?.write} onClick={() => void preview("revoke")}>预览撤销并清理</button>}
+         {view?.state === "revoked" && <p>已撤销，旧选择及依赖背景不可再使用。{view.purge_state === "done" ? "本条在线正文已清理。" : "内容清理待核对。"}</p>}
+-        {view?.state === "revoked" && view.purge_state !== "done" && <button disabled={busy || !caps?.cleanup} onClick={() => {
++        {view?.state === "revoked" && view.purge_state !== "done" && <button disabled={busy || reading || readUnconfirmed || !caps?.cleanup} onClick={() => {
+           if (!view.revocation_key) return;
+           void getMemoryReceipt(view.revocation_key, token).then(receipt => execute({ business_key: crypto.randomUUID(),
+             memory_id: view.memory_id, expected_revision: view.revision, action: "purge", body: { revocation_key: view.revocation_key,
+@@ -222,7 +255,7 @@
+     {impact && impactAction && view && <div className="memory-impact" role="dialog" aria-label="记忆变动确认">
+       <p>本条共 {impact.version_count} 个版本，影响 {impact.activity_count} 个活动和 {impact.dependent_memory_count} 条派生记忆。</p>
+       <p>{impact.effect} 所有既有选择不会自动换新版。清理只处理本条全部在线记忆正文，不删原始作答、资料、活动历史或备份。</p>
+-      <button className="primary" disabled={busy || conflict} onClick={() => void execute({ business_key: crypto.randomUUID(),
++      <button className="primary" disabled={busy || reading || readUnconfirmed || conflict} onClick={() => void execute({ business_key: crypto.randomUUID(),
+         memory_id: view.memory_id, expected_revision: binding.current?.revision ?? view.revision, action: impactAction,
+         body: impactAction === "revise" ? { kind, title, text, base_body_sha256: binding.current?.sha,
+           impact_token: impact.impact_token } : { impact_token: impact.impact_token, confirm_revoke: true, purge_memory_content: true } })}>

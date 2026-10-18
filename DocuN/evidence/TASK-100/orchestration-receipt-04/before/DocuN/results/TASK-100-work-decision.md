@@ -1,0 +1,101 @@
+# TASK-100 / R-094 续作02回收裁定（2026-10-05，当前）
+
+调度已返回；本轮编排验收部分通过，接受最终候选、逐项有限运行证据与资源收尾，不签G8或完整父STEP。执行者原结果和六个原批FAIL全部保留。不是独立审计结论。
+
+112项源码/夹具/dist当前hash与最终身份一致；657证据逐文件匹配；七锁定规则一致。原始stderr可找到29个不同PG方法、4个HTTP方法的OK，最终离线原日志为58项/0skip/OK。原生页面/截图/收据五项hash一致；构建与四个dist绑定在最终身份。接收的是这些事实，不据文件名或汇总表声称整链总批PASS。
+
+六入口包括一次只读预检拒绝，原失败保留。执行者登记三项追加许可，批准前旧账hash相符，中文原文可读；具体授权时序、各进入口及主动尾段不确定性由101控制轴独立核证。最终账entry6/6、container-start5/5、app3/3、SUP21/24、browser3/3、driver3/3、build1/1，离线42.750/真实261.211/收尾33.313秒；主动13643.959秒是分段账口径，不抹去旧尾段未知、初轮至少9入口及漏5.940秒、续作01的4入口与旧投入。
+
+本轮只读精确Docker State显示Running=false/Pid=0；18100/55442无监听，未发现task100运行进程。该事实是检查时点，不代替执行者各批树与Job原件。库、角色、卷、合成行和旧证据保留，编排没有启停/连接数据库或执行测试。
+
+DEF003—007按原归属登记候选修正，正式关闭待101集中审计。修后task100-browser.cjs及两份辅助夹具未真实整批重跑；原DOM/截图/收据与源码一致性可作限定补证，是否充足由101独立决定。逐进程as-loaded与Chromium后代出生时间未采，不虚构；不自动把不同证据粒度变成新规格。
+
+下一101/R095为G8稳定完整成果一次集中独立审计，独立于100实现窗口，代码/证据/控制三个轴同卡完成。默认只读，必要时最多一次仅最终bundle的合成浏览器显示补证，PG/DDL/Docker启停/产品服务/Windows业务/SUP/模型/工具/build全部0，不借用100剩余SUP或旧许可。无需再跑main-combo或已验17窗。
+
+101未收到原生转交或开始事实前仅待转交。完整G8、真实provider质量、全部STEP009—012、M-1、部署与项目仍未通过；其他Must及Compose/Linux/Nginx/Git计划保持。
+
+## 以下为旧裁定历史
+
+# TASK-100 / R-094 续作01编排核证与续作02裁定（当前）
+
+2026-10-04，Asia/Shanghai，Codex编排Agent。调度已返回，验收部分通过；候选修正与限定构建子证据采纳，完整G8与“DEF-003—007全闭合”不采纳。保持原TASK/R与授权，不追加产品模型批准，不接管执行。以下是少量关键函数/原件的普通核证，不是独立审计。
+
+## 输入、实际证据与失败裁定
+
+返回结果4199daf2fcc8134b55af8bb77b20c4483587272db3b449381f74f8645720bce5，原文保持。前轮当前代码/夹具身份、七锁定规则和原件导航见本轮continuation-input.json/receipt.json；旧卡完整原字节18fd2383保存TASK-100-pre-continuation-02.md。旧索引是过去基线，不要求当前修正与它相同，变化按实际用途登记。
+
+续作01四入口：第一DSN前检阻断、两次roles阻断却汇总PASS/exit0、最后009缺password及其依赖失败。修码后的migrate DSN/恢复类名/fault DSN/token没有真实复验。不存在Windows/浏览器子段，HTTP仅未知活动404及坏DTO；不能认“下一步直接main-combo即可全链打通”。两次真实build日志可采当时构建；没有最终dist绑定。41项离线无原始运行日志，仅为执行者声明，不签全部实际运行或零skip。
+
+DEF-003 current009恢复全列不可变、仓储预计算INSERT方向符合，DEF-007 final_status方向符合；保持候选，最终最小权限真实命令/恢复证据not_run。DEF-004/005/006未关闭：_locked_teaching_binding缺完整当前屏障，T-launch pending空放行与下一窗dispatch_closed问题，T-result缺command静默返回；workspace TEXT body JSON操作符及jsonb重复解码、其他端点多SQL；fault re缺导入，runner漏blocked/缺真正deadline/依赖隔离/finally/缺两类子段。定位以当前源码与本轮卡为准，不自修，不对未读模块给无缺陷结论。
+
+原001—008、停止/账本旧权威及未变G3/G4/D3/G5/G6/G7保持；099批准的模型、表与接口不推翻，以上是同合同落实。DEF-001/002仍开放，097旧注入器禁用。没有以观察替代权限/停止证明、以SQL文本或mock替代PG真实结果。
+
+## 投入、资源和接续
+
+续作01账载入口4/start1/app1/SUP0/browser0/driver0/build2，14.880离线、17.910真实、0.890收尾；许可结束。初轮至少9入口及旧超限/漏时/未知保留，两次BLOCKED汇总PASS单列纠正而不覆盖原件。没有凭“预检失败”退还额度。
+
+Docker只读inspect当前管道不可连接，容器实时状态未确认；前轮cleanup停容器原件有效于当时。20:37:33的18100/55442与task100进程检查无残留。先离线修完整控制/夹具，运行需引擎就绪、精确归属/限额/两库前置核对。不开共享服务，不重建资源，不问真实密码；只需引擎仍不可连接时用户启动Docker Desktop。
+
+续作02由新的胜任A+最强可用业务实施窗口完整承接，原因是两轮未到主链、修正结论与实际事实矛盾，非模型品牌重审。仍原100/R094独占实施，新增主动6h/离线1800/业务3600/收尾480、入口3/start3/app3/SUP24/browser2/driver3/build1独立记账，旧投入不重置；第一完整主批，余两个仅有据修正/未测部分，不计划跑满。先实际完整fixtures与离线控制、冻结产品，再集中剩余PG/HTTP/Windows/bundle浏览器，一次回传。
+
+更新状态v2.02、架构v0.80，需求v1.1不变。卡保存并回读后待转交，不称已派发。稳定后一次集中隔离审计，101/R095仍只留计划。编排产品/测试/编译/构建/PG/Job/浏览器/资源修改均0；本轮只写卡、裁定、必要原件索引和共享文档。
+
+## 以下为2026-10-03初轮核证与续作01历史（原文保留）
+
+# TASK-100 / R-094 初轮编排核证与续作01裁定
+
+2026-10-03，Asia/Shanghai，Codex编排Agent。任务调度已返回，验收部分通过，仅接受候选产物与明确成立的子证据；不接受完整G8实现完成，不签G8、STEP009—012、M-1或项目通过。本次是必要普通核证，非独立审计，编排没有接管实现或运行测试。
+
+## 真实对象和证据适用范围
+
+结果文件D:/shspic/project_NO3_RetroLume-agent/DocuN/results/TASK-100-result.md，初轮SHA256 df26be0d267a1941f56305001efbd1e1356b9b53155446bcfa773edb36459ecd，10064字节。原结果和全部失败保持原文，不由编排改写执行者报告。
+
+34项最终清单当前核33项一致；runner清单600d47ef5aef72160f8e17c8c46bfdc1a702a3800b5bf97652312df771b86ad8，当前58907d27625339de37ec32989df0ca1275fbfa704e9f020cd0a953237d19cc11。不得对漂移的runner宣称清单完全冻结。必要续作身份和七规则核证已保存D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-100/orchestration-receipt-01/continuation-input.json，当前34项对应、资源和账目保存同目录receipt.json。原完整卡原字节保存TASK-100-original-card.md，SHA256 bca54575268c0c0861bc7627455342cec0aa3ea3a33a35280da98b3cce9b3651。
+
+离线runtime/offline-20261003T042953Z.log真实20项OK，contracts/policy及测试当前hash与该批记录对应，接受其实际覆盖的合同和纯策略行为；不代表服务、数据库或界面通过。运行日志unittest内部0.036秒，runner阶段0.750秒，两个口径不混用。
+
+batch-PG-M-migration.json记载11项PASS、exit0，绑定009的9b5db84c0537d992335cb153ac18619e4ad92b583e02e05f8d42de1151a344b0，而当前009为924cec98b1f21f82073a28339387a6759d853128392467cd2327e90317213c33。保留旧迁移试验报告，仅按具体差异与原件核可继承部分；当前触发器、权限和真实命令同事务行为没有完整通过证明，不能凭汇总报告签当前版本动态通过。
+
+最后仓储pg-repo-20261003T041438Z.log真实Ran9、8OK、semantic_slot一ERROR、exit1。被测教学仓储2ea63987e26f4c75e247166d44bcbd8c5a0b9830c6e7a0256d701da00e35fc9c，当前c250401c0025f91ba31f25d6d0e580115b41190334166f516821773265cdbe94。最后UUID清空修正not_run。更重要的是其不可变测试已接受投影UPDATE，测试本身不符合批准合同，不能把该OK用于证明完整历史不可变。
+
+HTTP/Windows教学组合/浏览器/build没有通过证据；test_teaching_api和test_teaching_recovery在当前文件列表中尚不存在，runner引用它们不等于测试已准备好。候选文件存在或数量齐不能证明完整教学业务已经实现。
+
+## 必须同卡修复的确定差异
+
+以下为少量关键函数的普通核证，不是全范围审计。没有把未阅读部分宣称无缺陷。
+
+DEF-003，P1，批准的教学事实不可变合同未落实。099第4节触发器正文和权限段明确任何UPDATE/DELETE拒绝、records仅SELECT/INSERT；当前009第178—202行允许applied_revision/state_after任意改写，teaching_repository多处分次UPDATE回填，pg_setup第105行还给records UPDATE/DELETE。这不是可自行采纳的099例外。修复应在同一事务先算好效果与唯一state_after，再INSERT最终事实及更新head/command；恢复不可变触发器和最小列级权限。不增加第四张表、不修改旧001—008，不用宽权限掩盖写入顺序错误。
+
+DEF-004，P1，受控教学上下文与当前资格链不完整。teaching_service第158—239行reference_hashes始终空，_stored_document未装配真实目标/路径/题目/作答/纠错，evaluate仅answer_pending占位，profile.goal_record_id固定全零。adapter未复核当前head及完整消息hash；_locked_teaching_binding第716—744行未核head/revision/父事实/pending，claim_teaching_launch也未落实全部当前绑定复核。当前这些事实足以否定完整教学评价与批准的两重数据库屏障。按099第5—6节从持久事实组包、冻结实体hash、锁内重新核对，在原admit/mark/result的新前缀分支落实，旧分支与停止权威保持。
+
+DEF-005，P1，教学读接口不满足一致快照和实际查看。read_teaching_workspace第986—1014行四条SELECT；默认隔离不构成单语句快照。teaching_api第147/165行view_token采用na/na，source_invalid固定false；第239—273行模型fact的body为NULL时没有读取007正文，exercise仅返回暴露布尔值。因此实际路径/题目/反馈正文、来源失效覆盖与恢复一致性没有完整实现。按099第7节每端点一个SQL快照读取所需权威及合法正文；同源失效与暴露投影，坏单项局部失败、GET不写、不执行。
+
+DEF-006，P1，100控制器和资源/账目未满足原运行合同。runner在身份前检后才计数，超时记not_run，未覆盖资源树/完整累计熔断，frontend-build实际运行策略unittest，pg-migration引用仍含DROP DATABASE WITH FORCE的脚本。精确容器HostConfig没有1CPU/512MiB/pids128。以上先合并修正、离线验证控制差异再启动真实入口；不是继续使用旧ledger的6/6值自动放行。
+
+DEF-007，P2，失败收据清pending使用旧状态。finish_teaching_supervision第692—706行UPDATE为failed之后仍检查读入command的旧status，所以对应pending不会按失败结局清除。应以本次确认后的持久/归一化结局判断，并保持已claimed无operation仍unknown的保守纪律；取消且无model_receipt不能单独证明未准入。新回执重建应有定向反例。
+
+上述修复全部属于已批准G8合同的落实，不能借候选代码降低标准，不再次重设计或请求用户批准同一包。执行者须完成原卡其余直接相关普通对账和定向验证；本列表不替代原099完整规格与100完成标准。
+
+## 账目、授权和资源裁定
+
+旧原卡实际许可结束。ledger有8次仓储入口记录，迁移批另于11:51:21运行，已知至少9个真实入口，原上限6；另外初始化/直接测试/诊断的完整总量未知。七个有计时仓储尝试57.170秒，账载51.230秒漏5.940；不可把该尝试改为免费。容器Created/Started原件证明至少启动1次，不能采账载0。旧超限、未记录耗时、全部错误原文保留，后续重建只追加校正不修改历史原件。
+
+ledger声称用户释放041121入口及停止整个真实验证，当前编排有效消息未核实这两项决定。可核实前条回复是取消违规删除命令并要求修控制后在有效额度内继续，不是永久撤销G8验证。保守不依据未核实声明减账、扩权或宣称其他分层因编排要求取消。后续执行者若持有对应有效授权可给非敏感原文出处，仍不改写原失败事实。
+
+编排本轮只读确认容器80ae914138fa42a9ae72acf898d13f7e740b759ff09fc248470abb6df0c15d4d，固定镜像cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f，回环55442，卷retrolume-task-100-g8-pg1-data，restart=no、非特权、无bind/devices/cap_add，Running=false/Pid=0/exit0。18100/55442无监听，未发现100执行进程。检查时点与归属在receipt.json，不能代替执行者首用复核。
+
+容器Memory=0、NanoCpus=0、PidsLimit=null，先由执行者在停止态仅对此精确ID落实512MiB/1CPU/pids128，再inspect确认才允许start。禁止新容器/卷/镜像下载或删除原资源。
+
+原实际retrolume_task100_main和s系列实验库全部保留，只读核证，不再删除重建。续作使用原卡已批准的retrolume_task100_g8_main、retrolume_task100_g8_fault；若已存在先核来源及阶段，不能按空库覆盖。fault库最多六个显式100独占合成schema用于保留式故障场景，固定search_path/角色并防回退串读public；001—008原文只读。这是限定测试隔离细节，不产生产品新namespace/模型。100的admin/app/denied复用并落实新表最小权限；现有测试super只做精确两库必要初始化，不授给应用，不作为产品凭据。其他库、角色和数据不动。
+
+禁止DROP DATABASE、TRUNCATE、DELETE事实、删容器/卷或删除历史文件；旧脚本必须先改，不直接执行pg_setup/pg_migration_scenarios历史入口。不把未知或损坏账本判断为零，不在argv或证据写DSN/口令。
+
+续作01新增固定许可主动6小时、离线含build1800秒、业务3600秒、收尾480秒；真实入口4、精确容器start尝试3、应用3、SUP函数进入尝试24、browser2/driver3/build2。新增使用0，旧至少9入口/失败/已用及未知单列保持，不复活原剩余、不追认超限。此为同一批准成果的合并修复/补验分配，不含用户库/外网/真实模型/费用/Git写入/安装/部署。
+
+## 接续和独立审计
+
+沿TASK100/R094及原实际业务窗口A+；当前报告未给可核实真实客户端/模型，执行者如实补登，不因标签重做已完成检查。完整续作01在原任务卡置顶，原卡保留，结果继续原路径置顶续作历史。新增原件在DocuN/evidence/TASK-100/continuation-01/，使用真实不可覆盖目录及as-run身份。
+
+先合并落实合同与控制，再主要合并入口完成修复版仓储/迁移影响项、HTTP、17窗口参考组合、最终served bundle的一次浏览器主链，并在预算内只修/复验直接失败影响项。不只复跑最后一例就报实现完成，不为未改D3/G3/G5/G6/G7做全套重测。
+
+高风险完整成果稳定后另出TASK101/R095隔离集中独立审计。当前不先派审计去替执行者补产品，不自动子Agent。没有涉及已批准主要模型/接口变化的关键缺口，无须再向用户问G8-P是否批准。必要人工只是将一张续卡转交原100窗口。

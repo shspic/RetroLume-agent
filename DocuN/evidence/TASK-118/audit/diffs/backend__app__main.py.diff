@@ -1,0 +1,38 @@
+--- first-pre/backend/app/main.py
++++ current/backend/app/main.py
+@@ -14,6 +14,8 @@
+ from app.activities.api import router as activities_router
+ from app.learning.api import router as learning_router
+ from app.learning.teaching_api import router as teaching_router
++from app.retrieval.api import router as retrieval_router
++from app.retrieval.service import load_integration_config
+ from app.memory.api import router as memory_router
+ from app.interview.api import router as interview_router
+ from app.service_config import load_activity_config
+@@ -86,6 +88,18 @@
+         Path(__file__).resolve().parents[2] / "config" / "activity.local.json"
+     )
+     app.state.activity_config = load_activity_config(Path(config_path))
++    app.state.integration_config=load_integration_config(os.environ.get('RETROLUME_INTEGRATION_CONFIG'))
++    from dataclasses import replace
++    from app.service_config import LayerState
++    from app.capabilities.transport import HttpxModelTransport
++    activity_config=app.state.activity_config
++    embedding_service=app.state.integration_config.service
++    grant=embedding_service.outbound_grant if embedding_service else None
++    if grant and activity_config.model_service:
++        app.state.activity_config=replace(activity_config,model_service=activity_config.model_service.model_copy(update={'outbound_grant':grant,'outbound_source_manifest':embedding_service.outbound_source_manifest}))
++    elif HttpxModelTransport.is_external:
++        closed=LayerState(False,'outbound_not_authorized')
++        app.state.activity_config=replace(activity_config,continue_layer=closed,learning_layer=closed,teaching_layer=closed,interview_model_layer=closed,html_generation_layer=closed)
+     preview_path=os.environ.get("RETROLUME_PREVIEW_CONFIG")
+     policy=load_host_policy(preview_path,settings.data_dir/"preview-control") if preview_path else None
+     app.state.preview_policy=policy
+@@ -162,6 +176,7 @@
+     app.include_router(activities_router)
+     app.include_router(learning_router)
+     app.include_router(teaching_router)
++    app.include_router(retrieval_router)
+     app.include_router(memory_router)
+     app.include_router(interview_router)
+     app.include_router(preview_router)

@@ -1,0 +1,18 @@
+--- pre/backend/tests/test_activity_ledger.py
++++ post/backend/tests/test_activity_ledger.py
+@@ -44,6 +44,15 @@
+         async with await psycopg.AsyncConnection.connect(DSN) as connection:
+             await connection.execute("DROP TRIGGER IF EXISTS task048_force_failure ON activity_operations")
+             await connection.execute("DROP FUNCTION IF EXISTS task048_force_failure()")
++            # 007 子表存在时先删子表再删父表（旧 schema 无该表则跳过，不强塞新表清理）。
++            await connection.execute(
++                """DO $$
++                     BEGIN
++                       IF to_regclass('public.activity_operation_results') IS NOT NULL THEN
++                         EXECUTE 'DELETE FROM activity_operation_results';
++                       END IF;
++                     END $$"""
++            )
+             await connection.execute("DELETE FROM activity_operations")
+             await connection.execute("DELETE FROM activity_allowed_models")
+             await connection.execute("DELETE FROM activity_scope_sources")

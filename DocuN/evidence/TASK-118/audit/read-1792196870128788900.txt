@@ -1,0 +1,97 @@
+
+backend/app/learning/teaching_service.py
+500:             if node:
+501:                 return node['title']+' '+node['objective']
+502:         if facts and command.action == 'evaluate':
+503:             exercise = facts.get('exercise_projection') or {}
+504:             if exercise.get('stem'):
+505:                 return exercise['stem']
+506:         return snapshot.get("teaching_query") or "教学"
+507: 
+508:     @staticmethod
+509:     def _stored_document(command, snapshot, catalog, identity, facts) -> dict:
+510:         """发给模型的 user 投影：真实教学实体 + 受限目录；不含摘要自引用。
+511: 
+512:         DEF-004：目标/路径/题/参考/作答/纠错/前史/核算全部来自持久事实
+513:         组装，不再使用 answer_pending 占位或空引用。
+514:         """
+515:         document = {
+516:             "goal": facts["goal_text"] or "",
+517:             "goal_version": identity["goal_version"],
+518:             "scope_revision": snapshot["scope_revision"],
+519:             "evidence": [{"id": e.citation_id, "source": e.title, "origin_kind": e.origin_kind,
+520:                           "physical_page": e.physical_page, "lines": [e.start_line, e.end_line],
+521:                           "text": e.text} for e in catalog],
+522:         }
+523:         action = command.action
+524:         if action == "plan":
+525:             document["task"] = {"kind": "plan"}
+526:             if facts["correction_texts"]:
+527:                 document["task"]["corrections"] = facts["correction_texts"]
+528:         elif action == "exercise":
+529:             document["task"] = {"kind": "exercise",
+530:                                 "purpose": command.body.get("purpose", "initial"),
+531:                                 "node_id": command.body.get("node_id"),
+532:                                 "parent_feedback_record_id":command.body.get("parent_feedback_record_id"),
+533:                                 "parent_exercise_record_id":facts["parent_exercise_record_id"]}
+534:             if facts["path_nodes"]:
+535:                 document["task"]["path_nodes"] = facts["path_nodes"]
+536:             if facts["parent_feedback_summary"]:
+537:                 document["task"]["parent_feedback"] = facts["parent_feedback_summary"]
+538:         elif action == "evaluate":
+539:             document["task"] = {"kind": "evaluate",
+540:                                 "exercise": facts["exercise_projection"] or {},
+541:                                 "answer_text": facts["answer_text"] or ""}
+542:             if facts["correction_texts"]:
+543:                 document["task"]["corrections"] = facts["correction_texts"]
+544:             if facts["prior_observations"]:
+545:                 document["task"]["prior_observations"] = facts["prior_observations"]
+546:             if facts["calculation_summary"]:
+547:                 document["task"]["calculation"] = facts["calculation_summary"]
+548:         return document
+549: 
+550:     def _build_profile(self, activity_id, command, frozen, identity) -> object:
+551:         from .teaching_contracts import TeachingProfile
+552:         from .contracts import SourceIdentity
+553:         sources = [SourceIdentity(source_id=s.source_id, version_id=s.version_id,
+554:                                    source_revision=s.source_revision) for s in (frozen.catalog or [])]
+
+backend/app/interview/service.py
+40:         goal=await self.ledger.read_interview_record(aid,h['goal_record_id'],view['view_token'])
+41:         if goal['body'] is None:raise InterviewRefusal('interview_parent_invalid')
+42:         g=GoalBody.model_validate(goal['body']['value']['goal'])
+43:         snapshot=await self.ledger.read_learning_snapshot(aid)
+44:         units=await asyncio.to_thread(load_units,snapshot,self.materials,self.originals)
+45:         hybrid=command.schema_id=='interview.command.v2'
+46:         if hybrid:
+47:             from app.retrieval.service import RetrievalService
+48:             from app.retrieval.contracts import RetrievalRefusal
+49:             try:entries=await RetrievalService(self.ledger,self.materials,self.originals).catalog(aid,command.retrieval_ref,command.request_hash(aid),top_k=4,max_chars=4000,max_bytes=8000)
+50:             except RetrievalRefusal as exc:raise InterviewRefusal(exc.code,'本轮检索已失效') from None
+51:             catalog=[InterviewCatalogEntry.model_validate({**e.model_dump(),'citation_id':'ic_'+sha(command.request_hash(aid)+e.evidence_id)[:24]}) for e in entries]
+52:         else:catalog=assemble_catalog(g.target+' '+(g.focus or '')+' '+' '.join(g.clarifications),units,command.request_hash(aid))
+53:         refs=[]
+54:         if command.action=='review':
+55:             # Only this round's question/answer chain. No unbounded prior history.
+56:             needed={h['root_question_id'],h['current_question_id'],h['current_answer_id']}
+57:             round_rows=await self.ledger.read_interview_round_refs(aid,view['view_token'])
+58:             needed.update(r['record_id'] for r in round_rows)
+59:         else:needed={command.body.get('parent_feedback_id')} if command.body.get('parent_feedback_id') else set()
+60:         if len(needed)>12:raise InterviewRefusal('interview_context_too_large',status=422)
+61:         for rid in sorted(x for x in needed if x):
+62:             detail=await self.ledger.read_interview_record(aid,rid,view['view_token'])
+63:             if detail['body'] is None or not detail['record']['eligible']:raise InterviewRefusal('interview_parent_invalid')
+64:             r=detail['record'];refs.append(RecordRef(record_id=rid,kind=r['kind'],version=r['answer_version'],body_sha256=r['body_sha256'],
+65:                 body=self.ledger._interview_ref_body(r,detail['body'],command.action),operation_id=r['operation_id'],payload_sha256=r['payload_sha256']))
+66:         # Sorting by durable seq, not UUID, identifies latest answer/probe reliably.
+67:         order={r['record_id']:r['seq'] for r in view['records']}
+68:         if command.action=='review':order.update({r['record_id']:r['seq'] for r in round_rows})
+69:         refs.sort(key=lambda r:order.get(r.record_id,0))
+70:         limits=InterviewLimits(max_output_tokens=getattr(config,'interview_output_tokens',0) or 1,
+71:             max_followups_per_round=getattr(config,'interview_followups',0) or 1)
+72:         identity={'provider':config.provider,'model':config.model} if config.provider and config.model else await self.ledger.read_interview_identity(aid)
+73:         extra={}
+74:         if hybrid:
+75:             selection=await self.ledger.read_memory_selection(aid,include_bodies=True)
+76:             if not selection.get('eligible'):raise InterviewRefusal('interview_memory_dependency_invalid')
+77:             memory_refs=[{k:x[k] for k in ('memory_id','version','revision','body_sha256')} for x in selection['entries']]

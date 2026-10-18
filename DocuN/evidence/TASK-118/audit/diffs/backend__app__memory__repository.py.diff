@@ -1,0 +1,52 @@
+--- first-pre/backend/app/memory/repository.py
++++ current/backend/app/memory/repository.py
+@@ -40,6 +40,10 @@
+         if activity.get('_memory_selected'):
+             if tool:
+                 if not operation_id.startswith('teach8t.'):
++                    raise AdmissionDenied('memory_profile_required')
++            elif operation_id.startswith('int18m.'):
++                from app.interview.contracts import InterviewHybridCallBinding
++                if type(binding) is not InterviewHybridCallBinding or binding.memory_selection_sha256!=activity.get('_memory_selection_sha256') or binding.memory_dependency_sha256!=activity.get('_memory_dependency_sha256'):
+                     raise AdmissionDenied('memory_profile_required')
+             elif not operation_id.startswith('teach8m.') or not getattr(binding,'memory_selection_sha256',None):
+                 raise AdmissionDenied('memory_profile_required')
+@@ -168,9 +172,9 @@
+         cursor=await connection.execute("SELECT to_regclass('public.activity_operation_results') IS NOT NULL AS results,to_regclass('public.teaching_commands') IS NOT NULL AS commands")
+         objects=await cursor.fetchone();parts=[]
+         if objects['results']:
+-            parts.append(f"NOT EXISTS(SELECT 1 FROM public.activity_operation_results mr WHERE mr.activity_id={expression} AND mr.payload_format='json' AND mr.payload::jsonb->'value'->>'profile'='teaching.v2')")
++            parts.append(f"NOT EXISTS(SELECT 1 FROM public.activity_operation_results mr WHERE mr.activity_id={expression} AND mr.payload_format='json' AND mr.payload::jsonb->'value'->>'profile' IN ('teaching.v2','teaching.v3','interview.v2'))")
+         if objects['commands']:
+-            parts.append(f"NOT EXISTS(SELECT 1 FROM public.teaching_commands mt WHERE mt.activity_id={expression} AND mt.context_body IS NOT NULL AND mt.context_body::jsonb->>'schema'='teaching.context.v2')")
++            parts.append(f"NOT EXISTS(SELECT 1 FROM public.teaching_commands mt WHERE mt.activity_id={expression} AND mt.context_body IS NOT NULL AND mt.context_body::jsonb->>'schema' IN ('teaching.context.v2','teaching.context.v3'))")
+         return ' AND '.join(parts) or 'TRUE'
+ 
+     async def _memory_selected_sql(self,connection,expression):
+@@ -281,8 +285,18 @@
+         if row is not None:
+             row["_memory_eligible"]=bool(state["valid"])
+             row["_memory_selected"]=bool(state.get("selected"))
++            row['_memory_selection_sha256'],row['_memory_dependency_sha256']=await self._memory_binding_identity(connection,activity_id) if schema=='ready' else (None,None)
+         return {"activity":row,"snapshots":hint,"sources_valid":valid,"selected":bool(state.get("selected")),
+                 "eligible":bool(state["valid"]),"activities":activities,"dependencies":deps}
++
++    async def _memory_binding_identity(self,connection,activity_id):
++        cursor=await connection.execute('SELECT selection_sha256 FROM activity_memory_bindings WHERE activity_id=%s',(activity_id,))
++        binding=await cursor.fetchone()
++        if binding is None:return None,None
++        cursor=await connection.execute('''SELECT c.memory_id,c.version,c.selected_revision,c.body_sha256,r.dependencies_sha256
++          FROM activity_memory_choices c JOIN learning_memory_revisions r ON r.memory_id=c.memory_id AND r.version=c.version
++          WHERE c.activity_id=%s ORDER BY c.ordinal''',(activity_id,))
++        return binding['selection_sha256'],sha(canonical(plain(await cursor.fetchall())))
+ 
+     async def _memory_revision_rows(self,connection,memory_id,version=None):
+         cursor=await connection.execute("""SELECT h.*,r.claim_kind,r.uncertainty,r.policy_version,r.body_sha256,
+@@ -620,6 +634,7 @@
+                 valid=bool((await cursor.fetchone())['valid'])
+                 return {"selected":not valid,"eligible":valid,"selection_sha256":None,"entries":[]}
+             value=plain(row);value["selected"]=True
++            _,value['dependency_sha256']=await self._memory_binding_identity(connection,activity_id)
+             for entry in value["entries"]:
+                 if entry["body"]:entry["body"]=json.loads(entry["body"])
+                 if not include_bodies:entry.pop("body",None)

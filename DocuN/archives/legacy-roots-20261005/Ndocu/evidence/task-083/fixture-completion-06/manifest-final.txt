@@ -1,0 +1,15 @@
+TASK-083 fixture-completion-06 final targeted offline batch; pure substitutes only; no real event/Job/spawn/subprocess/PG/Docker/network/model/config.
+Python: backend/.venv/Scripts/python.exe -B (project venv, per card). Per-command <=60s, total <=120s. Stop on first failed command; no retry, no recheck. Single timing source: time.perf_counter in run_batch_06.py.
+Working directory for both commands: D:/shspic/project_NO3_RetroLume-agent
+Source hashes (see final-hashes.txt): focused_unit.py new=dfaaf814bb6abeea0a7f82d8499b1e03915c87bad50aa4a50295fcfde3995259 (pre=4a633aff...7a1ca; StartLifecycleTests section only, outside sections byte-identical per static-check 34/34); job_control.py=5bc35bf1...3980d2 and offline_unit.py=3029a709...4c5c unchanged.
+
+Command 1 (2 test methods, failfast):
+  backend/.venv/Scripts/python.exe -B backend/tests/fixtures/task083/focused_unit.py --failfast StartLifecycleTests.test_04_start_handle_closes_after_identity_receipt StartLifecycleTests.test_04_start_handle_release_exactly_once_on_failure
+  Expected: 2 ok, exit 0. Real verify_last_handle flow with fully stubbed OS (both WinDLL loads -> base-separated partial-wrapped Kernels 100/100100+; create_subprocess_exec -> FakeProc; NamedJob -> FakeNamedJob). Identity derived by fake_spawn from real spawn args (args[4]=activity_id, args[5]=int(str(generation)), args[6]=run_tag; argv order verified against job_control.py:82-84), receipt built with real job_name; no uuid4 patch; no identity check removed. Success asserts: suspended identity receipt (first readline) strictly precedes starter.CloseHandle(start_event=100); exactly one SetEvent and one CloseHandle on parent Start handle; OpenProcess/open_existing only after release, open_existing asserted with derived identity; worker_signaled_after_last_job_handle_closed=True. Failure branch A (spawn RuntimeError): Start handle released exactly once in finally, no readline/open_process/kill, derived identity stays empty dict. Failure branch B (empty receipt AssertionError): released exactly once, kill present, no open_process, open_existing absence checked with derived identity, readline precedes release.
+
+Command 2 (only if command 1 exits 0; 1 test method):
+  backend/.venv/Scripts/python.exe -B backend/tests/fixtures/task083/offline_unit.py OfflineRepairTests.test_05_early_success_uses_tree_zero_close_then_same_g_settle_retry
+  Expected: ok, exit 0. Deterministic local clock: t1>t0, observed ceil=1, W=6; tree-zero close precedes close_db, same-G settle retry; (settled,reserved,pending)=(1,0,0); active_processes_at_end=0.
+
+Old PASS evidence carried over by local invariance (no rerun, per card): EventControlTests collision pair and LauncherTests D1 deadline — outside-section bytes byte-identical to pre snapshot (head/tail equality in static check), direct dependencies frozen.
+Item 12 and the other 9 items reused per 084; no rerun.

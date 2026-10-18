@@ -1,0 +1,164 @@
+{
+  "evidence_level": "B，数据及源码路径反例，未运行产品或新测试",
+  "constraints_null_descriptor": {
+    "actions": [
+      {
+        "id": "hact_reset",
+        "kind": "reset",
+        "label": "恢复默认参数"
+      }
+    ],
+    "calculation_notes": [
+      {
+        "citations": [
+          "lc_synthetic_energy"
+        ],
+        "domain": "m/h均为0到10",
+        "error": "绝对误差1e-9",
+        "formula": "E=mgh，g=9.8",
+        "samples": [
+          {
+            "expected": "58.8 J",
+            "input": "m=2,h=3"
+          },
+          {
+            "expected": "0 J",
+            "input": "h=0"
+          }
+        ]
+      }
+    ],
+    "calculations": [
+      {
+        "expression": {
+          "args": [
+            {
+              "args": [
+                {
+                  "id": "hctl_m",
+                  "op": "input"
+                },
+                {
+                  "op": "const",
+                  "value": "9.8"
+                }
+              ],
+              "op": "mul"
+            },
+            {
+              "id": "hctl_h",
+              "op": "input"
+            }
+          ],
+          "op": "mul"
+        },
+        "id": "hcalc_energy"
+      }
+    ],
+    "citations": [
+      "lc_synthetic_energy"
+    ],
+    "concept": "合成材料定义E=mgh，g=9.8，数值及柱高按输入重算。",
+    "constraints": null,
+    "inputs": [
+      {
+        "default": "2",
+        "description": "合成资料限定参数",
+        "id": "hctl_m",
+        "kind": "number",
+        "label": "质量 m",
+        "max": "10",
+        "min": "0",
+        "step": "1"
+      },
+      {
+        "default": "3",
+        "description": "合成资料限定参数",
+        "id": "hctl_h",
+        "kind": "number",
+        "label": "高度 h",
+        "max": "10",
+        "min": "0",
+        "step": "1"
+      }
+    ],
+    "limitations": [
+      "只是冻结资料的公式交互，不证明全学科正确性"
+    ],
+    "schema": "interactive_description.v1",
+    "title": "机械能交互",
+    "views": [
+      {
+        "calculation": "hcalc_energy",
+        "id": "hout_energy",
+        "kind": "readout",
+        "label": "能量",
+        "unit": "J"
+      },
+      {
+        "id": "hview_energy",
+        "kind": "bar",
+        "label": "能量柱形图",
+        "source": {
+          "kind": "values",
+          "values": [
+            {
+              "label": "E",
+              "value": {
+                "id": "hcalc_energy",
+                "op": "result"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "BOM_header_metadata": {
+    "nonproduction_identity_placeholders": true,
+    "canonical_header": {
+      "protocol": "retrolume.preview.v2",
+      "type": "init",
+      "preview_id": "00000000-0000-0000-0000-000000000001",
+      "generation": 1,
+      "artifact_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "channel_nonce": "0000000000000000000000000000000000000000000000000000000000000000",
+      "seq": 0,
+      "body_bytes": 1577,
+      "body_sha256": "5b25deb8e776bfeb1382fe7e20e30df93b57c28e2438ecb38f77ac476d968548"
+    },
+    "BOM_header_hex": "efbbbf7b2261727469666163745f736861323536223a2230303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030222c22626f64795f6279746573223a313537372c22626f64795f736861323536223a2235623235646562386537373662666562313338326665376532306533306466393362353763323865323433386563623338663737616334373664393638353438222c226368616e6e656c5f6e6f6e6365223a2230303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030222c2267656e65726174696f6e223a312c22707265766965775f6964223a2230303030303030302d303030302d303030302d303030302d303030303030303030303031222c2270726f746f636f6c223a22726574726f6c756d652e707265766965772e7632222c22736571223a302c2274797065223a22696e6974227d",
+    "body_sha256": "5b25deb8e776bfeb1382fe7e20e30df93b57c28e2438ecb38f77ac476d968548",
+    "body_bytes": 1577,
+    "BOM_prefix": "EF BB BF",
+    "mechanism": "默认TextDecoder先移除起始BOM，比较解码text会漏原字节差异；该数据未被发送或运行"
+  },
+  "ready_schedule": {
+    "unit": "t0后的ns",
+    "wait_enter": 7998000000,
+    "wait_timeout": 20000000,
+    "ready_deadline": 8000000000,
+    "complete_ready_arrival": 8005000000,
+    "wait_returns": true,
+    "deadline_checked_only_on_false": true
+  },
+  "stderr_schedule": {
+    "chunks_bytes": [
+      1024,
+      1024,
+      1024,
+      1024,
+      1024,
+      1024,
+      1024,
+      1024,
+      1024
+    ],
+    "stderr_EOF_observed": false,
+    "stderr_thread_ended_by": "超8192分支break",
+    "stdout_EOF_later": true,
+    "attach_process_ended": true,
+    "both_reader_threads_ended": true,
+    "production_attach_ended_predicate": true
+  }
+}

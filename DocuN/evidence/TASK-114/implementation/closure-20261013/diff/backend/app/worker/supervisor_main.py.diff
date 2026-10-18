@@ -1,0 +1,11 @@
+--- before/backend/app/worker/supervisor_main.py
++++ final/backend/app/worker/supervisor_main.py
+@@ -48,7 +48,7 @@
+     if type(deadline_ns) is not int or deadline_ns <= time.monotonic_ns():
+         raise ValueError("management deadline expired")
+     ledger_data = value.get("ledger")
+-    if type(ledger_data) is not dict or set(ledger_data) != {
++    if type(ledger_data) is not dict or set(ledger_data)-{'data_guard'} != {
+         "dsn", "connect_timeout_seconds", "statement_timeout_ms", "lock_timeout_ms",
+     }:
+         raise ValueError("ledger data invalid")

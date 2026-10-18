@@ -1,0 +1,267 @@
+DocuN/evidence/TASK-117/execution/continuation-07/runtime.py
+1: """只托管S08合成HTTP与浏览器；独立Job闭包、截止、内存与父退出检查。"""
+2: import ctypes
+3: from ctypes import wintypes
+4: from datetime import datetime,timedelta,timezone
+5: import json
+6: import os
+7: import socket
+8: import subprocess
+9: import sys
+10: import time
+11: from control import N,E,ROOT,K,PERMIT,Job,birth,available_mib,sample,state,segment,guard,limits,count,write,event,failure
+12: 
+13: def port_free():
+14:     with socket.socket() as stream:
+15:         stream.settimeout(.5)
+16:         return stream.connect_ex(('127.0.0.1',18119))!=0
+17: 
+18: def identities(job):
+19:     class List(ctypes.Structure):_fields_=[('assigned',wintypes.DWORD),('returned',wintypes.DWORD),('pids',ctypes.c_size_t*512)]
+20:     data=List();K.QueryInformationJobObject.argtypes=[wintypes.HANDLE,ctypes.c_int,ctypes.c_void_p,wintypes.DWORD,ctypes.c_void_p]
+21:     if not K.QueryInformationJobObject(job.handle,3,ctypes.byref(data),ctypes.sizeof(data),None):raise ctypes.WinError(ctypes.get_last_error())
+22:     rows=[];K.OpenProcess.argtypes=[wintypes.DWORD,wintypes.BOOL,wintypes.DWORD];K.OpenProcess.restype=wintypes.HANDLE
+23:     for pid in list(data.pids)[:data.returned]:
+24:         handle=K.OpenProcess(0x1000|0x100000,False,pid)
+25:         if handle:
+26:             try:rows.append({'pid':pid,'birth_filetime':birth(handle)})
+27:             finally:K.CloseHandle(handle)
+28:     return rows
+29: 
+30: def main():
+31:     b=guard();assert b['active_root'] is None,'已有在途根，不能延长'
+32:     assert port_free(),'18119已有监听，不动其它进程或换端口'
+33:     memory=available_mib()
+34:     if memory<768:failure('S08_browser_memory_gate',f'{memory:.2f}MiB <768，未启动');return 2
+35:     started=sample();remaining=min(1500,limits(b,started))
+36:     resume=int(sys.argv[2]) if len(sys.argv)==3 and sys.argv[1]=='--resume-root' else None
+37:     if resume is None:
+38:         count('roots');b=state();root_id=b['counts']['roots'];assert 25<=root_id<=27
+39:         root={'id':root_id,'segment':PERMIT,'kind':'S08_closed_loopback_browser','start_utc':started['utc'],
+40:           'start_mono_ns':started['mono_ns'],'business_deadline_mono_ns':started['mono_ns']+int(remaining*1e9),
+41:           'business_deadline_utc':(datetime.fromisoformat(started['utc'])+timedelta(seconds=remaining)).isoformat(),
+42:           'cleanup_deadline_utc':(datetime.fromisoformat(started['utc'])+timedelta(seconds=remaining+300)).isoformat(),
+43:           'status':'active','initial_available_mib':memory,'attempt_number':1}
+44:         b['roots'].append(root)
+45:     else:
+46:         root_id=resume;root=next(r for r in b['roots'] if r['id']==resume)
+47:         assert root['segment']==PERMIT and root['status']=='closed' and root['stop']['child_exit_code']!=0
+48:         assert not root['stop']['same_birth_alive'] and root['stop']['18119_no_listener']
+49:         remaining=min(remaining,(root['business_deadline_mono_ns']-started['mono_ns'])/1e9)
+50:         assert remaining>0,'原根截止已到，不能续期'
+51:         root.setdefault('earlier_attempts',[]).append({'attempt_number':root.get('attempt_number',1),'stop':root['stop'],'evidence_directory':root['evidence_directory']})
+52:         root['attempt_number']=root.get('attempt_number',1)+1;root['status']='active'
+53:         event('S08_same_root_evidence_based_resume',root=root_id,attempt=root['attempt_number'],original_deadline=root['business_deadline_utc'],reason='已定位Playwright默认缓存指到sandbox子目录；明确使用现有缓存，不安装/换浏览器版本')
+54:     b['active_root']=root_id;segment(b)['holding_start_mono_ns']=started['mono_ns'];write(E/'budget.json',b)
+55:     directory=N/f'root-{root_id}'
+56:     if root['attempt_number']>1:directory=directory/f"attempt-{root['attempt_number']:02d}"
+57:     directory.mkdir(exist_ok=False)
+58:     write(directory/'spec.json',{'root':root,'permit':PERMIT,'evidence':str(directory),'project':str(ROOT),'port':18119,
+59:         'budget':str(E/'budget.json'),'profile':str(directory/'browser-profile'),'Q':'FROZEN'})
+60:     env=dict(os.environ);env.update(S08_SPEC=str(directory/'spec.json'),TEMP=str(directory),TMP=str(directory),PLAYWRIGHT_BROWSERS_PATH='C:/Users/28432/AppData/Local/ms-playwright')
+61:     job=Job();child=None;registered={};samples=[];reason='normal';parent=None
+62:     K.OpenProcess.argtypes=[wintypes.DWORD,wintypes.BOOL,wintypes.DWORD];K.OpenProcess.restype=wintypes.HANDLE
+63:     K.GetExitCodeProcess.argtypes=[wintypes.HANDLE,ctypes.POINTER(wintypes.DWORD)]
+64:     parent=K.OpenProcess(0x1000|0x100000,False,os.getppid())
+65:     try:
+66:         with (directory/'driver.log').open('wb') as output:
+67:             child=job.spawn(['C:/Program Files/nodejs/node.exe',str(ROOT/'frontend/tests/step018-s08.mjs')],cwd=ROOT,env=env,
+68:                             stdin=subprocess.PIPE,stdout=output,stderr=subprocess.STDOUT)
+69:             write(directory/'owned.json',{'controller':{'pid':os.getpid(),'birth_filetime':birth(K.GetCurrentProcess())},
+70:                 'node':{'pid':child.pid,'birth_filetime':birth(child._handle)},'kill_on_job_close':True,'root':root})
+71:             low=0
+72:             while child.poll() is None:
+73:                 clock=sample();mib=available_mib();rows=identities(job)
+74:                 for row in rows:registered[(row['pid'],row['birth_filetime'])]=row
+75:                 samples.append({'sample':clock,'available_mib':mib,'owned':rows})
+76:                 low=low+1 if mib<256 else 0
+77:                 parent_code=wintypes.DWORD(259)
+78:                 if parent:K.GetExitCodeProcess(parent,ctypes.byref(parent_code))
+79:                 if low>=2:reason='pressure_two_samples';break
+80:                 if parent_code.value!=259:reason='parent_exit';break
+81:                 if clock['mono_ns']>=root['business_deadline_mono_ns']:reason='original_root_deadline';break
+82:                 time.sleep(min(2,max(.01,(root['business_deadline_mono_ns']-clock['mono_ns'])/1e9)))
+83:             if reason!='normal':
+84:                 try:child.stdin.write(b'STOP\n');child.stdin.flush()
+85:                 except (BrokenPipeError,OSError):pass
+86:                 try:child.wait(timeout=15)
+87:                 except subprocess.TimeoutExpired:pass
+88:     except BaseException as exc:
+89:         reason='controller_exception:'+type(exc).__name__;failure('S08_runtime_controller',str(exc));raise
+90:     finally:
+91:         job.close()
+92:         if child is not None:
+93:             if child.stdin:child.stdin.close()
+94:             child.wait(timeout=10)
+95:         if parent:K.CloseHandle(parent)
+96:         ended=sample();seconds=(ended['mono_ns']-started['mono_ns'])/1e9
+97:         write(directory/'observations.json',samples)
+98:         alive=[]
+99:         for row in registered.values():
+100:             handle=K.OpenProcess(0x1000|0x100000,False,row['pid'])
+101:             if handle:
+102:                 try:
+103:                     code=wintypes.DWORD();K.GetExitCodeProcess(handle,ctypes.byref(code))
+104:                     if birth(handle)==row['birth_filetime'] and code.value==259:alive.append(row)
+105:                 finally:K.CloseHandle(handle)
+106:         stopped={'sample':ended,'reason':reason,'registered_pid_births':list(registered.values()),'same_birth_alive':alive,
+107:                  '18119_no_listener':port_free(),'child_exit_code':child.returncode if child else None,
+108:                  'holding_union_upper_seconds':seconds,'old_PG_observed':False,'Job_handle_closed':True}
+109:         write(directory/'stop.json',stopped)
+110:         b=state();s=segment(b);entry=next(r for r in b['roots'] if r['id']==root_id)
+111:         entry.update(status='closed',stop=stopped,evidence_directory=str(directory))
+112:         b['active_root']=None;s['holding_start_mono_ns']=None;s['last_clock']=ended
+113:         b['runtime_intervals'].append({'segment':PERMIT,'root':root_id,'start_utc':started['utc'],'end_utc':ended['utc'],
+114:             'seconds':seconds,'basis':'自有driver全寿命上界覆盖server/browser并集，启动与清场几毫秒也保守保留'})
+115:         s['offline_process_run_seconds']+=seconds
+116:         write(E/'budget.json',b);event('S08_runtime_closed',root=root_id,seconds=seconds,reason=reason,stop=stopped)
+117:         if alive or not stopped['18119_no_listener'] or child is None or child.returncode:
+118:             failure('S08_browser_root_'+str(root_id),json.dumps(stopped,ensure_ascii=False))
+119:     return 0 if reason=='normal' and child.returncode==0 and not alive and stopped['18119_no_listener'] else 1
+120: 
+121: if __name__=='__main__':raise SystemExit(main())
+
+DocuN/evidence/TASK-117/orchestration-s08-20261017/continuation-permit.json
+1: {
+2:   "id": "TASK-117-STEP018-AUDIT-REPAIR-S08-20261017",
+3:   "issued_at": "2026-10-17T17:49:25.194505+08:00",
+4:   "task": "TASK-117",
+5:   "R": "R-111",
+6:   "stage": "S08",
+7:   "status": "saved_pending_manual_transfer",
+8:   "start": "actual receipt first tool UTC plus current host monotonic identity, not issuance",
+9:   "calendar_hours": 48,
+10:   "save_only_calendar_remaining_seconds": 1200,
+11:   "activity_cap_seconds": null,
+12:   "activity_policy": "新段不以跨平台中断UTC总差作额外活动硬门；可观测段/UTC上界/未知分别留账，旧S07超额不追改",
+13:   "offline_child_process_wall_cap_seconds": 3600,
+14:   "runtime_holding_union_cap_seconds": 3600,
+15:   "renew_unused_S07_counts_only": true,
+16:   "new_roots": 3,
+17:   "root_business_seconds": 1500,
+18:   "root_cleanup_seconds": 300,
+19:   "baseline_counts": {
+20:     "roots": 24,
+21:     "pg_create_attempts": 6,
+22:     "pg_objects": 6,
+23:     "volumes": 6,
+24:     "pg_starts": 46,
+25:     "api_starts": 33,
+26:     "browser_starts": 16,
+27:     "frontend_builds": 7,
+28:     "native_windows": 140,
+29:     "preview_creates": 2,
+30:     "preview_starts": 2,
+31:     "http": 2324,
+32:     "provider_calls": 0,
+33:     "actual_fee_microunits": 0,
+34:     "fixture_server_starts": 0
+35:   },
+36:   "cumulative_caps": {
+37:     "roots": 27,
+38:     "pg_create_attempts": 6,
+39:     "pg_objects": 6,
+40:     "volumes": 6,
+41:     "pg_starts": 46,
+42:     "api_starts": 33,
+43:     "browser_starts": 19,
+44:     "frontend_builds": 9,
+45:     "native_windows": 140,
+46:     "preview_creates": 2,
+47:     "preview_starts": 2,
+48:     "http": 2924,
+49:     "provider_calls": 0,
+50:     "actual_fee_microunits": 0,
+51:     "fixture_server_starts": 3
+52:   },
+53:   "additional_PG_Docker_SQL_product_API_Job_preview_provider_fee_Git": 0,
+54:   "loopback": "127.0.0.1:18119",
+55:   "minimum_memory_MiB": {
+56:     "fixture_server": 512,
+57:     "browser": 768,
+58:     "pressure_exit_two_samples": 256
+59:   },
+60:   "Q_enabled": false,
+61:   "old_caps_or_activity_history_changed": false,
+62:   "no_permission_to_start_old_source_or_CIDs": true
+63: }
+
+DocuN/evidence/TASK-117/orchestration-s07-20261017/continuation-permit.json
+1: {
+2:   "id": "TASK-117-STEP018-AUDIT-REPAIR-S07-20261017",
+3:   "issued_at": "2026-10-17T09:09:22.668664+08:00",
+4:   "task": "TASK-117",
+5:   "R": "R-111",
+6:   "purpose": "TASK118 D01-D04合并修正与定向验证",
+7:   "status": "saved_pending_manual_transfer",
+8:   "starts_on": "actual first tool after receipt; not issuance",
+9:   "activity_seconds": 21600,
+10:   "no_new_family_after_seconds": 20400,
+11:   "save_reserve_seconds": 1200,
+12:   "calendar_hours": 48,
+13:   "offline_child_process_wall_seconds": 3600,
+14:   "runtime_holding_union_seconds": 3600,
+15:   "new_roots": 3,
+16:   "cumulative_roots_cap": 27,
+17:   "root_check_seconds": 1500,
+18:   "root_cleanup_seconds": 300,
+19:   "baseline_counts": {
+20:     "roots": 24,
+21:     "pg_create_attempts": 6,
+22:     "pg_objects": 6,
+23:     "volumes": 6,
+24:     "pg_starts": 46,
+25:     "api_starts": 33,
+26:     "browser_starts": 16,
+27:     "frontend_builds": 7,
+28:     "native_windows": 140,
+29:     "preview_creates": 2,
+30:     "preview_starts": 2,
+31:     "http": 2324,
+32:     "provider_calls": 0,
+33:     "actual_fee_microunits": 0
+34:   },
+35:   "new_counts": {
+36:     "browser_starts": 3,
+37:     "frontend_builds": 2,
+38:     "fixture_server_starts": 3,
+39:     "http": 600,
+40:     "pg_create_attempts": 0,
+41:     "pg_objects": 0,
+42:     "volumes": 0,
+43:     "pg_starts": 0,
+44:     "api_starts": 0,
+45:     "native_windows": 0,
+46:     "preview_creates": 0,
+47:     "preview_starts": 0,
+48:     "provider_calls": 0,
+49:     "actual_fee_microunits": 0
+50:   },
+51:   "cumulative_caps": {
+52:     "roots": 27,
+53:     "pg_create_attempts": 6,
+54:     "pg_objects": 6,
+55:     "volumes": 6,
+56:     "pg_starts": 46,
+57:     "api_starts": 33,
+58:     "browser_starts": 19,
+59:     "frontend_builds": 9,
+60:     "native_windows": 140,
+61:     "preview_creates": 2,
+62:     "preview_starts": 2,
+63:     "http": 2924,
+64:     "provider_calls": 0,
+65:     "actual_fee_microunits": 0
+66:   },
+67:   "fixture_binding": "127.0.0.1:18119, no PG/API product runtime, synthetic HTTP only",
+68:   "memory_gates_mib": {
+69:     "fixture_server": 512,
+70:     "browser": 768,
+71:     "pressure_exit_two_samples": 256,
+72:     "sample_interval_seconds": 2
+73:   },
+74:   "Q_enabled": false,
+75:   "financial_history_reset": false,
+76:   "historical_overruns_waived": false,
+77:   "runtime_now_started_by_main": false
+78: }

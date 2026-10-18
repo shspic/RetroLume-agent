@@ -1,0 +1,97 @@
+
+backend/app/data_exit/packages.py
+160:                         elif entry['path'].startswith('metadata/'):
+161:                             validate_metadata(entry['path'].split('/')[1][:-6],row,PROFILE)
+162:             elif entry["path"].endswith(".json"):
+163:                 if count > self.limits.manifest_bytes: raise DataError("capacity_exceeded", 413)
+164:                 value=load_json(self.archive.read(entry["path"]), self.limits)
+165:                 if entry['path']=='metadata/source_control.json':validate_metadata('source_control',value,PROFILE)
+166:                 if entry['path']=='codec_description.json':
+167:                     COLUMNS=self.schema_profile.columns;MIGRATIONS=self.schema_profile.codec_migrations
+168:                     from .codec import TRANSFORMS
+169:                     if value!={'profile':PROFILE,'columns':COLUMNS,'transformations':TRANSFORMS,'bigint_encoding':'decimal_string',
+170:                         'text_encoding':'UTF-8 原字符串','migration_sha256':MIGRATIONS}:raise DataError('codec_mismatch',422)
+171:         mandatory = {"records/" + t + ".jsonl" for t in TABLES} | {
+172:             "README.txt", "codec_description.json", "metadata/source_control.json", "metadata/operation_history.jsonl",
+173:             "metadata/tombstones.jsonl", "references/reference_edges.jsonl"}
+174:         if not {name.casefold() for name in mandatory}.issubset(seen): raise DataError("integrity_failed", 422)
+175:         if manifest["package_kind"] == "restore_checkpoint" and not {"checkpoint/" + t + ".jsonl" for t in TABLES}.issubset(seen):
+176:             raise DataError("integrity_failed", 422)
+177:         by_path={entry['path']:entry for entry in entries}
+178:         if manifest['package_kind']=='restore_checkpoint':
+179:             for table in TABLES:
+180:                 left,right=by_path['records/'+table+'.jsonl'],by_path['checkpoint/'+table+'.jsonl']
+181:                 if (left['bytes'],left['sha256'])!=(right['bytes'],right['sha256']):raise DataError('integrity_failed',422)
+182:         control=load_json(self.archive.read('metadata/source_control.json'),self.limits)
+183:         if control['dataset_id']!=point['source_dataset_id']:raise DataError('codec_mismatch',422)
+184:         allowed_availability = {"present", "deleted", "revoked", "never_received", "legacy_without_payload", "missing_optional", "missing_required"}
+185:         if not isinstance(manifest["availability"], list) or any(r.get("availability") not in allowed_availability for r in manifest["availability"]):
+186:             raise DataError("integrity_failed", 422)
+187:         if manifest["restore_eligible"] != (manifest["package_kind"] == "restore_checkpoint" and manifest["completion"] == "complete"):
+188:             raise DataError("integrity_failed", 422)
+189:         if (manifest['completion']=='complete')==any(r['availability']=='missing_required' for r in manifest['availability']):
+190:             raise DataError('integrity_failed',422)
+191:         version_availability={}
+192:         for item in manifest['availability']:
+193:             if 'version_id' in item:
+194:                 if set(item)!={'source_id','version_id','original_filename','sha256','size','availability','reason'} or item['version_id'] in version_availability:
+195:                     raise DataError('codec_mismatch',422)
+196:                 version_availability[item['version_id']]=item
+197:         seen_versions=set()
+198:         with self.archive.open('records/material_versions.jsonl') as stream:
+199:             for row in lines(stream,self.limits):
+200:                 self.check()
+201:                 if row['id'] in seen_versions:raise DataError('codec_mismatch',422)
+202:                 seen_versions.add(row['id']);item=version_availability.get(row['id'])
+203:                 if item is None or (item['source_id'],item['sha256'],item['size'],item['original_filename'])!=(row['source_id'],row['sha256'],row['size'],row['filename']):
+204:                     raise DataError('codec_mismatch',422)
+205:                 if item['availability']=='present':
+206:                     original=by_path.get('originals/'+row['sha256'])
+207:                     if original is None or (original['sha256'],original['bytes'])!=(row['sha256'],row['size']):raise DataError('integrity_failed',422)
+208:                     if row['format'] in ('txt','md'):
+209:                         text=by_path.get('texts/'+row['sha256']+'.txt')
+210:                         if text is None or (text['sha256'],text['bytes'])!=(row['sha256'],row['size']):raise DataError('integrity_failed',422)
+211:                         self.archive.read(text['path']).decode('utf-8-sig')
+212:                 elif item['availability'] not in ('deleted','missing_required'):raise DataError('codec_mismatch',422)
+213:         if seen_versions!=set(version_availability):raise DataError('codec_mismatch',422)
+214:         self.manifest = manifest
+215: 
+
+backend/app/data_exit/codec.py
+12:     if isinstance(raw, bytes):
+13:         if raw.startswith(b"\xef\xbb\xbf"):
+14:             raise DataError("integrity_failed", 422)
+15:         try:
+16:             raw = raw.decode("utf-8")
+17:         except UnicodeError:
+18:             raise DataError("integrity_failed", 422) from None
+19:     def pairs(items):
+20:         result = {}
+21:         for key, value in items:
+22:             if key in result:
+23:                 raise DataError("integrity_failed", 422)
+24:             result[key] = value
+25:         return result
+26:     try:
+27:         value = json.loads(raw, object_pairs_hook=pairs,
+28:                            parse_constant=lambda _: (_ for _ in ()).throw(DataError("integrity_failed", 422)))
+29:     except (ValueError, UnicodeError, RecursionError):
+30:         raise DataError("integrity_failed", 422) from None
+31:     def check(value, depth=0):
+32:         if depth > limits.json_depth:
+33:             raise DataError("capacity_exceeded", 413)
+34:         if isinstance(value, str) and any(0xD800 <= ord(c) <= 0xDFFF for c in value):
+35:             raise DataError("integrity_failed", 422)
+36:         if isinstance(value, float) and not math.isfinite(value):
+37:             raise DataError("integrity_failed", 422)
+38:         if isinstance(value, dict):
+39:             for key, child in value.items():
+40:                 check(key, depth + 1); check(child, depth + 1)
+41:         elif isinstance(value, list):
+42:             for child in value: check(child, depth + 1)
+43:     check(value)
+44:     return value
+45: 
+46: 
+47: def plain(value):
+48:     if isinstance(value, UUID): return str(value)

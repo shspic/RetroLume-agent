@@ -1,0 +1,17 @@
+--- pre/backend/tests/fixtures/task111/c05_fault_actor.py
++++ post/backend/tests/fixtures/task111/c05_fault_actor.py
+@@ -78,9 +78,13 @@
+             trigger["method"]="actual anonymous pipe header length2049 exceeds2048"
+         elif name=="hard_deadline":
+             original=h.controller._db
++            freeze={"deadline_ns":c["deadline_ns"],"planned_release_ns":c["deadline_ns"]+10**9,"trigger_ns":time.monotonic_ns(),"entries":[]}
+             def frozen(awaitable):
+-                time.sleep(max(0,(c["deadline_ns"]+10**9-time.monotonic_ns())/1e9));return original(awaitable)
++                entry={"entered_ns":time.monotonic_ns()};freeze["entries"].append(entry);atomic(out/"hard-deadline-freeze.json",freeze)
++                time.sleep(max(0,(c["deadline_ns"]+10**9-time.monotonic_ns())/1e9));entry["released_ns"]=time.monotonic_ns();atomic(out/"hard-deadline-freeze.json",freeze)
++                return original(awaitable)
+             h.controller._db=frozen;trigger["method"]="freeze actual Supervisor observation; independent production Reaper retains original D"
++            trigger["trigger_ns"]=freeze["trigger_ns"]
+         elif name=="owner_control_lost":trigger["method"]="owner heartbeat withheld; only ownerless persistent reads remain"
+         else:raise RuntimeError("fixed independent fault")
+         atomic(out/"trigger.json",trigger)

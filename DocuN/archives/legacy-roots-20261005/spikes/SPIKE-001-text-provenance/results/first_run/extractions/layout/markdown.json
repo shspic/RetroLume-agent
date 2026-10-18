@@ -1,0 +1,119 @@
+{
+  "case_id": "markdown",
+  "source_path": "fixtures/bilingual.md",
+  "source_sha256": "b2487b19389890ebd96286055fe5e0af34e05526af1d0d5f8ba3a60aadfa8304",
+  "basename": "bilingual.md",
+  "mode": "layout",
+  "adapter": "Python UTF-8 source read (no Markdown renderer)",
+  "status": "success",
+  "pages": [
+    {
+      "physical_page": null,
+      "text": "# 复习卡片 / Review card\n\n- 中文：先解释，再举例。\n- English: explain first, then give an example.\n\n| 项目 / Item | 数值 / Value |\n| --- | --- |\n| 时间 / Time | 3 seconds |\n"
+    }
+  ],
+  "evaluation": {
+    "fragments": [
+      {
+        "id": "MD1",
+        "expected": {
+          "id": "MD1",
+          "text": "# 复习卡片 / Review card",
+          "line": 1
+        },
+        "hits": [
+          {
+            "physical_page": null,
+            "extracted_offset": 0,
+            "text": "# 复习卡片 / Review card",
+            "excerpt": "# 复习卡片 / Review card\n\n- 中文：先解释，再举例。\n- English: exp",
+            "source_line": 1
+          }
+        ],
+        "content_unique_pass": true,
+        "location_pass": true
+      },
+      {
+        "id": "MD2",
+        "expected": {
+          "id": "MD2",
+          "text": "- 中文：先解释，再举例。",
+          "line": 3
+        },
+        "hits": [
+          {
+            "physical_page": null,
+            "extracted_offset": 22,
+            "text": "- 中文：先解释，再举例。",
+            "excerpt": "# 复习卡片 / Review card\n\n- 中文：先解释，再举例。\n- English: explain first, the",
+            "source_line": 3
+          }
+        ],
+        "content_unique_pass": true,
+        "location_pass": true
+      },
+      {
+        "id": "MD3",
+        "expected": {
+          "id": "MD3",
+          "text": "- English: explain first, then give an example.",
+          "line": 4
+        },
+        "hits": [
+          {
+            "physical_page": null,
+            "extracted_offset": 36,
+            "text": "- English: explain first, then give an example.",
+            "excerpt": " / Review card\n\n- 中文：先解释，再举例。\n- English: explain first, then give an example.\n\n| 项目 / Item | 数值 / Value |\n|",
+            "source_line": 4
+          }
+        ],
+        "content_unique_pass": true,
+        "location_pass": true
+      },
+      {
+        "id": "MD4",
+        "expected": {
+          "id": "MD4",
+          "text": "| 时间 / Time | 3 seconds |",
+          "line": 8
+        },
+        "hits": [
+          {
+            "physical_page": null,
+            "extracted_offset": 126,
+            "text": "| 时间 / Time | 3 seconds |",
+            "excerpt": " | 数值 / Value |\n| --- | --- |\n| 时间 / Time | 3 seconds |\n",
+            "source_line": 8
+          }
+        ],
+        "content_unique_pass": true,
+        "location_pass": true
+      }
+    ],
+    "orders": [
+      {
+        "name": "source_lines",
+        "expected": [
+          "MD1",
+          "MD2",
+          "MD3",
+          "MD4"
+        ],
+        "observed": [
+          "MD1",
+          "MD2",
+          "MD3",
+          "MD4"
+        ],
+        "pass": true
+      }
+    ],
+    "page_count": null
+  },
+  "python_warnings": [],
+  "pypdf_log": "",
+  "captured_stdout": "",
+  "captured_stderr": "",
+  "status_matches_manifest": true
+}

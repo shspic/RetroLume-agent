@@ -1,0 +1,19 @@
+--- first-pre/frontend/src/activities/memoryIntents.ts
++++ current/frontend/src/activities/memoryIntents.ts
+@@ -133,12 +133,13 @@
+ 
+ 
+ export async function submitTrackedMemoryCreate(activityId: string, sourceIds: string[],
+-  entries: import("./memoryApi").MemoryChoice[], token: string) {
++  entries: import("./memoryApi").MemoryChoice[], token: string,expectedSources?:{source_id:string;version_id:string;revision:number}[]) {
+   const api = await import("./memoryApi");
+   const owner = await memoryEditorOwner();
+   if (!owner) throw new Error("本机恢复身份不可用，未创建活动。");
+-  const body = { activity_id: activityId, source_ids: [...sourceIds].sort(), memory_selection: { confirmed: true, entries } };
+-  const hash = await api.memoryDigest(body);
++  const identity = { activity_id: activityId, source_ids: [...sourceIds].sort(), memory_selection: { confirmed: true, entries } };
++  const body={...identity,...(expectedSources?{expected_sources:expectedSources}:{})};
++  const hash = await api.memoryDigest(identity);
+   const draftId = "create|" + activityId + "|" + owner;
+   if (!await saveMemoryDraft({ id: draftId, memory_id: activityId, owner, version: 0, revision: 0, body_sha: "",
+     content: JSON.stringify(body) }) || !await appendMemoryIntent({ key: activityId, memory_id: activityId, owner,

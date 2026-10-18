@@ -1,0 +1,203 @@
+
+deploy/start_local.py
+1: """启动已配置的本地资料工作台；Ctrl+C结束本次应用和本次启动的数据库。"""
+2: import json
+3: import os
+4: import signal
+5: from pathlib import Path
+6: import subprocess
+7: import time
+8: import sys
+9: import argparse
+10: import threading
+11: 
+12: ROOT=Path(__file__).resolve().parents[1]
+13: NAME="retrolume-local-pg"
+14: IMAGE="sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f"
+15: 
+16: def docker(*args):
+17:     result=subprocess.run(["docker",*args],capture_output=True,text=True,encoding="utf-8",errors="replace",timeout=20)
+18:     if result.returncode:raise RuntimeError("Docker操作未完成，请检查Docker Desktop是否已启动")
+19:     return result.stdout.strip()
+20: 
+21: def serve_owned(port):
+22:     """本机启动器的精确stdin生命周期；仍由正常app/lifespan收尾。"""
+23:     sys.path.insert(0,str(ROOT/'backend'))
+24:     import asyncio,uvicorn
+25:     from app.main import create_app
+26:     from app.runtime import psycopg_compatible_loop_factory
+27:     server=uvicorn.Server(uvicorn.Config(create_app(),host='127.0.0.1',port=port,timeout_graceful_shutdown=150))
+28:     def close_on_owner_end():
+29:         sys.stdin.readline()
+30:         server.should_exit=True
+31:     threading.Thread(target=close_on_owner_end,name='local-launcher-owned-input',daemon=True).start()
+32:     with asyncio.Runner(loop_factory=psycopg_compatible_loop_factory) as runner:runner.run(server.serve())
+33: 
+34: def main():
+35:     parser=argparse.ArgumentParser()
+36:     parser.add_argument('--port',type=int,default=8000)
+37:     parser.add_argument('--container',default=NAME)
+38:     parser.add_argument('--shutdown-stdin',action='store_true',help='由当前启动句柄的stdin一行或EOF触发正常关闭')
+39:     parser.add_argument('--serve-owned',action='store_true',help=argparse.SUPPRESS)
+40:     args=parser.parse_args()
+41:     if not 1024<=args.port<=65535:raise RuntimeError('端口无效')
+42:     if args.serve_owned:return serve_owned(args.port)
+43:     config=ROOT/"config/database.local.json"
+44:     data_dir=os.environ.get("RETROLUME_DATA_DIR")
+45:     backup_dir=os.environ.get("RETROLUME_BACKUP_DIR")
+46:     if not data_dir or not backup_dir:
+47:         raise RuntimeError("缺少RETROLUME_DATA_DIR或RETROLUME_BACKUP_DIR；请在本机设置并保持两目录独立")
+48:     dsn=os.environ.get("RETROLUME_DATABASE_URL")
+49:     original_dsn=dsn
+50:     factory=None
+51:     selected_target=None
+52:     if os.environ.get('RETROLUME_DATA_EXIT_CONFIG'):
+53:         sys.path.insert(0,str(ROOT/'backend'))
+54:         from app.data_exit.config import load_profile
+55:         from app.data_exit.control import ControlHub
+56:         from app.data_exit.restore import TargetFactory
+57:         profile=load_profile()
+58:         if profile is not None:
+59:             hub=ControlHub(os.environ['RETROLUME_CONTROL_ROOT'])
+60:             selection=hub.state()['selection']
+61:             if selection is not None:
+62:                 factory=TargetFactory(hub,os.environ['RETROLUME_RESTORE_ROOT'],profile['factory'])
+63:                 selected_target=factory.target(selection['target_id'])
+64:                 dsn=factory.readonly_credentials(selected_target.target_id)['readonly_dsn']
+65:     if not dsn:
+66:         if not config.is_file():raise RuntimeError("缺少本地数据库配置；请设置RETROLUME_DATABASE_URL或创建受忽略的私有配置，切勿把密码发送到对话")
+67:         dsn=json.loads(config.read_text(encoding="utf-8"))["url"]
+68:     # 不启动同名但来源不一致的容器。
+69:     selected_name=selected_target.name if selected_target is not None else args.container
+70:     selected_image=factory.profile['image_id'] if factory is not None else IMAGE
+71:     if docker("inspect","--format","{{.Image}}",selected_name)!=selected_image:
+72:         raise RuntimeError("数据库容器与已配置镜像不一致，请先检查")
+73:     own_cid=docker("inspect","--format","{{.Id}}",selected_name)
+74:     if selected_target is not None and own_cid!=selected_target.cid:raise RuntimeError('只读副本身份不符，不能回退原库')
+75:     already_running=docker("inspect","--format","{{.State.Running}}",own_cid)=="true"
+76:     started=False
+77:     process=None
+78:     try:
+79:         if not already_running:
+80:             if factory is not None:factory.start(selected_target)
+81:             else:docker("start",own_cid)
+82:             started=True
+83:         deadline=time.monotonic()+20
+84:         while True:
+85:             if factory is not None:
+86:                 factory._wait_pg(dsn)
+87:                 break
+88:             import psycopg
+89:             try:
+90:                 with psycopg.connect(dsn,connect_timeout=3):pass
+91:                 break
+92:             except psycopg.Error:pass
+93:             if time.monotonic()>=deadline:raise RuntimeError("数据库启动超时；保留数据，不自动重建")
+94:             time.sleep(.3)
+95:         # 按实际数据库/登录就绪核对，不假定retrolume用户名；重开不迁移、不更换正常库。
+96:         sys.path.insert(0,str(ROOT/'backend'))
+97:         from app.data_exit.schema_checks import assert_data_schema_sync
+98:         from psycopg.rows import dict_row
+99:         with psycopg.connect(dsn,row_factory=dict_row) as application:
+100:             assert_data_schema_sync(application)
+101:             if application.execute('SELECT rolsuper FROM pg_roles WHERE rolname=current_user').fetchone()['rolsuper']:
+102:                 raise RuntimeError('业务进程不能使用superuser连接')
+103:         env=os.environ.copy()
+104:         env.update(RETROLUME_DATA_DIR=data_dir,RETROLUME_BACKUP_DIR=backup_dir)
+105:         # 目标连接仅用于其就绪检查；源旁证连接保留原身份，不冒目标为源。
+106:         application_dsn=original_dsn if selected_target is not None else dsn
+107:         if application_dsn:env['RETROLUME_DATABASE_URL']=application_dsn
+108:         else:env.pop('RETROLUME_DATABASE_URL',None)
+109:         print(f"Open http://127.0.0.1:{args.port} - Ctrl+C to stop.",flush=True)
+110:         process=subprocess.Popen(
+111:             [
+112:                 str(ROOT/"backend/.venv/Scripts/python.exe"),
+113:                 str(Path(__file__).resolve()),
+114:                 "--serve-owned",
+115:                 "--port",
+116:                 str(args.port),
+117:             ],
+118:             cwd=ROOT/"backend",
+119:             env=env,
+120:             stdin=subprocess.PIPE,
+121:             creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP|subprocess.CREATE_NO_WINDOW) if os.name=="nt" else 0,
+122:         )
+123:         if args.shutdown_stdin:
+124:             def close_from_owner():
+125:                 sys.stdin.readline()
+126:                 if process.poll() is None:
+127:                     try:process.stdin.write(b'stop\n');process.stdin.flush()
+128:                     except (OSError,ValueError):pass
+129:             threading.Thread(target=close_from_owner,name='local-launcher-owner',daemon=True).start()
+130:         process.wait()
+131:     except KeyboardInterrupt:
+132:         pass
+133:     finally:
+134:         if process is not None and process.poll() is None:
+135:             try:
+136:                 # 独占匿名输入管道优先请求正常lifespan；无控制HTTP或全局进程操作。
+137:                 process.stdin.write(b'stop\n');process.stdin.flush()
+138:                 process.wait(timeout=170)
+139:             except (OSError,subprocess.TimeoutExpired):
+140:                 process.terminate()
+141:                 try:process.wait(timeout=5)
+142:                 except subprocess.TimeoutExpired:process.kill();process.wait(timeout=3)
+143:                 print("应用退出未完成预览确认；保留preview-control收据，同Windows用户重启核对后才能再次打开预览。",flush=True)
+144:         if started:
+145:             if docker("inspect","--format","{{.Image}}",own_cid)!=selected_image:
+146:                 raise RuntimeError("本次数据库身份未确认，保留资源等待核对")
+147:             if factory is not None:factory.stop(selected_target)
+148:             else:docker("stop","--time","5",own_cid)
+149: 
+150: if __name__=="__main__":
+151:     try:main()
+152:     except (RuntimeError,OSError,KeyError,json.JSONDecodeError) as error:
+153:         print(str(error))
+154:         raise SystemExit(1)
+
+backend/app/main.py
+42:     for field, env in (("data_dir", "RETROLUME_DATA_DIR"), ("backup_dir", "RETROLUME_BACKUP_DIR")):
+43:         value = os.environ.get(env)
+44:         if not value:
+45:             raise RuntimeError(f"缺少本地配置：{env}")
+46:         values[field] = value
+47:         if os.environ.get('RETROLUME_DATA_EXIT_CONFIG'):
+48:             from app.data_exit.files import safe_root
+49:             safe_root(Path(value))
+50:     settings = Settings(**values)
+51:     a, b = settings.data_dir, settings.backup_dir
+52:     if a == b or a in b.parents or b in a.parents:
+53:         raise ValueError("资料与备份目录必须独立")
+54:     return settings
+55: 
+56: def create_app(materials=None) -> FastAPI:
+57:     settings = load_settings()
+58:     @asynccontextmanager
+59:     async def lifespan(application):
+60:         control=application.state.preview_controller
+61:         data=application.state.data_exit
+62:         if control is not None and (data is None or data.context().mode=='normal'):await control.recover()
+63:         try:yield
+64:         finally:
+65:             if control is not None:await control.close()
+66:     app = FastAPI(title="RetroLume development", docs_url=None, redoc_url=None, openapi_url=None,lifespan=lifespan)
+67:     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver"])
+68: 
+69:     @app.get("/health")
+70:     def health() -> dict[str, str]:
+71:         return {"status": "ok", "mode": "development"}
+72: 
+73:     originals_root = settings.data_dir / "originals"
+74:     originals_root.mkdir(exist_ok=True)
+75:     app.state.originals = OriginalStore(originals_root)
+76:     app.state.session_token = secrets.token_urlsafe(32)
+77:     dsn = os.environ.get("RETROLUME_DATABASE_URL")
+78:     app.state.materials = materials if materials is not None else (PostgresMaterials(dsn) if dsn else None)
+79:     # G6 活动账本独立失败关闭：DSN 缺失或非法只让活动面不可用，不影响资料入口。
+80:     ledger = None
+81:     if dsn:
+82:         try:
+83:             ledger = PostgresAdmissionLedger(dsn)
+84:         except ValueError:
+85:             ledger = None
+86:     app.state.activities_ledger = ledger

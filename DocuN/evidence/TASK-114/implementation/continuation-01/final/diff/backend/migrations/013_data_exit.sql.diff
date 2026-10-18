@@ -1,0 +1,15 @@
+--- pre/backend/migrations/013_data_exit.sql
++++ final/backend/migrations/013_data_exit.sql
+@@ -394,7 +394,11 @@
+   IF current_user<>'retrolume_memory_purger' THEN RAISE EXCEPTION '只可用获准精确清理函数'; END IF;
+   RETURN OLD;
+  END IF;
+- SELECT state,current_version INTO h FROM public.learning_memories WHERE memory_id=NEW.memory_id FOR KEY SHARE;
++ IF public.data_loading_allowed() THEN
++  SELECT state,current_version INTO h FROM public.learning_memories WHERE memory_id=NEW.memory_id;
++ ELSE
++  SELECT state,current_version INTO h FROM public.learning_memories WHERE memory_id=NEW.memory_id FOR KEY SHARE;
++ END IF;
+  IF NOT public.data_loading_allowed() AND (h.state IS DISTINCT FROM 'active' OR NEW.version NOT IN(h.current_version,h.current_version+1)) THEN
+   RAISE EXCEPTION '撤销正文不可重插'; END IF;
+  SELECT body_sha256,body_bytes,claim_kind,uncertainty INTO r FROM public.learning_memory_revisions WHERE memory_id=NEW.memory_id AND version=NEW.version;

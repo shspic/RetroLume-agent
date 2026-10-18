@@ -1,0 +1,15 @@
+# TASK-104 review-02 源码独立预判
+
+本记录在读取本轮运行结果、浏览器控制器、PG对照及实现者汇总判断之前形成。当前308对象与9项规则/合同指纹已匹配；两源码pre指纹与首轮F01对象一致，post与当前一致。未读取TASK103结果、自评或实现聊天。
+
+MemoryWorkspace.tsx第131—173行同时固定实例代际、owner、读取序号及ID/version/revision/body SHA。回执后先验证实例，再只更新持久意图显示；离开原编辑身份不再发旧select。两处保留新编辑分支在列表await之后重新检查sameEditor；正常分支清稿后再检查完整身份和编辑序号，最终列表与select由unchangedEditor授权。原F01的“回执已到，旧列表等待期间明确载入B”在源码上被阻断，尚待准确窗口的原件验证。
+
+select自己递增readSequence后，内部以新序号保护detail/get草稿及finally；execute不在正常select后要求旧序号才能放行确认，finally仅按sameInstance解除其busy。因此合法正常确认不会因自身select改变序号被全部拒绝。旧实例/旧token effect的owner、caps、初始草稿、列表回调由lifecycle隔离；cleanup增加lifecycle和readSequence并中止旧detail。当前实例切B时清notice，旧catch按sameEditor抑制，旧finally只解除仍属于本实例的忙状态。其余旧预览/选用/显式恢复实现未改，不扩展重审范围。
+
+memoryIntents.ts第78—90行新增条件删除：openDb返回后检查current；readwrite事务get成功事件内再次检查，随后同步delete固定的完整草稿key。开库或get回调之前的新编辑立即增加editSequence，使条件失效；事件内条件与delete没有await。回调之后新编辑的同store写事务晚于该删除事务创建，因此应在删除结束后落新草稿。事务错误/中止返回false，回滚不产生部分删除；本轮未实测故障注入。此项依据源码与W3C规范2.7.1/2.7.2独立判定，不能把代码注释作为证据。
+
+规范来源为[IndexedDB事务生命周期与调度](https://w3c.github.io/IndexedDB/#transaction-scheduling)，本轮仅查看一页官方原文：请求事件派发时事务可继续排请求；同store重叠的readwrite事务按创建先后排队，失败回滚。该规范说明是推导事务时序的依据，运行覆盖仍由原件另判。
+
+固定draft key仍含edit、ID、version、revision、body SHA、owner。新增条件删除唯一调用在execute；submitTrackedMemory的业务键、canonical摘要、意图正文先保存、回执身份四项匹配、拒绝/未确认分类以及显式同键恢复均未改。原intent草稿清理和revoke全ID清理保持原语义，不凭新增函数宣称修复这些未改路径。
+
+当前独立B级结论：F01所报控制点已修正，暂未见两文件增量导致的确定同链回归；证据/当前bundle/执行控制结论保留，需继续核原件。本轮产品/fixture/测试/资源执行次数为0。

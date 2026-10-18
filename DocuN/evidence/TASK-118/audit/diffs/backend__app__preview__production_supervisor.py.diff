@@ -1,0 +1,126 @@
+--- first-pre/backend/app/preview/production_supervisor.py
++++ current/backend/app/preview/production_supervisor.py
+@@ -74,6 +74,7 @@
+                         status=birth(owned["pid"])
+                         if status["state"]=="unknown" or status["state"]=="running" and status["birth"]==owned["birth"]:
+                             raise OwnershipUnknown("settled_owned_process_not_ended")
++                    self._end_recovered_owned(registry,saved)
+                     self.blocked=False;return
+                 if settled["state"]=="stopped":
+                     saved=await self.ledger._read_html_stop_confirmation(registry["activity_id"],registry["preview_id"])
+@@ -100,6 +101,7 @@
+                             raise OwnershipUnknown("settled_owned_process_not_ended")
+                     atomic_json(folder/("recovery-reused-"+self.boot_id+".json"),{"tree_confirmation":saved["tree_confirmation"],"cid":registry["cid"],
+                       "source_receipt_sha256":digest(saved),"same_started_finished_identity":True,"current_owned_instances_ended":True,"current_inspect":actual})
++                    self._end_recovered_owned(registry,saved)
+                     self.blocked=False;return
+             recovery_stage="parent";old_parent=birth(registry["parent"]["pid"])
+             if old_parent["state"]=="unknown" or (old_parent["state"]=="running" and old_parent["birth"]==registry["parent"]["birth"]):
+@@ -183,11 +185,33 @@
+                 await self.ledger.update_html_preview(registry["preview_id"],key,"failed_unstarted" if proof["tree_confirmation"]=="never_started" else "stopped",
+                     confirmation=proof,elapsed=row["reserve_seconds"])
+             registry["complete"]=True;atomic_json(folder/"registry.json",registry);atomic_json(folder/"recovery-proof.json",proof)
++            self._end_recovered_owned(registry,proof)
+             atomic_json(self.current_file,{"folder":str(folder),"preview_id":registry["preview_id"],"complete":True});self.blocked=False
+         except Exception as error:
+             self.blocked=True
+             code=str(error)[:128] if isinstance(error,(OwnershipUnknown,DockerUnknown,HtmlRefusal)) else "bounded_recovery_error"
+             atomic_json(self.root/("recovery-error-"+self.boot_id+".json"),{"stage":recovery_stage,"error_type":type(error).__name__,"code":code})
++
++    def _end_recovered_owned(self,registry,proof):
++        """Only a verified normal recovery can close its exact durable data work."""
++        gate=getattr(self,'mutation_gate',None)
++        if gate is None:return
++        if (registry.get('complete') is not True or proof.get('tree_confirmation') not in ('never_started','private_pid_init_terminated')
++            or proof.get('cid')!=registry.get('cid') or proof.get('image_id')!=registry['intent']['image_id']
++            or proof.get('nonce')!=registry['intent']['nonce']
++            or registry.get('cid') is None and (proof.get('parent_lifetime_ended') is not True
++                or not (proof.get('owned_reaper_ended') is True or proof.get('reaper_never_registered') is True and proof.get('registered_launcher_ended') is True))):
++            raise OwnershipUnknown('recovery_data_owned_proof')
++        matches=[r for r in gate.hub.state()['owned'].values() if r.get('kind')=='preview'
++                 and r.get('identity',{}).get('preview_id')==registry['preview_id']]
++        if not matches:return
++        if len(matches)!=1:raise OwnershipUnknown('recovery_data_owned_ambiguous')
++        row=matches[0];identity=row['identity']
++        if (identity.get('native_registry_id')!=registry['preview_id'] or identity.get('parent')!=registry['parent']
++            or identity.get('generation')!=registry['generation']
++            or identity.get('boot_id')!=registry['intent']['labels'].get('retrolume.boot')):
++            raise OwnershipUnknown('recovery_data_owned_identity')
++        if row.get('state')!='ended':gate.end_owned(row['owned_id'],confirmed=True,proof_sha256=digest(proof))
+ 
+     def _event(self,kind,value):
+         if self._event_sink:self._event_sink(kind,value)
+@@ -225,10 +249,12 @@
+         reserve=min(60,180-budget["settled_seconds"]-budget["reserved_seconds"])
+         if reserve<30 or budget["starts_used"]>=3:raise HtmlRefusal("html_preview_budget_exhausted")
+         now=time.monotonic_ns();pid=str(uuid4());control_key=secrets.token_hex(32)
++        stages=[{'stage':'t0_reserve_begin','at_ns':now}]
+         identity={"preview_id":pid,"owner_id":str(uuid4()),"boot_id":self.boot_id,"nonce":secrets.token_hex(32),
+           "control_key":control_key,"image_id":self.policy.image_id,"config_sha256":self.config_sha256,"t0_ns":now,
+           "deadline_at":datetime.now(timezone.utc)+timedelta(seconds=reserve)}
+         row,created=await self.ledger.reserve_html_preview(aid,artifact_id,command,identity,reserve)
++        stages.append({'stage':'reserve_end','at_ns':time.monotonic_ns()})
+         if not created:return await self.status(aid,row["preview_id"])
+         name=self._name_supplier(pid,row["generation"]) if self._name_supplier else "retrolume-preview-v2-"+pid.replace("-","")
+         parent=birth(os.getpid())
+@@ -244,7 +270,7 @@
+            "kernel_ready":None,"received_ready":None,"ready_received_ns":None,"ready_accepted_ns":None,
+            "pipe_eof":False,"stderr_eof":False,"stdout_read_error":None,"stderr_read_error":None,
+            "stderr_observed_bytes":0,"stderr_captured_bytes":0,"stderr_overflow":False,
+-           "error_code":None,"last_contact_ns":now,"reaper_owner":None}
++           "error_code":None,"last_contact_ns":now,"reaper_owner":None,"stage_times":stages}
+         current["input_times"]=deque();current["rate_exceeded_since"]=None
+         current["intent"]={"name":name,"image_id":self.policy.image_id,"nonce":identity["nonce"],"docker":self.policy.docker,
+           "kernel_release":self.policy.kernel_release,"created_unix":str(int(time.time())-1),
+@@ -255,10 +281,12 @@
+                   "intent":current["intent"],"cid":None,"complete":False,"control_key_blob":protect_control_key(control_key),
+                   "activity_id":aid,"preview_id":pid,"generation":row["generation"],"attach_pid":None,"attach_birth":None}
+         current["registry"]=registry;atomic_json(folder/"registry.json",registry);atomic_json(self.current_file,{"folder":str(folder),"preview_id":pid})
++        stages.append({'stage':'registry_end','at_ns':time.monotonic_ns()})
+         gate=getattr(self,'mutation_gate',None)
+         if gate is not None:
+             current['data_owned_id']=gate.register_owned('preview',{'parent':registry['parent'],'preview_id':pid,
+                 'boot_id':self.boot_id,'generation':row['generation'],'native_registry_id':pid})
++        stages.append({'stage':'data_owned_end','at_ns':time.monotonic_ns()})
+         with self._lock:
+             if self.current is not None:raise OwnershipUnknown("physical_owner_conflict")
+             self.current=current
+@@ -394,6 +422,7 @@
+         if gate is not None:
+             with gate.close_lane(c['data_owned_id']):
+                 with gate.acquire():
++                    c['stage_times'].append({'stage':'supervisor_gate_acquired','at_ns':time.monotonic_ns()})
+                     try:self._run_data_owned(c)
+                     finally:
+                         gate.end_owned(c['data_owned_id'],confirmed=c['registry'].get('complete') is True,
+@@ -403,12 +432,14 @@
+ 
+     def _run_data_owned(self,c):
+         with HostJob(job_name(c["preview_id"],c["nonce"],"SUP")) as job:
++            c['stage_times'].append({'stage':'SUP_job_created','at_ns':time.monotonic_ns()})
+             c["host_job"]=job;c["reaper_job"]=None
+             with scope(job):self._run_owned(c)
+ 
+     def _run_owned(self,c):
+         proof=None;started=False;registry=c["folder"]/"registry.json";stage="reaper_start"
+         try:
++            c['stage_times'].append({'stage':'reaper_Popen_begin','at_ns':time.monotonic_ns()})
+             reaper=subprocess.Popen([str(BACKEND/".venv"/"Scripts"/"python.exe"),"-B","-m","app.preview.production_reaper",str(registry)],
+                 cwd=BACKEND,env=clean_env(),stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,creationflags=subprocess.CREATE_NO_WINDOW)
+             c["reaper"]=reaper
+@@ -419,6 +450,7 @@
+                 if reaper.poll() is not None or time.monotonic_ns()>min(c["t0_ns"]+3000000000,c["deadline_ns"]-10000000000):raise OwnershipUnknown("reaper_not_ready")
+                 time.sleep(.02)
+             ready_owner=json.loads((c["folder"]/"reaper-ready.json").read_text(encoding="utf-8"))
++            c['stage_times'].append({'stage':'reaper_ready_observed','at_ns':time.monotonic_ns()})
+             expected_job=job_name(c["preview_id"],c["nonce"],"REAP")
+             if ready_owner.get("job_name")!=expected_job:raise OwnershipUnknown("reaper_job_identity")
+             lineage=child_lineage(ready_owner["pid"],ready_owner["birth"],reaper.pid,launcher["birth"])
+@@ -549,6 +581,7 @@
+                          "ready_received_ns":c.get("ready_received_ns"),"ready_accepted_ns":c.get("ready_accepted_ns"),
+                          "pipe_observation":self._pipe_observation(c),"at_ns":time.monotonic_ns()})
+             self._observe(c,"finished",{"preview_id":c["preview_id"],"state":c["state"],"confirmed":confirmed,"error_code":c["error_code"]})
++            self._save_observation(c,c['folder']/'stage-times.json',{'t0_ns':c['t0_ns'],'deadline_ns':c['deadline_ns'],'stages':c['stage_times']})
+             if not published:self.blocked=True;confirmed=False
+             if confirmed:
+                 if not self._save_observation(c,self.current_file,{"folder":str(c["folder"]),"preview_id":c["preview_id"],"complete":True}):

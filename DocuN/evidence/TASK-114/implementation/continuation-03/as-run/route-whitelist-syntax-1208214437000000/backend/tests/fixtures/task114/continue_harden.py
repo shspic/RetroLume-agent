@@ -1,0 +1,119 @@
+"""最后有限合并根：失败target撤权、控制日志坏尾/中段、目标不可用HTTP。"""
+import json
+import os
+from pathlib import Path
+import subprocess
+import time
+from uuid import uuid4
+from budget import ROOT,EVIDENCE
+from setup_source import IMAGE,memory_guard
+from app.data_exit.contracts import DataContext,DataError,DataJobCommand,canonical,digest
+from app.data_exit.control import ControlHub
+from app.data_exit.restore import TargetRef,inspect_target,docker_call
+from app.preview.process import birth
+
+def harden_group(budget,evidence,source,credentials):
+    from continue_run import runtime_for
+    from matrix_pg import environment
+    import psycopg
+    from psycopg.conninfo import make_conninfo
+    app,rt=runtime_for(credentials,budget)
+    state=rt.hub.state();selection=state['selection']
+    if selection is None:raise RuntimeError('此组要求原selector已经提交')
+    value=next(v for v in state['targets'].values() if v['slot_id']=='target06')
+    target=TargetRef(value['target_id'],value['job_id'],value['profile_id'],value['cid'],value['name'],value['volume'],value['port'],value['dataset_id'],value['instance_id'],value['root_id'],rt.factory.root/value['job_id'])
+    if value['state']!='failed':raise RuntimeError('负例目标状态漂移')
+    inspect_target(target,IMAGE)
+    # 只在内存中读取本卡合成container的bootstrap变量用于精确撤销；绝不dump Env。
+    full=json.loads(docker_call(['inspect',target.cid]))[0]
+    env={s.split('=',1)[0]:s.split('=',1)[1] for s in full['Config']['Env'] if '='in s}
+    if env['POSTGRES_USER']!='retrolume_task114_admin' or env['POSTGRES_DB']!='retrolume_task114_target':raise RuntimeError('失败目标bootstrap身份未知')
+    dsn=make_conninfo(host='127.0.0.1',port=target.port,dbname=env['POSTGRES_DB'],user=env['POSTGRES_USER'],password=env['POSTGRES_PASSWORD'])
+    evidence.secrets.extend([dsn,env['POSTGRES_PASSWORD']]);env.clear();full=None
+    rt.factory.start(target)
+    try:
+        rt.factory._wait_pg(dsn)
+        with psycopg.connect(dsn,connect_timeout=3) as conn:
+            rt.factory._ephemeral[target.target_id]={'admin_dsn':dsn}
+            rt.factory.abandon(target)
+            roles=conn.execute("SELECT rolname,rolcanlogin,rolpassword IS NULL AS password_cleared FROM pg_authid WHERE rolname='retrolume_task114_admin'").fetchall()
+            if roles!=[('retrolume_task114_admin',False,True)]:raise RuntimeError('负例缺loader时admin未撤销')
+        evidence.observe('01-failed-bootstrap-revoked',{'target_id':target.target_id,'roles':roles,'failed_target_never_restored':True,'cleanup_only_start':True})
+    finally:rt.factory.stop(target)
+    # 真实文件控制日志反例均在新scratch，不改本卡权威journal。
+    root=ROOT/'DocuN/evidence/TASK-114/synthetic/scratch'/('c01-control-'+str(uuid4()));root.mkdir()
+    ctx=lambda hub:DataContext(hub.control_id,0,str(uuid4()),str(uuid4()),'normal')
+    one=root/'tail';one.mkdir();h=ControlHub(one);origin=ctx(h)
+    job=h.create_or_get_job(DataJobCommand('portable_export','c01-control-key',{'mode':'all'}),origin);raw=h.path.read_bytes()
+    (one/'cache.json').write_bytes(b'{broken-cache')
+    if h.get_by_key('c01-control-key')['job_id']!=job['job_id']:raise RuntimeError('cache成为权威')
+    with h.path.open('ab') as stream:stream.write(b'\x00\x00')
+    before=h.path.read_bytes();got=h.get_by_key('c01-control-key')
+    if before!=h.path.read_bytes() or got['job_id']!=job['job_id']:raise RuntimeError('GET修复/丢失断尾前缀')
+    try:h.create_or_get_job(DataJobCommand('portable_export','c01-new-key',{'mode':'all'}),origin)
+    except DataError as e:
+        if e.code!='control_tail_unconfirmed':raise
+    else:raise RuntimeError('断尾仍新写')
+    two=root/'middle';two.mkdir();middle=ControlHub(two);middle.create_or_get_job(DataJobCommand('portable_export','c01-middle',{'mode':'all'}),ctx(middle))
+    broken=bytearray(middle.path.read_bytes());broken[30]^=1;middle.path.write_bytes(broken)
+    try:middle.get_by_key('c01-middle')
+    except DataError as e:
+        if e.code!='control_corrupt':raise
+    else:raise RuntimeError('中段坏仍读取/授新权')
+    evidence.observe('02-control-real-files',{'cache_ignored':True,'tail_prefix_get_readonly':True,'tail_write_rejected':True,'middle_rejected':True,'retained_root':str(root)})
+    # 真实目标不可用：Source和selected target都停，重启API仍能GET原job/包。
+    for v in rt.hub.state()['targets'].values():
+        if 'cid'in v and v.get('state')=='sealed':
+            t=rt.factory.target(v['target_id'])
+            if inspect_target(t,IMAGE)['running']:raise RuntimeError('不可用HTTP前有已选target在运行')
+    if inspect_target(source,IMAGE)['running']:raise RuntimeError('不可用HTTP前source仍运行')
+    environment(credentials);budget.reserve('api_start');budget.reserve('windows_start')
+    process=None;identity=None
+    try:
+        with (evidence.path/'api-unavailable.log').open('xb') as log:
+            process=subprocess.Popen([str(ROOT/'backend/.venv/Scripts/python.exe'),'-X','utf8',str(ROOT/'backend/tests/fixtures/task114/api_boot.py')],cwd=ROOT,env=dict(os.environ),stdout=log,stderr=subprocess.STDOUT,creationflags=subprocess.CREATE_NO_WINDOW)
+            born=birth(process.pid);identity='api:'+str(process.pid)+':'+str(born['birth']);budget.created(identity,'api',{'pid':process.pid,'birth':born['birth'],'port':18114});budget.begin(identity)
+            import httpx
+            with httpx.Client(base_url='http://127.0.0.1:18114',timeout=5) as client:
+                end=time.monotonic()+20
+                while True:
+                    try:
+                        if client.get('/health').status_code==200:break
+                    except httpx.TransportError:pass
+                    if process.poll() is not None or time.monotonic()>end:raise RuntimeError('目标不可用时API未启动')
+                    time.sleep(.1)
+                token=client.get('/api/session').json()['token'];headers={'X-RetroLume-Session':token}
+                caps=client.get('/api/data/capabilities',headers=headers).json()
+                if not caps['read_only'] or caps.get('target_observation_status')!='unknown':raise RuntimeError('不可用目标放开原源')
+                before=rt.hub.path.read_bytes();reads=[]
+                for j in rt.hub.state()['jobs'].values():
+                    response=client.get('/api/data/jobs/by-key/'+j['business_key'],headers=headers)
+                    if response.status_code!=200 or response.json()['job_id']!=j['job_id']:raise RuntimeError('target不可用时原键消失')
+                    reads.append(j['job_id'])
+                response=client.get('/api/data/packages/737bf7ba-18c2-436c-a011-3aabbc1a8b2b/content',headers=headers)
+                if response.status_code!=200 or digest(response.content)!='45177d58ea58fcaa704bfdd48641aceade7ca6e6f4fe5d6759b3a46bf2671665':raise RuntimeError('目标不可用时旧包消失')
+                record=client.get('/api/data/saved-records',headers=headers)
+                if record.status_code!=503:raise RuntimeError('业务读回退旧source')
+                if before!=rt.hub.path.read_bytes():raise RuntimeError('不可用只读GET写journal')
+                evidence.observe('03-target-unavailable-HTTP',{'caps':caps,'old_jobs_read':reads,'old_package_hash_verified':True,'business_read_status':record.status_code,'journal_unchanged':True,'source_fallback':False})
+    finally:
+        if process is not None:
+            if process.poll() is None:process.terminate()
+            process.wait(timeout=10)
+            if identity:budget.end(identity,{'pid':process.pid,'process_ended':True,'exit_code':process.returncode})
+    # 精确marker扫描普通包/公开材料；仅输出命中路径，不输出secret。
+    from setup_source import reference
+    _,known=reference();from psycopg.conninfo import conninfo_to_dict
+    needles=[known['maintenance_key'].encode('utf-8')]
+    needles.extend(conninfo_to_dict(s).get('password','').encode('utf-8') for k,s in known.items() if k.endswith('_dsn'))
+    inspected=[];hits=[]
+    for path in (ROOT/'DocuN/evidence/TASK-114/synthetic/backup-root/packages').glob('*.rldata'):
+        import zipfile
+        with zipfile.ZipFile(path) as z:
+            for name in z.namelist():
+                data=z.read(name)
+                if any(n and n in data for n in needles):hits.append({'package':path.name,'member':name})
+        inspected.append({'path':str(path),'sha256':digest(path.read_bytes())})
+    if hits:raise RuntimeError('合成凭据在包内出现')
+    evidence.observe('04-secret-scan',{'packages':inspected,'credential_values_printed':False,'hits':hits,'control_private_files_excluded':True})
+    return {'state':'passed','source_stopped':True,'selected_generation':selection['generation'],'failed_credentials_revoked':True}

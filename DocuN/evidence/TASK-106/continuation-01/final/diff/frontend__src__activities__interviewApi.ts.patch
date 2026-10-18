@@ -1,0 +1,11 @@
+--- pre/frontend/src/activities/interviewApi.ts
++++ post/frontend/src/activities/interviewApi.ts
+@@ -4,7 +4,7 @@
+ export type InterviewGoal = {target:string;focus:string|null;clarifications:string[];material_roles:SourceRole[]};
+ export type InterviewCommand = {schema:"interview.command.v1";business_key:string;action:InterviewAction;expected_head_revision:number;expected_goal_version:number;expected_scope_revision:number;body:Record<string,unknown>};
+ export type InterviewHead = {revision:number;goal_version:number;scope_revision:number;phase:string;round_index:number;probe_depth:number;last_seq:number;goal_record_id:string|null;root_question_id:string|null;current_question_id:string|null;current_answer_id:string|null;current_feedback_id:string|null;pending_key:string|null};
+-export type InterviewRecordMeta = {record_id:string;seq:number;kind:string;origin:string;goal_version:number;scope_revision:number;round_index:number;probe_depth:number;answer_version:number|null;question_record_id:string|null;body_sha256:string;operation_id:string|null;eligible:boolean};
++export type InterviewRecordMeta = {record_id:string;seq:number;kind:string;origin:string;goal_version:number;scope_revision:number;round_index:number;probe_depth:number;answer_version:number|null;question_record_id:string|null;body_sha256:string;operation_id:string|null;eligible:boolean;can_correct_answer:boolean};
+ export type InterviewSource = {source_id:string;version_id:string;source_revision:number;original_sha256:string;title:string;format:string;valid:boolean};
+ export type InterviewWorkspaceView = {schema:"interview.view.v1";activity_id:string;domain:string;head:InterviewHead|null;sources:InterviewSource[];budget:Record<string,number|string|null>;pending:{business_key:string;status:string}|null;records:InterviewRecordMeta[];view_token:string;qualification:string;suppression_reason:string|null;capabilities:{local:boolean;model:boolean;model_reason:string|null;max_followups_per_round:number|null;max_output_tokens:number|null}};
+ export type InterviewReceipt = {schema:"interview.receipt.v1";activity_id:string;business_key:string;request_sha256:string;status:string;action:InterviewAction;effect_applied:boolean;duplicate_of:string|null;record_ids:string[];qualification:string;error_code:string|null;view_token:string;launch_claimed:boolean};

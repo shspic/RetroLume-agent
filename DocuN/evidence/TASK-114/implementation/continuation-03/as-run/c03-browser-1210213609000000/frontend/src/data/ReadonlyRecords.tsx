@@ -1,0 +1,10 @@
+import {useEffect,useState} from 'react';
+import {dataRequest} from './dataApi';
+import {useDataContext} from './context';
+const categories=[['activities','活动与备份时点的账'],['learning','已保存学习输出'],['teaching','教学记录与修正'],['interview','面试记录与修正'],['memories','记忆版本与撤销'],['preview_history','预览历史与未知预留'],['versions','资料全部版本']];
+export function ReadonlyRecords({token}:{token:string}){
+  const context=useDataContext();
+  const [category,setCategory]=useState('activities'),[items,setItems]=useState<any[]>([]),[offset,setOffset]=useState(0),[next,setNext]=useState<number|null>(null),[error,setError]=useState('');
+  useEffect(()=>{let alive=true;const controller=new AbortController();setError('');setItems([]);setNext(null);void dataRequest(token,`/saved-records?category=${category}&offset=${offset}`,undefined,{signal:controller.signal}).then(value=>{if(alive&&!controller.signal.aborted){setItems(value.items);setNext(value.next_offset);}}).catch(reason=>{if(alive&&reason.name!=='AbortError')setError(reason.message);});return()=>{alive=false;controller.abort();};},[token,category,offset,context?.control_id,context?.instance_id,context?.selection_generation]);
+  return <section><h2>已保存记录</h2><p>以下仅查看备份时点的记录与关系。旧额度和未知预留保留，执行已冻结。已删除来源的派生正文无法回查；预览历史不会启动渲染。</p><label>记录类型<select value={category} onChange={event=>{setCategory(event.target.value);setOffset(0);}}>{categories.map(([key,label])=><option key={key} value={key}>{label}</option>)}</select></label>{error&&<p role="alert">{error}</p>}{items.map((item,index)=><article key={index}><p>{item.availability==='present'?'已保存':item.availability==='revoked'?'已撤销，正文不回查':'关联来源已删除或内容不可回查'}</p><pre>{JSON.stringify(item.record,null,2)}</pre></article>)}{offset>0&&<button onClick={()=>setOffset(Math.max(0,offset-20))}>上一页</button>}{next!==null&&<button onClick={()=>setOffset(next)}>下一页</button>}</section>;
+}

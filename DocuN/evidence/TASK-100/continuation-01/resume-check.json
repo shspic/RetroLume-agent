@@ -1,0 +1,52 @@
+{
+  "schema": "task100.continuation-01.resume-check.v1",
+  "at": "2026-10-03T05:50:48.847081+00:00",
+  "window": "GLM-5.3-Flash 续作01 执行窗口（续接初轮后新会话，真实客户端模型以此为准）",
+  "purpose": "续作01 断点核验：续作证据目录此前为空，本次为首条记录",
+  "input_index": "DocuN/evidence/TASK-100/orchestration-receipt-01/continuation-input.json",
+  "result": {
+    "match": 86,
+    "drift": 3,
+    "missing": 0
+  },
+  "drift_attribution": {
+    "judgment": "三个漂移文件内容经逐行核对均为续作01 合同 DEF-003 修复方向（本窗口摘要截断前的早期续作修复），归属明确，保留不回退",
+    "details": [
+      {
+        "path": "backend/app/activities/teaching_repository.py",
+        "indexed_sha256": "c250401c0025f91ba31f25d6d0e580115b41190334166f516821773265cdbe94",
+        "current_sha256": "f9cd1abf556386ce906ef16c87a919c1c649155df16383d43957888044a7b1a8",
+        "indexed_bytes": 64536,
+        "current_bytes": 64423
+      },
+      {
+        "path": "backend/migrations/009_teaching.sql",
+        "indexed_sha256": "924cec98b1f21f82073a28339387a6759d853128392467cd2327e90317213c33",
+        "current_sha256": "9fb8a3a261a1d01a658478ba31bcdd79ef409823b7490f93cb8ee52f696b638c",
+        "indexed_bytes": 14058,
+        "current_bytes": 13324
+      },
+      {
+        "path": "backend/tests/fixtures/task100/pg_setup.py",
+        "indexed_sha256": "8bc872308782ec92cf754f6086c45c553cb1406b7c0da459de7855d71ddf08ca",
+        "current_sha256": "78146fd204392d1c9e7c1f4095efb36f97fe45e642cefcf6bbd9c1b1c8c2c4a3",
+        "indexed_bytes": 7094,
+        "current_bytes": 9010
+      }
+    ],
+    "evidence": {
+      "backend/migrations/009_teaching.sql": "teaching_records_immutable 触发器已改为无条件拒绝 UPDATE/DELETE（含 applied_revision/state_after），REVOKE ALL FROM PUBLIC 在位（L178-212）",
+      "backend/app/activities/teaching_repository.py": "applied_revision/state_after 改为 INSERT 时写入最终值（L367/400/487/557/856/881/928/950），无 UPDATE teaching_records 回填",
+      "backend/tests/fixtures/task100/pg_setup.py": "records 仅授 SELECT/INSERT，heads/commands 列级 UPDATE 白名单，PUBLIC REVOKE，含 records_writable 自校验"
+    }
+  },
+  "not_yet_done": [
+    "DEF-004（teaching_service 上下文装配/资格链）—— hash 未变",
+    "DEF-005（teaching_api 一致读面）—— hash 未变",
+    "DEF-007（finish_teaching_supervision 结局判断）—— hash 未变",
+    "DEF-006 runner 控制器修正 —— runner.py hash 未变（58907d27）",
+    "pg_migration_scenarios.py 仍含 L64 DROP DATABASE WITH (FORCE)、L258 GRANT TO PUBLIC —— 未修",
+    "test_teaching_api.py / test_teaching_recovery.py 不存在"
+  ],
+  "budget_note": "本轮（续作01）新增使用 0：以上核验全部为只读 hash 对比与文件读取，未触任何真实资源/入口"
+}

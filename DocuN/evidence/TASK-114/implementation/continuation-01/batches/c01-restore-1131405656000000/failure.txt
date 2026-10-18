@@ -1,0 +1,17 @@
+Traceback (most recent call last):
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task114\continue_run.py", line 100, in main
+    result=restore_group(budget,evidence,source,credentials)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task114\continue_run.py", line 69, in restore_group
+    verified=runtime.restore.verify(job['job_id'],record['plan_sha256'])
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\data_exit\restore.py", line 338, in verify
+    proof = self._load(reader, target, plan)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\data_exit\restore.py", line 410, in _load
+    connection.execute(statement, tuple(decoded[c] for c in columns))
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\.venv\Lib\site-packages\psycopg\connection.py", line 300, in execute
+    raise ex.with_traceback(None)
+psycopg.errors.InsufficientPrivilege: permission denied for table learning_memories
+CONTEXT:  SQL statement "SELECT state,current_version        FROM public.learning_memories WHERE memory_id=NEW.memory_id FOR KEY SHARE"
+PL/pgSQL function public.memory_body_guard() line 9 at SQL statement

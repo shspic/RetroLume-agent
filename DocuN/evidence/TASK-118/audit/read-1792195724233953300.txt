@@ -1,0 +1,254 @@
+
+backend/app/activities/api.py
+343:     quota = dict(config.quota_preview or {})
+344:     integration=getattr(request.app.state,'integration_config',None)
+345:     embedding=integration.service if integration is not None and integration.available else None
+346:     grant=embedding.outbound_grant if embedding else None
+347:     grant_sha=None
+348:     if grant:
+349:         from app.capabilities.embedding import OutboundGrant
+350:         trusted=OutboundGrant.from_wire(grant)
+351:         from app.capabilities.embedding import OutboundSourceManifest
+352:         manifest=OutboundSourceManifest.from_wire(embedding.outbound_source_manifest)
+353:         if manifest.sha256!=trusted.source_manifest_sha256:raise _error(409,'outbound_manifest_mismatch','资料采用清单身份不符')
+354:         approved={(s['source_id'],s['source_version_id'],s['source_revision']) for s in manifest.sources}
+355:         if any((item,str(current[item]['current_version']),int(current[item]['revision'])) not in approved for item in source_ids):raise _error(409,'outbound_source_not_approved','所选资料版本不在已批准的合成清单')
+356:         if activity_id not in trusted.allowed_activity_ids:raise _error(409,'outbound_grant_mismatch','该活动不在已批准名单')
+357:         roster=['01800000-0000-4000-8000-000000000001','01800000-0000-4000-8000-000000000002','01800000-0000-4000-8000-000000000003']
+358:         index=roster.index(activity_id);grant_sha=trusted.sha256
+359:         quota.update(deadline_hours=24,max_requests=(40,24,16)[index],max_cost_microunits=(10000000,6000000,4000000)[index],reserve_cost_microunits=250000,max_running_seconds=3600,max_request_bytes=65536,max_output_tokens=4096,max_tool_calls=8)
+360:     if not quota:
+361:         raise _error(503, "config_unavailable", "活动额度配置不可用")
+362:     spec = ActivitySpec(
+363:         activity_id=activity_id,
+364:         sources=tuple(
+365:             SourceSnapshot(item, str(current[item]["current_version"]), int(current[item]["revision"]))
+366:             for item in source_ids
+367:         ),
+368:         deadline_at=datetime.now(timezone.utc) + timedelta(hours=int(quota["deadline_hours"])),
+369:         max_requests=int(quota["max_requests"]),
+370:         max_cost_microunits=int(quota["max_cost_microunits"]),
+371:         reserve_cost_microunits=int(quota["reserve_cost_microunits"]),
+372:         max_request_bytes=int(quota["max_request_bytes"]),
+373:         max_output_tokens=int(quota["max_output_tokens"]),
+374:         max_running_seconds=int(quota["max_running_seconds"]),
+375:         allowed_models=((config.provider, config.model),)+(((embedding.provider,embedding.model),) if embedding else ()),
+376:         outbound_grant_sha256=grant_sha,
+377:         allowed_tools=tuple(quota.get('allowed_tools',[])) if config.teaching_calculation_layer.available else (),
+378:         max_tool_calls=quota.get('max_tool_calls') if config.teaching_calculation_layer.available else None,
+379:     )
+380:     try:
+381:         await ledger.create_activity(spec,memory_selection=body.memory_selection)
+382:     except MemoryRefusal as exc:
+383:         raise _error(exc.status,exc.code,exc.message) from None
+384:     except ActivityLedgerConflict as exc:
+385:         message = str(exc)
+386:         if "已存在" in message:
+387:             raise _error(409, "activity_exists", "该活动已存在") from None
+388:         if "撤销" in message or "替换" in message:
+389:             raise _error(409, "source_replaced", "资料版本已变化，请刷新后重新选择") from None
+390:         raise _map_read_error(exc) from None
+391:     except Exception as exc:
+392:         raise _map_read_error(exc) from None
+393:     try:
+394:         fact = await service.read_activity(activity_id)
+395:     except Exception as exc:
+396:         raise _map_read_error(exc) from None
+397:     if fact is None:
+398:         raise _error(503, "unavailable", "活动创建后暂不可读取，请刷新列表")
+399:     return {"activity": _fact_payload(fact, detail=True)}
+400: 
+401: 
+402: @router.post("/activities/{activity_id}/cancel")
+403: async def cancel_activity(request: Request, activity_id: str):
+404:     _guard(request)
+405:     activity_id = _uuid_text(activity_id, "activity_id")
+406:     service = ActivityService(_ledger(request))
+407:     try:
+408:         await service.cancel_activity(activity_id)
+409:     except ActivityLedgerConflict as exc:
+410:         raise _map_read_error(exc) from None
+
+frontend/src/activities/TeachingWorkspace.tsx
+180:   const contextKey = useRef("");
+181:   const observe = useRef({ startedAt: 0, tries: 0 });
+182:   const abort = useRef<AbortController | null>(null);
+183:   const draftId = useRef<string | null>(null);
+184: 
+185:   useEffect(() => {
+186:     mounted.current = true;
+187:     return () => { mounted.current = false; abort.current?.abort(); ++historySeq.current; historyAbort.current?.abort();
+188:       ++pageSeq.current; pageAbort.current?.abort(); };
+189:   }, []);
+190: 
+191:   useEffect(()=>{++memoryReadSeq.current;setMemoryPreview(null);},[activityId,workspace?.memory_invalid]);
+192: 
+193:   const reloadIntents = useCallback(() => {
+194:     const current = loadTeachingIntents();
+195:     setIntents(current.items.filter(item => item.activity_id === activityId));
+196:     setIntentsOk(current.ok);
+197:   }, [activityId]);
+198: 
+199:   const refresh = useCallback(async (quiet = false) => {
+200:     if (!mounted.current) return;
+201:     const seq = ++readSeq.current;
+202:     abort.current?.abort();
+203:     const controller = new AbortController();
+204:     abort.current = controller;
+205:     try {
+206:       const view = await getTeachingWorkspace(activityId, token, controller.signal);
+207:       if (!mounted.current || seq !== readSeq.current) return;
+208:       if (view === null) { setReadError("教学读取不可用（未确认）"); return; }
+209:       const key = [activityId, view.head.goal_record_id, view.head.path_record_id, view.head.node_id,
+210:         view.head.exercise_record_id, view.head.answer_record_id].join("|");
+211:       const editKey = `${key}|${view.head.revision}`;
+212:       const owner=await teachingEditorOwner();
+213:       if (!mounted.current||seq!==readSeq.current) return;
+214:       editorOwner.current=owner;
+215:       const ownDraftKey=owner ? `edit-${editKey}|${owner}` : null;
+216:       if (view.view_token !== workspaceToken.current) {
+217:         workspaceToken.current=view.view_token; ++pageSeq.current; pageAbort.current?.abort();
+218:         setOlderHistory([]); setHistoryNext(view.next_cursor??null); setHistoryLoading(false);
+219:       }
+220:       if (key !== contextKey.current) {
+221:         // 编辑身份独立于新快照；外部新答不把旧文字改绑为其supersedes。
+222:         contextKey.current = key;
+223:         setFeedback(null);
+224:         ++historySeq.current; historyAbort.current?.abort();
+225:         setHistoryDetail(null);
+226:         setCorrectionTarget(null);
+227:         draftId.current = null;
+228:         const editAt=editSeq.current;
+229:         if (editing.current && (dirty.current.answer||dirty.current.correction)) {
+230:           setEditConflict(true);
+231:         } else {
+232:           editing.current={activity_id:activityId,head:{...view.head},scope_revision:scopeRef.current,key:editKey,draft_key:ownDraftKey};
+233:           setEditConflict(false);
+234:           const draft=ownDraftKey ? await readTeachingDraft(ownDraftKey) : null;
+235:           if (!mounted.current||seq!==readSeq.current) return;
+236:           if (editAt===editSeq.current) {
+237:             setAnswerText(draft?.content??String(view.answer?.text??""));
+238:             dirty.current.answer=Boolean(draft);
+239:             if (!dirty.current.goal) setGoalText(String(view.goal?.goal??""));
+240:             if (!dirty.current.correction) setCorrectionText("");
+241:           }
+242:         }
+243:       } else if (editing.current?.head.revision !== view.head.revision) {
+244:         if (dirty.current.answer||dirty.current.correction) setEditConflict(true);
+245:         else editing.current={activity_id:activityId,head:{...view.head},scope_revision:scopeRef.current,key:editKey,draft_key:ownDraftKey};
+246:       }
+247:       setWorkspace(view);
+248:       setReadError("");
+249:       if (!view.overlay.processing && !view.overlay.unknown) {
+250:         observe.current = { startedAt: 0, tries: 0 };
+251:       }
+252:       // 反馈正文直接消费同一 workspace 快照的 feedback 区域（DEF-005：
+253:       // 单语句一致读取；坏单项/来源失效时该区域已带资格标记）。
+254:       const feedbackRegion = view.feedback;
+255:       if (feedbackRegion && feedbackRegion.qualification === "current") {
+256:         setFeedback(toFeedbackView(feedbackRegion));
+257:       } else {
+258:         setFeedback(null);
+259:       }
+260:     } catch (reason) {
+261:       if (!mounted.current || seq !== readSeq.current) return;
+262:       if (reason instanceof TeachingApiError && reason.status === 0) {
+263:         setReadError("读取未确认（连接中断）；只读核对，不自动重发");
+264:         return;
+265:       }
+266:       if (!quiet) setReadError(reason instanceof Error ? reason.message : "教学读取失败");
+267:     }
+268:   }, [activityId, token]);
+269: 
+270:   useEffect(() => {
+271:     ++readSeq.current; ++historySeq.current; historyAbort.current?.abort(); ++pageSeq.current; pageAbort.current?.abort();
+272:     contextKey.current=""; workspaceToken.current=""; setWorkspace(null); setBusy("");
+273:     editing.current=null; dirty.current={answer:false,goal:false,correction:false}; setEditConflict(false);
+274:     setOlderHistory([]); setHistoryDetail(null); setCorrectionTarget(null); setHistoryNotice("");
+275:     reloadIntents(); void refresh();
+276:     return ()=>{ ++readSeq.current; abort.current?.abort(); ++historySeq.current; historyAbort.current?.abort(); ++pageSeq.current; pageAbort.current?.abort(); };
+277:   }, [reloadIntents, refresh]);
+278:   useEffect(()=>{
+279:     if (seed?.activity_id===activityId) { setSelectedSeed(seed); setGoalText(seed.goal); dirty.current.goal=true; }
+280:     else setSelectedSeed(null);
+281:   },[seed,activityId]);
+282:   useEffect(()=>{
+283:     const onStorage=()=>reloadIntents();
+284:     window.addEventListener("storage",onStorage);
+
+frontend/src/activities/InterviewWorkspace.tsx
+66:     const expectedOwner=owner,stamp=panel.current,aid=activityId,expectedView=view.view_token;
+67:     let command=makeInterviewCommand(action,view.head,view.head?.scope_revision??scopeRevision,body,recovered?String(recovered.domain_input.business_key):crypto.randomUUID(),view.head?view.profile==='interview.v2':retrievalMode==='hybrid');
+68:     if(command.schema==='interview.command.v2'&&['ask','review'].includes(action)){
+69:       const currentGoal=view.head?.goal_record_id?details[view.head.goal_record_id]?.body?.value.goal:null;
+70:       if(!currentGoal?.target?.trim()){setError('当前目标正文尚未核对完成，请等待读取后再明确提交');return;}
+71:       setBusy(true);setError('');
+72:       try{
+73:         if(recovered&&requestText(aid,command)!==requestText(aid,recovered.domain_input as InterviewCommand))throw new Error('原动作版本不同，不能改绑');
+74:         const result=await retrieveForCommand(token,aid,expectedOwner,'interview',command as unknown as Record<string,unknown>,view.head?.scope_revision??scopeRevision,view.head?.revision??0,[currentGoal.target,currentGoal.focus].filter(Boolean).join(' ').slice(0,1024),()=>alive(stamp,aid)&&active.current.owner===expectedOwner&&active.current.viewToken===expectedView,recovered);
+75:         if(!result.ref||!alive(stamp,aid)||active.current.owner!==expectedOwner||active.current.viewToken!==expectedView)return;
+76:         command={...command,retrieval_ref:result.ref};
+77:       }catch(e){if(alive(stamp,aid))setError((e as Error).message);return;}
+78:       finally{if(alive(stamp,aid))setBusy(false);}
+79:     }
+80:     const text=requestText(aid,command);draftIdentity.current={key:command.business_key,hash:"",text};setBusy(true);setError("");setNotice("");
+81:     const synchronous=()=>alive(stamp,aid)&&active.current.owner===expectedOwner&&active.current.viewToken===expectedView&&draftIdentity.current?.key===command.business_key&&draftIdentity.current.text===text;
+82:     try{
+83:       const hash=await interviewSha(text);if(!synchronous())return;draftIdentity.current!.hash=hash;
+84:       const stillCurrent=()=>synchronous()&&draftIdentity.current?.hash===hash;
+85:       const actualOwner=await interviewEditorOwner();if(!stillCurrent()||actualOwner!==expectedOwner)return;
+86:       await saveInterviewIntent({key:command.business_key,activity_id:aid,owner:expectedOwner,hash,command},stillCurrent);
+87:       if(!stillCurrent())return;
+88:       const afterSaveOwner=await interviewEditorOwner();if(!stillCurrent()||afterSaveOwner!==expectedOwner)return;
+89:       // No await between this last identity check and POST.
+90:       if(!stillCurrent())return;
+91:       for(const row of (await retrievalChains(aid)).filter(row=>row.domain_input.business_key===command.business_key))await storeRetrievalChain({...row,domain_sent:true});
+92:       if(!stillCurrent())return;
+93:       const lastOwner=await interviewEditorOwner();if(!stillCurrent()||lastOwner!==expectedOwner)return;
+94:       const c=controller();let receipt:InterviewReceipt;
+95:       try{receipt=await postInterview(token,aid,command,c.signal,stillCurrent);}finally{controllers.current.delete(c);}
+96:       if(!stillCurrent()||receipt.business_key!==command.business_key||receipt.activity_id!==aid||receipt.request_sha256!==hash)return;
+97:       await noteInterviewReceipt(receipt,expectedOwner,stillCurrent);if(!stillCurrent())return;
+98:       setNotice(receipt.status==="unknown"?"尚未确认是否完成，请查看原提交结果；不会自动重发。":receipt.effect_applied?"已持久保存。继续与下一题都需要你的明确选择。":"已核对原回执；没有第二次业务效果。");
+99:       if(action==="answer"||action==="correct_answer")setAnswer("");
+100:       await refresh();if(alive(stamp,aid))onChanged?.();
+101:     }catch(reason){if(alive(stamp,aid))setError(reason instanceof Error?reason.message:"请求未确认，请按原键只读核对，不会自动提交");}
+102:     finally{if(alive(stamp,aid)){setBusy(false);setIntents(localIntents(active.current.owner));}}
+103:   }
+104:   async function reconcile(intent:InterviewIntent,resubmit=false){
+105:     if(busy||!owner||!view||intent.owner!==owner)return;
+106:     const frozen={...intent},stamp=panel.current,aid=activityId,expectedOwner=owner,expectedView=view.view_token,work=crypto.randomUUID();
+107:     reconciliation.current=work;setBusy(true);setError("");setNotice("");
+108:     const panelLive=()=>alive(stamp,aid)&&active.current.owner===expectedOwner&&reconciliation.current===work;
+109:     const factLive=()=>{
+110:       if(!panelLive())return false;
+111:       const stored=loadInterviewIntents();if(!stored.ok)return false;
+112:       const now=stored.items.find(i=>i.key===frozen.key&&i.activity_id===aid&&i.owner===expectedOwner);
+113:       return Boolean(now&&now.hash===frozen.hash&&now.action===frozen.action&&now.head_revision===frozen.head_revision&&now.goal_version===frozen.goal_version&&now.scope_revision===frozen.scope_revision);
+114:     };
+115:     const live=()=>factLive()&&active.current.viewToken===expectedView;
+116:     const verify=(r:InterviewReceipt)=>{if(r.schema!=="interview.receipt.v1"||r.activity_id!==aid||r.business_key!==frozen.key||r.request_sha256!==frozen.hash||r.action!==frozen.action)throw new Error("服务器原意图身份不同，拒绝重交");};
+117:     try{
+118:       let receipt:InterviewReceipt|null=null;
+119:       try{receipt=await getInterviewReceipt(token,aid,frozen.key,undefined,factLive);}catch(reason){if(!(reason instanceof InterviewApiError&&reason.status===404))throw reason;}
+120:       if(!factLive())return;if(receipt)verify(receipt);
+121:       // Confirm this key's durable facts independently of a changed client view.
+122:       // A response's new server view is not itself a client-panel invalidation.
+123:       if(receipt){await noteInterviewReceipt(receipt,expectedOwner,factLive);if(!factLive())return;}
+124:       if(!live())return;
+125:       if(resubmit){
+126:         if(receipt&&!(receipt.status==="accepted"&&!receipt.launch_claimed&&!receipt.duplicate_of)){setNotice("原提交已进入处理或已有终态，只读核对；不会再启动。");}
+127:         else{
+128:           const draft=await readInterviewDraft(frozen.key);if(!live())return;
+129:           const now=await interviewEditorOwner();if(!live()||now!==expectedOwner)return;
+130:           if(!draft||draft.owner!==expectedOwner||draft.activity_id!==aid||draft.hash!==frozen.hash||draft.command.business_key!==frozen.key||draft.command.action!==frozen.action||draft.command.expected_head_revision!==frozen.head_revision||draft.command.expected_goal_version!==frozen.goal_version||draft.command.expected_scope_revision!==frozen.scope_revision)throw new Error("原键正文或编辑身份缺失，不能重交");
+131:           const hash=await interviewSha(requestText(aid,draft.command));if(!live())return;if(hash!==frozen.hash)throw new Error("本机正文hash无法核对，不能重交");
+132:           const freshOwner=await interviewEditorOwner();if(!live()||freshOwner!==expectedOwner)return;
+133:           if(!live())return;
+134:           receipt=await postInterview(token,aid,draft.command,undefined,factLive);if(!factLive())return;
+135:           verify(receipt);await noteInterviewReceipt(receipt,expectedOwner,factLive);if(!live())return;
+136:         }
+137:       }
+138:       if(receipt){if(!live())return;setNotice(`原提交状态：${receipt.status}。未重新生成业务键。`);}
+139:       else setNotice("服务器未找到原提交；请保留本机正文，可显式重交原意图。");
+140:       await refresh();

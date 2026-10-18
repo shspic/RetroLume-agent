@@ -1,0 +1,101 @@
+--- pre
++++ post-with-notrun-fix
+@@ -98,8 +98,25 @@
+ let postTotal = 0;
+ const setPhase = value => { phase = value; };
+ 
+-function classify(method, pathname) {
+-  if (pathname === "/api/session") return "session";
++// 观察窗内实际并发峰值：按每请求 (t_start, t_end) 配对时间线计算，
++// 不用全期历史峰值差分（续作02 卡面要求）。
++function windowPeak(requests) {
++  const events = [];
++  for (const item of requests) {
++    if (typeof item.t_start !== "number" || typeof item.t_end !== "number") continue;
++    events.push([item.t_start, 1], [item.t_end, -1]);
++  }
++  events.sort((a, b) => a[0] - b[0] || a[1] - b[1]); // 同时刻先处理结束，避免虚增
++  let current = 0;
++  let peak = 0;
++  for (const [, delta] of events) {
++    current += delta;
++    peak = Math.max(peak, current);
++  }
++  return peak;
++}
++
++function classify(method, pathname) {  if (pathname === "/api/session") return "session";
+   if (pathname === "/api/materials") return "materials";
+   if (pathname === "/api/pdf-candidates") return "pdf-candidates";
+   if (pathname === "/api/activities/capabilities") return "capabilities";
+@@ -200,6 +217,10 @@
+     entry.t_end = Date.now();
+     entry.duration_ms = entry.t_end - tStart;
+     log.push(entry);
++  } catch (error) {
++    // route 回调异步异常必须显式记为失败并尝试兜底响应，不允许静默悬空。
++    summary.failures.push(`route handler exception: ${String(error && error.stack ? error.stack : error).slice(0, 300)}`);
++    try { await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "fixture-error" }) }); } catch { /* 已响应或页面不在 */ }
+   } finally {
+     inflightStack.splice(inflightStack.indexOf(group), 1);
+   }
+@@ -283,7 +304,12 @@
+   summary.checks.s3_explicit_post_exactly_one = postTotal - postBefore === 1;
+   summary.checks.s3_read_after_explicit_action = slice3b.some(item => item.group === "list" && item.method === "GET");
+   (postTotal - postBefore === 1) || summary.failures.push(`s3 explicit POST count ${postTotal - postBefore}`);
+-  slice3b.some(item => item.method === "POST") && summary.failures.push("s3 after-action slice contains POST");
++  // after-action 窗口（beforeS3b 记录于点击前）必然包含显式 POST 请求自身；
++  // 真实预期 = 窗口内 POST 恰 1 个（显式动作本身），其余请求全部 GET。
++  summary.checks.s3_after_action_single_post = slice3b.filter(item => item.method === "POST").length === 1
++    && slice3b.filter(item => item.method !== "POST").every(item => item.method === "GET");
++  (slice3b.filter(item => item.method === "POST").length === 1)
++    || summary.failures.push(`s3 after-action slice POST count ${slice3b.filter(item => item.method === "POST").length}`);
+   summary.checks.s3_detail_after_success = (await page.getByText("尚无操作。此版本等待学习入口接入").count()) > 0;
+   summary.steps.push("s3-submitted-intent-explicit-post");
+   await page.screenshot({ path: `${SHOTS}/c01-s3-explicit-post.png`, fullPage: true });
+@@ -291,23 +317,24 @@
+ 
+   // s4 慢响应超过 3 秒调度的轮询不重叠：A running 使轮询活跃；列表响应慢 3.2s。
+   setPhase("s4-poll");
+-  const peakBeforeS4 = inflightPeak; // 只统计本观察窗（显式动作场景不在本窗内）
+   control.slowList = true;
+   const beforeS4 = apiCount();
+   await page.waitForTimeout(11500); // 观察窗：覆盖慢响应 + 多个 3s tick
+   const slice4 = log.slice(beforeS4).filter(item => item.group === "list");
+   const sorted = [...slice4].sort((a, b) => a.t_start - b.t_start);
++  // 在途数断言：观察窗内全部 API 请求按配对时间线计算实际并发峰值。
++  const s4Peak = windowPeak(log.slice(beforeS4));
+   summary.checks.s4_lists_observed = sorted.length >= 2;
+   summary.checks.s4_no_overlap = sorted.every((item, index) => index === 0 || sorted[index - 1].t_end <= item.t_start);
+   const slowOne = sorted.find(item => (item.duration_ms ?? 0) > 3000);
+   const afterSlow = slowOne ? sorted.filter(item => item.t_start > slowOne.t_start) : [];
+   summary.checks.s4_slow_request_seen = Boolean(slowOne);
+   summary.checks.s4_tick_skipped_while_inflight = afterSlow.length > 0 && afterSlow.every(item => item.t_start >= (slowOne.t_end ?? 0));
+-  summary.checks.s4_window_inflight_delta_le_2 = inflightPeak - peakBeforeS4 <= 2;
++  summary.checks.s4_window_concurrent_peak_le_2 = s4Peak <= 2;
+   (sorted.length >= 2) || summary.failures.push(`s4 list count ${sorted.length}`);
+   sorted.every((item, index) => index === 0 || sorted[index - 1].t_end <= item.t_start) || summary.failures.push("s4 overlapping list requests");
+   Boolean(slowOne) || summary.failures.push("s4 no slow list request observed");
+-  (inflightPeak - peakBeforeS4 <= 2) || summary.failures.push(`s4 window inflight delta ${inflightPeak - peakBeforeS4}`);
++  (s4Peak <= 2) || summary.failures.push(`s4 window concurrent peak ${s4Peak}`);
+   summary.timeline_note = JSON.stringify(sorted.map(item => ({ start: item.t_start, end: item.t_end, dur: item.duration_ms })));
+   summary.steps.push("s4-poll-no-overlap-slow");
+   control.slowList = false;
+@@ -397,9 +424,16 @@
+   summary.checks.console_errors_empty = consoleErrors.length === 0 && pageErrors.length === 0;
+   (postTotal === 1) || summary.failures.push(`post total ${postTotal}`);
+   (summary.blocked.length === 0) || summary.failures.push(`blocked ${JSON.stringify(summary.blocked)}`);
++  (consoleErrors.length === 0 && pageErrors.length === 0)
++    || summary.failures.push(`console/page errors: ${JSON.stringify([...consoleErrors, ...pageErrors]).slice(0, 400)}`);
++  // 通过判定收紧：所有必需 checks 必须为 true，且无 failures/blocked/console 错误；
++  // 不能只看脚本 exit 或 steps（续作02 卡面要求）。
++  for (const [key, value] of Object.entries(summary.checks)) {
++    if (value !== true) summary.failures.push(`check false: ${key}`);
++  }
+   summary.console_errors = consoleErrors;
+   summary.page_errors = pageErrors;
+-  summary.inflight_peak = inflightPeak;
++  summary.post_total = postTotal; // 同步全局计数到报告字段（续作02 实跑发现缺此同步）
+   summary.ok = summary.failures.length === 0;
+ } catch (error) {
+   summary.failures.push(`exception: ${error && error.stack ? String(error.stack).slice(0, 800) : String(error)}`);

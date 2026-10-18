@@ -1,0 +1,25 @@
+--- as-run/backend/app/data_exit/control.py
++++ final/backend/app/data_exit/control.py
+@@ -134,6 +134,13 @@
+ 
+     def current_receipt(self, state, job):
+         receipt = self.receipt(job)
++        if job.get('completion_protocol') == 1 and job['state'] in ('published','received','verified','active_readonly','deleted','deleted_pending'):
++            confirmation=job.get('completion_confirmed_ns')
++            deadline=job.get('execution',{}).get('deadline_ns')
++            if type(confirmation) is not int or type(deadline) is not int or not 0 < confirmation < deadline:
++                receipt.update(state={'portable_export':'published_unconfirmed','restore_checkpoint':'published_unconfirmed',
++                    'upload':'upload_unconfirmed','restore':'restore_unconfirmed','activate':'activation_unconfirmed',
++                    'source_delete':'deletion_unconfirmed'}[job['kind']],stage='completion_unconfirmed')
+         if job['kind']=='restore':
+             receipt.update(plan_id=job['scope']['plan_id'],plan_sha256=job['scope']['plan_sha256'])
+         selection = state['selection']
+@@ -162,7 +169,7 @@
+             job = {"job_id": str(uuid4()), "business_key": key, "kind": command.kind,
+                    "request_sha256": request_sha, "scope": command.scope,
+                    "origin": origin_context.public(), "state": "prepared", "stage": "prepared",
+-                   "revision": 1, "created_at": now, "updated_at": now, "execution_protocol": 2}
++                   "revision": 1, "created_at": now, "updated_at": now, "execution_protocol": 2, "completion_protocol": 1}
+             event = self._append(events, "job.create", job)
+             return self.receipt({**job, "control_seq": event["seq"]})
+ 

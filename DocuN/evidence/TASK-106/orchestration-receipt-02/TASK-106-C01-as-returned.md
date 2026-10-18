@@ -1,0 +1,155 @@
+# TASK-106 / R-100 续作01结果
+
+部分停止。四条源码修复及直接后端高风险补证已经落盘，正向语义和取消收尾得到新实际原件；历史修订与恢复守卫的最终浏览器方法尚未全部走完。监听进程启动6/6已经达到本轮上限，最后API已停止，不以其他余量再启动。新旧资源均停止并保留，本报告不签G10、独立审计、STEP014、M-1或共享DEF关闭。
+
+## 本轮身份与授权
+
+继续原106/R100业务窗口，实际根D:/shspic/project_NO3_RetroLume-agent，task_model、V4.0/CHG-0003锁定七指纹未变，需求1.1、架构0.98、执行动态2.20、阶段07。G10-P批准保持。本轮使用新许可TASK-106-G10-C01-20261008，初轮许可已结束，旧61个真实入口及全部费用/FAIL/UNKNOWN不返额。A+为资源标签；实际为系统声明基于GPT-6的Codex API窗口，具体部署后缀/推理档位不可读，没有派子Agent。
+
+原结果21949字节和SHA123afe0988d0736420f16751dd794da926d99eb993b185d8f834a5b993664fea已完整备份，以下历史正文原字节保留。旧原件/runs/控制账和54份post子集不覆写；本轮新台账、源码/fixture、原件在continuation-01。旧308/292保护与当前346核对层次保持，完整当前快照363文件范围在final/post-source.json，不把它称所有项目文件。
+
+## 四核心实际差异与证据
+
+E106-SEM已补合法正向原件。新的最低合成response从实际catalog挑串行110/两个先读100后写120和90的原句，以及分别2012/2013的原句；缺预设支持时失败，不造citation_id或手拼不在catalog里的句子。生产没有硬编码T/H/数值/年份，也没有新增通用语义证明权。P01的positive-two-directions.json用普通PG/原生SUP完成两方向两轮显式next、反馈、结束、历史；每条引用回实际原始UTF8、行/Unicode标量offset、hash并按冻结oracle核，保留位置核验和语义建议身份。旧免责声明/错误H引用与旧P02/P04失败保持。
+
+DEF024候选代码补齐。activities/interview_repository.py在资格/正文同一SQL内增加can_correct_answer，只对当前goal/scope、最高答案版本、当前父资格、非结束/取消/过期/失效记忆与来源开放；本地旧答案仍可读。InterviewWorkspace新增历史修订编辑区，绑定真实answer ID/version/bodyhash/head/goal/scope/view/owner，另存前复核，不套当前答案ID；草稿在资格变化时保留。P01 historical-recursive-correction.json在已有后续题及反馈后改早期v1->v2，旧回答保留、旧反馈/后继问题抑制、head回第一轮、新review仅用新回答，实际模型原件通过。浏览器已实际显示合格早期回答编辑区及失效后禁提交提示；另存成功/新review浏览器方法未到达，不能签该UI动态全过。
+
+DEF025候选代码补齐。reconcile捕获expected view与原intent的activity/owner/key/hash/action/head/goal/scope，读本机摘要确认身份，draft读、摘要写、hash/owner复核和POST前逐await停止陈旧副作用。已按原key验证匹配的持久receipt可以独立写事实状态；服务器正常成功后的新view不会被误当客户端面板失效。noteInterviewReceipt接受身份guard并在await前后复核；只读refresh增加generation且可在busy中安全读，以便已知同活动view变化阻止旧提交。该新增同activity、hash/owner屏障和正常accepted/丢响应恢复的最终browser分支未执行到，代码/语法通过不能替代实际方法。
+
+DEF026已补新实际取消原件。新InterviewService继续shield同一原生任务，增加现有AnyIO层取消屏蔽以配合ASGI middleware；其后只有一个15秒有界finish任务，重复caller取消不跳过/重起收尾，完成或明确未确认后传播CancelledError。原worker/Job/manager/发送门/停止/结算/recoveryfalse完全未改。P04 exact-cancellation-cases.json包含真实HTTP协程在mark后goal修正拒结果同时取消、再次取消、已正常COMMIT后caller取消、真实cancel_activity在mark前后各序、以及native结束后DB停止导致finish不可读。UNKNOWN/预留保守，正常已提交的007/领域不被改UNKNOWN或双记，GET0新调用。DB不可读时明确未确认，恢复同CID后仅据实际before_finish原生事实调用同一诊断收尾，未猜not_sent、退款、重发或伪停止证明。scope-before-admit.json另有实际scope修正代表；取消和旧四个goal窗不混为一种性质。
+
+## 合并补齐的直接性质
+
+P01 clarification-and-adopted-new-scope-native.json完成Spring澄清后新ask及无匹配片段应用问题后显式bind_scope、新scope原生ask/current引用。native-probe-depth-received-invalid.json在深度2后再返回probe，实际received-invalid无新领域fact/无自动纠错，requests4、结果3，保留已耗账。actual-invalid-memory-selection.json用本轮新G9 save/selection/revise使旧选择失效，新域拒interview_memory_dependency_invalid、不清选择；P05 M6-selected-valid-to-unreliable用新有效选择，在本卡主库临时保留表重命名造成M6不可靠，普通app拒绝，finally恢复M6/S1=ready。没有修改旧memory源码/010/已验旧样本、DROP/DELETE、purge或权限。
+
+P01 cross-consumption-and-upgraded-legacy.json补generic continue、tool在面试活动、learning跨域及int10m父、teaching本地head的实际拒绝码和0副作用。合法carrier的错activity/op/无profile在真实gateway拒绝。011已存在的普通runtime旧learning/teaching各一个实际合法入口/current007小回归，通过，未重跑旧全套。参数化SQL/原生权威/实际事务均保留。
+
+actual-http-capacity-refusals.json在10来源、50个本地回答版本的真实PG活动上GET history limit50得到413/interview_snapshot_limit，坏cursor422，过大命令413，无新模型账。P04真实启动配置变体中非法model身份409/interview_binding_invalid，超过OneCall配置体限额503/interview_model_unavailable由既有配置层先拒，均无业务effect。完整OneCall实际字节往返及超完整request纯契约拒绝在O02；没有把配置层拒绝冒充一条根本未进入的原生调用。
+
+V01/05/06正向结构与源支持新补；V02/03/04/11/12/13/14/15/19/20相应直接新性质有上述后端原件。V08/09同key/slot、V16原not_sent/received-invalid安全再试及UNKNOWN纪律、V17原子/严格终态、V18原迁移/S1/ACL，沿初轮未变方法与字节限定继承。V07其他恶意type/offset/权限字段的原policy契约和原接线证据保持，不机械逐变体重调模型。V21/22/23以及V12/24浏览器完整确认仍受本轮未走完方法限制。[精确剩余矩阵](D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-106/continuation-01/final/matrix.json)逐项记层与未验，不把根PASS、位置、样本支持、browser完整混写。
+
+## 失败、断点与资源选择
+
+本轮离线O01的完整内存compile完成，但错误期望超大OneCall配置仍可用，实际已有配置层先拒；保留FAIL，O02按真实层修正并继续oracle/type，未重做已完成全compile。F01实际前端构建通过，O03最终Python compile及Node --check通过，未拿它们冒browser完成。
+
+真实根6次中4个FAIL保留：P01首取消测试目标没含串行/覆盖，实际catalog缺预设支持，最低fixture抛错形成UNKNOWN，before_result屏障未进入；正向/历史/其他已COMMIT的方法不重跑。P04改明确主题词继续剩余，原失败activity/context/UNKNOWN/费用保存。P02不可靠测试错误使用未选记忆legacy，实际资格允许符合旧边界；P05用真正有效选择再损坏M6，恢复后通过，不把初失败称生产BUG。P03浏览器getByLabel误同时匹配article与textarea；P06改textbox并复用已提交前缀。P06随后在next submit刷新尚未完成时选择历史，已完成refresh清除旧详情，资格guard正确禁提交/保留草稿；夹具等待点已改为等待question_ready且该动作busy解除，最终只过语法检查，未再跑。
+
+首失败结束后RAM口令随父进程退出不可恢复。本轮共2次仅app PASSWORD重置，属性/成员/ACL前后一致，无role创建/授权；第二控制器有界保留口令在RAM，可读新检查点而不再重置。M6代表选择主库新样本临时缺名并恢复，不额外启动pg2/3或重bootstrap。该选择和全部故障名/原view/data保留原件，旧S1指纹13e3d8d9d78d7f6e119a226be6f4d6f3163b9bf5eaeeb1b8d66e5d44351f850b/011源码/角色ACL不变。没有把admin准备冒普通app资格。
+
+监听6/6已到限，最后API终止exit1/stopped真值保留。其余新root2、browser/driver1、SUP4、transport6等余量不授第7个listener，旧许可14/17也不能借。后续最小条件是明确新增一次有界API listener许可，沿本轮已准备browser检查点和余量，只补未完成方法；当前未批准也未启动。不需要重做T/H、取消、M6或所有旧测试。
+
+## 最终字节与收尾
+
+[346基线/差异/构建核对](D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-106/continuation-01/final/baseline-diff-build.json)中本轮允许变化7项，339项相同；5个生产文件修改与2个dist基线对象变化，无保护域漂移。对应pre完整保存、5份diff和363范围的当前生产/旧新fixture/dist快照在final/post，新增c01不import旧结束control。F01到P03/P06实际载入bundle身份相同，最后修的是browser fixture等待点，生产bundle未变。
+
+[新运行索引](D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-106/continuation-01/final/run-index.json)、[收尾证明](D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-106/continuation-01/final/resource-stop-proof.json)、[本轮台账](D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-106/continuation-01/session.json)、[剩余工作](D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-106/continuation-01/final/remainder-work.json)均可独立读取。精确三CID Running=false/Pid0，18106/18107/55446—55448无监听，API/driver/本轮profile Chromium及已记录native SUP原PID/出生均不活，RAM控制器已正常退出。旧标签/镜像/配额/命名卷保持，无新container/volume/role，无用户库/真实provider/外网/费用/安装/Git/共享文档/记忆写；实际数据/角色/库/卷/容器/旧新profiles/失败原件全部保留。
+
+本轮实际计数：root6/8，start7/12，listener6/6，SUP28/32，transport26/32，browser/driver2/3与2/3，offline3/4，build1/2，compile初批1/1与复检1/1，password_reset2/2。实测offline/build15.908/1200秒，real266.473/3600，cleanup6.274/600；主动6601.980/21600秒。本轮预算快照详见[session-close](D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-106/continuation-01/final/session-close.json)。计数在动作前扣，失败、UNKNOWN、重启和未发送不返；旧账不改。metadata采用原120加保守480，共600/1200秒，不称精确，主动包括思考与控制器等待。原未精准分项时段保持未知。新正文以下拼接初轮原21949字节，不重写旧表格/星号。
+
+本结果建议只回收保存的代码、已成立的新后端原件与收尾；整体尚未达到稳定完整G10候选。共享DEF裁定、经验、进度与未来107/R101由编排处理，本窗口没有自动派审计或关闭DEF。
+
+## 以下为原106结果21949字节历史
+
+# TASK-106 / R-100 结果
+
+**状态：部分停止，尚未达到完整候选交回标准。** 16 个新增生产文件、11 个生产接线文件及公开配置例子已经落盘，实际 PG／原生 SUP／HTTP／最终构建／浏览器主链已经运行。两处运行中发现的确定问题已修复并定向复验；最终语义核对发现 T／H 正向引用仍不能满足合成 oracle，历史答案修订 UI 入口也未补齐。真实入口 16/16、容器启动 18/18、build 3/3、compile 2/2 已用尽，依卡停止对应运行，不再开根补证。资源全部停止，原件及合成数据保留。
+
+本结果不签 G10、STEP014、M-1、独立审计或发布。107 未派发；应先沿 106 补齐下述具体缺口，再按编排安排集中独立复核。103／104／105、已关闭的旧 DEF、旧 FAIL／UNKNOWN 和旧 45 个真实入口保持原记录，不用它们的预算继续本卡。
+
+**授权与证据入口。** 实际项目根为 D:/shspic/project_NO3_RetroLume-agent；入口 AGENTS.md，task_model，V4.0／公共 AGENTS CHG-0003，需求 v1.1／架构 v0.97／执行动态 v2.19／阶段 07。七项锁定指纹终核相符。G10-P 批准沿 [批准原件](D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-106/orchestration-setup-20261008/adoption-received.json)，实施合同沿 [105 完整结果](D:/shspic/project_NO3_RetroLume-agent/DocuN/results/TASK-105-result.md) 与 [105 决定](D:/shspic/project_NO3_RetroLume-agent/DocuN/results/TASK-105-work-decision.md)；前者仍为 77012 字节、SHA-256 c1b192aa05cdab6384b9c3114269c7396ec44022685f1ac7d48edcd03f37483d。
+
+实际执行是本 Codex API 业务窗口；系统身份为基于 GPT-6 的 Codex，客户端具体型号与推理档位没有可读凭据，A+ 是资源安排标签。本卡没有派子 Agent。使用已有 Python 3.12 环境、Node／前端依赖及缓存 Chromium，未安装或升级。应用代码没有导入本卡 fixture、DocuN 实验或公共提示词库。
+
+所有以下证据相对路径均以 **D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-106/** 为基准，完整绝对路径和逐项正常／拒绝／继承／未验字段在 [最终矩阵](D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-106/final/matrix.json)。[执行索引](D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-106/final/run-index.json)、[资源台账](D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-106/session.json)、[剩余工作](D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-106/final/remainder-work.json) 共同保留中断、失败与剩额。
+
+**A—D 实施对照。**
+
+| 合同部分 | 已落盘／实际行为 | 当前缺口 |
+| --- | --- | --- |
+| A 用户流 | 新面试导航、开始／修正目标、资料用途、提问、原文回答、追问／反馈、显式下一题、结束、历史与有限预算；无匹配片段走应用澄清／反馈，0 SUP。 | 当前回答有修订按钮；选中历史答案仅只读，尚无历史答案修订入口。T／H 正向语义 oracle 未通过。共享新建说明还沿用部分学习措辞。 |
+| B 持久与权限 | 011 三表、五函数、两个 NOLOGIN 角色；不可变版本、原子 007 与领域记录、同键／槽、受信 carrier、S1、读资格与正文同语句、六路由。 | 精确取消／来源／回答修正的若干组合未动态补齐；取消中的终态收尾分支有待核对风险。 |
+| C 文件与兼容 | 16 新文件＋11 接线＋1 配置例子；旧平台、迁移、memory、旧教学核心及学习契约未改。公开例子 max_output_tokens=0，默认不可用。 | 不追加保护文件、不扩大模型或权限。修改生产代码后需要额外 build／compile 差额，当前没有。 |
+| D 验证与收尾 | 16 个真实根、2 离线批、3 build；完整证据、最终字节包、保护比对及精确停机。 | 不能把结构 PASS、引用位置 PASS、纯契约 PASS 记成语义支持或全部动态窗口 PASS。 |
+
+**实际文件、接口和事务。** 完整名单及位置在 [实施映射](D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-106/implementation-map.json)。新增为 011_text_interview.sql、activities/interview_repository.py、interview 包的 __init__／contracts／prompt／evidence／policy／views／service／api，以及前端 InterviewWorkspace／InterviewCitations／interviewApi／interviewIntents／interviewDrafts／CSS。修改 repository／activities service／api／teaching_repository、learning service、capabilities contracts／gateway、service_config／main、ActivityWorkspace／前端 main；另修改 activity.example.json。未修改 activities/__init__.py。新增检查采用 test_interview_contracts.py、fixtures/task106 与 frontend/tests/task106-interview.mjs；没有写空的 PG／HTTP skip 测试来冒充证据。
+
+六路由前缀为 /api/activities/{activity_id}/interview：workspace、POST commands、commands/{key}、history、records/{record_id}、records/{record_id}/citations/{citation_id}。使用实际 local_session 与业务 Origin；该保护模块未改。重复 JSON 键、额外权限字段、未知动作、非法布尔／长度等拒绝。workspace 完整 wire 上限 131072 字节，history／record／citation 65536，超限为 413/interview_snapshot_limit。纯契约检查覆盖边界值；没有伪称跑了真实 HTTP 超大快照。
+
+interview.v1 与 int10m. 相互绑定，learning／teaching／interview 三 profile 互斥；只含两条固定消息，无工具和外来 input_result。AdmissionIntent 在尾部添加可选绑定；旧 exclude_none 字节核对保持。新 carrier 实际通过未改 OneCall／协议3／原生 Windows Job／SUP／账本。
+
+写入锁序保持来源／记忆／活动→排序 operation→interview head→commands。scope 提取同连接 helper，旧默认语义保持；新 scope／copied goal／head 在同事务。模型正文与领域记录最终字段一次 INSERT，native received、007、record、head、command 同 COMMIT，hook 故障整笔回滚。严格终态先做等值只读确认；异文、旧无正文补写、缺领域引用均有实际拒绝。
+
+history 与 workspace 使用有界元数据投影，不先取 model body／catalog／回答再删除。详情的 CASE 资格与正文同一 SELECT；generic 007 也受面试资格约束。引用最后一条 DB 资格语句是交付截止：截止前来源替换拒旧原文；截止后已在途响应可以存在，客户端按已知面板／view 失效拒收，未宣称撤回网络字节。
+
+**迁移、S1 与普通账户。** [实际 011 catalog](D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-106/runs/P01-owned-main-migration-catalog/approved-011-catalog.json) 的生产锁定指纹为 **13e3d8d9d78d7f6e119a226be6f4d6f3163b9bf5eaeeb1b8d66e5d44351f850b**，检查列／默认／约束／索引／trigger／函数定义、volatility、owner、search_path、ACL 与角色属性。app／owner 为 NOLOGIN，普通 runtime 是 retrolume_task106_app，无 SUPERUSER／BYPASSRLS／CREATEDB／CREATEROLE，无 owner／旧 purger 成员。
+
+P08 在 pg2 先顺序应用 001—010、产生真实旧 learning／teaching 行，再升级 011；旧表逐行 JSON 前后相等。pg3 对新函数改定义、缺 head、缺全套 011 名称和残迹、缺领域引用进行了明确故障与恢复；普通角色拒绝 records UPDATE／DELETE、TRUNCATE、SET ROLE owner、旧 007／009 不可变事实更新。未 DROP 表／角色／库／卷、未删除旧事实、未关闭旧 trigger。缺领域引用试验保留原 records 表，用新故障 view 排除 model 行，随后恢复原表名；额外 view task106_fault_empty_model_projection 留在新 fault 库作为保留试验对象。新角色／函数／三表的暂时重命名全部恢复，最终 S1=ready。C2 逆迁移／物理删除没有实施权限，未执行。
+
+**V01—V24 最终状态。** 原 run.json 的 PASS 表示当时实际断言结果；最终矩阵对发现的语义不足单独降级，原件不覆写。每行证据对应下面 P 编号完整目录；更细事实在 matrix.json。
+
+| 项 | 正常／拒绝证据 | 继承与未验界限 |
+| --- | --- | --- |
+| V01 | P02/P03 T 首轮到结束；P04 H 反馈→显式 next→结束；P10/P11/P12 实际 HTTP／浏览器。 | 结构闭环已运行；语义项受 V05/V06 失败限制。T 的 next 后续整链未跑。 |
+| V02 | P04 CV 追问基线／口径／样本／环境／记录，再答后反馈仍为自报；O02 probe 到深度上限拒绝。 | 上限拒绝为纯 policy；native received 的超深 probe 子样本未跑。 |
+| V03 | P04 缺目标拒 ask，Spring 明确列框架／季节，goal 修订抑制旧问题。 | 澄清后再一次原生 ask 未跑。 |
+| V04 | P04 无匹配资料的应用问题／反馈，requests=0；P07 bind_scope 真实采用。 | bind_scope 后的新 scope 原生 ask 未跑。 |
+| V05 | CV 身份／固定自报说明通过；T 位置、原回答和 source 身份通过。 | **T 正向语义未通过**：recognition 只引用免责声明，不能支撑 110／覆盖风险。 |
+| V06 | H 输出并列两个 source 身份、2012／2013 冲突与未知，字段／位置有效。 | **H 年份支持未通过**：第二引用仅为冲突说明，没有定位到 2013 原句。 |
+| V07 | P07 原生 invalid_output received 失败且无领域 effect、保留预算；O02 额外 score/mastery/position_verified/tool_calls、伪 citation、错答案、bool、Unicode 偏移和伪 fragment 身份拒绝。 | O02 是契约／policy 层；没有把每个恶意变体冒充逐一 PG／HTTP 动态。伪 semantic supports 的正向质量仍受 V05/V06 限制。 |
+| V08 | P13 accepted 持久后只 GET 不 claim；显式原 POST 与同 key 并发只有一 native admission／007；异 body 同 key 拒绝且前后不变。 | 正常／拒绝的实际 PG 子性质通过；P13 根因测试接线错误 FAIL 保留。 |
+| V09 | P13 模型同 slot 异 key 持久 alias，只有一个 launch／费用；P04 本地答案竞争；异文同 slot 拒绝。 | 唯一索引已在实际 catalog 核对。 |
+| V10 | P15 原路由实际 COMMIT 后断 HTTP body，RemoteProtocolError，原 key GET／同 key确认无新 effect；P12 刷新只 GET；P13 显式领取 accepted。 | 真实断响应选择本地 finish；模型失败并伴随请求任务 CancelledError 的组合未跑。 |
+| V11 | P05 前两窗口；P06 修后 mark→result 窗及 L-R 先提交再 goal 修正；字段／007／head／预算有配对原件。 | 四支均使用 goal 修正；同窗 correct_answer／bind_scope／source 替换组合未逐一动态跑。 |
+| V12 | P04 v1→v2 原回答保留、旧反馈 body 抑制；P15 实际 256 个本地答案版本拒第257版。 | 已有后续题的早期答案递归修订未跑；**历史答案修订 UI 未实现**。 |
+| V13 | P07 source 替换→旧正文抑制→scope+goal+head 原子采用；P15 workspace／history／record／generic007／引用截止配对。 | 新 scope 再次原生调用及 scope 修正精确发送窗未跑。 |
+| V14 | P07 真 G9 save／selection 活动，start 拒 interview_memory_not_supported，不清选择／不建 head。 | G9 未改部分继承；失效／撤销记忆、损坏 M6 在新 profile 的分级动态未跑。 |
+| V15 | P15 request=1／cost=100 达限、running=1 不启动、自然过期和真实 cancel 后 ask 拒绝；原费用／次数保持。 | 新 profile allowed_tools=空，旧 G5 工具主权继承；**取消与 mark 精确屏障未跑**，见终态收尾风险。 |
+| V16 | P06/P07 UNKNOWN 禁新 key/retry_of；abandon 不授重发；P07 received-invalid 与 P15 明确 not_sent 的显式安全重试。 | 旧停止／结算／跨恢复主权继承，不重跑旧全平台矩阵。 |
+| V17 | P06 actual hook 内故障整笔回滚；P13 严格等值／异文／无正文补写；P15 缺领域引用拒绝并恢复。 | 007 和 immutable 表均保留，无伪 commit。 |
+| V18 | P01 fresh、P08 非空升级／普通 ACL／坏函数／缺 head；P15 全 011 缺名且 int10m 残迹 fail closed、恢复 S1。 | 旧空／非空条件按实际证据区分；额外 fault view 明确保留。 |
+| V19 | P10 generic continuation 409；P14 teaching 本地 head stage_conflict；O02 真实合法三 profile 类型混合拒绝；P08 原学习／教学各一有效样本。 | 错活动／op 的 gateway 断言在 P13 中经过，但独立返回码原件不足；完整 tool／learning／teaching 跨活动消费负矩阵未跑。旧样本 native 调用发生在011之前，升级后主要证明行不变／S1，未冒充升级后重新执行。 |
+| V20 | O01/O02 原文／hash／严格令牌、配置缺 section／bool／输出超过服务、完整 wire 实际编码长度／往返及旧无 null；原生 carrier 动态多次。 | 非法模型身份／最大完整 OneCall 在真实 HTTP/PG 的逐项拒绝未跑。 |
+| V21 | P12 IDB 失败0 POST、真实未发送原 key 404→hash不符拒重交、正文/摘要先存；P16 摘要锁失败及 owner锁不可用0 POST。 | 真浏览器已通过；未覆盖每个本机总字节边界和真实 model POST 丢响应恢复组合。 |
+| V22 | P12 保存正文／摘要后切 activity0 POST；引用解析前／后不复活。P16 草稿读取完成后切换0 POST，问题／反馈解析前／后不复活，实际 owner碰撞获得不同锁。 | reconcile 的同活动 view 变化守卫不足，见具体剩余工作；没有宣称穷举每个 await／owner 改变。 |
+| V23 | P12 重开 budget=2、不清零；P10 坏 view409；P15 引用最终资格前拒原文／之后在途证据；history 元数据同 SQL投影。 | 前后分支已保存时间事实；游标并发与各恢复组合没有逐一动态覆盖。 |
+| V24 | P15 实际32 goal、256 answer、4096 records／commands拒额外写；P03/P04/P10/P12 结束不补评价／预算；F03→P12/P16 字节身份及所有 owned 停止。 | 4096 是声明的011物理合成准备，经真实 trigger／约束／普通 app 后拒绝，非4096次用户链。完整任务因上述缺口部分停止。 |
+
+**确定修复与仍待处理的问题。**
+
+1. P05 发现 goal 在 mark 后变化时，domain 标 UNKNOWN，但 native operation 留 dispatched。新增 finish_interview_supervision 用原 admission permit 调原 record_outcome 登记 UNKNOWN 诊断；保留预留，未制造 not_sent、退款或停止证明。P06 用新的准确第三窗口复验，另保留原 P05 operation 的诊断修复前后；atomic 故障也得到了 native UNKNOWN。
+2. P11 发现切选中活动到新详情返回之间仍挂着旧 InterviewWorkspace，已成功保存的草稿续处理可能 POST 到旧活动。ActivityWorkspace 现在 selectedId 不匹配时即卸载旧面试面板；增加实际 activity DOM 身份。F03 编译后 P12／P16 复用已提交主链，正文／摘要保存与 draft 读取后的切换均 0 POST。没有重复原主链 model effect。
+3. **语义证据未通过，尚未修复。** 最底合成 transport 使用 catalog 排序第一项／每 source 第一项作支持，T 第一项是免责声明，H 第二项只是冲突说明。原 P02 首项语义断言失败不能因 P03 的坐标核对而关闭；P04 的结构 PASS 也不证明 H 两个年份均被引用支持。[最终语义核对](D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-106/final/semantic-oracle.json) 明确保留这些原值与失败。产品把语义显示为建议，并不自动证明真伪；仍须修正合成正向样本、明确 oracle 后用新 key 留新的合法结果，旧 immutable 正文不能覆盖。
+4. **UI 与请求取消风险尚未完整处理。** 当前历史详情只有只读入口；应补本 goal／scope 合格早期答案的显式修订及准确版本绑定。[reconcile](D:/shspic/project_NO3_RetroLume-agent/frontend/src/activities/InterviewWorkspace.tsx:81) 的 live 只绑定 panel/activity/owner，尚未完整捕获 expected view 和意图身份后逐 await 检查。另 [submit_command](D:/shspic/project_NO3_RetroLume-agent/backend/app/interview/service.py:104) 在 shield 完成后可因 cancelled 先抛 CancelledError，再走不到 finish_interview_supervision；若同时有 mark 后结果拒绝，可能遗留未确认 native/domain 状态。这是源级待核对风险，尚无该组合的动态证明，不冒称已观察到又一实跑故障。续作应先沿本新 service 做准确取消屏障，结合真实 stop/ledger 事实处理，保持 worker 和旧平台不变。
+
+**失败、偏差和复用。** 真实根 FAIL 共7个，原件完整保留：P02 首项支持断言（语义缺口仍开）；P05 上述 native dispatched 问题（P06修复）；P06 夹具遗漏合法 interview_slot_conflict 拒绝码（P07续未走链）；P09 资料接口 Origin 使用18106被旧保护403（P10改用现有允许5173，无改local_session）；P11保存后切换问题（F03/P12修复）；P13夹具把 TeachingRefusal/stage_conflict 当 InterviewRefusal（P14续）；P14夹具读取不存在的 snapshot.status，应为 read_status（P15续）。没有为让总根变绿重放已经 COMMIT 的模型效果，也没有删除 FAIL。
+
+初始矩阵只做了全体通用样本／分组映射，未充分逐项冻结期望及调用数，这是流程偏差，最终矩阵不追认它已完整。早期 as-run 以源 hash 为主，P11 没有单独冻结当时 mjs 字节；从 F03/P12 起补了逐根 as-run 字节、mjs、dist。最终版本完整字节和12份原文件 diff已封装。辅助文件读取出现路径／glob错误；一次初始进程查询返回了非任务进程命令行，未将其纳入项目证据或使用，随后查询收窄到本卡精确 PID／出生与 profile。不能把这次辅助读取描述成从未接触任何非任务进程元数据。
+
+O01 原文/key/hash与严格动作两项未变验证继承；O02只复检修正后的 wire 项和4个新增方法，5方法全部通过。未安装新的测试框架，未改旧测试断言。支持值依给定虚构算法／完整原文核，不给现实 PG 隔离级别或真实业绩背书。
+
+**预算和停止。** 主动起点固定为 UTC 2026-10-08 00:58:08，start_ns=692532393225800，deadline_ns=721332393225800；中断未清零。主动截止与当前剩额见 final/session-close.json。辅助 metadata 采用保守累计，不称精确。
+
+| 分类 | 实际／上限 |
+| --- | --- |
+| 真实根／容器启动 | **16/16；18/18** |
+| API／fake监听启动 | 6/8；fake18107未启动 |
+| native SUP尝试／最底 transport 调用 | 34/48；31/48，包含明确 not_sent 等失败尝试，未返额 |
+| browser／driver | 3/4；3/4，同 browser 内追加文档用于owner验证 |
+| offline／build／compile | 2/6；**3/3；2/2**，compile内存执行、不写pyc |
+| 新 container／volume | 3/3；3/3 |
+| offline+build／real／cleanup | 16.116/1800秒；502.303/7200秒；7.481/900秒（运行批内 finally 停止计在对应 real内） |
+| metadata | 保守780/1800秒，含原180与本次后段600；不以未独立计时为精确数 |
+
+未用 SUP／transport 余量不授新的 root、容器启动、build 或 compile。permit日期不重置。执行只有新合成数据、最低 transport 合成 OpenAI 兼容原始响应和 usage128+64=192；native权威／SQL／资格／commit／Job／停止没有被替换。实际用户资料／简历／用户DSN／真实模型密钥／账号操作／provider外网调用／收费／安装／Git写均0；上述一次非任务进程元数据初检另明示。合成费用预留100微单位不是现实价目或免费承诺。
+
+**最终封装与资源。** [pre/diff/post及保护核对](D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-106/final/baseline-post-and-build-identity.json) 对308基线对象核对：12个授权修改及dist允许变化，292个保护对象0漂移，16个新生产源有最终hash。pre原字节在 evidence/TASK-106/pre，12份diff在 final/diff，最终源／fixture／dist完整字节在 final/post；F01—F03保留各次被替换dist。最终index.html SHA为 b308d9a5375db35d95be012492ee9d5ace93291b5f83b4c7c5e3931e067f45b4，index-AYhGumvL.js 为358d1b0e4f3a0fef62e2d223025aa0914f99b8c4f5668c9ecc0081be1c52e476。F03与P12/P16实际HTTP载入dist相符。
+
+| 新资源 | 冻结身份／端口 | 最终 |
+| --- | --- | --- |
+| pg1 | dca7942c0b39c136fbdfd9f38dafdabd60571ad472539a8961fe0bc3f2fa34e4；55446 | Running=false／Pid=0 |
+| pg2 | 25ba629dfecec2b8f3da7b0689e4a10bc111472848498c6402feeaf5c3ca896a；55447 | Running=false／Pid=0 |
+| pg3 | 5cee67731606bb28e3bc2abc6c0c21da853c5c9c837e9a80c5dde78a60c17fb4；55448 | Running=false／Pid=0 |
+
+三者均原固定镜像、1CPU／512MiB／pids128／restart=no／loopback／唯一命名卷／本许可标签，无host bind、额外cap、privileged或Docker socket。API18106、fake18107、PG三端口无监听；精确API／driver／Chromium／native SUP PID及出生核对原进程均不再活，所有 run 非 running。[收尾证明](D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-106/final/resource-stop-proof.json) 保留每项。Windows API受控终止的非零退出码如实保留，不写成正常exit0。未扫杀用户进程，旧103／100／088资源未启未删；新数据／角色／卷／容器／browser profiles／故障对象／原件均保留。
+
+**续作最小输入。** 使用本106结果、final/remainder-work.json、final/matrix.json、final/post与已有原件，优先修语义样本／oracle、历史答案UI和reconcile守卫，再验证请求取消中的诊断收尾。已有通过子性质直接继承，仅补新差异和明确not_run项。运行需要编排明确追加本许可已耗尽的 root／container_start／build／compile差额；不能以剩余时间或调用数自行续起，也不能通过改日期／换窗／新R返额。现卡内没有新批准差额，本窗口停止在已封装、已收尾的部分成果。

@@ -1,0 +1,53 @@
+
+backend/app/data_exit/packages.py
+90:             if (not allowed_member(info.filename) or info.filename.casefold() in seen or info.is_dir()
+91:                 or info.flag_bits & 1 or info.compress_type != zipfile.ZIP_STORED or info.compress_size != info.file_size
+92:                 or mode & 0o170000 not in (0, 0o100000) or info.extra):
+93:                 raise DataError("unsupported_format", 415)
+94:             seen.add(info.filename.casefold())
+95:             total += info.file_size
+96:             locations.append(info.header_offset)
+97:             if total > self.limits.package_bytes: raise DataError("capacity_exceeded", 413)
+98:             if info.filename == "manifest.json" and info.file_size > self.limits.manifest_bytes:
+99:                 raise DataError("capacity_exceeded", 413)
+100:         if not locations or min(locations) != 0: raise DataError("unsupported_format", 415)
+101:         if "manifest.json" not in seen: raise DataError("integrity_failed", 422)
+102:         manifest = load_json(self.archive.read("manifest.json"), self.limits)
+103:         required = {"format", "format_version", "package_id", "package_kind", "codec_profile", "source_business_table_count",
+104:                     "snapshot_control_domain_count", "snapshot", "contents", "availability", "scope", "completion", "restore_eligible", "root_sha256"}
+105:         if set(manifest) != required or manifest["format"] != FORMAT or manifest["format_version"] != 1:
+106:             raise DataError("unsupported_format", 415)
+107:         from .schema_profiles import get_profile
+108:         try:self.schema_profile=get_profile(manifest['codec_profile'])
+109:         except DataError:raise DataError('unsupported_format',415) from None
+110:         PROFILE=self.schema_profile.name;TABLES=self.schema_profile.tables
+111:         uuid(manifest["package_id"])
+112:         if manifest["package_kind"] not in ("portable_export", "restore_checkpoint") or manifest["source_business_table_count"] != len(TABLES) or manifest["snapshot_control_domain_count"] != 3:
+113:             raise DataError("unsupported_format", 415)
+114:         if type(manifest['format_version']) is not int:raise DataError('unsupported_format',415)
+115:         point=manifest['snapshot']
+116:         if (not isinstance(point,dict) or set(point)!={'logical_time_utc','database_snapshot','source_schema_profile',
+117:                 'source_dataset_id','runtime_authority_included','browser_drafts_included'}
+118:             or point['source_schema_profile']!=PROFILE or point['runtime_authority_included'] is not False
+119:             or point['browser_drafts_included'] is not False
+120:             or not isinstance(point['database_snapshot'],str)
+121:             or re.fullmatch(r'[0-9]+:[0-9]+:(?:[0-9]+(?:,[0-9]+)*)?',point['database_snapshot']) is None):
+122:             raise DataError('codec_mismatch',422)
+123:         uuid(point['source_dataset_id'])
+124:         from datetime import datetime
+125:         try:
+126:             if datetime.fromisoformat(point['logical_time_utc']).utcoffset() is None:raise ValueError()
+127:         except (TypeError,ValueError):raise DataError('codec_mismatch',422) from None
+128:         if manifest["completion"] not in ("complete", "incomplete") or type(manifest["restore_eligible"]) is not bool:
+129:             raise DataError("integrity_failed", 422)
+130:         root = dict(manifest); expected = root.pop("root_sha256")
+131:         if digest(canonical(root)) != expected: raise DataError("integrity_failed", 422)
+132:         entries = manifest["contents"]
+133:         if not isinstance(entries, list) or len(entries) > self.limits.members: raise DataError("capacity_exceeded", 413)
+134:         if len({e["path"] for e in entries}) != len(entries) or {e["path"] for e in entries} | {"manifest.json"} != {i.filename for i in infos}:
+135:             raise DataError("integrity_failed", 422)
+136:         total_rows = 0
+137:         for entry in entries:
+138:             self.check()
+139:             if set(entry) != {"path", "kind", "availability", "bytes", "sha256"} or not allowed_member(entry["path"],PROFILE) or entry["path"] == "manifest.json" or entry["availability"] != "present":
+140:                 raise DataError("integrity_failed", 422)

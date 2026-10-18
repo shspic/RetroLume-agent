@@ -1,0 +1,12 @@
+--- materials-api-pre
++++ materials-api-current
+@@ -15,7 +15,8 @@
+ 
+ 
+ def repository(request):
+-    local_session(request, allow_own_origin=True)
++    # 续作01（D1）：资料与 PDF 面恢复默认固定允许来源/拒绝行为；同源放行仅保留在活动路由。
++    local_session(request)
+     if request.app.state.materials is None:
+         raise HTTPException(503, "本地PostgreSQL尚未配置；资料不会被保存到临时替代数据库")
+     return request.app.state.materials

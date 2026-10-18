@@ -1,0 +1,39 @@
+Traceback (most recent call last):
+  File "D:\shspic\project_NO3_RetroLume-agent\DocuN\evidence\TASK-117\execution\continuation-01\http_remaining.py", line 12, in case
+    value=operation();c.write(C01/(name+'.json'),{'sample':c.sample(),'status':'passed_at_stated_layer','layer':layer,'Q':'NOT_RUN','result':value});return value
+          ^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\DocuN\evidence\TASK-117\execution\continuation-01\root13_batch.py", line 31, in <lambda>
+    for name,operation in [('X03-X07-real-PG-only',lambda:run_async(budget_keys(runtime,mapping))),('X02-real-PG-local-memory',lambda:run_async(memory_changes(runtime,mapping))),('X10-real-PG-delete-source',lambda:run_async(delete_source(runtime)))]:
+                                                                                                                                                                                                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\DocuN\evidence\TASK-117\execution\continuation-01\pg_remaining.py", line 81, in run_async
+    with asyncio.Runner(loop_factory=psycopg_compatible_loop_factory) as runner:return runner.run(operation)
+                                                                                       ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\DocuN\evidence\TASK-117\execution\continuation-01\pg_remaining.py", line 72, in delete_source
+    receipt=await runtime.deletions.confirm(sid,revision,impact['impact_sha256'],str(uuid4()))
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\data_exit\deletions.py", line 67, in confirm
+    return await self._confirm(source_id,expected_revision,impact_sha,business_key)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\data_exit\deletions.py", line 110, in _confirm
+    impact, tomb = await joined_thread(tombstone)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\data_exit\operations.py", line 31, in joined_thread
+    result = await asyncio.shield(future)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\data_exit\deletions.py", line 88, in tombstone
+    with self.repository.connection(operation=operation) as connection:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\contextlib.py", line 158, in __exit__
+    self.gen.throw(value)
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\data_exit\repository.py", line 28, in connection
+    raise DataError("storage_unavailable", 503) from None
+app.data_exit.contracts.DataError: storage_unavailable

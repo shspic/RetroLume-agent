@@ -1,0 +1,453 @@
+"""独立Embedding能力、规范float32向量、受信外发许可与一次受控调用。"""
+from __future__ import annotations
+import asyncio
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from decimal import Decimal, ROUND_CEILING
+import hashlib
+import json
+import math
+import re
+import struct
+from typing import Literal
+from uuid import UUID
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
+from .contracts import (AdmissionDenied, AdmissionUnavailable, CallContext, CallStatus, LedgerDisposition,
+                        Provider, RecordOutcome, Usage, build_business_payload)
+from .transport import HttpxModelTransport, RequestNotSent, DeliveryUnknown
+from app.retrieval.contracts import canonical, digest, space_identity
+
+HEX=r'^[0-9a-f]{64}$'
+NAME=r'^[A-Za-z0-9._:/-]+$'
+FROZEN_SAMPLE_SHA='304a4b131d04cd4132334bebd091f94ff62bec5660698457487e14136023c113'
+
+
+def float32_values(values,*,normalize=False):
+    """hash对象为实际PG存储的512个LE float32；从规范JSON或PG文字回读同一表示。"""
+    if not isinstance(values,(list,tuple)) or len(values)!=512:raise ValueError('embedding_dimensions_invalid')
+    if any(type(x) not in (int,float) or not math.isfinite(x) for x in values):raise ValueError('embedding_nonfinite')
+    norm=math.hypot(*values)
+    if not math.isfinite(norm) or norm<=0:raise ValueError('embedding_zero_norm')
+    converted=[]
+    try:
+        for x in values:
+            converted.append(struct.unpack('<f',struct.pack('<f',x/norm if normalize else x))[0])
+    except (OverflowError,struct.error):raise ValueError('embedding_float32_overflow') from None
+    if any(not math.isfinite(x) for x in converted) or math.hypot(*converted)<=0:raise ValueError('embedding_float32_invalid')
+    return tuple(converted)
+
+
+def vector_digest(values):return hashlib.sha256(struct.pack('<512f',*float32_values(values))).hexdigest()
+
+
+def validate_stored_value(value):
+    """007封闭Embedding值校验；不能由普通JSON标签绕过原模型节点限制。"""
+    if type(value) is not dict or set(value)!={'profile','purpose','space_id','request_sha256','manifest_sha256','inputs','usage'}:
+        raise ValueError('embedding_payload_invalid')
+    if value['profile']!='embedding.v1' or value['purpose'] not in ('source_index','query'):raise ValueError('embedding_payload_invalid')
+    for key in ('space_id','request_sha256','manifest_sha256'):
+        if not isinstance(value[key],str) or re.fullmatch(HEX,value[key]) is None:raise ValueError('embedding_payload_invalid')
+    inputs=value['inputs']
+    if not isinstance(inputs,list) or not 1<=len(inputs)<=4 or (value['purpose']=='query' and len(inputs)!=1):raise ValueError('embedding_payload_invalid')
+    for index,item in enumerate(inputs):
+        if type(item) is not dict or set(item)!={'ordinal','identity_sha256','vector','vector_sha256'} or type(item['ordinal']) is not int or item['ordinal']!=index:
+            raise ValueError('embedding_payload_invalid')
+        if not isinstance(item['identity_sha256'],str) or re.fullmatch(HEX,item['identity_sha256']) is None:raise ValueError('embedding_payload_invalid')
+        if vector_digest(item['vector'])!=item['vector_sha256'] or list(float32_values(item['vector']))!=item['vector']:
+            raise ValueError('embedding_vector_identity_invalid')
+    usage=value['usage']
+    if type(usage) is not dict or set(usage)!={'prompt_tokens','total_tokens'} or type(usage['prompt_tokens']) is not int or usage['prompt_tokens']<0 or usage['total_tokens']!=usage['prompt_tokens']:
+        raise ValueError('embedding_usage_invalid')
+
+
+class EmbeddingInput(BaseModel):
+    model_config=ConfigDict(extra='forbid',frozen=True,strict=True)
+    ordinal:int=Field(ge=0,le=3)
+    identity_sha256:str=Field(pattern=HEX)
+    text:str=Field(min_length=1,max_length=2048,repr=False)
+
+
+class EmbeddingBinding(BaseModel):
+    model_config=ConfigDict(extra='forbid',frozen=True,strict=True)
+    business_key:str
+    purpose:Literal['source_index','query']
+    request_sha256:str=Field(pattern=HEX)
+    manifest_sha256:str=Field(pattern=HEX)
+    batch_ordinal:int=Field(ge=0,le=127)
+    scope_revision:int=Field(ge=1)
+    domain:Literal['learning','interview']
+    domain_revision:int=Field(ge=0)
+    memory_selection_sha256:str|None=Field(default=None,pattern=HEX)
+    memory_dependency_sha256:str|None=Field(default=None,pattern=HEX)
+
+    @field_validator('business_key')
+    @classmethod
+    def uuid(cls,value):
+        if str(UUID(value))!=value:raise ValueError('embedding_binding_invalid')
+        return value
+
+
+class EmbeddingRequest(BaseModel):
+    model_config=ConfigDict(extra='forbid',frozen=True,strict=True)
+    profile:Literal['embedding.v1']='embedding.v1'
+    activity_id:str
+    dimensions:Literal[512]=512
+    space_id:str=Field(pattern=HEX)
+    binding:EmbeddingBinding
+    inputs:tuple[EmbeddingInput,...]=Field(min_length=1,max_length=4,repr=False)
+
+    @property
+    def input_result(self):return None
+
+    @field_validator('dimensions',mode='before')
+    @classmethod
+    def dimension_integer(cls,value):
+        if type(value) is not int or value!=512:raise ValueError('embedding_dimensions_invalid')
+        return value
+
+    @model_validator(mode='after')
+    def bound(self):
+        if str(UUID(self.activity_id))!=self.activity_id:raise ValueError('embedding_binding_invalid')
+        if tuple(x.ordinal for x in self.inputs)!=tuple(range(len(self.inputs))):raise ValueError('embedding_input_order')
+        if len({x.identity_sha256 for x in self.inputs})!=len(self.inputs):raise ValueError('embedding_duplicate_input')
+        if self.binding.purpose=='query' and (len(self.inputs)!=1 or len(self.inputs[0].text)>1024 or len(self.inputs[0].text.encode('utf-8'))>4096):
+            raise ValueError('embedding_query_limit')
+        return self
+
+
+def approved_fragment_identity(value):
+    """与source_index冻结身份同一规范；引用ID随命令变化，不进入白名单键。"""
+    v=value.model_dump() if hasattr(value,'model_dump') else value
+    return digest({'evidence_id':v['evidence_id'],'source_id':str(v['source_id']),
+      'source_version_id':str(v.get('source_version_id',v.get('version_id'))),'source_revision':v['source_revision'],
+      'origin':v.get('origin',v.get('origin_kind')),'physical_page':v.get('physical_page'),
+      'supplement_id':v.get('supplement_id'),'start_codepoint':v.get('start_codepoint',v.get('start_offset')),
+      'end_codepoint':v.get('end_codepoint',v.get('end_offset')),'text_sha256':v.get('text_sha256',v.get('fragment_sha256')),
+      'unit_sha256':v['unit_sha256'],'original_sha256':v['original_sha256']})
+
+
+class OutboundModelApproval(BaseModel):
+    """受信离线清单逐动作批准完整发送对象及其原请求身份。"""
+    model_config=ConfigDict(extra='forbid',frozen=True,strict=True)
+    payload_sha256:str=Field(pattern=HEX)
+    request_sha256:str=Field(pattern=HEX)
+
+
+class OutboundSourceManifest(BaseModel):
+    """operator采用的有限实际版本/片段，不把样本文件hash冒实际外发范围。"""
+    model_config=ConfigDict(extra='forbid',frozen=True,strict=True)
+    schema:Literal['retrolume.outbound-sources.v1']='retrolume.outbound-sources.v1'
+    frozen_samples_sha256:Literal[FROZEN_SAMPLE_SHA]
+    sources:tuple[dict,...]=Field(min_length=1,max_length=128)
+    fragments:tuple[dict,...]=Field(min_length=1,max_length=512)
+    query_input_sha256:tuple[str,...]=Field(min_length=1,max_length=128)
+    model_requests:tuple[OutboundModelApproval,...]=Field(default=(),max_length=128)
+
+    @model_validator(mode='after')
+    def closed(self):
+        identities=set()
+        for row in self.sources:
+            if set(row)!={'source_id','source_version_id','source_revision','original_sha256'}:raise ValueError('outbound_source_shape')
+            if any(str(UUID(row[k]))!=row[k] for k in ('source_id','source_version_id')) or type(row['source_revision']) is not int or row['source_revision']<1 or not re.fullmatch(HEX,row['original_sha256']):raise ValueError('outbound_source_shape')
+            identity=(row['source_id'],row['source_version_id'],row['source_revision'])
+            if identity in identities:raise ValueError('outbound_source_duplicate')
+            identities.add(identity)
+        ids=set()
+        for row in self.fragments:
+            if set(row)!={'identity_sha256','input_sha256'} or any(not isinstance(v,str) or not re.fullmatch(HEX,v) for v in row.values()) or row['identity_sha256'] in ids:raise ValueError('outbound_fragment_shape')
+            ids.add(row['identity_sha256'])
+        if len(set(self.query_input_sha256))!=len(self.query_input_sha256) or any(not re.fullmatch(HEX,x) for x in self.query_input_sha256):raise ValueError('outbound_query_shape')
+        pairs=[(row.payload_sha256,row.request_sha256) for row in self.model_requests]
+        if len(set(pairs))!=len(pairs):raise ValueError('outbound_model_approval_duplicate')
+        return self
+
+    @property
+    def sha256(self):
+        # 空新增字段保留原Embedding清单身份；模型没有完整批准仍失败关闭。
+        return digest(self.model_dump(mode='json',exclude={'model_requests'} if not self.model_requests else set()))
+    @classmethod
+    def from_wire(cls,value):
+        if isinstance(value,dict) and value.get('schema')=='retrolume.outbound-sources.v2':
+            from .q_protocol import SourceManifestV2
+            return SourceManifestV2.model_validate_json(json.dumps(value,ensure_ascii=False,separators=(',',':')))
+        return cls.model_validate_json(json.dumps(value,ensure_ascii=False,separators=(',',':')))
+
+    def check_sources(self,rows):
+        allowed={(r['source_id'],r['source_version_id'],r['source_revision'],r['original_sha256']) for r in self.sources}
+        if not rows or any((str(r['source_id']),str(r.get('source_version_id',r.get('version_id'))),r['source_revision'],r.get('original_sha256',r.get('sha256'))) not in allowed for r in rows):raise AdmissionDenied('outbound_source_not_approved')
+
+    def check_embedding(self,request):
+        approved={r['identity_sha256']:r['input_sha256'] for r in self.fragments}
+        for item in request.inputs:
+            if request.binding.purpose=='source_index':
+                valid=approved.get(item.identity_sha256)==digest(item.text)
+            else:valid=digest(item.text) in self.query_input_sha256
+            if not valid:raise AdmissionDenied('outbound_input_not_approved')
+
+    def check_model(self,request,payload=None):
+        if payload is None or not any(row.payload_sha256==digest(payload) and row.request_sha256==digest(request.model_dump(mode='json')) for row in self.model_requests):
+            raise AdmissionDenied('outbound_model_payload_not_approved')
+        profile=request.learning_profile or request.teaching_profile or request.interview_profile
+        if profile is not None:catalog=profile.catalog
+        elif request.html_profile is not None:catalog=json.loads(request.html_profile.context_json).get('catalog',[])
+        else:raise AdmissionDenied('outbound_profile_required')
+        allowed={r['identity_sha256'] for r in self.fragments}
+        if not catalog:raise AdmissionDenied('outbound_source_not_approved')
+        for entry in catalog:
+            row=entry.model_dump() if hasattr(entry,'model_dump') else entry
+            if not isinstance(row.get('text'),str) or hashlib.sha256(row['text'].encode('utf-8')).hexdigest()!=row.get('fragment_sha256'):raise AdmissionDenied('outbound_fragment_not_approved')
+            if approved_fragment_identity(row) not in allowed:raise AdmissionDenied('outbound_fragment_not_approved')
+            self.check_sources([{'source_id':row['source_id'],'source_version_id':row['version_id'],'source_revision':row['source_revision'],'original_sha256':row['original_sha256']}])
+
+
+class OutboundGrant(BaseModel):
+    """仅来自operator配置/私有IPC；客户端不能指定或改变活动grant。"""
+    model_config=ConfigDict(extra='forbid',frozen=True,strict=True)
+    schema:Literal['retrolume.outbound-grant.v1']='retrolume.outbound-grant.v1'
+    grant_id:str
+    approved_receipt_sha256:str=Field(pattern=HEX)
+    q_activation_receipt_sha256:str=Field(pattern=HEX)
+    source_manifest_sha256:str=Field(pattern=HEX)
+    price_snapshot_sha256:str=Field(pattern=HEX)
+    valid_from_utc:str
+    valid_until_utc:str
+    data_class:Literal['synthetic']='synthetic'
+    allowed_activity_ids:tuple[str,...]=Field(min_length=1,max_length=3)
+    provider_capabilities:tuple[str,...]=Field(min_length=1,max_length=2)
+    global_max_requests:Literal[80]=80
+    global_max_cost_microunits:Literal[20000000]=20000000
+    capabilities_verified:bool
+    account_terms_verified:bool
+    token_upper_bound_verified:bool
+    input_rate_cny_per_million:str
+    output_rate_cny_per_million:str
+    framing_token_upper_bound:int=Field(ge=0,le=4096)
+    margin_percent:int=Field(ge=25,le=100)
+
+    @model_validator(mode='after')
+    def bounds(self):
+        start,end=datetime.fromisoformat(self.valid_from_utc),datetime.fromisoformat(self.valid_until_utc)
+        if start.tzinfo is None or end.tzinfo is None or not 0<(end-start).total_seconds()<=72*3600:raise ValueError('outbound_grant_time_invalid')
+        roster={'01800000-0000-4000-8000-000000000001','01800000-0000-4000-8000-000000000002','01800000-0000-4000-8000-000000000003'}
+        if len(set(self.allowed_activity_ids))!=len(self.allowed_activity_ids) or not set(self.allowed_activity_ids)<=roster:raise ValueError('outbound_grant_roster_invalid')
+        chat='deepseek-flash' if self.schema=='retrolume.outbound-grant.v2' else 'deepseek-chat'
+        if not set(self.provider_capabilities)<={f'deepseek_chat_completions/{chat}','zhipu_embeddings/embedding-3'}:raise ValueError('outbound_grant_capability_invalid')
+        for value in (self.input_rate_cny_per_million,self.output_rate_cny_per_million):
+            number=Decimal(value)
+            if not number.is_finite() or number<0:raise ValueError('outbound_price_invalid')
+        return self
+
+    @property
+    def sha256(self):return digest(self.model_dump(mode='json'))
+
+    @classmethod
+    def from_wire(cls,value):
+        # JSON数组经严格JSON校验成为冻结tuple，其他标量仍保持strict边界。
+        if isinstance(value,dict) and value.get('schema')=='retrolume.outbound-grant.v2':
+            return OutboundGrantV2.model_validate_json(json.dumps(value,ensure_ascii=False,separators=(',',':')))
+        return cls.model_validate_json(json.dumps(value,ensure_ascii=False,separators=(',',':')))
+
+    def check(self,activity_id,provider,model,request_bytes,output_tokens):
+        now=datetime.now(timezone.utc)
+        if not self.capabilities_verified or not self.account_terms_verified or not self.token_upper_bound_verified:
+            raise AdmissionDenied('outbound_conditions_unverified')
+        if not datetime.fromisoformat(self.valid_from_utc)<=now<datetime.fromisoformat(self.valid_until_utc):raise AdmissionDenied('outbound_grant_expired')
+        if activity_id not in self.allowed_activity_ids or f'{provider}/{model}' not in self.provider_capabilities:raise AdmissionDenied('outbound_grant_mismatch')
+        # bytes在这里仅是已核保守token上界的一部分，绝不称精确tokens；未核上界不发。
+        worst=(Decimal(request_bytes+self.framing_token_upper_bound)*Decimal(self.input_rate_cny_per_million)
+               +Decimal(output_tokens)*Decimal(self.output_rate_cny_per_million))*(Decimal(100+self.margin_percent)/100)
+        microunits=int(worst.to_integral_value(rounding=ROUND_CEILING))
+        if microunits>250000:raise AdmissionDenied('outbound_price_limit')
+        return microunits
+
+
+class OutboundGrantV2(OutboundGrant):
+    schema:Literal['retrolume.outbound-grant.v2']='retrolume.outbound-grant.v2'
+    global_max_requests:Literal[100]=100
+    global_max_cost_microunits:Literal[25000000]=25000000
+    instance_binding_sha256:str=Field(pattern=HEX)
+
+
+class EmbeddingServiceConfig(BaseModel):
+    model_config=ConfigDict(extra='forbid',frozen=True,strict=True)
+    provider:Literal['zhipu_embeddings']='zhipu_embeddings'
+    base_url:Literal['https://open.bigmodel.cn/api/paas/v4']='https://open.bigmodel.cn/api/paas/v4'
+    model:Literal['embedding-3']='embedding-3'
+    dimensions:Literal[512]=512
+    returned_models:tuple[str,...]=('embedding-3',)
+    api_key:SecretStr=Field(repr=False)
+    timeout_seconds:float=Field(default=10.0,gt=0,le=10)
+    max_request_bytes:int=Field(default=65536,ge=1024,le=65536)
+    max_response_bytes:int=Field(default=65536,ge=1024,le=65536)
+    outbound_grant:dict|None=Field(default=None,repr=False)
+    outbound_source_manifest:dict|None=Field(default=None,repr=False)
+    outbound_authorization:dict|None=Field(default=None,repr=False)
+
+    @field_validator('api_key')
+    @classmethod
+    def key(cls,value):
+        if not value.get_secret_value().strip() or len(value.get_secret_value().encode('utf-8'))>4096:raise ValueError('invalid_credential')
+        return value
+
+    @field_validator('returned_models')
+    @classmethod
+    def aliases(cls,value):
+        if not value or len(set(value))!=len(value) or any(x!='embedding-3' for x in value):raise ValueError('embedding_model_identity_invalid')
+        return value
+
+
+@dataclass(frozen=True)
+class EmbeddingAdmissionIntent:
+    context:CallContext
+    configured_model:str
+    request_bytes:int
+    binding:EmbeddingBinding
+    request:EmbeddingRequest=field(repr=False)
+    outbound_grant:dict|None=field(default=None,repr=False)
+    outbound_source_manifest:dict|None=field(default=None,repr=False)
+    provider:str='zhipu_embeddings'
+    max_output_tokens:int=0
+    tool_names:tuple[str,...]=()
+    outbound_authorization:dict|None=field(default=None,repr=False)
+
+
+@dataclass(frozen=True)
+class EmbeddingAdmissionPermit:
+    admission_id:str
+    operation_id:str
+    executor_id:str
+
+
+@dataclass(frozen=True)
+class EmbeddingLedgerOutcome:
+    disposition:LedgerDisposition
+    error_code:str|None=None
+    remote_request_id:str|None=None
+    returned_model:str|None=None
+    finish_reason:str|None=None
+    prompt_tokens:int|None=None
+    completion_tokens:int|None=None
+    response_bytes:int|None=None
+    payload_format:str|None=None
+    payload:str|None=field(default=None,repr=False)
+    payload_sha256:str|None=None
+
+
+@dataclass(frozen=True)
+class EmbeddingCallResult:
+    status:CallStatus
+    operation_id:str
+    provider:str
+    configured_model:str
+    returned_model:str|None=None
+    usage:Usage|None=None
+    error_code:str|None=None
+    remote_request_id:str|None=None
+    payload_sha256:str|None=None
+
+
+class ControlledEmbeddingGateway:
+    def __init__(self,config,*,ledger,transport=None):
+        if type(config) is not EmbeddingServiceConfig:raise TypeError('typed_embedding_config_required')
+        self._config=config;self._ledger=ledger;self._transport=transport or HttpxModelTransport()
+
+    def _result(self,context,status,error=None,**facts):
+        return EmbeddingCallResult(status,context.operation_id,self._config.provider,self._config.model,error_code=error,**facts)
+
+    async def _finish(self,permit,context,outcome,status):
+        from .q_gateway import release_dispatch
+        await release_dispatch()
+        try:
+            confirmation=await self._ledger.record_embedding_outcome(permit,outcome)
+            if confirmation not in (RecordOutcome.RECORDED,RecordOutcome.ALREADY_PRESENT):raise AdmissionUnavailable('record_unconfirmed')
+        except AdmissionDenied:return self._result(context,CallStatus.UNKNOWN,'record_denied')
+        except Exception:return self._result(context,CallStatus.UNKNOWN,'record_unconfirmed')
+        usage=Usage(outcome.prompt_tokens,0,outcome.prompt_tokens) if outcome.prompt_tokens is not None else None
+        return self._result(context,status,outcome.error_code,returned_model=outcome.returned_model,usage=usage,
+                            remote_request_id=outcome.remote_request_id,payload_sha256=outcome.payload_sha256 if status==CallStatus.SUCCEEDED else None)
+
+    async def call(self,context,request):
+        from .q_gateway import call_with_policy, is_v2
+        if is_v2(self._config):
+            return await call_with_policy(self,context,request,self._call_original)
+        return await self._call_original(context,request)
+
+    async def _call_original(self,context,request):
+        if type(request) is not EmbeddingRequest:return self._result(context,CallStatus.REJECTED,'embedding_profile_required')
+        try:
+            request=EmbeddingRequest.model_validate_json(request.model_dump_json())
+            if context.activity_id!=request.activity_id or context.scope_revision!=request.binding.scope_revision:raise ValueError('embedding_binding_invalid')
+            expected=('emb18i.' if request.binding.purpose=='source_index' else 'emb18q.')+request.binding.business_key+'.'+str(request.binding.batch_ordinal)
+            if context.operation_id!=expected or request.space_id!=space_identity(self._config.provider,self._config.model):raise ValueError('embedding_binding_invalid')
+            payload={'model':self._config.model,'input':[x.text for x in request.inputs],'dimensions':512}
+            size=len(canonical(payload).encode('utf-8'))
+            if size>self._config.max_request_bytes:raise ValueError('embedding_context_limit')
+            grant=None
+            source_manifest=None
+            if getattr(self._transport,'is_external',True) or self._config.outbound_grant is not None:
+                if self._config.outbound_grant is None:raise AdmissionDenied('outbound_not_authorized')
+                parsed=OutboundGrant.from_wire(self._config.outbound_grant);parsed.check(context.activity_id,self._config.provider,self._config.model,size,0)
+                source_manifest=OutboundSourceManifest.from_wire(self._config.outbound_source_manifest)
+                if source_manifest.sha256!=parsed.source_manifest_sha256:raise AdmissionDenied('outbound_manifest_mismatch')
+                source_manifest.check_embedding(request)
+                grant=parsed.model_dump(mode='json')
+            intent=EmbeddingAdmissionIntent(context,self._config.model,size,request.binding,request,grant,source_manifest.model_dump(mode='json') if source_manifest else None)
+            if self._config.outbound_authorization:
+                from dataclasses import replace
+                intent=replace(intent,outbound_authorization=self._config.outbound_authorization)
+            from .q_gateway import admission_intent,admission_observed
+            admission_intent(intent)
+            permit=await self._ledger.admit_embedding(intent)
+            admission_observed(permit)
+            if type(permit) is not EmbeddingAdmissionPermit or permit.operation_id!=context.operation_id or permit.executor_id!=context.executor_id:
+                raise AdmissionDenied('embedding_permit_invalid')
+            if grant is not None:parsed.check(context.activity_id,self._config.provider,self._config.model,size,0)
+            await self._ledger.mark_embedding_dispatch_started(permit)
+        except (ValueError,AdmissionDenied) as exc:return self._result(context,CallStatus.REJECTED,str(exc) if re.fullmatch(NAME,str(exc)) else 'embedding_admission_denied')
+        except Exception:return self._result(context,CallStatus.REJECTED,'embedding_admission_unavailable')
+        try:
+            async with asyncio.timeout(self._config.timeout_seconds):
+                from .q_gateway import dispatch_transport
+                response=await dispatch_transport(self._transport,endpoint=self._config.base_url+'/embeddings',api_key=self._config.api_key.get_secret_value(),
+                    payload=payload,timeout_seconds=self._config.timeout_seconds,max_response_bytes=self._config.max_response_bytes)
+        except RequestNotSent:return await self._finish(permit,context,EmbeddingLedgerOutcome(LedgerDisposition.NOT_SENT,'request_not_sent'),CallStatus.NOT_SENT)
+        except asyncio.CancelledError:
+            await self._finish(permit,context,EmbeddingLedgerOutcome(LedgerDisposition.UNKNOWN,'cancelled'),CallStatus.UNKNOWN);raise
+        except (TimeoutError,DeliveryUnknown):return await self._finish(permit,context,EmbeddingLedgerOutcome(LedgerDisposition.UNKNOWN,'delivery_unknown'),CallStatus.UNKNOWN)
+        except Exception:return await self._finish(permit,context,EmbeddingLedgerOutcome(LedgerDisposition.UNKNOWN,'transport_unknown'),CallStatus.UNKNOWN)
+        facts={'response_bytes':response.response_bytes}
+        try:
+            if response.status_code!=200:raise ValueError('embedding_http_error')
+            if response.body_too_large or type(response.response_bytes) is not int or not 0<response.response_bytes<=65536 or len(response.body)>65536:
+                raise ValueError('embedding_response_limit')
+            def pairs(items):
+                result={}
+                for key,value in items:
+                    if key in result:raise ValueError('embedding_duplicate_key')
+                    result[key]=value
+                return result
+            value=json.loads(response.body,object_pairs_hook=pairs,parse_constant=lambda _:(_ for _ in ()).throw(ValueError('embedding_nonfinite')))
+            if not isinstance(value,dict) or value.get('model') not in self._config.returned_models:raise ValueError('embedding_model_identity_invalid')
+            data=value.get('data')
+            if not isinstance(data,list) or len(data)!=len(request.inputs):raise ValueError('embedding_response_count')
+            indices=[x.get('index') if isinstance(x,dict) else None for x in data]
+            if any(type(x) is not int for x in indices) or sorted(indices)!=list(range(len(data))):raise ValueError('embedding_response_order')
+            inputs=[]
+            for row in sorted(data,key=lambda x:x['index']):
+                vectors=float32_values(row.get('embedding'),normalize=True);inp=request.inputs[row['index']]
+                inputs.append({'ordinal':inp.ordinal,'identity_sha256':inp.identity_sha256,'vector':list(vectors),'vector_sha256':vector_digest(vectors)})
+            usage=value.get('usage')
+            if not isinstance(usage,dict) or type(usage.get('prompt_tokens')) is not int or usage['prompt_tokens']<0:raise ValueError('embedding_usage_invalid')
+            rid=value.get('id',response.remote_request_id)
+            if rid is not None and (not isinstance(rid,str) or len(rid)>128 or re.fullmatch(NAME,rid) is None):raise ValueError('embedding_remote_identity_invalid')
+            stored={'profile':'embedding.v1','purpose':request.binding.purpose,'space_id':request.space_id,
+                    'request_sha256':request.binding.request_sha256,'manifest_sha256':request.binding.manifest_sha256,
+                    'inputs':inputs,'usage':{'prompt_tokens':usage['prompt_tokens'],'total_tokens':usage['prompt_tokens']}}
+            fmt,body,body_sha=build_business_payload(json_object=stored)
+            outcome=EmbeddingLedgerOutcome(LedgerDisposition.RECEIVED,remote_request_id=rid,returned_model=value['model'],
+                prompt_tokens=usage['prompt_tokens'],completion_tokens=0,response_bytes=response.response_bytes,
+                payload_format=fmt,payload=body,payload_sha256=body_sha)
+            return await self._finish(permit,context,outcome,CallStatus.SUCCEEDED)
+        except (ValueError,TypeError,KeyError,OverflowError):
+            outcome=EmbeddingLedgerOutcome(LedgerDisposition.RECEIVED,'embedding_response_invalid',**facts)
+            return await self._finish(permit,context,outcome,CallStatus.FAILED)

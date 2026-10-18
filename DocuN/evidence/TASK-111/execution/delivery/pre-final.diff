@@ -1,0 +1,465 @@
+--- pre/backend/app/activities/repository.py
++++ final/backend/app/activities/repository.py
+@@ -40,6 +40,7 @@
+ from app.memory.repository import MemoryLedgerMethods
+ from app.memory.contracts import MemorySelectionInput, MemoryRefusal
+ from app.learning.contracts import canonical, sha
++from app.preview.repository import HtmlLedgerMethods
+ 
+ 
+ _T = TypeVar("_T")
+@@ -281,7 +282,7 @@
+     payload: str | None = field(default=None, repr=False)
+ 
+ 
+-class PostgresAdmissionLedger(TeachingLedgerMethods, MemoryLedgerMethods, InterviewLedgerMethods):
++class PostgresAdmissionLedger(TeachingLedgerMethods, MemoryLedgerMethods, InterviewLedgerMethods, HtmlLedgerMethods):
+     """`AdmissionLedger` 的失败关闭 PostgreSQL 实现。
+ 
+     连接、锁和语句都有限时；任何数据库错误对准入调用统一表现为 unavailable，
+@@ -1092,7 +1093,11 @@
+             sources_valid=memory_state['sources_valid']
+             activity=memory_state['activity']
+             await self._interview_require_call(connection,activity,operation_id,intent.interview_binding)
+-            self._memory_require_call(activity,operation_id,intent.teaching_binding)
++            if operation_id.startswith("html11m."):
++                await self._html_require_call(connection,activity,operation_id,intent.html_binding)
++            else:
++                if intent.html_binding is not None: raise AdmissionDenied("invalid_html_profile")
++                self._memory_require_call(activity,operation_id,intent.teaching_binding)
+             if intent.input_result is not None and activity is not None:
+                 if activity["status"]=="cancelled":raise AdmissionDenied("cancelled")
+                 if not sources_valid:raise AdmissionDenied("source_invalid")
+@@ -1117,7 +1122,7 @@
+                     raise AdmissionDenied("invalid_input")
+                 if ref.scope_revision!=activity["scope_revision"] or ref.scope_revision!=intent.context.scope_revision:
+                     raise AdmissionDenied("result_invalidated")
+-            if operation_id.startswith(('teach8m.','teach8t.','int10m.')):
++            if operation_id.startswith(('teach8m.','teach8t.','int10m.','html11m.')):
+                 await self._teaching_lock_operations(connection,activity_id)
+             keys=sorted({operation_id}|({ref.operation_id} if ref else set()))
+             cursor=await connection.execute("SELECT * FROM activity_operations WHERE activity_id=%s AND operation_id=ANY(%s) ORDER BY operation_id FOR UPDATE",(activity_id,keys))
+@@ -1134,6 +1139,7 @@
+                 except InterviewRefusal as exc: raise AdmissionDenied(exc.code) from None
+             if operation_id in calls:raise AdmissionDenied("操作键已经占用，不能获得第二次发送资格")
+             if ref and ref.operation_id.startswith("int10m."):raise AdmissionDenied("interview_parent_forbidden")
++            if ref and ref.operation_id.startswith("html11m."):raise AdmissionDenied("html_parent_forbidden")
+             if ref:
+                 parent=calls.get(ref.operation_id)
+                 if parent is not None and parent["kind"]!="model":
+@@ -1485,7 +1491,7 @@
+         snapshots=memory_state['snapshots']
+         sources_valid=memory_state['sources_valid']
+         activity=memory_state['activity']
+-        if operation_id.startswith(('teach8m.','teach8t.','int10m.')):
++        if operation_id.startswith(('teach8m.','teach8t.','int10m.','html11m.')):
+             await self._teaching_lock_operations(connection,activity_id)
+         cursor = await connection.execute(
+             "SELECT * FROM activity_operations WHERE admission_id = %s FOR UPDATE",
+@@ -1520,6 +1526,8 @@
+     async def mark_dispatch_started(self, permit: AdmissionPermit) -> None:
+         async def operation(connection: object) -> AdmissionPermit:
+             activity, call, sources_valid = await self._locked_operation(connection, permit)
++            if call["operation_id"].startswith("html11m."):
++                await self._html_locked_binding(connection,activity,call["operation_id"])
+             if call["operation_id"].startswith("teach8m."):
+                 # G8：mark 锁内复核教学命令仍为 started 且未被废弃。
+                 try:
+@@ -1704,6 +1712,8 @@
+             activity, call, sources_valid = await self._locked_operation(connection, permit)
+             confirmed = await self._terminal_confirmation(connection, call, values, payload_triple)
+             if confirmed is not None:
++                if call["operation_id"].startswith("html11m."):
++                    await self._html_confirm_integrity(connection,call,payload_triple)
+                 if call["operation_id"].startswith("teach8m."):
+                     await self._teaching_confirm_integrity(connection,call,payload_triple)
+                 if call["operation_id"].startswith("int10m."):
+@@ -1722,6 +1732,8 @@
+                 await self._write_teaching_outcome(connection, activity, call, outcome, payload_triple)
+             if call["operation_id"].startswith("int10m."):
+                 await self._write_interview_outcome(connection,activity,call,outcome,payload_triple)
++            if call["operation_id"].startswith("html11m."):
++                await self._write_html_outcome(connection,activity,call,outcome,payload_triple)
+             return RecordOutcome.RECORDED
+ 
+         return await self._transaction(operation)
+--- pre/backend/app/activities/service.py
++++ final/backend/app/activities/service.py
+@@ -124,6 +124,7 @@
+         try: await self.ledger.require_non_interview(activity_id)
+         except InterviewRefusal as exc: return ContinuationOutcome(exc.code)
+         if parent_operation_id.startswith("int10m.") or new_operation_id.startswith("int10m."):return ContinuationOutcome("interview_parent_forbidden")
++        if parent_operation_id.startswith("html11m.") or new_operation_id.startswith("html11m."):return ContinuationOutcome("html_parent_forbidden")
+         selected=await self.ledger.read_memory_selection(activity_id)
+         if selected.get('selected') or not selected.get('eligible',True):
+             return ContinuationOutcome('memory_profile_required')
+--- pre/backend/app/capabilities/contracts.py
++++ final/backend/app/capabilities/contracts.py
+@@ -15,6 +15,7 @@
+ from app.learning.contracts import LearningProfile
+ from app.interview.contracts import InterviewProfile, InterviewCallBinding
+ from app.learning.teaching_contracts import TeachingCallBinding, TeachingProfile, TeachingMemoryCallBinding, TeachingMemoryProfile
++from app.preview.business_contracts import HtmlProfile, HtmlCallBinding
+ 
+ 
+ class Provider(StrEnum):
+@@ -132,6 +133,7 @@
+     learning_profile: LearningProfile | None = Field(default=None, repr=False)
+     teaching_profile: TeachingProfile | TeachingMemoryProfile | None = Field(default=None, repr=False)
+     interview_profile: InterviewProfile | None = Field(default=None, repr=False)
++    html_profile: HtmlProfile | None = Field(default=None, repr=False)
+     messages: tuple[Message, ...] = Field(min_length=1, max_length=128)
+     max_output_tokens: int = Field(ge=1)
+     response_mode: ResponseMode = ResponseMode.JSON_OBJECT
+@@ -140,7 +142,7 @@
+     @model_validator(mode="after")
+     def profile_exclusive(self) -> "ModelCallRequest":
+         # teaching.v1 与 learning.v1 互斥；teaching 必须 JSON_OBJECT 且无工具。
+-        if sum(p is not None for p in (self.learning_profile,self.teaching_profile,self.interview_profile)) > 1:
++        if sum(p is not None for p in (self.learning_profile,self.teaching_profile,self.interview_profile,self.html_profile)) > 1:
+             raise ValueError("mixed_profile_rejected")
+         if self.teaching_profile is not None and (
+             self.response_mode.value != "json_object" or self.allowed_tools
+@@ -150,6 +152,9 @@
+             raise ValueError("invalid_teaching_profile")
+         if self.interview_profile is not None and (self.response_mode.value != "json_object" or self.allowed_tools or self.input_result is not None or len(self.messages) != 2):
+             raise ValueError("interview_binding_invalid")
++        if self.html_profile is not None and (self.response_mode.value != "json_object" or self.allowed_tools
++                or self.input_result is not None or len(self.messages) != 2):
++            raise ValueError("invalid_html_profile")
+         return self
+ 
+     @field_validator("allowed_tools")
+@@ -199,6 +204,7 @@
+     # G8：受信教学调用绑定；由 gateway 从 teaching_profile 构造，公开 API 不可直接构造。
+     teaching_binding: TeachingCallBinding | TeachingMemoryCallBinding | None = None
+     interview_binding: InterviewCallBinding | None = None
++    html_binding: HtmlCallBinding | None = None
+ 
+ 
+ @dataclass(frozen=True)
+--- pre/backend/app/capabilities/gateway.py
++++ final/backend/app/capabilities/gateway.py
+@@ -98,6 +98,13 @@
+         self._tools = tools or ToolRegistry()
+ 
+     async def call(self, context: CallContext, request: ModelCallRequest) -> ModelCallResult:
++        if context.operation_id.startswith("html11m.") and request.html_profile is None:
++            return self._result(context, CallStatus.REJECTED, "html_profile_required")
++        if request.html_profile is not None:
++            from app.preview.model_policy import validate_request
++            code = await validate_request(context, request, self._ledger)
++            if code is not None:
++                return self._result(context, CallStatus.REJECTED, code)
+         if request.learning_profile is None and request.teaching_profile is None \
+                 and context.operation_id.startswith(("learn-first-v1.", "learn-next-v1.")):
+             return self._result(context, CallStatus.REJECTED, "invalid_learning_profile")
+@@ -160,6 +167,16 @@
+             intent=AdmissionIntent(context=intent.context,provider=intent.provider,configured_model=intent.configured_model,request_bytes=intent.request_bytes,
+                 max_output_tokens=intent.max_output_tokens,tool_names=intent.tool_names,interview_binding=InterviewCallBinding(
+                     business_key=p.business_key,request_sha256=p.request_sha256,context_sha256=p.context_sha256,expected_head_revision=p.expected_head_revision,goal_version=p.goal_version))
++        if request.html_profile is not None:
++            from app.preview.business_contracts import HtmlCallBinding
++            from app.preview.description import load_json
++            p = request.html_profile
++            frozen = load_json(p.context_json)
++            intent = AdmissionIntent(context=intent.context, provider=intent.provider, configured_model=intent.configured_model,
++                request_bytes=intent.request_bytes, max_output_tokens=intent.max_output_tokens, tool_names=intent.tool_names,
++                html_binding=HtmlCallBinding(business_key=p.business_key, request_sha256=p.request_sha256,
++                    context_sha256=p.context_sha256, renderer_sha256=p.renderer_sha256,
++                    memory_selection_sha256=frozen.get("memory_selection_sha256")))
+         stage = "admit"
+         try:
+             permit = await self._ledger.admit(intent)
+@@ -425,8 +442,17 @@
+                 raise ResponseValidationError("invalid_output_json") from exc
+             if not isinstance(value, dict):
+                 raise ResponseValidationError("invalid_output_json")
+-            _validate_json_shape(value)
+-            if request.interview_profile is not None:
++            _validate_json_shape(value, max_depth=64 if request.html_profile is not None else 12,
++                                 max_nodes=5000 if request.html_profile is not None else 2000)
++            if request.html_profile is not None:
++                from app.preview.model_policy import stored_result
++                try:
++                    if completion_tokens > request.max_output_tokens:
++                        raise ValueError("invalid_interactive_output")
++                    value = stored_result(content, request.html_profile)
++                except (ValueError, TypeError, KeyError, RecursionError, UnicodeError):
++                    raise ResponseValidationError("invalid_interactive_output") from None
++            elif request.interview_profile is not None:
+                 from app.interview.policy import stored_result
+                 try:
+                     if completion_tokens > request.max_output_tokens: raise ValueError("invalid_interview_output")
+--- pre/backend/app/service_config.py
++++ final/backend/app/service_config.py
+@@ -61,6 +61,8 @@
+     interview_model_layer: LayerState = LayerState(False,"interview_not_configured")
+     interview_output_tokens: int | None = None
+     interview_followups: int | None = None
++    html_generation_layer: LayerState = LayerState(False,"html_not_configured")
++    html_output_tokens: int | None = None
+ 
+ 
+ class _ModelIdentity(BaseModel):
+@@ -327,6 +329,13 @@
+     learning_layer, learning_tokens = _learning_check(data, defaults, continue_layer, model_service)
+     teaching_layer, teaching_tokens, calculation_layer = _teaching_check(data, defaults, continue_layer, model_service)
+     interview_layer,interview_tokens,interview_followups = _interview_check(data,defaults,continue_layer,model_service)
++    html_layer=LayerState(False,"html_not_configured");html_tokens=None
++    section=data.get("html")
++    if section is not None:
++        if (type(section) is dict and set(section)=={"profile","max_output_tokens"} and section["profile"]=="html_explanation.v2"
++            and type(section["max_output_tokens"]) is int and 1<=section["max_output_tokens"]<=4096 and continue_layer.available):
++            html_layer=LayerState(True);html_tokens=section["max_output_tokens"]
++        else:html_layer=LayerState(False,"html_config_invalid")
+     memory_context=None
+     memory_layer=LayerState(False,'memory_not_configured')
+     if data.get('memory_context') is not None:
+@@ -353,4 +362,5 @@
+         teaching_calculation_layer=calculation_layer,
+         memory_context=memory_context,memory_layer=memory_layer,
+         interview_model_layer=interview_layer,interview_output_tokens=interview_tokens,interview_followups=interview_followups,
++        html_generation_layer=html_layer,html_output_tokens=html_tokens,
+     )
+--- pre/backend/app/main.py
++++ final/backend/app/main.py
+@@ -17,6 +17,10 @@
+ from app.memory.api import router as memory_router
+ from app.interview.api import router as interview_router
+ from app.service_config import load_activity_config
++from app.preview.api import router as preview_router
++from app.preview.host_policy import load_host_policy
++from app.preview.production_supervisor import PreviewController
++from contextlib import asynccontextmanager
+ 
+ class Settings(BaseModel):
+     data_dir: Path
+@@ -44,7 +48,14 @@
+ 
+ def create_app(materials=None) -> FastAPI:
+     settings = load_settings()
+-    app = FastAPI(title="RetroLume development", docs_url=None, redoc_url=None, openapi_url=None)
++    @asynccontextmanager
++    async def lifespan(application):
++        control=application.state.preview_controller
++        if control is not None:await control.recover()
++        try:yield
++        finally:
++            if control is not None:await control.close()
++    app = FastAPI(title="RetroLume development", docs_url=None, redoc_url=None, openapi_url=None,lifespan=lifespan)
+     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver"])
+ 
+     @app.get("/health")
+@@ -69,6 +80,9 @@
+         Path(__file__).resolve().parents[2] / "config" / "activity.local.json"
+     )
+     app.state.activity_config = load_activity_config(Path(config_path))
++    preview_path=os.environ.get("RETROLUME_PREVIEW_CONFIG")
++    policy=load_host_policy(preview_path,settings.data_dir/"preview-control") if preview_path else None
++    app.state.preview_controller=PreviewController(ledger,policy) if policy is not None and ledger is not None else None
+     @app.middleware("http")
+     async def no_store_api(request, call_next):
+         response = await call_next(request)
+@@ -84,6 +98,7 @@
+     app.include_router(teaching_router)
+     app.include_router(memory_router)
+     app.include_router(interview_router)
++    app.include_router(preview_router)
+     dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+     if dist.is_dir():
+         app.mount("/", StaticFiles(directory=dist, html=True), name="frontend")
+--- pre/frontend/src/activities/LearningResult.tsx
++++ final/frontend/src/activities/LearningResult.tsx
+@@ -1,5 +1,6 @@
+ import { useEffect, useRef, useState } from "react";
+ import { PdfCitationPage } from "../pdf/PdfReviewPanel";
++import { HtmlExplanationPanel } from "../explanations/HtmlExplanationPanel";
+ 
+ type Citation = {
+   citation_id: string; source_id: string; version_id: string; source_revision: number;
+@@ -26,10 +27,13 @@
+ 
+ const KINDS: Record<string, string> = { answer: "学习答案", clarification: "需要补充信息", no_evidence: "证据不足", conflict: "来源冲突" };
+ 
+-export function LearningResult({document: result, activityId, operationId, token, onUseGoal}: {
++export function LearningResult({document: result, activityId, operationId, token, onUseGoal, payloadSha256}: {
+   document: LearningDocument; activityId: string; operationId: string; token: string;
+   onUseGoal?: () => void;
++  payloadSha256?: string | null;
+ }) {
++  const [htmlSegment,setHtmlSegment] = useState<number|null>(null);
++  useEffect(()=>setHtmlSegment(null),[activityId,operationId,payloadSha256]);
+   const [citation, setCitation] = useState<Citation | null>(null);
+   const [error, setError] = useState("");
+   const [loading, setLoading] = useState(false);
+@@ -75,6 +79,8 @@
+     <p>{result.result.message}</p>
+     {result.result.segments.map((segment, index) => <div className="ws-answer-segment" key={index}>
+       <p>{segment.text}</p>
++      {result.result.kind==="answer"&&payloadSha256&&/^[0-9a-f]{64}$/.test(payloadSha256)&&
++        <button onClick={()=>setHtmlSegment(index)}>交互解释此答案段</button>}
+       <div className="ws-citations">{segment.citations.map(id => {
+         const entry = result.catalog.find(e => e.citation_id === id);
+         return <button className="secondary" key={id} onClick={() => void showCitation(id)}>
+@@ -84,6 +90,9 @@
+       })}</div>
+     </div>)}
+     {result.result.questions.length > 0 && <ul>{result.result.questions.map((q, i) => <li key={i}>{q}</li>)}</ul>}
++    {htmlSegment!==null&&payloadSha256&&<HtmlExplanationPanel key={`${activityId}:${operationId}:${payloadSha256}:${htmlSegment}`}
++      activityId={activityId} token={token} parent={{kind:"learning",operation_id:operationId,payload_sha256:payloadSha256,segment_index:htmlSegment}}
++      onClose={()=>setHtmlSegment(null)}/>}
+     <p className="quiet">有限词项模式 · {result.limitations.join(" ")}</p>
+     <div className="ws-citation-reader" aria-label="引用原文">
+       {loading && <p role="status">正在回查引用原文…</p>}
+--- pre/frontend/src/activities/TeachingWorkspace.tsx
++++ final/frontend/src/activities/TeachingWorkspace.tsx
+@@ -21,6 +21,8 @@
+ } from "./teachingIntents";
+ import { compareTeachingIntent } from "./teachingIntentMatch";
+ import { TeachingCitations, citationIds } from "./TeachingCitations";
++import { HtmlExplanationPanel } from "../explanations/HtmlExplanationPanel";
++import type { HtmlParent } from "../explanations/contracts";
+ 
+ const POLL_MS = 3000;
+ const OBSERVE_MAX_SECONDS = 120;
+@@ -122,6 +124,9 @@
+   seed?: TeachingSeed | null;
+ }) {
+   const [workspace, setWorkspace] = useState<TeachingWorkspace | null>(null);
++  const [htmlParent,setHtmlParent]=useState<HtmlParent|null>(null);
++  const htmlReadSeq=useRef(0);
++  useEffect(()=>{htmlReadSeq.current++;setHtmlParent(null);},[activityId,scopeRevision,workspace?.head.exercise_record_id,workspace?.head.feedback_record_id,workspace?.memory_invalid]);
+   const [feedback, setFeedback] = useState<FeedbackView | null>(null);
+   const [memoryPreview,setMemoryPreview]=useState<{capture:Record<string,unknown>;observation:Record<string,unknown>}|null>(null);
+   const memoryReadSeq=useRef(0);
+@@ -153,6 +158,16 @@
+   const editSeq=useRef(0);
+   const activityRef=useRef(activityId);
+   activityRef.current=activityId;
++  async function openHtml(region:TeachingRegion){
++    if(region.qualification!=="current"||typeof region.record_id!=="string")return;
++    const aid=activityId,rid=region.record_id,version=++htmlReadSeq.current,view=workspaceToken.current;
++    try{
++      const record=await getTeachingRecord(aid,rid,token);
++      if(version!==htmlReadSeq.current||activityRef.current!==aid||workspaceToken.current!==view)return;
++      if(record.qualification!=="current"||typeof record.body_sha256!=="string"||!/^[0-9a-f]{64}$/.test(record.body_sha256))throw new Error("教学父成果身份不可核对");
++      setHtmlParent({kind:"teaching",record_id:rid,body_sha256:record.body_sha256,point_id:null});
++    }catch(reason){if(version===htmlReadSeq.current&&activityRef.current===aid)setError(reason instanceof Error?reason.message:"交互解释父成果读取失败");}
++  }
+   const scopeRef=useRef(scopeRevision);
+   scopeRef.current=scopeRevision;
+ 
+@@ -604,6 +619,7 @@
+             void submit("expose", { exercise_record_id: workspace.head.exercise_record_id, part });
+           }}
+         />
++        {workspace?.exercise?.qualification==="current"&&<button onClick={()=>void openHtml(workspace.exercise!)}>交互解释当前练习</button>}
+         <div className="ws-exercise-actions">
+           <button
+             className="secondary"
+@@ -724,6 +740,7 @@
+           }}
+         >请求评价（1 次模型）</button>
+         <TeachingFeedback workspace={workspace} feedback={feedback} token={token} />
++        {workspace?.feedback?.qualification==="current"&&<button onClick={()=>void openHtml(workspace.feedback!)}>交互解释当前反馈</button>}
+         {workspace?.reason&&<div aria-label="更新或保留理由"><h6>更新或保留理由</h6>
+           <p>{String(reasonBody.reason??workspace.reason.message??reasonBody.text??"当前事实保留，等待你的下一次明确动作。")}</p>
+           {workspace.reason.kind==="progress"&&<p>本节点独立作答 {reasonCount("independent_answers")} 个，辅助观察 {reasonCount("assisted")} 个，争议观察 {reasonCount("contested")} 个。{reasonBody.advance?`当前节点已从 ${String(reasonBody.node_before)} 前进至 ${String(reasonBody.node_after)}。`:"当前节点保留。"}</p>}
+@@ -794,6 +811,8 @@
+           <p className="quiet">放弃只清除本机提示，不撤回已提交或延迟到达的请求，也不释放服务端未知槽。</p>
+         </div>
+       )}
++      {htmlParent&&<HtmlExplanationPanel key={`${activityId}:${scopeRevision}:${JSON.stringify(htmlParent)}`} activityId={activityId}
++        token={token} parent={htmlParent} onClose={()=>setHtmlParent(null)}/>}
+     </section>
+   );
+ }
+--- pre/frontend/src/activities/ActivityWorkspace.tsx
++++ final/frontend/src/activities/ActivityWorkspace.tsx
+@@ -51,6 +51,7 @@
+   finish_reason: string | null; returned_model: string | null; committed_at: string | null;
+   read_status: string; payload_available: boolean;
+   payload: { format: string; value: unknown } | null;
++  payload_sha256?: string | null;
+ };
+ 
+ type MaterialOption = { id: string; title: string; version_id: string; revision: number; format: string };
+@@ -939,7 +940,7 @@
+                             {op.payload
+                               ? isLearningDocument(op.payload.value, op.operation_id)
+                                 ? <LearningResult key={`${detail.activity_id}:${op.operation_id}`} document={op.payload.value}
+-                                  activityId={detail.activity_id} operationId={op.operation_id} token={token}
++                                  activityId={detail.activity_id} operationId={op.operation_id} token={token} payloadSha256={op.payload_sha256}
+                                   onUseGoal={op.kind==='model'&&op.read_status==='committed_current'?()=>{
+                                     const aid=detail.activity_id;
+                                     void getTeachingSeed(aid,op.operation_id,token).then(value=>{
+--- pre/deploy/start_local.py
++++ final/deploy/start_local.py
+@@ -1,6 +1,7 @@
+ """启动已配置的本地资料工作台；Ctrl+C结束本次应用和本次启动的数据库。"""
+ import json
+ import os
++import signal
+ from pathlib import Path
+ import subprocess
+ import time
+@@ -27,11 +28,12 @@
+     # 不启动同名但来源不一致的容器。
+     if docker("inspect","--format","{{.Image}}",NAME)!=IMAGE:
+         raise RuntimeError("数据库容器与已配置镜像不一致，请先检查")
++    own_cid=docker("inspect","--format","{{.Id}}",NAME)
+     already_running=docker("inspect","--format","{{.State.Running}}",NAME)=="true"
+     started=False
+     process=None
+     try:
+-        if not already_running:docker("start",NAME);started=True
++        if not already_running:docker("start",own_cid);started=True
+         deadline=time.monotonic()+20
+         while True:
+             status=subprocess.run(["docker","exec",NAME,"pg_isready","-U","retrolume","-d","retrolume"],capture_output=True,timeout=3)
+@@ -57,16 +59,27 @@
+             ],
+             cwd=ROOT/"backend",
+             env=env,
++            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name=="nt" else 0,
+         )
+         process.wait()
+     except KeyboardInterrupt:
+         pass
+     finally:
+         if process is not None and process.poll() is None:
+-            process.terminate()
+-            try:process.wait(timeout=5)
+-            except subprocess.TimeoutExpired:process.kill();process.wait(timeout=3)
+-        if started:docker("stop","--time","5",NAME)
++            try:
++                # 先让uvicorn执行lifespan，关闭预览监督链；只向本次创建的进程组发送。
++                if os.name=="nt":process.send_signal(signal.CTRL_BREAK_EVENT)
++                else:process.terminate()
++                process.wait(timeout=20)
++            except (OSError,subprocess.TimeoutExpired):
++                process.terminate()
++                try:process.wait(timeout=5)
++                except subprocess.TimeoutExpired:process.kill();process.wait(timeout=3)
++                print("应用退出未完成预览确认；保留preview-control收据，同Windows用户重启核对后才能再次打开预览。",flush=True)
++        if started:
++            if docker("inspect","--format","{{.Image}}",own_cid)!=IMAGE:
++                raise RuntimeError("本次数据库身份未确认，保留资源等待核对")
++            docker("stop","--time","5",own_cid)
+ 
+ if __name__=="__main__":
+     try:main()
+--- pre/config/activity.example.json
++++ final/config/activity.example.json
+@@ -33,6 +33,10 @@
+     "max_output_tokens": 0,
+     "max_followups_per_round": 2
+   },
++  "html": {
++    "profile": "html_explanation.v2",
++    "max_output_tokens": 0
++  },
+   "memory_context": null,
+   "_memory_context_readme": "默认关闭学习背景消费；显式配置需绑定当前模型、4项/4096字节/2048字符及有限输入估算/输出/安全预留。010与最小权限由受控迁移采用，不由启动器执行，真实用户库迁移另授权。"
+ }

@@ -1,0 +1,67 @@
+--- first-audit/frontend/src/activities/InterviewWorkspace.tsx
++++ current/frontend/src/activities/InterviewWorkspace.tsx
+@@ -6,7 +6,7 @@
+ import {InterviewCitations} from "./InterviewCitations";
+ import "./interview-workspace.css";
+ import {RetrievalPanel} from './RetrievalPanel';
+-import {retrieveForCommand,retrievalChains,storeRetrievalChain,type RetrievalChain} from './retrieval-api';
++import {retrieveForCommand,retrievalChains,storeRetrievalChain,type RetrievalChain,type ServiceIdentity} from './retrieval-api';
+ import type {InterviewCommand} from './interviewApi';
+ 
+ const PHASE:Record<string,string>={needs_goal:"请补充具体目标",ready:"可开始提问",question_ready:"等待你的回答",answer_ready:"回答已保存，可请求追问或反馈",feedback_ready:"本轮反馈已保存",ended:"本场次已结束，只读历史"};
+@@ -15,7 +15,7 @@
+ type Material={id:string;title:string;version_id:string;revision:number;sha256:string};
+ type HistoryEdit={activity:string;owner:string;record:string;version:number;bodyHash:string;view:string;revision:number;goal:number;scope:number;text:string};
+ 
+-export function InterviewWorkspace({activityId,token,scopeRevision,onChanged}:{activityId:string;token:string;scopeRevision:number;onChanged?:()=>void}){
++export function InterviewWorkspace({activityId,token,scopeRevision,onChanged,modelService=null}:{activityId:string;token:string;scopeRevision:number;onChanged?:()=>void;modelService?:ServiceIdentity|null}){
+   const [view,setView]=useState<InterviewWorkspaceView|null>(null),[details,setDetails]=useState<Record<string,InterviewDetail>>({}),[history,setHistory]=useState<InterviewHistory|null>(null);
+   const [target,setTarget]=useState(""),[focus,setFocus]=useState(""),[answer,setAnswer]=useState(""),[roles,setRoles]=useState<Record<string,MaterialRole>>({});
+   const [error,setError]=useState(""),[notice,setNotice]=useState(""),[busy,setBusy]=useState(false),[owner,setOwner]=useState<string|null>(null),[intents,setIntents]=useState<InterviewIntent[]>([]);
+@@ -25,6 +25,7 @@
+   const draftIdentity=useRef<{key:string;hash:string;text:string}|null>(null),viewRef=useRef<InterviewWorkspaceView|null>(null);
+   const readGeneration=useRef(0),reconciliation=useRef<string|null>(null);
+   const [retrievalMode,setRetrievalMode]=useState<'hybrid'|'terms'>('hybrid');
++  const [modelNoticeReady,setModelNoticeReady]=useState(false);
+   active.current={activityId,token,owner,viewToken:view?.view_token??""};viewRef.current=view;
+   const alive=(stamp:number,aid=activityId)=>panel.current===stamp&&active.current.activityId===aid;
+   function controller(){const c=new AbortController();controllers.current.add(c);return c;}
+@@ -63,6 +64,7 @@
+   function goal():InterviewGoal{return {target,focus:focus.trim()?focus:null,clarifications:[],material_roles:(view?.sources??[]).map(s=>({source_id:s.source_id,role:roles[s.source_id]??"unspecified"}))};}
+   async function submit(action:InterviewAction,body:Record<string,unknown>,recovered?:RetrievalChain){
+     if(busy||!owner||!view)return;
++    if(['ask','review'].includes(action)&&!modelNoticeReady){setError('供应商、模型或用途额度无法核对，未提交');return;}
+     const expectedOwner=owner,stamp=panel.current,aid=activityId,expectedView=view.view_token;
+     let command=makeInterviewCommand(action,view.head,view.head?.scope_revision??scopeRevision,body,recovered?String(recovered.domain_input.business_key):crypto.randomUUID(),view.head?view.profile==='interview.v2':retrievalMode==='hybrid');
+     if(command.schema==='interview.command.v2'&&['ask','review'].includes(action)){
+@@ -71,7 +73,7 @@
+       setBusy(true);setError('');
+       try{
+         if(recovered&&requestText(aid,command)!==requestText(aid,recovered.domain_input as InterviewCommand))throw new Error('原动作版本不同，不能改绑');
+-        const result=await retrieveForCommand(token,aid,expectedOwner,'interview',command as unknown as Record<string,unknown>,view.head?.scope_revision??scopeRevision,view.head?.revision??0,[currentGoal.target,currentGoal.focus].filter(Boolean).join(' ').slice(0,1024),()=>alive(stamp,aid)&&active.current.owner===expectedOwner&&active.current.viewToken===expectedView,recovered);
++        const result=await retrieveForCommand(token,aid,expectedOwner,'interview',command as unknown as Record<string,unknown>,view.head?.scope_revision??scopeRevision,view.head?.revision??0,[currentGoal.target,currentGoal.focus].filter(Boolean).join(' ').slice(0,1024),()=>alive(stamp,aid)&&active.current.owner===expectedOwner&&active.current.viewToken===expectedView,recovered,modelService);
+         if(!result.ref||!alive(stamp,aid)||active.current.owner!==expectedOwner||active.current.viewToken!==expectedView)return;
+         command={...command,retrieval_ref:result.ref};
+       }catch(e){if(alive(stamp,aid))setError((e as Error).message);return;}
+@@ -184,7 +186,7 @@
+     </article>;
+   }
+   return <div className="interview-workspace" aria-label="文字模拟面试工作区" data-interview-activity-id={activityId}><h3>文字模拟面试</h3><p>新混合检索场次可明确选择最多四条学习记忆作低信任背景。经历与收益保留自报身份；模型反馈是建议。</p>
+-    <RetrievalPanel token={token} activityId={activityId} scopeRevision={view?.head?.scope_revision??scopeRevision} domainRevision={view?.head?.revision??0} owner={owner} mode={retrievalMode} indexAllowed={Boolean(head)} onMode={mode=>{if(!view?.head)setRetrievalMode(mode);}} onContinue={chain=>{const saved=chain.domain_input;void submit(saved.action as InterviewAction,saved.body as Record<string,unknown>,chain);}}/>
++    <RetrievalPanel token={token} activityId={activityId} scopeRevision={view?.head?.scope_revision??scopeRevision} domainRevision={view?.head?.revision??0} owner={owner} mode={retrievalMode} modelService={modelService} onDisclosureChange={setModelNoticeReady} indexAllowed={Boolean(head)} onMode={mode=>{if(!view?.head)setRetrievalMode(mode);}} onContinue={chain=>{const saved=chain.domain_input;void submit(saved.action as InterviewAction,saved.body as Record<string,unknown>,chain);}}/>
+     {error&&<p role="alert" className="failure">{error}</p>}{notice&&<p role="status">{notice}</p>}<button type="button" onClick={()=>void refresh()}>只读刷新／恢复场次</button>
+     {!owner&&<p>本机编辑身份或锁不可用，保持只读。可以复制自己的草稿。</p>}
+     {view&&<><section><h4>本次资料范围与预算</h4>{view.sources.map(s=><p key={s.source_id}>{s.title} · 版本{s.source_revision} · {s.valid?"当前可用":"已更新，须重新确认范围"}</p>)}
+@@ -199,9 +201,9 @@
+       {!view.capabilities.model&&<p>模型动作未开放：{view.capabilities.model_reason}；本地答案与只读核对仍按当前资格可用。</p>}
+       {detailCard(question)}{detailCard(savedAnswer)}{(head.phase==="question_ready"||head.phase==="answer_ready"||head.phase==="feedback_ready")&&<section><label>{head.phase==="question_ready"?"你的回答":"修改当前回答（另存新版本）"}<textarea aria-label="面试回答" value={answer} maxLength={4096} disabled={writeDisabled} onChange={e=>setAnswer(e.target.value)}/></label><button type="button" disabled={writeDisabled||!answer.trim()||(!head.current_question_id)} onClick={()=>void submit(head.current_answer_id?"correct_answer":"answer",head.current_answer_id?{answer_record_id:head.current_answer_id,expected_answer_version:savedAnswer?.record.answer_version??1,text:answer}:{question_record_id:head.current_question_id,text:answer})}>保存回答{head.current_answer_id?"新版本":""}（不调用模型）</button></section>}
+       {detailCard(feedback)}<div className="interview-actions">
+-        {head.phase==="ready"&&<button type="button" disabled={writeDisabled||pending||!modelGoalReady} onClick={()=>void submit("ask",{mode:"first"})}>开始提问</button>}
+-        {head.phase==="answer_ready"&&<button type="button" disabled={writeDisabled||pending||!modelGoalReady} onClick={()=>void submit("review",{question_record_id:head.current_question_id,answer_record_id:head.current_answer_id})}>获取必要追问或反馈</button>}
+-        {head.phase==="feedback_ready"&&<button type="button" disabled={writeDisabled||pending||!modelGoalReady} onClick={()=>void submit("ask",{mode:"next",parent_feedback_id:head.current_feedback_id})}>继续下一题（显式调用）</button>}
++        {head.phase==="ready"&&<button type="button" disabled={writeDisabled||pending||!modelGoalReady||!modelNoticeReady} onClick={()=>void submit("ask",{mode:"first"})}>开始提问</button>}
++        {head.phase==="answer_ready"&&<button type="button" disabled={writeDisabled||pending||!modelGoalReady||!modelNoticeReady} onClick={()=>void submit("review",{question_record_id:head.current_question_id,answer_record_id:head.current_answer_id})}>获取必要追问或反馈</button>}
++        {head.phase==="feedback_ready"&&<button type="button" disabled={writeDisabled||pending||!modelGoalReady||!modelNoticeReady} onClick={()=>void submit("ask",{mode:"next",parent_feedback_id:head.current_feedback_id})}>继续下一题（显式调用）</button>}
+         {pending&&<button type="button" disabled={writeDisabled} onClick={()=>void submit("abandon",{pending_key:head.pending_key})}>显式放弃原意图（不退款／不重发）</button>}
+         {!finished&&<button type="button" disabled={writeDisabled||pending} onClick={()=>void submit("finish",{})}>结束本场次</button>}
+       </div></>}

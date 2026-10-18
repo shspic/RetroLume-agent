@@ -1,0 +1,55 @@
+--- backend/tests/fixtures/task111/core.py.pre
++++ backend/tests/fixtures/task111/core.py.post
+@@ -24,7 +24,7 @@
+ 
+ 
+ class Harness:
+-    def __init__(self,resource,built,folder):
++    def __init__(self,resource,built,folder,*,registry_dir=None):
+         from app.activities.repository import PostgresAdmissionLedger
+         from app.materials.repository import PostgresMaterials
+         from app.storage.originals import OriginalStore
+@@ -34,21 +34,14 @@
+         from app.preview.production_supervisor import PreviewController
+         self.resource,self.folder=resource,folder
+         self.ledger=PostgresAdmissionLedger(resource["app"]);self.materials=PostgresMaterials(resource["app"])
+-        self.data=EVIDENCE/"synthetic/data";self.data.mkdir(parents=True,exist_ok=True)
++        from .control import synthetic_root,preview_name
++        self.data=synthetic_root()/"data";self.data.mkdir(parents=True,exist_ok=True)
+         (self.data/"originals").mkdir(exist_ok=True);self.originals=OriginalStore(self.data/"originals")
+         self.policy=HostPolicy(image_id=built["image"]["id"],load_manifest_sha256=built["load_manifest_sha256"],renderer_sha256=built["renderer_sha256"],
+-          kernel_release=resource["platform"]["kernel"],docker=resources.DOCKER,registry_dir=(EVIDENCE/"synthetic/http-control").resolve(),authorization=PERMIT,
++          kernel_release=resource["platform"]["kernel"],docker=resources.DOCKER,registry_dir=registry_dir or (synthetic_root()/"http-control").resolve(),authorization=PERMIT,
+           owner_name="Global\\RetroLumePreviewV2Task111")
+         def name(pid,generation):
+-            count=reserve("preview_creates",{"preview_id":pid})
+-            from .control import CONTINUE_ROOT
+-            plan=CONTINUE_ROOT/"preview-name-plan.json"
+-            if plan.exists():
+-                names=json.loads(plan.read_text(encoding="utf-8"))
+-                if not names or names[0] not in [str(n).zfill(2) for n in range(2,15)]:raise RuntimeError("fixed preview name plan")
+-                chosen=names.pop(0);atomic(plan,names)
+-            else:chosen=str(count).zfill(2)
+-            return "retrolume-task-111-g11-preview-"+chosen
++            return preview_name(pid,generation)
+         def observer(kind,data):
+             if kind=="start_attempt":reserve("preview_starts",data)
+             event("preview_"+kind,data)
+@@ -58,7 +51,7 @@
+           api_key=SecretStr(secrets.token_urlsafe(32)),timeout_seconds=1.0,max_request_bytes=65536,max_response_bytes=65536,max_output_tokens_limit=4096),
+           create_layer=LayerState(True),continue_layer=LayerState(True),html_generation_layer=LayerState(True),html_output_tokens=4096)
+ 
+-    async def parent(self,kind):
++    async def parent(self,kind,*,activity_id=None):
+         from app.activities import ActivitySpec,SourceSnapshot
+         from app.capabilities.contracts import AdmissionIntent,CallContext,Provider,LedgerOutcome,LedgerDisposition,build_business_payload
+         from app.learning.contracts import LearningProfile,request_fingerprint,normalize_result,parse_output
+@@ -66,7 +59,7 @@
+         text="机械能的合成材料。E=mgh，g=9.8，m和h范围0到10。m=2,h=3得到58.8 J，零因子为0。" if kind=="energy" else "二项概率的合成材料。P(X=k)=C(n,k)p^k(1-p)^(n-k)，n整数1到5，k在0到n，p在0到1。n3,k2,p0.5为0.375。"
+         original=self.originals.put(io.BytesIO(text.encode("utf-8")),max_bytes=5242880)
+         material=self.materials.save(source_id=None,expected_version=None,filename=kind+".md",format="md",sha256=original.sha256,size=original.size)
+-        aid=str(uuid4());await self.ledger.create_activity(ActivitySpec(activity_id=aid,sources=(SourceSnapshot(material["id"],material["version_id"],material["revision"]),),
++        aid=activity_id or str(uuid4());await self.ledger.create_activity(ActivitySpec(activity_id=aid,sources=(SourceSnapshot(material["id"],material["version_id"],material["revision"]),),
+           deadline_at=datetime.now(timezone.utc)+timedelta(hours=3),max_requests=8,max_cost_microunits=10000,reserve_cost_microunits=100,
+           max_request_bytes=65536,max_output_tokens=4096,max_running_seconds=1800,allowed_models=(("deepseek_chat_completions","task111-synthetic"),),max_tool_calls=0))
+         snapshot=await self.ledger.read_learning_snapshot(aid);sources=validate_snapshot(snapshot)

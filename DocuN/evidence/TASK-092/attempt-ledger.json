@@ -1,0 +1,266 @@
+{
+  "task": "TASK-092",
+  "fields": [
+    "attempt",
+    "phase",
+    "path",
+    "command",
+    "start_utc",
+    "end_utc",
+    "seconds",
+    "deadline_seconds",
+    "exit",
+    "windows_sessions",
+    "scenarios",
+    "source_changed",
+    "fault_injection",
+    "cleanup"
+  ],
+  "note": "每次入口一行；失败批不覆盖，原样保留；汇总区分执行实例与唯一方法。",
+  "entries": [
+    {
+      "attempt": 1,
+      "phase": "pg",
+      "path": "DocuN/evidence/TASK-092/real-01",
+      "command": "python.exe -B batch_runner.py --phase pg",
+      "start_utc": "2026-09-30T14:51:47.907193+00:00",
+      "end_utc": "2026-09-30T14:52:04.507361+00:00",
+      "seconds": 16.593000000000757,
+      "deadline_seconds": 600,
+      "exit": 1,
+      "windows_sessions": 0,
+      "scenarios": {
+        "batch": 1,
+        "database": "retrolume_task092_tools",
+        "deadline_seconds": 600,
+        "scenarios": [
+          "新建合成库应用001-008并核验列与五个具名约束标记",
+          "tests.test_activity_tools.ToolPostgresTests C1约束反例/重复008回滚",
+          "C2参数与凭证绑定(mark/record身份、跨kind凭证、二次mark)",
+          "C3白名单/NULL/零额/正额2两次/重连不重置/预扣不退款",
+          "C4同键两连接竞争单凭证、实际execute计数1、model占键、崩溃0执行T1",
+          "C5类型隔离(read/list kind元数据、service与ledger.admit双层拒tool父、model父对照)",
+          "C6 admit/mark提交前后故障(reserved/dispatched/T1, execute0, unknown收敛)",
+          "C7执行后未提交(dispatched/T1/无正文/不能覆盖/确定失败received无正文/独立结算)",
+          "C8 record已提交丢响应(ALREADY_PRESENT无写/异文拒绝/无正文补写拒绝/非规范工具正文拒绝)",
+          "C9 scope CAS两种竞争/旧context拒scope_changed/mark后变化/cancel一次折叠/UNKNOWN诊断",
+          "C12目标项 close丢响应不退款、settle丢响应ALREADY_SETTLED一次、业务UNKNOWN与时间结算独立",
+          "旧model定向回归: test_activity_results 03/05/16 + test_activity_time_budget 01"
+        ],
+        "fault_injection": "trigger真实事务回滚/BEFORE INSERT|UPDATE；子类super()后抛AdmissionUnavailable模拟COMMIT后响应丢失；屏障用事件与wait_for，不用sleep猜顺序"
+      },
+      "source_changed": false,
+      "fault_injection": "trigger真实事务回滚/BEFORE INSERT|UPDATE；子类super()后抛AdmissionUnavailable模拟COMMIT后响应丢失；屏障用事件与wait_for，不用sleep猜顺序",
+      "cleanup": {
+        "container_stopped": true,
+        "cleanup_incomplete": false
+      }
+    },
+    {
+      "attempt": 2,
+      "phase": "retry_upgrade",
+      "path": "DocuN/evidence/TASK-092/real-02",
+      "command": "python.exe -B batch_runner.py --phase retry_upgrade",
+      "start_utc": "2026-09-30T14:53:36.391875+00:00",
+      "end_utc": "2026-09-30T14:53:38.244766+00:00",
+      "seconds": 1.8440000000045984,
+      "deadline_seconds": 700,
+      "exit": null,
+      "windows_sessions": 0,
+      "scenarios": {
+        "batch": 2,
+        "database": "retrolume_task092_tools + retrolume_task092_upgrade",
+        "deadline_seconds": 700,
+        "scenarios": [
+          "定向重验 real-01 中两处夹具缺陷修复项：test_c7(执行后record提交前失败,execute1,dispatched,T1,不可覆盖)与 test_c9(两种scope竞争/mark拒绝/cancel一次折叠)",
+          "产品源码自 real-01 未变；仅测试夹具修复，其余15项按real-01原适用范围沿用",
+          "upgrade子批：合法非空001-007→008、旧model生命线、重复008回滚、篡改约束失败回滚、缺前置拒绝"
+        ],
+        "fault_injection": "同pg与upgrade清单；本批为有证据修正后的定向复验"
+      },
+      "source_changed": false,
+      "fault_injection": "同pg与upgrade清单；本批为有证据修正后的定向复验",
+      "cleanup": {
+        "container_stopped": true,
+        "cleanup_incomplete": false
+      }
+    },
+    {
+      "attempt": 3,
+      "phase": "final",
+      "path": "DocuN/evidence/TASK-092/real-03",
+      "command": "python.exe -B batch_runner.py --phase final",
+      "start_utc": "2026-09-30T14:54:19.278580+00:00",
+      "end_utc": "2026-09-30T14:54:26.761719+00:00",
+      "seconds": 7.484000000004016,
+      "deadline_seconds": 1100,
+      "exit": 1,
+      "windows_sessions": 1,
+      "scenarios": {
+        "batch": 3,
+        "database": "retrolume_task092_tools + retrolume_task092_upgrade",
+        "deadline_seconds": 1100,
+        "scenarios": [
+          "定向复验 real-01 两处夹具缺陷修复项（c7/c9），产品源码与real-01逐hash一致",
+          "upgrade子批：合法非空001-007→008、旧model生命线、重复008回滚、篡改约束失败回滚、缺前置拒绝",
+          "windows子批六场景：tool_chain/model_regression/tool_stop/tool_recovery/old_sup_reject/old_worker_reject",
+          "real-02预检因runner自身prior-manifest解析缺陷失败（TypeError,未运行子批）；本批为修复后唯一剩余完整批次"
+        ],
+        "fault_injection": "合并三子批冻结清单；失败不清空后续场景，不重试失败子批"
+      },
+      "source_changed": false,
+      "fault_injection": "合并三子批冻结清单；失败不清空后续场景，不重试失败子批",
+      "cleanup": {
+        "container_stopped": true,
+        "cleanup_incomplete": false
+      }
+    },
+    {
+      "attempt": 4,
+      "phase": "continuation_01",
+      "path": "DocuN/evidence/TASK-092/real-04",
+      "command": "python.exe -B continuation_runner.py",
+      "start_utc": "2026-09-30T15:19:28.037365+00:00",
+      "end_utc": "2026-09-30T15:19:55.154543+00:00",
+      "seconds": 27.10899999999674,
+      "deadline_seconds": 420,
+      "exit": 1,
+      "windows_sessions": 6,
+      "scenarios": {
+        "batch": 4,
+        "database": "retrolume_task092_upgrade + retrolume_task092_tools",
+        "deadline_seconds": 420,
+        "business_seconds": 300,
+        "cleanup_seconds": 120,
+        "frozen_utc": "2026-09-30T23:18:56.630849+08:00",
+        "note": "续作01真实批冻结。原批frozen_utc=2026-10-01T00:05:00+08:00为书写时投影值，与real-01实际时间2026-09-30T22:51:47+08:00不一致，据真实manifest披露，不回改旧值；本条目使用真实时点。",
+        "scenarios": [
+          "upgrade收尾子批（修复F-U2后）：合法非空001-007→008全量断言、旧model生命线、重复008回滚、篡改约束失败回滚、缺前置拒绝；三schema先摘要后定向重建",
+          "windows六方向（5场景函数，含两会话组合）：tool_chain/model_regression/tool_stop/tool_recovery/old_sup_reject/old_worker_reject",
+          "清理不全即停止后续场景；stop失败则recovery标not_run；不重跑pg_retry/离线全量"
+        ],
+        "fault_injection": "同前冻结清单；本轮修正F-U2、win场景清单函数映射与清理纪律；产品/迁移/backend测试全部冻结于final-product-hashes.json"
+      },
+      "source_changed": false,
+      "continuation": {
+        "authorization": "TASK-092续作01置顶：追加real-04一批及原容器一次启动，累计上限3→4，不重置历史；业务300秒+收尾120秒，入口总截止420秒；Windows本轮至多6会话；费用仍0。",
+        "cumulative_before": {
+          "real_used_seconds": 25.92100000000937,
+          "real_attempts": 3,
+          "container_starts": 3,
+          "windows_sessions": 1,
+          "offline_used_seconds": 5.873999999996158
+        },
+        "cumulative_after": {
+          "real_used_seconds": 53.03000000000611,
+          "real_attempts": 4,
+          "container_starts": 4,
+          "windows_sessions": 7
+        }
+      },
+      "cleanup": {
+        "container_stopped": true,
+        "cleanup_incomplete": false
+      }
+    },
+    {
+      "attempt": 5,
+      "phase": "continuation_02",
+      "path": "DocuN/evidence/TASK-092/real-05",
+      "command": "python.exe -B upgrade_runner.py",
+      "start_utc": "2026-09-30T17:28:46.529279+00:00",
+      "end_utc": "2026-09-30T17:28:54.946070+00:00",
+      "seconds": 8.421999999998661,
+      "deadline_seconds": 300,
+      "exit": 0,
+      "windows_sessions": 0,
+      "scenarios": {
+        "batch": "real-05（必要时real-06定向）",
+        "database": "retrolume_task092_upgrade",
+        "deadline_seconds": 300,
+        "business_seconds": 180,
+        "cleanup_seconds": 120,
+        "frozen_utc": "2026-10-01T01:28:24.667618+08:00",
+        "scenarios": [
+          "s1：重建happy schema一次走通001-007→008、旧行逐字段不变、旧model生命线（未配置拒工具零副作用）、重复008命中008自身RAISE且schema/数据不变",
+          "s2：独立基线+篡改成本约束→008唯一识别失败整事务回滚；无五新列、无部分DDL、旧行不变、篡改约束仍在",
+          "s3：独立空schema→008前置不存在拒绝；显式零目标对象",
+          "阴性识别：SQLSTATE=P0001且命中008自身有限识别文本；非DSN/权限/语法/夹具表缺失",
+          "real-06仅为范围内夹具/控制缺陷且过两次修正门后定向重测失败/未运行项；real-05全过即止"
+        ],
+        "fault_injection": "s2篡改成本约束定义诱导识别失败；s3缺前置；失败注入用独立连接并在finally关闭"
+      },
+      "source_changed": false,
+      "continuation": {
+        "authorization": "TASK-092续作02置顶：只收尾升级库；批/启动上限4→6；每批业务180秒+收尾120秒、总截止300秒；real-05一次三场景，仅明确范围内缺陷且过两次修正门后允许real-06定向；Windows业务会话新增0；费用0。",
+        "retry_targets": null,
+        "cumulative_before": {
+          "real_used_seconds": 53.03000000000611,
+          "real_attempts": 4,
+          "container_starts": 4,
+          "windows_sessions": 7,
+          "offline_used_seconds": 6.65499999999156
+        },
+        "cumulative_after": {
+          "real_used_seconds": 61.45200000000477,
+          "real_attempts": 5,
+          "container_starts": 5,
+          "windows_sessions": 7
+        }
+      },
+      "cleanup": {
+        "container_stopped": true,
+        "cleanup_incomplete": false
+      }
+    },
+    {
+      "attempt": 6,
+      "phase": "continuation_03_e2",
+      "path": "DocuN/evidence/TASK-092/real-06",
+      "command": "python.exe -B real06_runner.py",
+      "start_utc": "2026-09-30T19:51:00.022270+00:00",
+      "end_utc": "2026-09-30T19:51:12.724251+00:00",
+      "seconds": 12.703999999997905,
+      "deadline_seconds": 300,
+      "exit": 0,
+      "windows_sessions": 0,
+      "scenarios": {
+        "frozen_targets": [
+          "tests.test_activity_tools.ToolPostgresTests.test_c1_tool_operation_conditional_constraints",
+          "tests.test_activity_tools.ToolPostgresTests.test_c1_budget_check_rejections_and_repeat_008_rollback",
+          "tests.test_activity_tools.ToolPostgresTests.test_c2_mark_and_record_reject_wrong_identity",
+          "tests.test_activity_tools.ToolPostgresTests.test_c3_rejected_admit_leaves_no_trace_and_no_refund_of_unknown",
+          "tests.test_activity_tools.ToolPostgresTests.test_c3_whitelist_null_zero_and_exhaustion",
+          "tests.test_activity_tools.ToolPostgresTests.test_c4_model_key_occupied_and_winner_crash_zero_execution",
+          "tests.test_activity_tools.ToolPostgresTests.test_c4_same_key_two_connections_single_permit_and_execution",
+          "tests.test_activity_tools.ToolPostgresTests.test_c5_read_list_typed_and_parent_isolation",
+          "tests.test_activity_tools.ToolPostgresTests.test_c6_admit_and_mark_commit_boundaries",
+          "tests.test_activity_tools.ToolPostgresTests.test_c8_committed_record_response_loss_and_write_free_confirmation",
+          "tests.test_activity_tools.ToolPostgresTests.test_c12_settle_and_close_facts_with_tool_budget"
+        ],
+        "reason": "real-01旧夹具原件未存档且哈希仲裁重建未果；对最终版冻结11个缺证方法定向复跑，c7/c9已由real-03最终版通过故排除；4项旧model回归文件hash一致直接复用"
+      },
+      "source_changed": false,
+      "continuation": {
+        "authorization": "TASK-092续作03 E2回退条款：real-06一次入口+原容器一次启动；总尝试与启动上限6；业务180秒+收尾120秒、总截止300秒；仅工具库与task092_synth；Windows会话0；费用0。",
+        "cumulative_before": {
+          "real_used_seconds": 61.45200000000477,
+          "real_attempts": 5,
+          "container_starts": 5,
+          "windows_sessions": 7,
+          "offline_used_seconds": 7.514000000002852
+        },
+        "cumulative_after": {
+          "real_used_seconds": 74.15600000000268,
+          "real_attempts": 6,
+          "container_starts": 6,
+          "windows_sessions": 7
+        }
+      },
+      "cleanup": {
+        "container_stopped": true,
+        "cleanup_incomplete": false
+      }
+    }
+  ]
+}

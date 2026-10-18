@@ -1,0 +1,19 @@
+"""只修派生说明，区别资格不足、无后继和可推进。"""
+import unittest
+from app.activities.teaching_repository import _progress_reason
+
+
+class ProgressReasonTests(unittest.TestCase):
+    def test_three_actual_decisions_remain_distinct(self):
+        insufficient = _progress_reason('insufficient', None)
+        no_successor = _progress_reason('evidence_sufficient', None)
+        advance = _progress_reason('evidence_sufficient', 'n2')
+        self.assertIn('独立实例不足', insufficient)
+        self.assertIn('没有满足前置条件', no_successor)
+        self.assertNotIn('独立实例不足', no_successor)
+        self.assertIn('可有限前进', advance)
+        for value in (insufficient, no_successor, advance):
+            self.assertIn('不推定长期掌握', value)
+
+
+if __name__ == '__main__': unittest.main()

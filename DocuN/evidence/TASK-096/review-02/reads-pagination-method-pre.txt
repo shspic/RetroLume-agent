@@ -1,0 +1,24 @@
+    async def test_activity_list_pagination_cursor(self):
+        second = await self.new_activity()
+        third = await self.new_activity()
+        first_page = await self.ledger.list_activities(limit=2)
+        self.assertEqual(len(first_page), 2)
+        anchor = first_page[-1]
+        second_page = await self.ledger.list_activities(
+            limit=2, after_created_at=anchor.created_at, after_activity_id=anchor.activity_id,
+        )
+        seen = [item.activity_id for item in first_page] + [item.activity_id for item in second_page]
+        self.assertEqual(len(seen), len(set(seen)))
+        self.assertEqual(set(seen), {self.activity, second, third})
+        keys = [
+            (item.created_at, item.activity_id)
+            for item in list(first_page) + list(second_page)
+        ]
+        self.assertEqual(keys, sorted(keys, reverse=True))
+        with self.assertRaises(ValueError):
+            await self.ledger.list_activities(limit=2, after_created_at=anchor.created_at)
+        with self.assertRaises(ValueError):
+            await self.ledger.list_activities(limit=0)
+        with self.assertRaises(ValueError):
+            await self.ledger.list_activities(limit=201)
+

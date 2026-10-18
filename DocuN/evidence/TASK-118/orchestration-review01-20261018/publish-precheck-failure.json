@@ -1,0 +1,10 @@
+{
+  "recorded_at": "2026-10-18T10:20:17.926257+08:00",
+  "command": "backend/.venv/Scripts/python.exe -X utf8 -B DocuN/evidence/TASK-118/orchestration-review01-20261018/publish.py",
+  "exit_code": 1,
+  "error": "AssertionError: frontend/dist/assets/index-BgdcRLRN.js",
+  "effect": "冻结基线预检阶段停止，未创建before-documents或修改正式文档/卡片。",
+  "root_cause": "聚合163项旧清单时未先应用正式bundle8替换身份；旧bundle7主JS由正常Vite构建移出dist，原字节仍在C07/bundle-7-before精确备份。",
+  "independent_read_check": "加入bundle8期望后，旧163清单只余此一项预期删除，没有其它漂移。",
+  "correction": "先绑定bundle8四项，仅对旧bundle7四项清单内且备份hash一致的缺失项记录正式构建的预期删除；不宽松豁免其它漂移。"
+}

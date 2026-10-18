@@ -1,0 +1,34 @@
+review-09 independent SHA256; managed Python hashlib only, 2026-09-27
+# 本轮三变化文件（现场计算，全部 MATCH 卡面 TASK-084.md "当前快照"节）
+Ndocu/evidence/task-083/d3-repair-11/runner.py MATCH 7137664E7CFF010089C58600DE6F9DAE96F82A274CAD8968BD6600F70BE2C436
+Ndocu/evidence/task-083/d3-repair-11/controlled_child.py MATCH 0494AF00387BA5F1C45062B9CD892E5AF22822E95D72B619134F6BD694C8A664
+backend/tests/fixtures/task083/d3_pg_windows.py MATCH 19B6F78CACC88C299A94B78B7E3F2C569621F020D337178163680269100CA1F8
+# 卡面未变关键四项（现场计算，全部 MATCH）
+backend/app/activities/repository.py MATCH BCA8283316F62216F5BA94959F5C36F8C3395301AEB9DC7F21A9B376F92E29A3
+backend/app/worker/session.py MATCH EB514B5F76B0DC8B43ED8DFE116D2DC7BE5A181011E1516FAAA4D8005461D71C
+Ndocu/evidence/task-083/d3-repair-11/contracts.py MATCH A344AC5FBDF7C838C08C18FC1816D5D8E823C3FF67B1A98976CF11129257CBCD
+backend/migrations/006_activities_running_owner_session.sql MATCH F791F22DCFCCF204F6FDA369470978452B3B23CCA0FC40D2057BD08EA47F6428
+# 其余冻结/未变项（现场计算，全部 MATCH review-08 hashes.txt 与 review08-current-hashes.json）
+backend/tests/test_d3_recovery.py MATCH D5A5389D175E08EBEF01AD8CE1D7851745A3612271A30533E84108B146CF0C44
+backend/tests/test_d3_runner_control.py MATCH FC157323CDEF15E473FC847221E25DCA1CE382C10531F74C6F47922595402C66
+backend/app/worker/windows_job.py MATCH D04ED8F249106328D81147707451E6092C2D650C9199BD6C4989931D5249C596
+backend/tests/test_worker_session.py MATCH 4027F5CD72B17D826626704E118B0A194B0A7AEF48C4EE4C8DE4AC3EFAE69CF5
+backend/tests/fixtures/task083/offline_unit.py MATCH BB30163891DE46EF97350B90C1988DF5C5E0F80189DD13CDCCB9E9C3C8264B6D
+Ndocu/evidence/task-083/d3-implementation-10/runner_replacement.py MATCH 39E5917E0173ACED0391F9729A4A3CE2F492ED41B8BB2C41E7CD205CC735A27F
+# pre 链（14 窗口修前副本 = review-08 基线，独立核验）
+Ndocu/evidence/task-083/d3-completion-14/pre/...d3-repair-11__runner.py MATCH 26ECB423DF5524EC834FFB96366ECC599F62764D648EDA63F30FB6EC73D3F731（= review-08 记录的 repair-11 最终 runner）
+Ndocu/evidence/task-083/d3-completion-14/pre/...d3-repair-11__controlled_child.py MATCH 14E20FCB63DB913E22FF05F4C8286C0A3D56FEE946A06DBB17E044635CF0E401
+Ndocu/evidence/task-083/d3-completion-14/pre/backend__tests__fixtures__task083__d3_pg_windows.py MATCH A1E419F34C6464FC588B5812A9AE95545E4074C8732130CC85D2251AF57CE3A1
+Ndocu/evidence/task-083/d3-completion-14/pre/...d3-repair-11__contracts.py MATCH A344AC5F...（未变）
+Ndocu/evidence/task-083/d3-completion-14/pre/backend__tests__test_d3_runner_control.py MATCH FC157323...（未变）
+Ndocu/evidence/task-083/d3-completion-14/pre/Ndocu__results__TASK-083-result.md = 54F559F1E12A73BC60686D9E5C94D36D1D47EAD0F7347C490B05D2D4A4CD0F7C
+# pre/TASK-083-result.md 与 review-08 记录 DB656509... 的差异 = 12 轮 BLOCKED 结果置顶写入（review-08 读到的是置顶11 版），
+# 属已登记历史演进，非未知漂移；14 窗口 pre 快照与 12 轮结果时间线自洽。
+# as-run 链（现场计算，与当前文件逐字节相等；sidecar 记录一致）
+continuation-20260927-095506-73c4c3e3/runner-as-run.py = 7137664E...（= 当前 runner.py）
+continuation-20260927-095506-73c4c3e3/controlled_child-as-run.py = 0494AF00...（= 当前 controlled_child.py）
+continuation-20260927-095506-73c4c3e3/contracts-as-run.py = A344AC5F...（= 当前 contracts.py）
+continuation-20260927-095506-73c4c3e3/attempt-01/as-run.py = 19B6F78C...（= 当前 d3_pg_windows.py）
+# 定稿后无漂移（现场计算）
+Ndocu/results/TASK-083-result.md = 2d246fc8a1897ca3d637efc398f0a6bab06f291afd5a3006e03ca2869028b0f9（= evidence-hashes.txt:88 与 delivery-check.result_sha256）
+# 结论：pre/as-run/final 三链独立闭合；13 项冻结面 = 3 变化 + 10 未变，与卡面及 review08-current-hashes.json 完全一致；零未知漂移。

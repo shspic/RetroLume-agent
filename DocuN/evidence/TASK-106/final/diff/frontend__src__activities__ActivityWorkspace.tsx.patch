@@ -1,0 +1,70 @@
+--- pre/frontend/src/activities/ActivityWorkspace.tsx
++++ post/frontend/src/activities/ActivityWorkspace.tsx
+@@ -3,6 +3,7 @@
+ import { isLearningDocument, LearningResult } from "./LearningResult";
+ import { compareLearningIntent } from "./learningIntentMatch";
+ import { TeachingWorkspace } from "./TeachingWorkspace";
++import { InterviewWorkspace } from "./InterviewWorkspace";
+ import { MemoryWorkspace } from "./MemoryWorkspace";
+ import type { MemoryChoice } from "./memoryApi";
+ import { submitTrackedMemoryCreate } from "./memoryIntents";
+@@ -40,6 +41,7 @@
+   allowed_models?: { provider: string; model: string }[];
+   sources?: { source_id: string; title: string; valid: boolean }[];
+   memory_selection?: { selected: boolean; eligible: boolean } | null;
++  business_domain?: "interview" | "unknown";
+ };
+ 
+ type OperationRow = {
+@@ -141,7 +143,7 @@
+   return status === "running" ? "运行中" : status === "cancelled" ? "已取消" : "空闲";
+ }
+ 
+-export function ActivityWorkspace({ token }: { token: string }) {
++export function ActivityWorkspace({ token, variant = "learning" }: { token: string; variant?: "learning" | "interview" }) {
+   const [caps, setCaps] = useState<Capabilities | null>(null);
+   const [capsError, setCapsError] = useState("");
+   const [items, setItems] = useState<ActivityFacts[]>([]);
+@@ -677,7 +679,7 @@
+       <header>
+         <div>
+           <p className="eyebrow">YOUR ACTIVITIES, IN FACTS</p>
+-          <h1>学习活动</h1>
++          <h1>{variant === "interview" ? "模拟面试" : "学习活动"}</h1>
+           <p className="subtitle">每次活动限定资料范围与有限预算；这里查看活动、四类预算与每次运行的事实结果。</p>
+         </div>
+         <button className="secondary" onClick={() => { void refreshCapabilities(); void refreshList(); void loadMaterials(); if (selectedId) void refreshDetail(selectedId); }}>刷新</button>
+@@ -745,7 +747,7 @@
+ 
+       {caps?.storage_ready && (
+         <>
+-        <MemoryWorkspace token={token} choices={memoryChoices} onChoicesChange={setMemoryChoices} />
++        {variant === "learning" && <MemoryWorkspace token={token} choices={memoryChoices} onChoicesChange={setMemoryChoices} />}
+         <section className="ws-create">
+           <h2>新建活动</h2>
+           <p className="quiet">新建只确定资料范围与有限预算，不会立即产生模型调用。创建后确认目标并显式开始学习。</p>
+@@ -803,7 +805,7 @@
+           <ul>
+             {items.map(item => (
+               <li key={item.activity_id}>
+-                <button className={`material ${selectedId === item.activity_id ? "selected" : ""}`} onClick={() => void selectActivity(item.activity_id)}>
++                <button data-activity-id={item.activity_id} className={`material ${selectedId === item.activity_id ? "selected" : ""}`} onClick={() => void selectActivity(item.activity_id)}>
+                   <span className="format">{statusBadge(item.status)}</span>
+                   <span className="material-name">
+                     <strong>{activityLabel(item)}</strong>
+@@ -840,6 +842,7 @@
+                 </div>
+               )}
+ 
++              {(variant === "interview" || detail.business_domain === "interview") ? detail.activity_id === selectedId ? <InterviewWorkspace key={detail.activity_id} activityId={detail.activity_id} token={token} scopeRevision={detail.scope_revision} onChanged={() => { void refreshDetail(detail.activity_id, true); }}/> : <p role="status">正在读取选中的面试活动…</p> : detail.business_domain === "unknown" ? <p role="alert">活动领域资格不可核对，保持只读；请核对服务状态。</p> : <>
+               <div className="ws-block">
+                 <h4>资料范围 · 范围修订 {detail.scope_revision}</h4>
+                 {(detail.sources ?? []).map(source => (
+@@ -984,6 +987,7 @@
+                 </ul>
+                 {opsCursor && <button className="secondary" onClick={() => void loadMoreOperations()}>加载更多操作</button>}
+               </div>
++              </>}
+             </>
+           )}
+         </section>

@@ -1,0 +1,21 @@
+--- pre/backend/tests/fixtures/task114/setup_source.py
++++ final/backend/tests/fixtures/task114/setup_source.py
+@@ -10,7 +10,7 @@
+ import time
+ from uuid import uuid4
+ 
+-from budget import Budget,ROOT,CONTROL
++from budget import Budget,ROOT,CONTROL,EVIDENCE
+ sys.path.insert(0,str(ROOT/'backend'))
+ from app.data_exit.control import ControlHub,CredentialVault
+ from app.data_exit.contracts import digest
+@@ -36,7 +36,8 @@
+     if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(value)):raise RuntimeError('内存观察不可用')
+     result={'available_bytes':value.available_phys,'total_bytes':value.total_phys,'minimum_bytes':2*1024**3,
+             'monotonic_ns':time.monotonic_ns(),'ready':value.available_phys>=2*1024**3}
+-    path=CONTROL/('memory-before-'+str(time.monotonic_ns())+'.json')
++    path=EVIDENCE/'observations'/('memory-before-'+str(time.monotonic_ns())+'.json')
++    path.parent.mkdir(parents=True,exist_ok=True)
+     path.write_text(json.dumps(result,indent=2),encoding='utf-8')
+     return result
+ 

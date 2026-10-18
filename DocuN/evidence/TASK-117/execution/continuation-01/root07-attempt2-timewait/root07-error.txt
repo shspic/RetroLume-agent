@@ -1,0 +1,19 @@
+Traceback (most recent call last):
+  File "D:\shspic\project_NO3_RetroLume-agent\DocuN\evidence\TASK-117\execution\continuation-01\profiles_batch.py", line 179, in main
+    compat_repair();rc.start_pg('source');profiles(run);outcome='passed_R01_R02_deferred_until_final_facts'
+                                          ^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\DocuN\evidence\TASK-117\execution\continuation-01\profiles_batch.py", line 141, in profiles
+    target=runtime.factory.target(result['target_id']);runtime.factory.start(target)
+                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\data_exit\restore.py", line 201, in start
+    self._hook("before_start", target)
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\data_exit\restore.py", line 98, in _hook
+    if self.hooks is not None: getattr(self.hooks, name)(*args)
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\DocuN\evidence\TASK-117\execution\continuation-01\profiles_batch.py", line 68, in before_start
+    self.run.check();rc.memory_gate('restore-start-'+target.name);rc.port_gate(target.port);c.count('pg_starts')
+                                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\DocuN\evidence\TASK-117\execution\runtime_control.py", line 60, in port_gate
+    if rows:raise RuntimeError('port_in_use')
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: port_in_use

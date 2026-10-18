@@ -1,0 +1,162 @@
+
+backend/app/learning/teaching_service.py
+66:                 row=current['command']
+67:                 if row['request_sha256']!=command.request_sha256(activity_id) or row['request_body']!=canonical(command.canonical_request_body(activity_id)):
+68:                     raise TeachingRefusal('command_key_conflict','同键已经绑定不同正文')
+69:                 if (row['status'] != 'accepted' or row['launch_claimed_at'] is not None
+70:                         or row['obsolete_at'] is not None or row['abandoned_at'] is not None):
+71:                     return self._read_receipt(current)
+72:                 # 只恢复持久原意图；不得重新检索或换掉已接受的冻结上下文。
+73:                 original = json.loads(row['request_body'])
+74:                 original.pop('activity_id')
+75:                 original['business_key'] = str(row['business_key'])
+76:                 original = TeachingCommandInput.model_validate(original)
+77:                 frozen = parse_frozen_context(json.loads(row['context_body']))
+78:                 from .teaching_contracts import frozen_context_digest
+79:                 if (frozen_context_digest(frozen) != row['context_sha256']
+80:                         or frozen.operation_id != row['operation_id']
+81:                         or frozen.kind != ('model' if command.action in MODEL_ACTIONS else 'tool')):
+82:                     raise TeachingRefusal('integrity_error', '持久冻结上下文不一致，未恢复执行')
+83:                 tag = run_tag or _RUN_TAG_PREFIX + secrets.token_hex(12)
+84:                 if command.action in MODEL_ACTIONS:
+85:                     return await self._submit_model(activity_id, original, config, tag, recovered=(current, frozen))
+86:                 return await self._submit_tool(activity_id, original, config, tag, recovered=(current, frozen))
+87:         if command.action in MODEL_ACTIONS:
+88:             return await self._submit_model(activity_id, command, config,
+89:                                             run_tag or _RUN_TAG_PREFIX + secrets.token_hex(12))
+90:         if command.action in TOOL_ACTIONS:
+91:             return await self._submit_tool(activity_id, command, config,
+92:                                            run_tag or _RUN_TAG_PREFIX + secrets.token_hex(12))
+93:         return await self.ledger.apply_teaching_local(activity_id, command)
+94: 
+95:     @staticmethod
+96:     def _read_receipt(view):
+97:         row=view['command']; records=view.get('records',[])
+98:         return TeachingCommandReceipt(activity_id=str(row['activity_id']),business_key=str(row['business_key']),action=row['action'],
+
+backend/app/learning/teaching_service.py
+500:             if node:
+501:                 return node['title']+' '+node['objective']
+502:         if facts and command.action == 'evaluate':
+503:             exercise = facts.get('exercise_projection') or {}
+504:             if exercise.get('stem'):
+505:                 return exercise['stem']
+506:         return snapshot.get("teaching_query") or "教学"
+507: 
+508:     @staticmethod
+509:     def _stored_document(command, snapshot, catalog, identity, facts) -> dict:
+510:         """发给模型的 user 投影：真实教学实体 + 受限目录；不含摘要自引用。
+511: 
+512:         DEF-004：目标/路径/题/参考/作答/纠错/前史/核算全部来自持久事实
+513:         组装，不再使用 answer_pending 占位或空引用。
+514:         """
+515:         document = {
+516:             "goal": facts["goal_text"] or "",
+517:             "goal_version": identity["goal_version"],
+518:             "scope_revision": snapshot["scope_revision"],
+519:             "evidence": [{"id": e.citation_id, "source": e.title, "origin_kind": e.origin_kind,
+520:                           "physical_page": e.physical_page, "lines": [e.start_line, e.end_line],
+521:                           "text": e.text} for e in catalog],
+522:         }
+523:         action = command.action
+524:         if action == "plan":
+525:             document["task"] = {"kind": "plan"}
+526:             if facts["correction_texts"]:
+527:                 document["task"]["corrections"] = facts["correction_texts"]
+528:         elif action == "exercise":
+529:             document["task"] = {"kind": "exercise",
+530:                                 "purpose": command.body.get("purpose", "initial"),
+531:                                 "node_id": command.body.get("node_id"),
+532:                                 "parent_feedback_record_id":command.body.get("parent_feedback_record_id"),
+533:                                 "parent_exercise_record_id":facts["parent_exercise_record_id"]}
+534:             if facts["path_nodes"]:
+535:                 document["task"]["path_nodes"] = facts["path_nodes"]
+536:             if facts["parent_feedback_summary"]:
+537:                 document["task"]["parent_feedback"] = facts["parent_feedback_summary"]
+538:         elif action == "evaluate":
+539:             document["task"] = {"kind": "evaluate",
+540:                                 "exercise": facts["exercise_projection"] or {},
+541:                                 "answer_text": facts["answer_text"] or ""}
+542:             if facts["correction_texts"]:
+543:                 document["task"]["corrections"] = facts["correction_texts"]
+544:             if facts["prior_observations"]:
+545:                 document["task"]["prior_observations"] = facts["prior_observations"]
+546:             if facts["calculation_summary"]:
+547:                 document["task"]["calculation"] = facts["calculation_summary"]
+548:         return document
+549: 
+550:     def _build_profile(self, activity_id, command, frozen, identity) -> object:
+551:         from .teaching_contracts import TeachingProfile
+552:         from .contracts import SourceIdentity
+
+backend/app/interview/service.py
+45:         hybrid=command.schema_id=='interview.command.v2'
+46:         if hybrid:
+47:             from app.retrieval.service import RetrievalService
+48:             from app.retrieval.contracts import RetrievalRefusal
+49:             try:entries=await RetrievalService(self.ledger,self.materials,self.originals).catalog(aid,command.retrieval_ref,command.request_hash(aid),top_k=4,max_chars=4000,max_bytes=8000)
+50:             except RetrievalRefusal as exc:raise InterviewRefusal(exc.code,'本轮检索已失效') from None
+51:             catalog=[InterviewCatalogEntry.model_validate({**e.model_dump(),'citation_id':'ic_'+sha(command.request_hash(aid)+e.evidence_id)[:24]}) for e in entries]
+52:         else:catalog=assemble_catalog(g.target+' '+(g.focus or '')+' '+' '.join(g.clarifications),units,command.request_hash(aid))
+53:         refs=[]
+54:         if command.action=='review':
+55:             # Only this round's question/answer chain. No unbounded prior history.
+56:             needed={h['root_question_id'],h['current_question_id'],h['current_answer_id']}
+57:             round_rows=await self.ledger.read_interview_round_refs(aid,view['view_token'])
+58:             needed.update(r['record_id'] for r in round_rows)
+59:         else:needed={command.body.get('parent_feedback_id')} if command.body.get('parent_feedback_id') else set()
+60:         if len(needed)>12:raise InterviewRefusal('interview_context_too_large',status=422)
+61:         for rid in sorted(x for x in needed if x):
+62:             detail=await self.ledger.read_interview_record(aid,rid,view['view_token'])
+63:             if detail['body'] is None or not detail['record']['eligible']:raise InterviewRefusal('interview_parent_invalid')
+64:             r=detail['record'];refs.append(RecordRef(record_id=rid,kind=r['kind'],version=r['answer_version'],body_sha256=r['body_sha256'],
+65:                 body=self.ledger._interview_ref_body(r,detail['body'],command.action),operation_id=r['operation_id'],payload_sha256=r['payload_sha256']))
+66:         # Sorting by durable seq, not UUID, identifies latest answer/probe reliably.
+67:         order={r['record_id']:r['seq'] for r in view['records']}
+68:         if command.action=='review':order.update({r['record_id']:r['seq'] for r in round_rows})
+69:         refs.sort(key=lambda r:order.get(r.record_id,0))
+70:         limits=InterviewLimits(max_output_tokens=getattr(config,'interview_output_tokens',0) or 1,
+71:             max_followups_per_round=getattr(config,'interview_followups',0) or 1)
+72:         identity={'provider':config.provider,'model':config.model} if config.provider and config.model else await self.ledger.read_interview_identity(aid)
+73:         extra={}
+74:         if hybrid:
+75:             selection=await self.ledger.read_memory_selection(aid,include_bodies=True)
+76:             if not selection.get('eligible'):raise InterviewRefusal('interview_memory_dependency_invalid')
+77:             memory_refs=[{k:x[k] for k in ('memory_id','version','revision','body_sha256')} for x in selection['entries']]
+
+frontend/src/activities/InterviewWorkspace.tsx
+66:     const expectedOwner=owner,stamp=panel.current,aid=activityId,expectedView=view.view_token;
+67:     let command=makeInterviewCommand(action,view.head,view.head?.scope_revision??scopeRevision,body,recovered?String(recovered.domain_input.business_key):crypto.randomUUID(),view.head?view.profile==='interview.v2':retrievalMode==='hybrid');
+68:     if(command.schema==='interview.command.v2'&&['ask','review'].includes(action)){
+69:       const currentGoal=view.head?.goal_record_id?details[view.head.goal_record_id]?.body?.value.goal:null;
+70:       if(!currentGoal?.target?.trim()){setError('当前目标正文尚未核对完成，请等待读取后再明确提交');return;}
+71:       setBusy(true);setError('');
+72:       try{
+73:         if(recovered&&requestText(aid,command)!==requestText(aid,recovered.domain_input as InterviewCommand))throw new Error('原动作版本不同，不能改绑');
+74:         const result=await retrieveForCommand(token,aid,expectedOwner,'interview',command as unknown as Record<string,unknown>,view.head?.scope_revision??scopeRevision,view.head?.revision??0,[currentGoal.target,currentGoal.focus].filter(Boolean).join(' ').slice(0,1024),()=>alive(stamp,aid)&&active.current.owner===expectedOwner&&active.current.viewToken===expectedView,recovered);
+75:         if(!result.ref||!alive(stamp,aid)||active.current.owner!==expectedOwner||active.current.viewToken!==expectedView)return;
+76:         command={...command,retrieval_ref:result.ref};
+77:       }catch(e){if(alive(stamp,aid))setError((e as Error).message);return;}
+78:       finally{if(alive(stamp,aid))setBusy(false);}
+79:     }
+80:     const text=requestText(aid,command);draftIdentity.current={key:command.business_key,hash:"",text};setBusy(true);setError("");setNotice("");
+81:     const synchronous=()=>alive(stamp,aid)&&active.current.owner===expectedOwner&&active.current.viewToken===expectedView&&draftIdentity.current?.key===command.business_key&&draftIdentity.current.text===text;
+82:     try{
+83:       const hash=await interviewSha(text);if(!synchronous())return;draftIdentity.current!.hash=hash;
+84:       const stillCurrent=()=>synchronous()&&draftIdentity.current?.hash===hash;
+85:       const actualOwner=await interviewEditorOwner();if(!stillCurrent()||actualOwner!==expectedOwner)return;
+86:       await saveInterviewIntent({key:command.business_key,activity_id:aid,owner:expectedOwner,hash,command},stillCurrent);
+87:       if(!stillCurrent())return;
+88:       const afterSaveOwner=await interviewEditorOwner();if(!stillCurrent()||afterSaveOwner!==expectedOwner)return;
+89:       // No await between this last identity check and POST.
+90:       if(!stillCurrent())return;
+91:       for(const row of (await retrievalChains(aid)).filter(row=>row.domain_input.business_key===command.business_key))await storeRetrievalChain({...row,domain_sent:true});
+92:       if(!stillCurrent())return;
+93:       const lastOwner=await interviewEditorOwner();if(!stillCurrent()||lastOwner!==expectedOwner)return;
+94:       const c=controller();let receipt:InterviewReceipt;
+95:       try{receipt=await postInterview(token,aid,command,c.signal,stillCurrent);}finally{controllers.current.delete(c);}
+96:       if(!stillCurrent()||receipt.business_key!==command.business_key||receipt.activity_id!==aid||receipt.request_sha256!==hash)return;
+97:       await noteInterviewReceipt(receipt,expectedOwner,stillCurrent);if(!stillCurrent())return;
+98:       setNotice(receipt.status==="unknown"?"尚未确认是否完成，请查看原提交结果；不会自动重发。":receipt.effect_applied?"已持久保存。继续与下一题都需要你的明确选择。":"已核对原回执；没有第二次业务效果。");
+99:       if(action==="answer"||action==="correct_answer")setAnswer("");
+100:       await refresh();if(alive(stamp,aid))onChanged?.();

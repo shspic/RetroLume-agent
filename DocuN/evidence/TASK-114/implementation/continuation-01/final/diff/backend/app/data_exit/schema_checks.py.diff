@@ -1,0 +1,59 @@
+--- pre/backend/app/data_exit/schema_checks.py
++++ final/backend/app/data_exit/schema_checks.py
+@@ -13,9 +13,16 @@
+  JOIN pg_proc p ON p.oid=t.tgfoid JOIN pg_namespace f ON f.oid=p.pronamespace
+  WHERE n.nspname='public' AND t.tgname='data_runtime_write' AND NOT t.tgisinternal"""
+ DATA_ROLES=['retrolume_data_owner','retrolume_data_app','retrolume_data_snapshot','retrolume_data_restore_loader']
++CONSTRAINT_QUERY="""SELECT c.relname,q.conname,q.contype,q.condeferrable,q.condeferred,q.convalidated,
++ pg_get_constraintdef(q.oid) AS definition,q.confrelid::regclass::text AS reference_table,
++ ARRAY(SELECT a.attname FROM unnest(q.conkey) WITH ORDINALITY u(k,o) JOIN pg_attribute a ON a.attrelid=q.conrelid AND a.attnum=u.k ORDER BY u.o) AS columns,
++ ARRAY(SELECT a.attname FROM unnest(q.confkey) WITH ORDINALITY u(k,o) JOIN pg_attribute a ON a.attrelid=q.confrelid AND a.attnum=u.k ORDER BY u.o) AS reference_columns
++ FROM pg_constraint q JOIN pg_class c ON c.oid=q.conrelid JOIN pg_namespace n ON n.oid=c.relnamespace
++ WHERE n.nspname='public' AND (q.conname IN('data_restore_budget_shape','data_restore_session_shape') OR
++ (c.relname='teaching_commands' AND q.contype='f' AND q.confrelid='public.teaching_records'::regclass))"""
+ 
+ 
+-def check_data_shape(rows,roles,triggers):
++def check_data_shape(rows,roles,triggers,constraints):
+     from .schema import DATA_FUNCTIONS
+     from .contracts import TABLES
+     if len(rows)!=len(DATA_FUNCTIONS):raise DataError('data_schema_not_ready',503)
+@@ -28,6 +35,18 @@
+     if len(triggers)!=28 or {row['relname'] for row in triggers}!=set(TABLES) or any(
+         row['tgenabled']!='O' or row['tgtype']!=31 or row['function_name']!='data_runtime_write_guard' or row['function_schema']!='public'
+         for row in triggers):raise DataError('data_schema_not_ready',503)
++    expected={
++      'data_restore_budget_shape':('html_preview_budgets','t',True,[],[]),
++      'data_restore_session_shape':('html_preview_sessions','t',True,[],[]),
++      'teaching_commands_activity_id_parent_record_id_fkey':('teaching_commands','f',False,['activity_id','parent_record_id'],['activity_id','record_id']),
++      'teaching_commands_activity_id_result_record_id_fkey':('teaching_commands','f',False,['activity_id','result_record_id'],['activity_id','record_id'])}
++    if len(constraints)!=4 or {r['conname'] for r in constraints}!=set(expected):raise DataError('data_schema_not_ready',503)
++    for row in constraints:
++        table,kind,deferred,columns,refcolumns=expected[row['conname']]
++        if (row['relname']!=table or row['contype']!=kind or not row['condeferrable'] or row['condeferred']!=deferred
++            or not row['convalidated'] or row['columns']!=columns or row['reference_columns']!=refcolumns):raise DataError('data_schema_not_ready',503)
++        if kind=='t' and row['definition']!='TRIGGER DEFERRABLE INITIALLY DEFERRED':raise DataError('data_schema_not_ready',503)
++        if kind=='f' and row['reference_table'] not in ('teaching_records','public.teaching_records'):raise DataError('data_schema_not_ready',503)
+ 
+ 
+ def assert_data_schema_sync(connection):
+@@ -35,7 +54,7 @@
+     rows=connection.execute(FUNCTION_QUERY,(list(DATA_FUNCTIONS),)).fetchall()
+     roles=connection.execute(ROLE_QUERY,(DATA_ROLES,)).fetchall()
+     triggers=connection.execute(TRIGGER_QUERY).fetchall()
+-    check_data_shape(rows,roles,triggers)
++    check_data_shape(rows,roles,triggers,connection.execute(CONSTRAINT_QUERY).fetchall())
+ 
+ 
+ async def assert_data_schema(connection):
+@@ -45,7 +64,9 @@
+     cursor=await connection.execute(ROLE_QUERY,(DATA_ROLES,))
+     roles=await cursor.fetchall()
+     cursor=await connection.execute(TRIGGER_QUERY)
+-    check_data_shape(rows,roles,await cursor.fetchall())
++    triggers=await cursor.fetchall()
++    cursor=await connection.execute(CONSTRAINT_QUERY)
++    check_data_shape(rows,roles,triggers,await cursor.fetchall())
+ 
+ 
+ async def schema_mode(connection):

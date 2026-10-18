@@ -1,0 +1,498 @@
+--- pre/backend/app/worker/__init__.py
++++ current/backend/app/worker/__init__.py
+@@ -4,6 +4,11 @@
+ from .gate import ClosingCallGate, GateClosed
+ from .launcher import run_supervised_window
+ from .session import SessionConfig, SessionOutcome
+-from .worker_main import run_controlled_worker
++from .one_call import OneCallInput, run_one_call
+ 
+-__all__ = ["WorkerCommand", "ClosingCallGate", "GateClosed", "SessionConfig", "SessionOutcome", "run_controlled_worker", "run_supervised_window"]
++def run_controlled_worker(*args, **kwargs):
++    from .worker_main import run_controlled_worker as run
++    return run(*args, **kwargs)
++
++
++__all__ = ["WorkerCommand", "ClosingCallGate", "GateClosed", "SessionConfig", "SessionOutcome", "OneCallInput", "run_one_call", "run_controlled_worker", "run_supervised_window"]
+--- pre/backend/app/worker/worker_main.py
++++ current/backend/app/worker/worker_main.py
+@@ -1,13 +1,19 @@
+-"""Fixed internal worker entry. Product supplier routing remains unwired."""
++"""固定worker入口；一次模型调用，正文回执不提交业务成果。"""
+ 
+ from __future__ import annotations
+ 
+ import asyncio
+ from collections.abc import Awaitable, Callable
+ import sys
++import time
+ from typing import Any
+ 
+ from .gate import ClosingCallGate
++from .one_call import decode_worker_request, receipt
++from .supervisor_ipc import NamedMapping
++from app.activities import PostgresAdmissionLedger
++from app.capabilities.gateway import ControlledModelGateway
++from app.runtime import psycopg_compatible_loop_factory
+ 
+ 
+ async def run_controlled_worker(
+@@ -24,7 +30,7 @@
+         await gate.close(timeout_seconds=drain_timeout_seconds)
+ 
+ 
+-async def run_internal_task(gateway: Any, task: str) -> None:
++async def run_internal_task(gateway: Any, task: str, context=None, request=None, *, call_seconds=1.0):
+     """The injected gateway is only handed to work through ClosingCallGate."""
+     if task not in ("idle", "one_call"):
+         raise ValueError("unsupported internal worker task")
+@@ -33,21 +39,51 @@
+         return None
+ 
+     async def one_call(gate: ClosingCallGate) -> None:
+-        await gate.call(None, None)
++        nonlocal result
++        if context is None or request is None:
++            raise ValueError("one_call requires context and request")
++        async with asyncio.timeout(call_seconds):
++            result = await gate.call(context, request)
+ 
++    result = None
+     await run_controlled_worker(gateway, one_call if task == "one_call" else idle, drain_timeout_seconds=1.0)
++    return result
+ 
+ 
+-class _UnwiredGateway:
+-    async def call(self, _context: Any, _request: Any) -> None:
+-        raise RuntimeError("product gateway is not connected")
++async def execute_one_call(value):
++    call, context = decode_worker_request(value)
++    ledger = PostgresAdmissionLedger(**value["ledger"])
++    gateway = ControlledModelGateway(call.service, ledger=ledger)
++    # 单调截止由SUP固定；整体超时包括准入/发送/记账，不靠网络timeout扩窗。
++    seconds = min(value["call_seconds"], (value["stop_ns"] - time.monotonic_ns()) / 1e9 - 0.25)
++    if seconds <= 0:
++        raise ValueError("call window expired")
++    result = await run_internal_task(gateway, "one_call", context, call.request, call_seconds=seconds)
++    return receipt(result, context, value["run_tag"])
+ 
+ 
+ def main() -> int:
+-    if len(sys.argv) != 2 or sys.argv[1] not in ("idle", "one_call"):
+-        return 2
+-    asyncio.run(run_internal_task(_UnwiredGateway(), sys.argv[1]))
+-    return 0
++    mapping = None
++    try:
++        if sys.argv[1:] == ["idle"]:
++            return 0
++        if len(sys.argv) != 3 or sys.argv[1] != "one_call":
++            return 2
++        mapping = NamedMapping.open_existing(sys.argv[2])
++        value = mapping.read_request()
++        with asyncio.Runner(loop_factory=psycopg_compatible_loop_factory) as runner:
++            result = runner.run(execute_one_call(value))
++        mapping.write_result(result)
++        return 0
++    except BaseException:
++        # 包括模型验证异常都不输出消息/traceback/正文。
++        return 1
++    finally:
++        if mapping is not None:
++            try:
++                mapping.close()
++            except BaseException:
++                return 1
+ 
+ 
+ if __name__ == "__main__":
+--- pre/backend/app/worker/supervisor_main.py
++++ current/backend/app/worker/supervisor_main.py
+@@ -15,13 +15,16 @@
+ from .command import WorkerCommand
+ from .session import SessionConfig, SingleWindowSupervisor
+ from .supervisor_ipc import NamedMapping
++from .one_call import OneCallInput, validate_identity
+ 
+ 
+ _RUN_TAG = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
+ 
+ 
+ def _validated_request(value: dict, mapping_name: str):
+-    if type(value) is not dict or value.get("protocol") != 1 or value.get("mapping_name") != mapping_name:
++    if (type(value) is not dict or set(value) != {"protocol", "mapping_name", "activity_id", "executor_id",
++            "run_tag", "deadline_ns", "command", "config", "ledger", "one_call"}
++            or value.get("protocol") != 2 or value.get("mapping_name") != mapping_name):
+         raise ValueError("SUP request identity mismatch")
+     activity_id = value.get("activity_id")
+     executor_id = value.get("executor_id")
+@@ -52,7 +55,14 @@
+     ledger = PostgresAdmissionLedger(**ledger_data)
+     config = SessionConfig(**config_data)
+     command = WorkerCommand(**command_data)
+-    return ledger, config, activity_id, executor_id, command, run_tag, deadline_ns
++    one_call = OneCallInput.from_wire(value["one_call"]) if value["one_call"] is not None else None
++    if command.task == "one_call":
++        if one_call is None:
++            raise ValueError("missing one_call data")
++        validate_identity(activity_id, executor_id, one_call.operation_id, run_tag)
++    elif one_call is not None:
++        raise ValueError("unexpected business data")
++    return ledger, config, activity_id, executor_id, command, run_tag, deadline_ns, one_call
+ 
+ 
+ def main() -> int:
+@@ -61,15 +71,16 @@
+     mapping = None
+     try:
+         mapping = NamedMapping.open_existing(sys.argv[1])
+-        ledger, config, activity_id, executor_id, command, run_tag, deadline_ns = _validated_request(
++        ledger, config, activity_id, executor_id, command, run_tag, deadline_ns, one_call = _validated_request(
+             mapping.read_request(), sys.argv[1],
+         )
+         with asyncio.Runner(loop_factory=psycopg_compatible_loop_factory) as runner:
+             outcome = runner.run(SingleWindowSupervisor(ledger, config).run_once(
+                 activity_id, executor_id, command, run_tag=run_tag,
+                 manager_deadline_ns=deadline_ns,
++                one_call=one_call,
+             ))
+-        mapping.write_result({"protocol": 1, "run_tag": run_tag, "activity_id": activity_id,
++        mapping.write_result({"protocol": 2, "run_tag": run_tag, "activity_id": activity_id,
+                               "outcome": asdict(outcome)})
+         return 0
+     except BaseException:
+--- pre/backend/app/worker/supervisor_ipc.py
++++ current/backend/app/worker/supervisor_ipc.py
+@@ -16,7 +16,7 @@
+ import struct
+ 
+ 
+-MAP_SIZE = 16_384
++MAP_SIZE = 1_048_576  # 协议2：两个512KiB槽，业务合同另限128KiB编码数据。
+ SLOT_SIZE = MAP_SIZE // 2
+ REQUEST_OFFSET = 0
+ RESULT_OFFSET = SLOT_SIZE
+@@ -58,8 +58,16 @@
+     if hashlib.sha256(payload).digest() != expected:
+         raise IpcUnknown("SUP frame checksum mismatch")
+     try:
+-        value = json.loads(payload.decode("utf-8"))
+-    except (UnicodeError, ValueError) as exc:
++        def unique(pairs):
++            result = {}
++            for key, item in pairs:
++                if key in result:
++                    raise ValueError("duplicate key")
++                result[key] = item
++            return result
++        value = json.loads(payload.decode("utf-8"), object_pairs_hook=unique,
++                           parse_constant=lambda _: (_ for _ in ()).throw(ValueError("nonfinite")))
++    except (UnicodeError, ValueError, RecursionError) as exc:
+         raise IpcUnknown("SUP frame JSON invalid") from exc
+     if type(value) is not dict:
+         raise IpcUnknown("SUP frame root must be object")
+@@ -91,14 +99,35 @@
+         self.handle = handle
+         self.view = view
+         self.name = name
++        self.owner = False
+ 
+     @classmethod
+     def create(cls, name: str) -> "NamedMapping":
+         validate_name(name)
+         api = _kernel()
+         ctypes.set_last_error(0)
+-        handle = api.CreateFileMappingW(ctypes.c_void_p(-1), None, PAGE_READWRITE, 0, MAP_SIZE, name)
+-        error = ctypes.get_last_error()
++        # 受信边界是当前Windows用户；随机名称/校验和不是身份认证。
++        # 显式受保护DACL只给对象所有者和SYSTEM访问，不继承宽松默认ACL。
++        advapi = ctypes.WinDLL("advapi32", use_last_error=True)
++        advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
++            wintypes.LPCWSTR, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p]
++        advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW.restype = wintypes.BOOL
++        descriptor = ctypes.c_void_p()
++        if not advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW(
++            "D:P(A;;GA;;;OW)(A;;GA;;;SY)", 1, ctypes.byref(descriptor), None
++        ):
++            raise IpcUnknown("mapping security descriptor failed")
++        class SecurityAttributes(ctypes.Structure):
++            _fields_ = [("length", wintypes.DWORD), ("descriptor", ctypes.c_void_p), ("inherit", wintypes.BOOL)]
++        security = SecurityAttributes(ctypes.sizeof(SecurityAttributes), descriptor, False)
++        api.LocalFree.argtypes = [ctypes.c_void_p]
++        api.LocalFree.restype = ctypes.c_void_p
++        try:
++            ctypes.set_last_error(0)
++            handle = api.CreateFileMappingW(ctypes.c_void_p(-1), ctypes.byref(security), PAGE_READWRITE, 0, MAP_SIZE, name)
++            error = ctypes.get_last_error()
++        finally:
++            api.LocalFree(descriptor)
+         if not handle or error == ERROR_ALREADY_EXISTS:
+             if handle:
+                 api.CloseHandle(handle)
+@@ -107,7 +136,9 @@
+         if not view:
+             api.CloseHandle(handle)
+             raise IpcUnknown(f"SUP mapping view: Windows error {ctypes.get_last_error()}")
+-        return cls(api, handle, view, name)
++        result = cls(api, handle, view, name)
++        result.owner = True
++        return result
+ 
+     @classmethod
+     def open_existing(cls, name: str) -> "NamedMapping":
+@@ -147,6 +178,8 @@
+     def close(self) -> None:
+         failures = []
+         if self.view:
++            if self.owner:
++                ctypes.memset(self.view, 0, MAP_SIZE)
+             if self.api.UnmapViewOfFile(self.view):
+                 self.view = 0
+             else:
+--- pre/backend/app/worker/session.py
++++ current/backend/app/worker/session.py
+@@ -3,8 +3,9 @@
+ from __future__ import annotations
+ 
+ import asyncio
+-from dataclasses import dataclass
++from dataclasses import dataclass, field
+ import math
++import secrets
+ import threading
+ import time
+ from typing import Protocol
+@@ -12,6 +13,9 @@
+ from app.activities import ActivityLease, CloseResult, SettleResult, WindowSnapshot
+ 
+ from .command import WorkerCommand
++from .one_call import OneCallInput, decode_receipt, validate_identity, worker_request
++from .supervisor_ipc import NamedMapping
++from app.capabilities.contracts import CallContext
+ from .windows_job import (
+     ActivityMutex, ERROR_FILE_NOT_FOUND, JobOpenError, JobUnknown,
+     NamedJob, current_process_session_id, job_name,
+@@ -89,6 +93,7 @@
+     manager_created_100ns: int | None = None
+     running_owner_session_id: int | None = None
+     worker_created_100ns: int | None = None
++    model_receipt: dict | None = field(default=None, repr=False)
+ 
+ 
+ class _StopSession(Exception):
+@@ -130,10 +135,20 @@
+         *,
+         run_tag: str,
+         manager_deadline_ns: int,
++        one_call: OneCallInput | None = None,
+     ) -> SessionOutcome:
+         # 产品调用只经 launcher.run_supervised_window；此方法供子进程与纯替身测试。
+         if type(command) is not WorkerCommand:
+             raise TypeError("SUP只接受已校验的WorkerCommand纯数据")
++        if command.task == "one_call":
++            if type(one_call) is not OneCallInput:
++                raise ValueError("one_call requires explicit data")
++            validate_identity(activity_id, executor_id, one_call.operation_id, run_tag)
++            one_call.to_wire()
++            if one_call.service.timeout_seconds > self.config.request_timeout_seconds:
++                raise ValueError("model timeout exceeds session")
++        elif one_call is not None:
++            raise ValueError("idle cannot carry one_call data")
+         if not run_tag or len(run_tag) > 64 or not run_tag.isascii() or not run_tag.replace("-", "").replace("_", "").isalnum():
+             raise ValueError("run_tag须是受限非空ASCII标识")
+         identity_name = job_name(activity_id, 0)  # 在任何副作用前验证 UUID。
+@@ -164,6 +179,8 @@
+         settlement_attempted = False
+         claim_attempted = False
+         interrupted: BaseException | None = None
++        exchange = None
++        model_receipt = None
+ 
+         local_owner = _local_lock(activity_id)
+         if not local_owner.acquire(blocking=False):
+@@ -229,6 +246,8 @@
+                 raise _StopSession
+             if lease.running_owner_session_id != session_id:
+                 raise JobUnknown("新代次持久会话身份与 SUP 不一致")
++            if lease.activity_id != activity_id or lease.executor_id != executor_id:
++                raise JobUnknown("claim identity mismatch")
+             window = lease.window_seconds
+             settled_seconds = 0
+             reserved_seconds = window
+@@ -246,10 +265,18 @@
+                 raise _StopSession
+ 
+             self._remaining(manager_deadline_ns)
++            if one_call is not None:
++                exchange = NamedMapping.create("Local\\RetroLume.SUP." + secrets.token_hex(16))
++                exchange.write_request(worker_request(one_call, {
++                    "dsn": self.ledger._dsn,
++                    "connect_timeout_seconds": self.ledger._connect_timeout,
++                    "statement_timeout_ms": self.ledger._statement_timeout_ms,
++                    "lock_timeout_ms": self.ledger._lock_timeout_ms,
++                }, lease, run_tag, stop_ns, config.request_timeout_seconds))
+             job = NamedJob.create(activity_id, lease.execution_generation)
+             created_job = True
+             name = job.name
+-            pid = job.spawn_suspended(command.argv(), cwd=command.cwd)
++            pid = job.spawn_suspended(command.argv(exchange.name) if exchange is not None else command.argv(), cwd=command.cwd)
+             worker_created_100ns = job.process_creation_time_100ns()
+             if time.monotonic_ns() >= min(t0_ns + int(config.startup_limit_seconds * 1e9), stop_ns):
+                 state = "startup_deadline"
+@@ -275,6 +302,18 @@
+             if not 1 <= observed <= window:
+                 state = "elapsed_violation_full_reservation"
+                 raise _StopSession
++            if exchange is not None:
++                candidate = exchange.read_result()
++                context = CallContext(activity_id=activity_id, executor_id=executor_id,
++                                      operation_id=one_call.operation_id,
++                                      execution_generation=lease.execution_generation,
++                                      scope_revision=lease.scope_revision)
++                decoded = decode_receipt(candidate, context, run_tag)
++                if decoded.provider != one_call.service.provider or decoded.configured_model != one_call.service.model:
++                    raise ValueError("model configuration receipt mismatch")
++                model_receipt = candidate
++                exchange.close()
++                exchange = None
+             # 树已确认0且主进程成功；先关闭自身全部Job/进程句柄，避免
+             # 后续清理失败发生在部分退款之后。活动互斥仍保持到结算结束。
+             job.close()
+@@ -327,6 +366,11 @@
+                     job.close()
+                 except BaseException as exc:
+                     cleanup_errors.append(f"job_close:{type(exc).__name__}")
++            if exchange is not None:
++                try:
++                    exchange.close()
++                except BaseException as exc:
++                    cleanup_errors.append(f"exchange_close:{type(exc).__name__}")
+             if owner is not None:
+                 try:
+                     owner.close()
+@@ -351,6 +395,7 @@
+             timing_diagnostic,
+             running_owner_session_id=session_id if lease is not None else None,
+             worker_created_100ns=worker_created_100ns,
++            model_receipt=model_receipt,
+         )
+         if interrupted is not None:
+             interrupted.session_outcome = result
+--- pre/backend/app/worker/launcher.py
++++ current/backend/app/worker/launcher.py
+@@ -18,6 +18,8 @@
+ from .command import WorkerCommand, _BACKEND, _INTERPRETER
+ from .session import SessionConfig, SessionOutcome
+ from .supervisor_ipc import NamedMapping
++from .one_call import OneCallInput, decode_receipt, validate_identity
++from app.capabilities.contracts import CallContext
+ from .windows_job import (_FILETIME, _PROCESS_INFORMATION, _STARTUPINFOW,
+                           CREATE_NO_WINDOW, CREATE_SUSPENDED, WAIT_OBJECT_0,
+                           WAIT_TIMEOUT)
+@@ -167,7 +169,7 @@
+             raise ManagerControlError("CloseHandle(SUP): " + ",".join(errors))
+ 
+ 
+-def _request(ledger, config, activity_id, executor_id, command, run_tag, mapping_name, deadline_ns) -> dict:
++def _request(ledger, config, activity_id, executor_id, command, run_tag, mapping_name, deadline_ns, one_call=None) -> dict:
+     if type(ledger) is not PostgresAdmissionLedger or type(config) is not SessionConfig or type(command) is not WorkerCommand:
+         raise TypeError("fixed ledger, config and command required")
+     if type(ledger._dsn) is not str or not 1 <= len(ledger._dsn.encode("utf-8")) <= 4096 or "\x00" in ledger._dsn:
+@@ -178,12 +180,21 @@
+         raise ValueError("executor invalid")
+     if type(run_tag) is not str or not 1 <= len(run_tag) <= 64 or not run_tag.isascii() or not run_tag.replace("-", "").replace("_", "").isalnum():
+         raise ValueError("runTag invalid")
++    if command.task == "one_call":
++        if type(one_call) is not OneCallInput:
++            raise ValueError("one_call requires explicit input")
++        validate_identity(activity_id, executor_id, one_call.operation_id, run_tag)
++        if one_call.service.timeout_seconds > config.request_timeout_seconds:
++            raise ValueError("model timeout exceeds session")
++    elif one_call is not None:
++        raise ValueError("idle cannot carry business data")
+     return {
+-        "protocol": 1, "mapping_name": mapping_name,
++        "protocol": 2, "mapping_name": mapping_name,
+         "activity_id": activity_id, "executor_id": executor_id,
+         "run_tag": run_tag, "deadline_ns": deadline_ns,
+         "command": {"task": command.task},
+         "config": asdict(config),
++        "one_call": one_call.to_wire() if one_call is not None else None,
+         "ledger": {
+             "dsn": ledger._dsn,
+             "connect_timeout_seconds": ledger._connect_timeout,
+@@ -194,7 +205,7 @@
+ 
+ 
+ def _decode_outcome(frame: dict, run_tag: str, activity_id: str) -> SessionOutcome:
+-    if type(frame) is not dict or frame.get("protocol") != 1 or frame.get("run_tag") != run_tag or frame.get("activity_id") != activity_id:
++    if type(frame) is not dict or set(frame) != {"protocol", "run_tag", "activity_id", "outcome"} or frame.get("protocol") != 2 or frame.get("run_tag") != run_tag or frame.get("activity_id") != activity_id:
+         raise ManagerControlError("SUP response identity mismatch")
+     data = frame.get("outcome")
+     if type(data) is not dict or set(data) != {f.name for f in fields(SessionOutcome)}:
+@@ -220,6 +231,7 @@
+     command: WorkerCommand,
+     *,
+     run_tag: str,
++    one_call: OneCallInput | None = None,
+ ) -> SessionOutcome:
+     """Blocking internal entry; no application event-loop or business grant."""
+     if os.name != "nt":
+@@ -235,7 +247,7 @@
+     deadline_ns = started_ns + int(config.manager_total_seconds * 1e9)
+     run_deadline_ns = deadline_ns - int(config.cleanup_seconds * 1e9)
+     mapping_name = "Local\\RetroLume.SUP." + secrets.token_hex(16)
+-    request = _request(ledger, config, activity_id, executor_id, command, run_tag, mapping_name, deadline_ns)
++    request = _request(ledger, config, activity_id, executor_id, command, run_tag, mapping_name, deadline_ns, one_call)
+     mapping = None
+     process = None
+     outcome = None
+@@ -271,7 +283,21 @@
+                         state = "manager_timeout_unconfirmed"
+                     elif process.exit_code() == 0:
+                         outcome = _decode_outcome(mapping.read_result(), run_tag, activity_id)
++                        if outcome.model_receipt is not None:
++                            if one_call is None or outcome.generation is None:
++                                raise ManagerControlError("unexpected business receipt")
++                            context = CallContext.model_validate(outcome.model_receipt.get("context"), strict=True)
++                            if (context.activity_id != activity_id or context.executor_id != executor_id
++                                    or context.operation_id != one_call.operation_id
++                                    or context.execution_generation != outcome.generation):
++                                raise ManagerControlError("business identity mismatch")
++                            result = decode_receipt(outcome.model_receipt, context, run_tag)
++                            if result.provider != one_call.service.provider or result.configured_model != one_call.service.model:
++                                raise ManagerControlError("business model mismatch")
++                        elif one_call is not None and outcome.state == "settled":
++                            raise ManagerControlError("missing business receipt")
+     except BaseException as exc:
++        outcome = None
+         failure = exc
+         errors.append(f"launcher:{type(exc).__name__}")
+     finally:
+--- pre/backend/app/worker/command.py
++++ current/backend/app/worker/command.py
+@@ -13,7 +13,7 @@
+ 
+ @dataclass(frozen=True)
+ class WorkerCommand:
+-    """Only the benign internal task is wired; product gateway injection is separate."""
++    """固定任务枚举；秘密和正文只能走映射。"""
+ 
+     task: str = "idle"
+ 
+@@ -25,7 +25,13 @@
+     def cwd(self) -> str:
+         return str(_BACKEND)
+ 
+-    def argv(self) -> list[str]:
+-        return [str(_INTERPRETER), "-B", "-m", "app.worker.worker_main", self.task]
++    def argv(self, mapping_name: str | None = None) -> list[str]:
++        result = [str(_INTERPRETER), "-B", "-m", "app.worker.worker_main", self.task]
++        if self.task == "one_call":
++            from .supervisor_ipc import validate_name
++            result.append(validate_name(mapping_name))
++        elif mapping_name is not None:
++            raise ValueError("idle does not accept business data")
++        return result
+ 
+ 

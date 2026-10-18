@@ -1,0 +1,3071 @@
+{
+  "tables": [
+    [
+      "activities",
+      "id",
+      "uuid",
+      true
+    ],
+    [
+      "activities",
+      "status",
+      "text",
+      true
+    ],
+    [
+      "activities",
+      "scope_revision",
+      "integer",
+      true
+    ],
+    [
+      "activities",
+      "execution_generation",
+      "integer",
+      true
+    ],
+    [
+      "activities",
+      "executor_id",
+      "character varying(128)",
+      false
+    ],
+    [
+      "activities",
+      "lease_expires_at",
+      "timestamp with time zone",
+      false
+    ],
+    [
+      "activities",
+      "deadline_at",
+      "timestamp with time zone",
+      true
+    ],
+    [
+      "activities",
+      "max_requests",
+      "integer",
+      true
+    ],
+    [
+      "activities",
+      "requests_reserved",
+      "integer",
+      true
+    ],
+    [
+      "activities",
+      "max_cost_microunits",
+      "bigint",
+      true
+    ],
+    [
+      "activities",
+      "cost_reserved_microunits",
+      "bigint",
+      true
+    ],
+    [
+      "activities",
+      "reserve_cost_microunits",
+      "bigint",
+      true
+    ],
+    [
+      "activities",
+      "max_request_bytes",
+      "integer",
+      true
+    ],
+    [
+      "activities",
+      "max_output_tokens",
+      "integer",
+      true
+    ],
+    [
+      "activities",
+      "allowed_tools",
+      "character varying(64)[]",
+      true
+    ],
+    [
+      "activities",
+      "created_at",
+      "timestamp with time zone",
+      true
+    ],
+    [
+      "activities",
+      "updated_at",
+      "timestamp with time zone",
+      true
+    ],
+    [
+      "activities",
+      "cancelled_at",
+      "timestamp with time zone",
+      false
+    ],
+    [
+      "activities",
+      "max_running_seconds",
+      "bigint",
+      true
+    ],
+    [
+      "activities",
+      "running_reserved_seconds",
+      "bigint",
+      true
+    ],
+    [
+      "activities",
+      "running_settled_seconds",
+      "bigint",
+      true
+    ],
+    [
+      "activities",
+      "last_settled_generation",
+      "integer",
+      false
+    ],
+    [
+      "activities",
+      "last_settled_seconds",
+      "bigint",
+      false
+    ],
+    [
+      "activities",
+      "dispatch_closed",
+      "boolean",
+      true
+    ],
+    [
+      "activities",
+      "running_owner_session_id",
+      "bigint",
+      false
+    ],
+    [
+      "activities",
+      "max_tool_calls",
+      "integer",
+      false
+    ],
+    [
+      "activities",
+      "tools_reserved",
+      "integer",
+      true
+    ],
+    [
+      "activity_allowed_models",
+      "activity_id",
+      "uuid",
+      true
+    ],
+    [
+      "activity_allowed_models",
+      "provider",
+      "character varying(64)",
+      true
+    ],
+    [
+      "activity_allowed_models",
+      "model",
+      "character varying(128)",
+      true
+    ],
+    [
+      "activity_memory_bindings",
+      "activity_id",
+      "uuid",
+      true
+    ],
+    [
+      "activity_memory_bindings",
+      "selection_sha256",
+      "text",
+      true
+    ],
+    [
+      "activity_memory_bindings",
+      "create_request_sha256",
+      "text",
+      true
+    ],
+    [
+      "activity_memory_bindings",
+      "bound_scope_revision",
+      "integer",
+      true
+    ],
+    [
+      "activity_memory_bindings",
+      "bound_scope_sha256",
+      "text",
+      true
+    ],
+    [
+      "activity_memory_bindings",
+      "selected_count",
+      "smallint",
+      true
+    ],
+    [
+      "activity_memory_bindings",
+      "policy_version",
+      "text",
+      true
+    ],
+    [
+      "activity_memory_bindings",
+      "selected_at",
+      "timestamp with time zone",
+      true
+    ],
+    [
+      "activity_memory_choices",
+      "activity_id",
+      "uuid",
+      true
+    ],
+    [
+      "activity_memory_choices",
+      "memory_id",
+      "uuid",
+      true
+    ],
+    [
+      "activity_memory_choices",
+      "version",
+      "integer",
+      true
+    ],
+    [
+      "activity_memory_choices",
+      "selected_revision",
+      "integer",
+      true
+    ],
+    [
+      "activity_memory_choices",
+      "body_sha256",
+      "text",
+      true
+    ],
+    [
+      "activity_memory_choices",
+      "ordinal",
+      "smallint",
+      true
+    ],
+    [
+      "activity_operation_results",
+      "activity_id",
+      "uuid",
+      true
+    ],
+    [
+      "activity_operation_results",
+      "operation_id",
+      "character varying(128)",
+      true
+    ],
+    [
+      "activity_operation_results",
+      "admission_id",
+      "uuid",
+      true
+    ],
+    [
+      "activity_operation_results",
+      "execution_generation",
+      "integer",
+      true
+    ],
+    [
+      "activity_operation_results",
+      "scope_revision",
+      "integer",
+      true
+    ],
+    [
+      "activity_operation_results",
+      "payload_format",
+      "text",
+      true
+    ],
+    [
+      "activity_operation_results",
+      "payload",
+      "text",
+      true
+    ],
+    [
+      "activity_operation_results",
+      "payload_sha256",
+      "text",
+      true
+    ],
+    [
+      "activity_operation_results",
+      "committed_at",
+      "timestamp with time zone",
+      true
+    ],
+    [
+      "activity_operations",
+      "activity_id",
+      "uuid",
+      true
+    ],
+    [
+      "activity_operations",
+      "operation_id",
+      "character varying(128)",
+      true
+    ],
+    [
+      "activity_operations",
+      "admission_id",
+      "uuid",
+      true
+    ],
+    [
+      "activity_operations",
+      "executor_id",
+      "character varying(128)",
+      true
+    ],
+    [
+      "activity_operations",
+      "execution_generation",
+      "integer",
+      true
+    ],
+    [
+      "activity_operations",
+      "scope_revision",
+      "integer",
+      true
+    ],
+    [
+      "activity_operations",
+      "provider",
+      "character varying(64)",
+      false
+    ],
+    [
+      "activity_operations",
+      "configured_model",
+      "character varying(128)",
+      false
+    ],
+    [
+      "activity_operations",
+      "request_bytes",
+      "integer",
+      false
+    ],
+    [
+      "activity_operations",
+      "max_output_tokens",
+      "integer",
+      false
+    ],
+    [
+      "activity_operations",
+      "tool_names",
+      "character varying(64)[]",
+      true
+    ],
+    [
+      "activity_operations",
+      "reserved_cost_microunits",
+      "bigint",
+      true
+    ],
+    [
+      "activity_operations",
+      "state",
+      "text",
+      true
+    ],
+    [
+      "activity_operations",
+      "disposition",
+      "text",
+      false
+    ],
+    [
+      "activity_operations",
+      "error_code",
+      "character varying(64)",
+      false
+    ],
+    [
+      "activity_operations",
+      "remote_request_id",
+      "character varying(128)",
+      false
+    ],
+    [
+      "activity_operations",
+      "returned_model",
+      "character varying(128)",
+      false
+    ],
+    [
+      "activity_operations",
+      "finish_reason",
+      "character varying(64)",
+      false
+    ],
+    [
+      "activity_operations",
+      "prompt_tokens",
+      "integer",
+      false
+    ],
+    [
+      "activity_operations",
+      "completion_tokens",
+      "integer",
+      false
+    ],
+    [
+      "activity_operations",
+      "response_bytes",
+      "integer",
+      false
+    ],
+    [
+      "activity_operations",
+      "reserved_at",
+      "timestamp with time zone",
+      true
+    ],
+    [
+      "activity_operations",
+      "dispatch_started_at",
+      "timestamp with time zone",
+      false
+    ],
+    [
+      "activity_operations",
+      "recorded_at",
+      "timestamp with time zone",
+      false
+    ],
+    [
+      "activity_operations",
+      "kind",
+      "text",
+      true
+    ],
+    [
+      "activity_operations",
+      "arguments_sha256",
+      "text",
+      false
+    ],
+    [
+      "activity_operations",
+      "tool_call_id",
+      "character varying(128)",
+      false
+    ],
+    [
+      "activity_scope_sources",
+      "activity_id",
+      "uuid",
+      true
+    ],
+    [
+      "activity_scope_sources",
+      "source_id",
+      "uuid",
+      true
+    ],
+    [
+      "activity_scope_sources",
+      "version_id",
+      "uuid",
+      true
+    ],
+    [
+      "activity_scope_sources",
+      "source_revision",
+      "integer",
+      true
+    ],
+    [
+      "learning_memories",
+      "memory_id",
+      "uuid",
+      true
+    ],
+    [
+      "learning_memories",
+      "revision",
+      "integer",
+      true
+    ],
+    [
+      "learning_memories",
+      "current_version",
+      "integer",
+      true
+    ],
+    [
+      "learning_memories",
+      "state",
+      "text",
+      true
+    ],
+    [
+      "learning_memories",
+      "created_at",
+      "timestamp with time zone",
+      true
+    ],
+    [
+      "learning_memories",
+      "updated_at",
+      "timestamp with time zone",
+      true
+    ],
+    [
+      "learning_memories",
+      "revoked_at",
+      "timestamp with time zone",
+      false
+    ],
+    [
+      "learning_memories",
+      "revocation_key",
+      "uuid",
+      false
+    ],
+    [
+      "learning_memories",
+      "purged_at",
+      "timestamp with time zone",
+      false
+    ],
+    [
+      "learning_memories",
+      "purge_state",
+      "text",
+      true
+    ],
+    [
+      "learning_memory_bodies",
+      "memory_id",
+      "uuid",
+      true
+    ],
+    [
+      "learning_memory_bodies",
+      "version",
+      "integer",
+      true
+    ],
+    [
+      "learning_memory_bodies",
+      "body",
+      "text",
+      true
+    ],
+    [
+      "learning_memory_commands",
+      "business_key",
+      "uuid",
+      true
+    ],
+    [
+      "learning_memory_commands",
+      "action",
+      "text",
+      true
+    ],
+    [
+      "learning_memory_commands",
+      "memory_id",
+      "uuid",
+      true
+    ],
+    [
+      "learning_memory_commands",
+      "request_sha256",
+      "text",
+      true
+    ],
+    [
+      "learning_memory_commands",
+      "slot_sha256",
+      "text",
+      true
+    ],
+    [
+      "learning_memory_commands",
+      "effect_applied",
+      "boolean",
+      true
+    ],
+    [
+      "learning_memory_commands",
+      "before_revision",
+      "integer",
+      true
+    ],
+    [
+      "learning_memory_commands",
+      "after_revision",
+      "integer",
+      true
+    ],
+    [
+      "learning_memory_commands",
+      "after_version",
+      "integer",
+      true
+    ],
+    [
+      "learning_memory_commands",
+      "result_meta",
+      "text",
+      true
+    ],
+    [
+      "learning_memory_commands",
+      "cleanup_manifest",
+      "text",
+      false
+    ],
+    [
+      "learning_memory_commands",
+      "manifest_sha256",
+      "text",
+      false
+    ],
+    [
+      "learning_memory_commands",
+      "committed_at",
+      "timestamp with time zone",
+      true
+    ],
+    [
+      "learning_memory_dependencies",
+      "memory_id",
+      "uuid",
+      true
+    ],
+    [
+      "learning_memory_dependencies",
+      "version",
+      "integer",
+      true
+    ],
+    [
+      "learning_memory_dependencies",
+      "ordinal",
+      "smallint",
+      true
+    ],
+    [
+      "learning_memory_dependencies",
+      "dependency_kind",
+      "text",
+      true
+    ],
+    [
+      "learning_memory_dependencies",
+      "source_id",
+      "uuid",
+      false
+    ],
+    [
+      "learning_memory_dependencies",
+      "source_version_id",
+      "uuid",
+      false
+    ],
+    [
+      "learning_memory_dependencies",
+      "source_revision",
+      "integer",
+      false
+    ],
+    [
+      "learning_memory_dependencies",
+      "original_sha256",
+      "text",
+      false
+    ],
+    [
+      "learning_memory_dependencies",
+      "origin_activity_id",
+      "uuid",
+      false
+    ],
+    [
+      "learning_memory_dependencies",
+      "record_id",
+      "uuid",
+      false
+    ],
+    [
+      "learning_memory_dependencies",
+      "record_kind",
+      "text",
+      false
+    ],
+    [
+      "learning_memory_dependencies",
+      "record_sha256",
+      "text",
+      false
+    ],
+    [
+      "learning_memory_dependencies",
+      "origin_scope_revision",
+      "integer",
+      false
+    ],
+    [
+      "learning_memory_dependencies",
+      "origin_goal_version",
+      "integer",
+      false
+    ],
+    [
+      "learning_memory_dependencies",
+      "upstream_memory_id",
+      "uuid",
+      false
+    ],
+    [
+      "learning_memory_dependencies",
+      "upstream_version",
+      "integer",
+      false
+    ],
+    [
+      "learning_memory_dependencies",
+      "upstream_body_sha256",
+      "text",
+      false
+    ],
+    [
+      "learning_memory_revisions",
+      "memory_id",
+      "uuid",
+      true
+    ],
+    [
+      "learning_memory_revisions",
+      "version",
+      "integer",
+      true
+    ],
+    [
+      "learning_memory_revisions",
+      "claim_kind",
+      "text",
+      true
+    ],
+    [
+      "learning_memory_revisions",
+      "uncertainty",
+      "text",
+      true
+    ],
+    [
+      "learning_memory_revisions",
+      "policy_version",
+      "text",
+      true
+    ],
+    [
+      "learning_memory_revisions",
+      "body_sha256",
+      "text",
+      true
+    ],
+    [
+      "learning_memory_revisions",
+      "body_bytes",
+      "integer",
+      true
+    ],
+    [
+      "learning_memory_revisions",
+      "dependencies_sha256",
+      "text",
+      true
+    ],
+    [
+      "learning_memory_revisions",
+      "dependency_count",
+      "smallint",
+      true
+    ],
+    [
+      "learning_memory_revisions",
+      "created_by_key",
+      "uuid",
+      true
+    ],
+    [
+      "learning_memory_revisions",
+      "created_at",
+      "timestamp with time zone",
+      true
+    ],
+    [
+      "material_sources",
+      "id",
+      "uuid",
+      true
+    ],
+    [
+      "material_sources",
+      "title",
+      "text",
+      true
+    ],
+    [
+      "material_sources",
+      "current_version",
+      "uuid",
+      false
+    ],
+    [
+      "material_sources",
+      "revision",
+      "integer",
+      true
+    ],
+    [
+      "material_versions",
+      "id",
+      "uuid",
+      true
+    ],
+    [
+      "material_versions",
+      "source_id",
+      "uuid",
+      true
+    ],
+    [
+      "material_versions",
+      "filename",
+      "text",
+      true
+    ],
+    [
+      "material_versions",
+      "format",
+      "text",
+      true
+    ],
+    [
+      "material_versions",
+      "sha256",
+      "character(64)",
+      true
+    ],
+    [
+      "material_versions",
+      "size",
+      "bigint",
+      true
+    ],
+    [
+      "material_versions",
+      "created_at",
+      "timestamp with time zone",
+      true
+    ],
+    [
+      "pdf_extracted_pages",
+      "version_id",
+      "uuid",
+      true
+    ],
+    [
+      "pdf_extracted_pages",
+      "physical_page",
+      "integer",
+      true
+    ],
+    [
+      "pdf_extracted_pages",
+      "extracted_text",
+      "text",
+      true
+    ],
+    [
+      "pdf_extracted_pages",
+      "warnings",
+      "jsonb",
+      true
+    ],
+    [
+      "pdf_review_candidates",
+      "id",
+      "uuid",
+      true
+    ],
+    [
+      "pdf_review_candidates",
+      "source_id",
+      "uuid",
+      true
+    ],
+    [
+      "pdf_review_candidates",
+      "version_id",
+      "uuid",
+      true
+    ],
+    [
+      "pdf_review_candidates",
+      "expected_version",
+      "uuid",
+      false
+    ],
+    [
+      "pdf_review_candidates",
+      "expected_revision",
+      "integer",
+      true
+    ],
+    [
+      "pdf_review_candidates",
+      "status",
+      "text",
+      true
+    ],
+    [
+      "pdf_review_candidates",
+      "page_count",
+      "integer",
+      true
+    ],
+    [
+      "pdf_review_candidates",
+      "extraction_method",
+      "text",
+      true
+    ],
+    [
+      "pdf_review_candidates",
+      "created_at",
+      "timestamp with time zone",
+      true
+    ],
+    [
+      "pdf_review_candidates",
+      "decided_at",
+      "timestamp with time zone",
+      false
+    ],
+    [
+      "pdf_review_pages",
+      "candidate_id",
+      "uuid",
+      true
+    ],
+    [
+      "pdf_review_pages",
+      "version_id",
+      "uuid",
+      true
+    ],
+    [
+      "pdf_review_pages",
+      "physical_page",
+      "integer",
+      true
+    ],
+    [
+      "pdf_review_pages",
+      "reviewed_at",
+      "timestamp with time zone",
+      true
+    ],
+    [
+      "pdf_user_supplements",
+      "id",
+      "uuid",
+      true
+    ],
+    [
+      "pdf_user_supplements",
+      "candidate_id",
+      "uuid",
+      true
+    ],
+    [
+      "pdf_user_supplements",
+      "version_id",
+      "uuid",
+      true
+    ],
+    [
+      "pdf_user_supplements",
+      "physical_page",
+      "integer",
+      true
+    ],
+    [
+      "pdf_user_supplements",
+      "identity",
+      "text",
+      true
+    ],
+    [
+      "pdf_user_supplements",
+      "text",
+      "text",
+      true
+    ],
+    [
+      "pdf_user_supplements",
+      "created_at",
+      "timestamp with time zone",
+      true
+    ],
+    [
+      "teaching_commands",
+      "activity_id",
+      "uuid",
+      true
+    ],
+    [
+      "teaching_commands",
+      "business_key",
+      "uuid",
+      true
+    ],
+    [
+      "teaching_commands",
+      "action",
+      "text",
+      true
+    ],
+    [
+      "teaching_commands",
+      "request_sha256",
+      "character(64)",
+      true
+    ],
+    [
+      "teaching_commands",
+      "request_body",
+      "text",
+      true
+    ],
+    [
+      "teaching_commands",
+      "slot_sha256",
+      "character(64)",
+      true
+    ],
+    [
+      "teaching_commands",
+      "expected_revision",
+      "integer",
+      true
+    ],
+    [
+      "teaching_commands",
+      "goal_version",
+      "integer",
+      true
+    ],
+    [
+      "teaching_commands",
+      "scope_revision",
+      "integer",
+      true
+    ],
+    [
+      "teaching_commands",
+      "parent_record_id",
+      "uuid",
+      false
+    ],
+    [
+      "teaching_commands",
+      "context_body",
+      "text",
+      false
+    ],
+    [
+      "teaching_commands",
+      "context_sha256",
+      "character(64)",
+      false
+    ],
+    [
+      "teaching_commands",
+      "operation_id",
+      "character varying(128)",
+      false
+    ],
+    [
+      "teaching_commands",
+      "retry_of",
+      "uuid",
+      false
+    ],
+    [
+      "teaching_commands",
+      "status",
+      "text",
+      true
+    ],
+    [
+      "teaching_commands",
+      "launch_claimed_at",
+      "timestamp with time zone",
+      false
+    ],
+    [
+      "teaching_commands",
+      "obsolete_at",
+      "timestamp with time zone",
+      false
+    ],
+    [
+      "teaching_commands",
+      "abandoned_at",
+      "timestamp with time zone",
+      false
+    ],
+    [
+      "teaching_commands",
+      "result_record_id",
+      "uuid",
+      false
+    ],
+    [
+      "teaching_commands",
+      "error_code",
+      "character varying(64)",
+      false
+    ],
+    [
+      "teaching_commands",
+      "created_at",
+      "timestamp with time zone",
+      true
+    ],
+    [
+      "teaching_commands",
+      "updated_at",
+      "timestamp with time zone",
+      true
+    ],
+    [
+      "teaching_heads",
+      "activity_id",
+      "uuid",
+      true
+    ],
+    [
+      "teaching_heads",
+      "revision",
+      "integer",
+      true
+    ],
+    [
+      "teaching_heads",
+      "goal_version",
+      "integer",
+      true
+    ],
+    [
+      "teaching_heads",
+      "last_seq",
+      "integer",
+      true
+    ],
+    [
+      "teaching_heads",
+      "phase",
+      "text",
+      true
+    ],
+    [
+      "teaching_heads",
+      "goal_record_id",
+      "uuid",
+      false
+    ],
+    [
+      "teaching_heads",
+      "path_record_id",
+      "uuid",
+      false
+    ],
+    [
+      "teaching_heads",
+      "node_id",
+      "character varying(2)",
+      false
+    ],
+    [
+      "teaching_heads",
+      "exercise_record_id",
+      "uuid",
+      false
+    ],
+    [
+      "teaching_heads",
+      "answer_record_id",
+      "uuid",
+      false
+    ],
+    [
+      "teaching_heads",
+      "feedback_record_id",
+      "uuid",
+      false
+    ],
+    [
+      "teaching_heads",
+      "reason_record_id",
+      "uuid",
+      false
+    ],
+    [
+      "teaching_heads",
+      "pending_business_key",
+      "uuid",
+      false
+    ],
+    [
+      "teaching_heads",
+      "projection",
+      "text",
+      true
+    ],
+    [
+      "teaching_heads",
+      "updated_at",
+      "timestamp with time zone",
+      true
+    ],
+    [
+      "teaching_records",
+      "activity_id",
+      "uuid",
+      true
+    ],
+    [
+      "teaching_records",
+      "record_id",
+      "uuid",
+      true
+    ],
+    [
+      "teaching_records",
+      "seq",
+      "integer",
+      true
+    ],
+    [
+      "teaching_records",
+      "kind",
+      "text",
+      true
+    ],
+    [
+      "teaching_records",
+      "business_key",
+      "uuid",
+      true
+    ],
+    [
+      "teaching_records",
+      "ordinal",
+      "smallint",
+      true
+    ],
+    [
+      "teaching_records",
+      "goal_version",
+      "integer",
+      true
+    ],
+    [
+      "teaching_records",
+      "scope_revision",
+      "integer",
+      true
+    ],
+    [
+      "teaching_records",
+      "goal_record_id",
+      "uuid",
+      false
+    ],
+    [
+      "teaching_records",
+      "parent_record_id",
+      "uuid",
+      false
+    ],
+    [
+      "teaching_records",
+      "exercise_record_id",
+      "uuid",
+      false
+    ],
+    [
+      "teaching_records",
+      "answer_record_id",
+      "uuid",
+      false
+    ],
+    [
+      "teaching_records",
+      "supersedes_record_id",
+      "uuid",
+      false
+    ],
+    [
+      "teaching_records",
+      "operation_id",
+      "character varying(128)",
+      false
+    ],
+    [
+      "teaching_records",
+      "body",
+      "text",
+      false
+    ],
+    [
+      "teaching_records",
+      "body_sha256",
+      "character(64)",
+      true
+    ],
+    [
+      "teaching_records",
+      "source_refs",
+      "text",
+      true
+    ],
+    [
+      "teaching_records",
+      "applied_revision",
+      "integer",
+      false
+    ],
+    [
+      "teaching_records",
+      "state_after",
+      "text",
+      false
+    ],
+    [
+      "teaching_records",
+      "created_at",
+      "timestamp with time zone",
+      true
+    ]
+  ],
+  "constraints": [
+    [
+      "activities",
+      "activities_allowed_tools_check",
+      "CHECK ((cardinality(allowed_tools) <= 32))",
+      true
+    ],
+    [
+      "activities",
+      "activities_check",
+      "CHECK (((requests_reserved >= 0) AND (requests_reserved <= max_requests)))",
+      true
+    ],
+    [
+      "activities",
+      "activities_check1",
+      "CHECK (((cost_reserved_microunits >= 0) AND (cost_reserved_microunits <= max_cost_microunits)))",
+      true
+    ],
+    [
+      "activities",
+      "activities_check2",
+      "CHECK (((reserve_cost_microunits > 0) AND (reserve_cost_microunits <= max_cost_microunits)))",
+      true
+    ],
+    [
+      "activities",
+      "activities_check3",
+      "CHECK ((((status = 'running'::text) AND (executor_id IS NOT NULL) AND (lease_expires_at IS NOT NULL)) OR (status <> 'running'::text)))",
+      true
+    ],
+    [
+      "activities",
+      "activities_execution_generation_check",
+      "CHECK ((execution_generation >= 0))",
+      true
+    ],
+    [
+      "activities",
+      "activities_last_settled_generation_check",
+      "CHECK (((last_settled_generation IS NULL) OR (last_settled_generation >= 0)))",
+      true
+    ],
+    [
+      "activities",
+      "activities_last_settled_seconds_check",
+      "CHECK (((last_settled_seconds IS NULL) OR (last_settled_seconds >= 0)))",
+      true
+    ],
+    [
+      "activities",
+      "activities_max_cost_microunits_check",
+      "CHECK ((max_cost_microunits > 0))",
+      true
+    ],
+    [
+      "activities",
+      "activities_max_output_tokens_check",
+      "CHECK ((max_output_tokens > 0))",
+      true
+    ],
+    [
+      "activities",
+      "activities_max_request_bytes_check",
+      "CHECK ((max_request_bytes > 0))",
+      true
+    ],
+    [
+      "activities",
+      "activities_max_requests_check",
+      "CHECK ((max_requests > 0))",
+      true
+    ],
+    [
+      "activities",
+      "activities_max_running_seconds_check",
+      "CHECK (((max_running_seconds > 0) AND (max_running_seconds <= 2147483647)))",
+      true
+    ],
+    [
+      "activities",
+      "activities_pkey",
+      "PRIMARY KEY (id)",
+      true
+    ],
+    [
+      "activities",
+      "activities_running_owner_session_id_check",
+      "CHECK (((running_owner_session_id >= 0) AND (running_owner_session_id <= '4294967295'::bigint)))",
+      true
+    ],
+    [
+      "activities",
+      "activities_running_reserved_seconds_check",
+      "CHECK ((running_reserved_seconds >= 0))",
+      true
+    ],
+    [
+      "activities",
+      "activities_running_settled_seconds_check",
+      "CHECK ((running_settled_seconds >= 0))",
+      true
+    ],
+    [
+      "activities",
+      "activities_scope_revision_check",
+      "CHECK ((scope_revision > 0))",
+      true
+    ],
+    [
+      "activities",
+      "activities_status_check",
+      "CHECK ((status = ANY (ARRAY['pending'::text, 'running'::text, 'cancelled'::text])))",
+      true
+    ],
+    [
+      "activities",
+      "activities_time_budget_balance",
+      "CHECK ((running_reserved_seconds <= (max_running_seconds - running_settled_seconds)))",
+      true
+    ],
+    [
+      "activities",
+      "activities_time_budget_last_settled_pair",
+      "CHECK (((last_settled_generation IS NULL) = (last_settled_seconds IS NULL)))",
+      true
+    ],
+    [
+      "activities",
+      "activities_time_budget_running_shape",
+      "CHECK (((status = 'running'::text) = (running_reserved_seconds > 0)))",
+      true
+    ],
+    [
+      "activities",
+      "activities_tool_budget_balance",
+      "CHECK ((((max_tool_calls IS NULL) AND (tools_reserved = 0)) OR ((max_tool_calls IS NOT NULL) AND ((tools_reserved >= 0) AND (tools_reserved <= max_tool_calls)))))",
+      true
+    ],
+    [
+      "activities",
+      "activities_tool_budget_limit",
+      "CHECK (((max_tool_calls IS NULL) OR (max_tool_calls >= 0)))",
+      true
+    ],
+    [
+      "activities",
+      "activities_tool_budget_reserved",
+      "CHECK ((tools_reserved >= 0))",
+      true
+    ],
+    [
+      "activity_allowed_models",
+      "activity_allowed_models_activity_id_fkey",
+      "FOREIGN KEY (activity_id) REFERENCES activities(id)",
+      true
+    ],
+    [
+      "activity_allowed_models",
+      "activity_allowed_models_pkey",
+      "PRIMARY KEY (activity_id, provider, model)",
+      true
+    ],
+    [
+      "activity_memory_bindings",
+      "activity_memory_bindings_activity_id_fkey",
+      "FOREIGN KEY (activity_id) REFERENCES activities(id)",
+      true
+    ],
+    [
+      "activity_memory_bindings",
+      "activity_memory_bindings_bound_scope_revision_check",
+      "CHECK ((bound_scope_revision > 0))",
+      true
+    ],
+    [
+      "activity_memory_bindings",
+      "activity_memory_bindings_bound_scope_sha256_check",
+      "CHECK ((bound_scope_sha256 ~ '^[0-9a-f]{64}$'::text))",
+      true
+    ],
+    [
+      "activity_memory_bindings",
+      "activity_memory_bindings_create_request_sha256_check",
+      "CHECK ((create_request_sha256 ~ '^[0-9a-f]{64}$'::text))",
+      true
+    ],
+    [
+      "activity_memory_bindings",
+      "activity_memory_bindings_pkey",
+      "PRIMARY KEY (activity_id)",
+      true
+    ],
+    [
+      "activity_memory_bindings",
+      "activity_memory_bindings_policy_version_check",
+      "CHECK ((policy_version = 'memory.selection.v1'::text))",
+      true
+    ],
+    [
+      "activity_memory_bindings",
+      "activity_memory_bindings_selected_count_check",
+      "CHECK (((selected_count >= 1) AND (selected_count <= 4)))",
+      true
+    ],
+    [
+      "activity_memory_bindings",
+      "activity_memory_bindings_selection_sha256_check",
+      "CHECK ((selection_sha256 ~ '^[0-9a-f]{64}$'::text))",
+      true
+    ],
+    [
+      "activity_memory_bindings",
+      "memory_binding_shape",
+      "TRIGGER DEFERRABLE INITIALLY DEFERRED",
+      true
+    ],
+    [
+      "activity_memory_choices",
+      "activity_memory_choices_activity_id_fkey",
+      "FOREIGN KEY (activity_id) REFERENCES activity_memory_bindings(activity_id)",
+      true
+    ],
+    [
+      "activity_memory_choices",
+      "activity_memory_choices_activity_id_ordinal_key",
+      "UNIQUE (activity_id, ordinal)",
+      true
+    ],
+    [
+      "activity_memory_choices",
+      "activity_memory_choices_body_sha256_check",
+      "CHECK ((body_sha256 ~ '^[0-9a-f]{64}$'::text))",
+      true
+    ],
+    [
+      "activity_memory_choices",
+      "activity_memory_choices_memory_id_version_fkey",
+      "FOREIGN KEY (memory_id, version) REFERENCES learning_memory_revisions(memory_id, version)",
+      true
+    ],
+    [
+      "activity_memory_choices",
+      "activity_memory_choices_ordinal_check",
+      "CHECK (((ordinal >= 1) AND (ordinal <= 4)))",
+      true
+    ],
+    [
+      "activity_memory_choices",
+      "activity_memory_choices_pkey",
+      "PRIMARY KEY (activity_id, memory_id)",
+      true
+    ],
+    [
+      "activity_memory_choices",
+      "activity_memory_choices_selected_revision_check",
+      "CHECK ((selected_revision > 0))",
+      true
+    ],
+    [
+      "activity_memory_choices",
+      "activity_memory_choices_version_check",
+      "CHECK (((version >= 1) AND (version <= 32)))",
+      true
+    ],
+    [
+      "activity_memory_choices",
+      "memory_choices_shape",
+      "TRIGGER DEFERRABLE INITIALLY DEFERRED",
+      true
+    ],
+    [
+      "activity_operation_results",
+      "activity_operation_results_activity_id_operation_id_fkey",
+      "FOREIGN KEY (activity_id, operation_id) REFERENCES activity_operations(activity_id, operation_id)",
+      true
+    ],
+    [
+      "activity_operation_results",
+      "activity_operation_results_execution_generation_check",
+      "CHECK ((execution_generation >= 0))",
+      true
+    ],
+    [
+      "activity_operation_results",
+      "activity_operation_results_payload_check",
+      "CHECK (((octet_length(payload) >= 1) AND (octet_length(payload) <= 131072)))",
+      true
+    ],
+    [
+      "activity_operation_results",
+      "activity_operation_results_payload_format_check",
+      "CHECK ((payload_format = ANY (ARRAY['text'::text, 'json'::text])))",
+      true
+    ],
+    [
+      "activity_operation_results",
+      "activity_operation_results_payload_sha256_check",
+      "CHECK ((payload_sha256 ~ '^[0-9a-f]{64}$'::text))",
+      true
+    ],
+    [
+      "activity_operation_results",
+      "activity_operation_results_pkey",
+      "PRIMARY KEY (activity_id, operation_id)",
+      true
+    ],
+    [
+      "activity_operation_results",
+      "activity_operation_results_scope_revision_check",
+      "CHECK ((scope_revision > 0))",
+      true
+    ],
+    [
+      "activity_operations",
+      "activity_operations_activity_id_fkey",
+      "FOREIGN KEY (activity_id) REFERENCES activities(id)",
+      true
+    ],
+    [
+      "activity_operations",
+      "activity_operations_admission_id_key",
+      "UNIQUE (admission_id)",
+      true
+    ],
+    [
+      "activity_operations",
+      "activity_operations_check",
+      "CHECK ((((state = ANY (ARRAY['reserved'::text, 'dispatched'::text])) AND (disposition IS NULL)) OR (state = disposition)))",
+      true
+    ],
+    [
+      "activity_operations",
+      "activity_operations_check1",
+      "CHECK ((((state = 'reserved'::text) AND (dispatch_started_at IS NULL)) OR (state <> 'reserved'::text)))",
+      true
+    ],
+    [
+      "activity_operations",
+      "activity_operations_check2",
+      "CHECK ((((state = ANY (ARRAY['not_sent'::text, 'received'::text, 'unknown'::text])) AND (recorded_at IS NOT NULL)) OR (state = ANY (ARRAY['reserved'::text, 'dispatched'::text]))))",
+      true
+    ],
+    [
+      "activity_operations",
+      "activity_operations_completion_tokens_check",
+      "CHECK ((completion_tokens >= 0))",
+      true
+    ],
+    [
+      "activity_operations",
+      "activity_operations_disposition_check",
+      "CHECK ((disposition = ANY (ARRAY['not_sent'::text, 'received'::text, 'unknown'::text])))",
+      true
+    ],
+    [
+      "activity_operations",
+      "activity_operations_execution_generation_check",
+      "CHECK ((execution_generation >= 0))",
+      true
+    ],
+    [
+      "activity_operations",
+      "activity_operations_kind_domain",
+      "CHECK ((kind = ANY (ARRAY['model'::text, 'tool'::text])))",
+      true
+    ],
+    [
+      "activity_operations",
+      "activity_operations_kind_shape",
+      "CHECK ((((kind = 'model'::text) AND (provider IS NOT NULL) AND (configured_model IS NOT NULL) AND (request_bytes IS NOT NULL) AND (request_bytes > 0) AND (max_output_tokens IS NOT NULL) AND (max_output_tokens > 0) AND (reserved_cost_microunits > 0) AND (arguments_sha256 IS NULL) AND (tool_call_id IS NULL)) OR ((kind = 'tool'::text) AND (provider IS NULL) AND (configured_model IS NULL) AND (request_bytes IS NULL) AND (max_output_tokens IS NULL) AND (reserved_cost_microunits = 0) AND (tool_names = ARRAY['finite_calculate'::character varying(64)]) AND (arguments_sha256 IS NOT NULL) AND (octet_length(arguments_sha256) = 64) AND (arguments_sha256 ~ '^[0-9a-f]{64}$'::text) AND (tool_call_id IS NOT NULL) AND ((char_length((tool_call_id)::text) >= 1) AND (char_length((tool_call_id)::text) <= 128)) AND ((tool_call_id)::text !~ '[^A-Za-z0-9._:/-]'::text) AND (remote_request_id IS NULL) AND (returned_model IS NULL) AND (finish_reason IS NULL) AND (prompt_tokens IS NULL) AND (completion_tokens IS NULL) AND (response_bytes IS NULL))))",
+      true
+    ],
+    [
+      "activity_operations",
+      "activity_operations_max_output_tokens_check",
+      "CHECK ((max_output_tokens > 0))",
+      true
+    ],
+    [
+      "activity_operations",
+      "activity_operations_pkey",
+      "PRIMARY KEY (activity_id, operation_id)",
+      true
+    ],
+    [
+      "activity_operations",
+      "activity_operations_prompt_tokens_check",
+      "CHECK ((prompt_tokens >= 0))",
+      true
+    ],
+    [
+      "activity_operations",
+      "activity_operations_request_bytes_check",
+      "CHECK ((request_bytes > 0))",
+      true
+    ],
+    [
+      "activity_operations",
+      "activity_operations_response_bytes_check",
+      "CHECK (((response_bytes >= 0) AND (response_bytes <= 67108864)))",
+      true
+    ],
+    [
+      "activity_operations",
+      "activity_operations_scope_revision_check",
+      "CHECK ((scope_revision > 0))",
+      true
+    ],
+    [
+      "activity_operations",
+      "activity_operations_state_check",
+      "CHECK ((state = ANY (ARRAY['reserved'::text, 'dispatched'::text, 'not_sent'::text, 'received'::text, 'unknown'::text])))",
+      true
+    ],
+    [
+      "activity_operations",
+      "activity_operations_tool_names_check",
+      "CHECK ((cardinality(tool_names) <= 32))",
+      true
+    ],
+    [
+      "activity_scope_sources",
+      "activity_scope_sources_activity_id_fkey",
+      "FOREIGN KEY (activity_id) REFERENCES activities(id)",
+      true
+    ],
+    [
+      "activity_scope_sources",
+      "activity_scope_sources_pkey",
+      "PRIMARY KEY (activity_id, source_id)",
+      true
+    ],
+    [
+      "activity_scope_sources",
+      "activity_scope_sources_source_id_fkey",
+      "FOREIGN KEY (source_id) REFERENCES material_sources(id)",
+      true
+    ],
+    [
+      "activity_scope_sources",
+      "activity_scope_sources_source_id_version_id_fkey",
+      "FOREIGN KEY (source_id, version_id) REFERENCES material_versions(source_id, id)",
+      true
+    ],
+    [
+      "activity_scope_sources",
+      "activity_scope_sources_source_revision_check",
+      "CHECK ((source_revision >= 0))",
+      true
+    ],
+    [
+      "learning_memories",
+      "learning_memories_check",
+      "CHECK ((((state = 'active'::text) AND (revoked_at IS NULL) AND (revocation_key IS NULL) AND (purged_at IS NULL) AND (purge_state = 'none'::text)) OR ((state = 'revoked'::text) AND (revoked_at IS NOT NULL) AND (revocation_key IS NOT NULL) AND (((purge_state = 'pending'::text) AND (purged_at IS NULL)) OR ((purge_state = 'done'::text) AND (purged_at IS NOT NULL))))))",
+      true
+    ],
+    [
+      "learning_memories",
+      "learning_memories_current_version_check",
+      "CHECK (((current_version >= 1) AND (current_version <= 32)))",
+      true
+    ],
+    [
+      "learning_memories",
+      "learning_memories_pkey",
+      "PRIMARY KEY (memory_id)",
+      true
+    ],
+    [
+      "learning_memories",
+      "learning_memories_purge_state_check",
+      "CHECK ((purge_state = ANY (ARRAY['none'::text, 'pending'::text, 'done'::text])))",
+      true
+    ],
+    [
+      "learning_memories",
+      "learning_memories_revision_check",
+      "CHECK (((revision >= 1) AND (revision <= 2147483647)))",
+      true
+    ],
+    [
+      "learning_memories",
+      "learning_memories_state_check",
+      "CHECK ((state = ANY (ARRAY['active'::text, 'revoked'::text])))",
+      true
+    ],
+    [
+      "learning_memories",
+      "memory_current_version",
+      "FOREIGN KEY (memory_id, current_version) REFERENCES learning_memory_revisions(memory_id, version) DEFERRABLE INITIALLY DEFERRED",
+      true
+    ],
+    [
+      "learning_memories",
+      "memory_revoke_command",
+      "FOREIGN KEY (memory_id, revocation_key) REFERENCES learning_memory_commands(memory_id, business_key) DEFERRABLE INITIALLY DEFERRED",
+      true
+    ],
+    [
+      "learning_memory_bodies",
+      "learning_memory_bodies_body_check",
+      "CHECK (((octet_length(body) >= 2) AND (octet_length(body) <= 4096)))",
+      true
+    ],
+    [
+      "learning_memory_bodies",
+      "learning_memory_bodies_memory_id_version_fkey",
+      "FOREIGN KEY (memory_id, version) REFERENCES learning_memory_revisions(memory_id, version)",
+      true
+    ],
+    [
+      "learning_memory_bodies",
+      "learning_memory_bodies_pkey",
+      "PRIMARY KEY (memory_id, version)",
+      true
+    ],
+    [
+      "learning_memory_commands",
+      "learning_memory_commands_action_check",
+      "CHECK ((action = ANY (ARRAY['save'::text, 'revise'::text, 'revoke'::text, 'purge'::text])))",
+      true
+    ],
+    [
+      "learning_memory_commands",
+      "learning_memory_commands_after_revision_check",
+      "CHECK (((after_revision >= 1) AND (after_revision <= 2147483647)))",
+      true
+    ],
+    [
+      "learning_memory_commands",
+      "learning_memory_commands_after_version_check",
+      "CHECK (((after_version >= 1) AND (after_version <= 32)))",
+      true
+    ],
+    [
+      "learning_memory_commands",
+      "learning_memory_commands_before_revision_check",
+      "CHECK (((before_revision >= 0) AND (before_revision <= 2147483647)))",
+      true
+    ],
+    [
+      "learning_memory_commands",
+      "learning_memory_commands_check",
+      "CHECK (((cleanup_manifest IS NULL) = (manifest_sha256 IS NULL)))",
+      true
+    ],
+    [
+      "learning_memory_commands",
+      "learning_memory_commands_check1",
+      "CHECK (((action = 'revoke'::text) OR (cleanup_manifest IS NULL)))",
+      true
+    ],
+    [
+      "learning_memory_commands",
+      "learning_memory_commands_cleanup_manifest_check",
+      "CHECK (((cleanup_manifest IS NULL) OR ((octet_length(cleanup_manifest) >= 2) AND (octet_length(cleanup_manifest) <= 8192))))",
+      true
+    ],
+    [
+      "learning_memory_commands",
+      "learning_memory_commands_manifest_sha256_check",
+      "CHECK (((manifest_sha256 IS NULL) OR (manifest_sha256 ~ '^[0-9a-f]{64}$'::text)))",
+      true
+    ],
+    [
+      "learning_memory_commands",
+      "learning_memory_commands_memory_id_business_key_key",
+      "UNIQUE (memory_id, business_key)",
+      true
+    ],
+    [
+      "learning_memory_commands",
+      "learning_memory_commands_memory_id_fkey",
+      "FOREIGN KEY (memory_id) REFERENCES learning_memories(memory_id) DEFERRABLE INITIALLY DEFERRED",
+      true
+    ],
+    [
+      "learning_memory_commands",
+      "learning_memory_commands_pkey",
+      "PRIMARY KEY (business_key)",
+      true
+    ],
+    [
+      "learning_memory_commands",
+      "learning_memory_commands_request_sha256_check",
+      "CHECK ((request_sha256 ~ '^[0-9a-f]{64}$'::text))",
+      true
+    ],
+    [
+      "learning_memory_commands",
+      "learning_memory_commands_result_meta_check",
+      "CHECK (((octet_length(result_meta) >= 2) AND (octet_length(result_meta) <= 4096)))",
+      true
+    ],
+    [
+      "learning_memory_commands",
+      "learning_memory_commands_slot_sha256_check",
+      "CHECK ((slot_sha256 ~ '^[0-9a-f]{64}$'::text))",
+      true
+    ],
+    [
+      "learning_memory_dependencies",
+      "learning_memory_dependencies_check",
+      "CHECK (((upstream_memory_id IS NULL) OR (upstream_memory_id <> memory_id)))",
+      true
+    ],
+    [
+      "learning_memory_dependencies",
+      "learning_memory_dependencies_check1",
+      "CHECK ((((dependency_kind = 'source'::text) AND (num_nonnulls(source_id, source_version_id, source_revision, original_sha256) = 4) AND (num_nonnulls(origin_activity_id, record_id, record_kind, record_sha256, origin_scope_revision, origin_goal_version, upstream_memory_id, upstream_version, upstream_body_sha256) = 0)) OR ((dependency_kind = 'event'::text) AND (num_nonnulls(origin_activity_id, record_id, record_kind, record_sha256, origin_scope_revision, origin_goal_version) = 6) AND (num_nonnulls(source_id, source_version_id, source_revision, original_sha256, upstream_memory_id, upstream_version, upstream_body_sha256) = 0)) OR ((dependency_kind = 'memory'::text) AND (num_nonnulls(upstream_memory_id, upstream_version, upstream_body_sha256) = 3) AND (num_nonnulls(source_id, source_version_id, source_revision, original_sha256, origin_activity_id, record_id, record_kind, record_sha256, origin_scope_revision, origin_goal_version) = 0))))",
+      true
+    ],
+    [
+      "learning_memory_dependencies",
+      "learning_memory_dependencies_dependency_kind_check",
+      "CHECK ((dependency_kind = ANY (ARRAY['source'::text, 'event'::text, 'memory'::text])))",
+      true
+    ],
+    [
+      "learning_memory_dependencies",
+      "learning_memory_dependencies_memory_id_version_fkey",
+      "FOREIGN KEY (memory_id, version) REFERENCES learning_memory_revisions(memory_id, version)",
+      true
+    ],
+    [
+      "learning_memory_dependencies",
+      "learning_memory_dependencies_ordinal_check",
+      "CHECK (((ordinal >= 1) AND (ordinal <= 32)))",
+      true
+    ],
+    [
+      "learning_memory_dependencies",
+      "learning_memory_dependencies_origin_activity_id_record_id_fkey",
+      "FOREIGN KEY (origin_activity_id, record_id) REFERENCES teaching_records(activity_id, record_id)",
+      true
+    ],
+    [
+      "learning_memory_dependencies",
+      "learning_memory_dependencies_origin_goal_version_check",
+      "CHECK (((origin_goal_version >= 1) AND (origin_goal_version <= 32)))",
+      true
+    ],
+    [
+      "learning_memory_dependencies",
+      "learning_memory_dependencies_origin_scope_revision_check",
+      "CHECK ((origin_scope_revision > 0))",
+      true
+    ],
+    [
+      "learning_memory_dependencies",
+      "learning_memory_dependencies_original_sha256_check",
+      "CHECK (((original_sha256 IS NULL) OR (original_sha256 ~ '^[0-9a-f]{64}$'::text)))",
+      true
+    ],
+    [
+      "learning_memory_dependencies",
+      "learning_memory_dependencies_pkey",
+      "PRIMARY KEY (memory_id, version, ordinal)",
+      true
+    ],
+    [
+      "learning_memory_dependencies",
+      "learning_memory_dependencies_record_kind_check",
+      "CHECK (((record_kind IS NULL) OR (record_kind = ANY (ARRAY['exercise'::text, 'answer'::text, 'feedback'::text, 'progress'::text, 'correction'::text]))))",
+      true
+    ],
+    [
+      "learning_memory_dependencies",
+      "learning_memory_dependencies_record_sha256_check",
+      "CHECK (((record_sha256 IS NULL) OR (record_sha256 ~ '^[0-9a-f]{64}$'::text)))",
+      true
+    ],
+    [
+      "learning_memory_dependencies",
+      "learning_memory_dependencies_source_id_source_version_id_fkey",
+      "FOREIGN KEY (source_id, source_version_id) REFERENCES material_versions(source_id, id)",
+      true
+    ],
+    [
+      "learning_memory_dependencies",
+      "learning_memory_dependencies_source_revision_check",
+      "CHECK ((source_revision >= 0))",
+      true
+    ],
+    [
+      "learning_memory_dependencies",
+      "learning_memory_dependencies_upstream_body_sha256_check",
+      "CHECK (((upstream_body_sha256 IS NULL) OR (upstream_body_sha256 ~ '^[0-9a-f]{64}$'::text)))",
+      true
+    ],
+    [
+      "learning_memory_dependencies",
+      "learning_memory_dependencies_upstream_memory_id_upstream_v_fkey",
+      "FOREIGN KEY (upstream_memory_id, upstream_version) REFERENCES learning_memory_revisions(memory_id, version)",
+      true
+    ],
+    [
+      "learning_memory_dependencies",
+      "learning_memory_dependencies_upstream_version_check",
+      "CHECK (((upstream_version >= 1) AND (upstream_version <= 32)))",
+      true
+    ],
+    [
+      "learning_memory_dependencies",
+      "memory_dependencies_shape",
+      "TRIGGER DEFERRABLE INITIALLY DEFERRED",
+      true
+    ],
+    [
+      "learning_memory_revisions",
+      "learning_memory_revisions_body_bytes_check",
+      "CHECK (((body_bytes >= 2) AND (body_bytes <= 4096)))",
+      true
+    ],
+    [
+      "learning_memory_revisions",
+      "learning_memory_revisions_body_sha256_check",
+      "CHECK ((body_sha256 ~ '^[0-9a-f]{64}$'::text))",
+      true
+    ],
+    [
+      "learning_memory_revisions",
+      "learning_memory_revisions_check",
+      "CHECK ((((claim_kind = 'learning_observation'::text) AND (uncertainty = ANY (ARRAY['limited'::text, 'unknown'::text])) AND (policy_version = 'memory.observation.v1'::text)) OR ((claim_kind <> 'learning_observation'::text) AND (uncertainty = ANY (ARRAY['self_reported'::text, 'unknown'::text])) AND (policy_version = 'memory.user.v1'::text))))",
+      true
+    ],
+    [
+      "learning_memory_revisions",
+      "learning_memory_revisions_claim_kind_check",
+      "CHECK ((claim_kind = ANY (ARRAY['self_report'::text, 'preference'::text, 'focus'::text, 'learning_observation'::text])))",
+      true
+    ],
+    [
+      "learning_memory_revisions",
+      "learning_memory_revisions_created_by_key_key",
+      "UNIQUE (created_by_key)",
+      true
+    ],
+    [
+      "learning_memory_revisions",
+      "learning_memory_revisions_dependencies_sha256_check",
+      "CHECK ((dependencies_sha256 ~ '^[0-9a-f]{64}$'::text))",
+      true
+    ],
+    [
+      "learning_memory_revisions",
+      "learning_memory_revisions_dependency_count_check",
+      "CHECK (((dependency_count >= 0) AND (dependency_count <= 32)))",
+      true
+    ],
+    [
+      "learning_memory_revisions",
+      "learning_memory_revisions_memory_id_created_by_key_fkey",
+      "FOREIGN KEY (memory_id, created_by_key) REFERENCES learning_memory_commands(memory_id, business_key) DEFERRABLE INITIALLY DEFERRED",
+      true
+    ],
+    [
+      "learning_memory_revisions",
+      "learning_memory_revisions_memory_id_fkey",
+      "FOREIGN KEY (memory_id) REFERENCES learning_memories(memory_id)",
+      true
+    ],
+    [
+      "learning_memory_revisions",
+      "learning_memory_revisions_pkey",
+      "PRIMARY KEY (memory_id, version)",
+      true
+    ],
+    [
+      "learning_memory_revisions",
+      "learning_memory_revisions_policy_version_check",
+      "CHECK ((policy_version = ANY (ARRAY['memory.user.v1'::text, 'memory.observation.v1'::text])))",
+      true
+    ],
+    [
+      "learning_memory_revisions",
+      "learning_memory_revisions_uncertainty_check",
+      "CHECK ((uncertainty = ANY (ARRAY['self_reported'::text, 'unknown'::text, 'limited'::text])))",
+      true
+    ],
+    [
+      "learning_memory_revisions",
+      "learning_memory_revisions_version_check",
+      "CHECK (((version >= 1) AND (version <= 32)))",
+      true
+    ],
+    [
+      "learning_memory_revisions",
+      "memory_revision_shape",
+      "TRIGGER DEFERRABLE INITIALLY DEFERRED",
+      true
+    ],
+    [
+      "material_sources",
+      "material_current_version_source",
+      "FOREIGN KEY (id, current_version) REFERENCES material_versions(source_id, id)",
+      true
+    ],
+    [
+      "material_sources",
+      "material_sources_pkey",
+      "PRIMARY KEY (id)",
+      true
+    ],
+    [
+      "material_sources",
+      "material_sources_revision_check",
+      "CHECK ((revision >= 0))",
+      true
+    ],
+    [
+      "material_versions",
+      "material_versions_format_check",
+      "CHECK ((format = ANY (ARRAY['txt'::text, 'md'::text, 'pdf'::text])))",
+      true
+    ],
+    [
+      "material_versions",
+      "material_versions_pkey",
+      "PRIMARY KEY (id)",
+      true
+    ],
+    [
+      "material_versions",
+      "material_versions_sha256_check",
+      "CHECK ((sha256 ~ '^[0-9a-f]{64}$'::text))",
+      true
+    ],
+    [
+      "material_versions",
+      "material_versions_size_check",
+      "CHECK (((size >= 0) AND (size <= 5242880)))",
+      true
+    ],
+    [
+      "material_versions",
+      "material_versions_source_id_fkey",
+      "FOREIGN KEY (source_id) REFERENCES material_sources(id)",
+      true
+    ],
+    [
+      "material_versions",
+      "material_versions_source_id_id_key",
+      "UNIQUE (source_id, id)",
+      true
+    ],
+    [
+      "pdf_extracted_pages",
+      "pdf_extracted_pages_physical_page_check",
+      "CHECK (((physical_page >= 1) AND (physical_page <= 50)))",
+      true
+    ],
+    [
+      "pdf_extracted_pages",
+      "pdf_extracted_pages_pkey",
+      "PRIMARY KEY (version_id, physical_page)",
+      true
+    ],
+    [
+      "pdf_extracted_pages",
+      "pdf_extracted_pages_version_id_fkey",
+      "FOREIGN KEY (version_id) REFERENCES pdf_review_candidates(version_id)",
+      true
+    ],
+    [
+      "pdf_extracted_pages",
+      "pdf_extracted_pages_warnings_check",
+      "CHECK ((jsonb_typeof(warnings) = 'array'::text))",
+      true
+    ],
+    [
+      "pdf_review_candidates",
+      "pdf_review_candidates_check",
+      "CHECK ((((status = 'pending'::text) AND (decided_at IS NULL)) OR ((status <> 'pending'::text) AND (decided_at IS NOT NULL))))",
+      true
+    ],
+    [
+      "pdf_review_candidates",
+      "pdf_review_candidates_expected_revision_check",
+      "CHECK ((expected_revision >= 0))",
+      true
+    ],
+    [
+      "pdf_review_candidates",
+      "pdf_review_candidates_id_version_id_key",
+      "UNIQUE (id, version_id)",
+      true
+    ],
+    [
+      "pdf_review_candidates",
+      "pdf_review_candidates_page_count_check",
+      "CHECK (((page_count >= 1) AND (page_count <= 50)))",
+      true
+    ],
+    [
+      "pdf_review_candidates",
+      "pdf_review_candidates_pkey",
+      "PRIMARY KEY (id)",
+      true
+    ],
+    [
+      "pdf_review_candidates",
+      "pdf_review_candidates_source_id_expected_version_fkey",
+      "FOREIGN KEY (source_id, expected_version) REFERENCES material_versions(source_id, id)",
+      true
+    ],
+    [
+      "pdf_review_candidates",
+      "pdf_review_candidates_source_id_fkey",
+      "FOREIGN KEY (source_id) REFERENCES material_sources(id)",
+      true
+    ],
+    [
+      "pdf_review_candidates",
+      "pdf_review_candidates_source_id_version_id_fkey",
+      "FOREIGN KEY (source_id, version_id) REFERENCES material_versions(source_id, id)",
+      true
+    ],
+    [
+      "pdf_review_candidates",
+      "pdf_review_candidates_status_check",
+      "CHECK ((status = ANY (ARRAY['pending'::text, 'confirmed'::text, 'skipped'::text])))",
+      true
+    ],
+    [
+      "pdf_review_candidates",
+      "pdf_review_candidates_version_id_key",
+      "UNIQUE (version_id)",
+      true
+    ],
+    [
+      "pdf_review_pages",
+      "pdf_review_pages_candidate_id_version_id_fkey",
+      "FOREIGN KEY (candidate_id, version_id) REFERENCES pdf_review_candidates(id, version_id)",
+      true
+    ],
+    [
+      "pdf_review_pages",
+      "pdf_review_pages_pkey",
+      "PRIMARY KEY (candidate_id, physical_page)",
+      true
+    ],
+    [
+      "pdf_review_pages",
+      "pdf_review_pages_version_id_physical_page_fkey",
+      "FOREIGN KEY (version_id, physical_page) REFERENCES pdf_extracted_pages(version_id, physical_page)",
+      true
+    ],
+    [
+      "pdf_user_supplements",
+      "pdf_user_supplements_candidate_id_version_id_fkey",
+      "FOREIGN KEY (candidate_id, version_id) REFERENCES pdf_review_candidates(id, version_id)",
+      true
+    ],
+    [
+      "pdf_user_supplements",
+      "pdf_user_supplements_identity_check",
+      "CHECK ((identity = 'user_supplement'::text))",
+      true
+    ],
+    [
+      "pdf_user_supplements",
+      "pdf_user_supplements_pkey",
+      "PRIMARY KEY (id)",
+      true
+    ],
+    [
+      "pdf_user_supplements",
+      "pdf_user_supplements_text_check",
+      "CHECK (((octet_length(text) > 0) AND (octet_length(text) <= 65536)))",
+      true
+    ],
+    [
+      "pdf_user_supplements",
+      "pdf_user_supplements_version_id_physical_page_fkey",
+      "FOREIGN KEY (version_id, physical_page) REFERENCES pdf_extracted_pages(version_id, physical_page)",
+      true
+    ],
+    [
+      "teaching_commands",
+      "teaching_commands_action_check",
+      "CHECK ((action = ANY (ARRAY['goal'::text, 'plan'::text, 'accept_path'::text, 'exercise'::text, 'expose'::text, 'answer'::text, 'calculate'::text, 'evaluate'::text, 'correct'::text, 'abandon'::text, 'select_node'::text])))",
+      true
+    ],
+    [
+      "teaching_commands",
+      "teaching_commands_activity_id_fkey",
+      "FOREIGN KEY (activity_id) REFERENCES activities(id)",
+      true
+    ],
+    [
+      "teaching_commands",
+      "teaching_commands_activity_id_operation_id_key",
+      "UNIQUE (activity_id, operation_id)",
+      true
+    ],
+    [
+      "teaching_commands",
+      "teaching_commands_activity_id_parent_record_id_fkey",
+      "FOREIGN KEY (activity_id, parent_record_id) REFERENCES teaching_records(activity_id, record_id)",
+      true
+    ],
+    [
+      "teaching_commands",
+      "teaching_commands_activity_id_result_record_id_fkey",
+      "FOREIGN KEY (activity_id, result_record_id) REFERENCES teaching_records(activity_id, record_id)",
+      true
+    ],
+    [
+      "teaching_commands",
+      "teaching_commands_activity_id_retry_of_fkey",
+      "FOREIGN KEY (activity_id, retry_of) REFERENCES teaching_commands(activity_id, business_key)",
+      true
+    ],
+    [
+      "teaching_commands",
+      "teaching_commands_check",
+      "CHECK (((context_body IS NULL) = (context_sha256 IS NULL)))",
+      true
+    ],
+    [
+      "teaching_commands",
+      "teaching_commands_check1",
+      "CHECK ((((action = ANY (ARRAY['plan'::text, 'exercise'::text, 'evaluate'::text, 'calculate'::text])) AND (operation_id IS NOT NULL)) OR ((action <> ALL (ARRAY['plan'::text, 'exercise'::text, 'evaluate'::text, 'calculate'::text])) AND (operation_id IS NULL))))",
+      true
+    ],
+    [
+      "teaching_commands",
+      "teaching_commands_check2",
+      "CHECK (((launch_claimed_at IS NULL) OR (action = ANY (ARRAY['plan'::text, 'exercise'::text, 'evaluate'::text, 'calculate'::text]))))",
+      true
+    ],
+    [
+      "teaching_commands",
+      "teaching_commands_check3",
+      "CHECK (((status <> 'started'::text) OR (launch_claimed_at IS NOT NULL)))",
+      true
+    ],
+    [
+      "teaching_commands",
+      "teaching_commands_context_body_check",
+      "CHECK (((context_body IS NULL) OR ((octet_length(context_body) >= 2) AND (octet_length(context_body) <= 49152))))",
+      true
+    ],
+    [
+      "teaching_commands",
+      "teaching_commands_context_sha256_check",
+      "CHECK (((context_sha256 IS NULL) OR (context_sha256 ~ '^[0-9a-f]{64}$'::text)))",
+      true
+    ],
+    [
+      "teaching_commands",
+      "teaching_commands_error_code_check",
+      "CHECK (((error_code IS NULL) OR ((error_code)::text ~ '^[A-Za-z0-9._:/-]{1,64}$'::text)))",
+      true
+    ],
+    [
+      "teaching_commands",
+      "teaching_commands_expected_revision_check",
+      "CHECK (((expected_revision >= 0) AND (expected_revision <= 2147483647)))",
+      true
+    ],
+    [
+      "teaching_commands",
+      "teaching_commands_goal_version_check",
+      "CHECK (((goal_version >= 0) AND (goal_version <= 32)))",
+      true
+    ],
+    [
+      "teaching_commands",
+      "teaching_commands_operation_id_check",
+      "CHECK (((operation_id IS NULL) OR (((char_length((operation_id)::text) >= 1) AND (char_length((operation_id)::text) <= 128)) AND ((operation_id)::text !~ '[^A-Za-z0-9._:/-]'::text))))",
+      true
+    ],
+    [
+      "teaching_commands",
+      "teaching_commands_pkey",
+      "PRIMARY KEY (activity_id, business_key)",
+      true
+    ],
+    [
+      "teaching_commands",
+      "teaching_commands_request_body_check",
+      "CHECK (((octet_length(request_body) >= 2) AND (octet_length(request_body) <= 32768)))",
+      true
+    ],
+    [
+      "teaching_commands",
+      "teaching_commands_request_sha256_check",
+      "CHECK ((request_sha256 ~ '^[0-9a-f]{64}$'::text))",
+      true
+    ],
+    [
+      "teaching_commands",
+      "teaching_commands_scope_revision_check",
+      "CHECK ((scope_revision > 0))",
+      true
+    ],
+    [
+      "teaching_commands",
+      "teaching_commands_slot_sha256_check",
+      "CHECK ((slot_sha256 ~ '^[0-9a-f]{64}$'::text))",
+      true
+    ],
+    [
+      "teaching_commands",
+      "teaching_commands_status_check",
+      "CHECK ((status = ANY (ARRAY['accepted'::text, 'started'::text, 'committed'::text, 'history'::text, 'not_sent'::text, 'failed'::text, 'unknown'::text, 'abandoned'::text])))",
+      true
+    ],
+    [
+      "teaching_heads",
+      "teaching_heads_activity_id_answer_record_id_fkey",
+      "FOREIGN KEY (activity_id, answer_record_id) REFERENCES teaching_records(activity_id, record_id)",
+      true
+    ],
+    [
+      "teaching_heads",
+      "teaching_heads_activity_id_exercise_record_id_fkey",
+      "FOREIGN KEY (activity_id, exercise_record_id) REFERENCES teaching_records(activity_id, record_id)",
+      true
+    ],
+    [
+      "teaching_heads",
+      "teaching_heads_activity_id_feedback_record_id_fkey",
+      "FOREIGN KEY (activity_id, feedback_record_id) REFERENCES teaching_records(activity_id, record_id)",
+      true
+    ],
+    [
+      "teaching_heads",
+      "teaching_heads_activity_id_fkey",
+      "FOREIGN KEY (activity_id) REFERENCES activities(id)",
+      true
+    ],
+    [
+      "teaching_heads",
+      "teaching_heads_activity_id_goal_record_id_fkey",
+      "FOREIGN KEY (activity_id, goal_record_id) REFERENCES teaching_records(activity_id, record_id)",
+      true
+    ],
+    [
+      "teaching_heads",
+      "teaching_heads_activity_id_path_record_id_fkey",
+      "FOREIGN KEY (activity_id, path_record_id) REFERENCES teaching_records(activity_id, record_id)",
+      true
+    ],
+    [
+      "teaching_heads",
+      "teaching_heads_activity_id_pending_business_key_fkey",
+      "FOREIGN KEY (activity_id, pending_business_key) REFERENCES teaching_commands(activity_id, business_key)",
+      true
+    ],
+    [
+      "teaching_heads",
+      "teaching_heads_activity_id_reason_record_id_fkey",
+      "FOREIGN KEY (activity_id, reason_record_id) REFERENCES teaching_records(activity_id, record_id)",
+      true
+    ],
+    [
+      "teaching_heads",
+      "teaching_heads_check",
+      "CHECK ((((goal_version = 0) AND (goal_record_id IS NULL) AND (phase = 'needs_goal'::text)) OR ((goal_version > 0) AND (goal_record_id IS NOT NULL) AND (phase <> 'needs_goal'::text))))",
+      true
+    ],
+    [
+      "teaching_heads",
+      "teaching_heads_check1",
+      "CHECK ((((path_record_id IS NULL) AND (node_id IS NULL)) OR ((path_record_id IS NOT NULL) AND (node_id IS NOT NULL))))",
+      true
+    ],
+    [
+      "teaching_heads",
+      "teaching_heads_check2",
+      "CHECK (((answer_record_id IS NULL) OR (exercise_record_id IS NOT NULL)))",
+      true
+    ],
+    [
+      "teaching_heads",
+      "teaching_heads_check3",
+      "CHECK (((feedback_record_id IS NULL) OR (answer_record_id IS NOT NULL)))",
+      true
+    ],
+    [
+      "teaching_heads",
+      "teaching_heads_goal_version_check",
+      "CHECK (((goal_version >= 0) AND (goal_version <= 32)))",
+      true
+    ],
+    [
+      "teaching_heads",
+      "teaching_heads_last_seq_check",
+      "CHECK (((last_seq >= 0) AND (last_seq <= 4096)))",
+      true
+    ],
+    [
+      "teaching_heads",
+      "teaching_heads_node_id_check",
+      "CHECK (((node_id IS NULL) OR ((node_id)::text ~ '^n[1-6]$'::text)))",
+      true
+    ],
+    [
+      "teaching_heads",
+      "teaching_heads_phase_check",
+      "CHECK ((phase = ANY (ARRAY['needs_goal'::text, 'needs_plan'::text, 'path_review'::text, 'ready'::text, 'exercise_ready'::text, 'answer_saved'::text, 'feedback_ready'::text])))",
+      true
+    ],
+    [
+      "teaching_heads",
+      "teaching_heads_pkey",
+      "PRIMARY KEY (activity_id)",
+      true
+    ],
+    [
+      "teaching_heads",
+      "teaching_heads_projection_check",
+      "CHECK (((octet_length(projection) >= 2) AND (octet_length(projection) <= 8192)))",
+      true
+    ],
+    [
+      "teaching_heads",
+      "teaching_heads_revision_check",
+      "CHECK (((revision >= 0) AND (revision <= 2147483647)))",
+      true
+    ],
+    [
+      "teaching_records",
+      "teaching_records_activity_id_answer_record_id_fkey",
+      "FOREIGN KEY (activity_id, answer_record_id) REFERENCES teaching_records(activity_id, record_id)",
+      true
+    ],
+    [
+      "teaching_records",
+      "teaching_records_activity_id_business_key_fkey",
+      "FOREIGN KEY (activity_id, business_key) REFERENCES teaching_commands(activity_id, business_key)",
+      true
+    ],
+    [
+      "teaching_records",
+      "teaching_records_activity_id_business_key_ordinal_key",
+      "UNIQUE (activity_id, business_key, ordinal)",
+      true
+    ],
+    [
+      "teaching_records",
+      "teaching_records_activity_id_exercise_record_id_fkey",
+      "FOREIGN KEY (activity_id, exercise_record_id) REFERENCES teaching_records(activity_id, record_id)",
+      true
+    ],
+    [
+      "teaching_records",
+      "teaching_records_activity_id_fkey",
+      "FOREIGN KEY (activity_id) REFERENCES activities(id)",
+      true
+    ],
+    [
+      "teaching_records",
+      "teaching_records_activity_id_goal_record_id_fkey",
+      "FOREIGN KEY (activity_id, goal_record_id) REFERENCES teaching_records(activity_id, record_id)",
+      true
+    ],
+    [
+      "teaching_records",
+      "teaching_records_activity_id_operation_id_fkey",
+      "FOREIGN KEY (activity_id, operation_id) REFERENCES activity_operation_results(activity_id, operation_id)",
+      true
+    ],
+    [
+      "teaching_records",
+      "teaching_records_activity_id_parent_record_id_fkey",
+      "FOREIGN KEY (activity_id, parent_record_id) REFERENCES teaching_records(activity_id, record_id)",
+      true
+    ],
+    [
+      "teaching_records",
+      "teaching_records_activity_id_seq_key",
+      "UNIQUE (activity_id, seq)",
+      true
+    ],
+    [
+      "teaching_records",
+      "teaching_records_activity_id_supersedes_record_id_fkey",
+      "FOREIGN KEY (activity_id, supersedes_record_id) REFERENCES teaching_records(activity_id, record_id)",
+      true
+    ],
+    [
+      "teaching_records",
+      "teaching_records_applied_revision_check",
+      "CHECK (((applied_revision >= 1) AND (applied_revision <= 2147483647)))",
+      true
+    ],
+    [
+      "teaching_records",
+      "teaching_records_body_check",
+      "CHECK (((body IS NULL) OR ((octet_length(body) >= 2) AND (octet_length(body) <= 32768))))",
+      true
+    ],
+    [
+      "teaching_records",
+      "teaching_records_body_sha256_check",
+      "CHECK ((body_sha256 ~ '^[0-9a-f]{64}$'::text))",
+      true
+    ],
+    [
+      "teaching_records",
+      "teaching_records_check",
+      "CHECK ((((kind = ANY (ARRAY['path_proposal'::text, 'exercise'::text, 'calculation'::text, 'feedback'::text])) AND (operation_id IS NOT NULL) AND (body IS NULL)) OR ((kind <> ALL (ARRAY['path_proposal'::text, 'exercise'::text, 'calculation'::text, 'feedback'::text])) AND (operation_id IS NULL) AND (body IS NOT NULL))))",
+      true
+    ],
+    [
+      "teaching_records",
+      "teaching_records_check1",
+      "CHECK (((applied_revision IS NULL) = (state_after IS NULL)))",
+      true
+    ],
+    [
+      "teaching_records",
+      "teaching_records_check2",
+      "CHECK ((((kind = 'goal'::text) AND (goal_record_id IS NULL)) OR ((kind <> 'goal'::text) AND (goal_record_id IS NOT NULL))))",
+      true
+    ],
+    [
+      "teaching_records",
+      "teaching_records_check3",
+      "CHECK (((kind <> ALL (ARRAY['feedback'::text, 'calculation'::text, 'progress'::text])) OR (answer_record_id IS NOT NULL)))",
+      true
+    ],
+    [
+      "teaching_records",
+      "teaching_records_check4",
+      "CHECK (((kind <> ALL (ARRAY['answer'::text, 'exposure'::text, 'feedback'::text, 'calculation'::text, 'progress'::text])) OR (exercise_record_id IS NOT NULL)))",
+      true
+    ],
+    [
+      "teaching_records",
+      "teaching_records_check5",
+      "CHECK (((kind <> 'progress'::text) OR (parent_record_id IS NOT NULL)))",
+      true
+    ],
+    [
+      "teaching_records",
+      "teaching_records_goal_version_check",
+      "CHECK (((goal_version >= 1) AND (goal_version <= 32)))",
+      true
+    ],
+    [
+      "teaching_records",
+      "teaching_records_kind_check",
+      "CHECK ((kind = ANY (ARRAY['goal'::text, 'path_proposal'::text, 'path_accept'::text, 'exercise'::text, 'exposure'::text, 'answer'::text, 'calculation'::text, 'feedback'::text, 'progress'::text, 'correction'::text, 'node_selection'::text])))",
+      true
+    ],
+    [
+      "teaching_records",
+      "teaching_records_ordinal_check",
+      "CHECK (((ordinal >= 1) AND (ordinal <= 4)))",
+      true
+    ],
+    [
+      "teaching_records",
+      "teaching_records_pkey",
+      "PRIMARY KEY (activity_id, record_id)",
+      true
+    ],
+    [
+      "teaching_records",
+      "teaching_records_scope_revision_check",
+      "CHECK ((scope_revision > 0))",
+      true
+    ],
+    [
+      "teaching_records",
+      "teaching_records_seq_check",
+      "CHECK (((seq >= 1) AND (seq <= 4096)))",
+      true
+    ],
+    [
+      "teaching_records",
+      "teaching_records_source_refs_check",
+      "CHECK (((octet_length(source_refs) >= 2) AND (octet_length(source_refs) <= 8192)))",
+      true
+    ],
+    [
+      "teaching_records",
+      "teaching_records_state_after_check",
+      "CHECK (((state_after IS NULL) OR ((octet_length(state_after) >= 2) AND (octet_length(state_after) <= 8192))))",
+      true
+    ]
+  ],
+  "functions": [
+    [
+      "activity_memory_eligible",
+      "aid uuid",
+      "\n SELECT NOT EXISTS(SELECT 1 FROM public.activity_memory_bindings WHERE activity_id=aid) OR EXISTS(\n SELECT 1 FROM public.activity_memory_bindings b JOIN public.activities a ON a.id=b.activity_id\n WHERE b.activity_id=aid AND b.bound_scope_revision=a.scope_revision\n AND EXISTS(SELECT 1 FROM public.activity_scope_sources WHERE activity_id=aid)\n AND NOT EXISTS(SELECT 1 FROM public.activity_scope_sources sc LEFT JOIN public.material_sources ms ON ms.id=sc.source_id\n WHERE sc.activity_id=aid AND(ms.current_version IS DISTINCT FROM sc.version_id OR ms.revision IS DISTINCT FROM sc.source_revision))\n AND b.bound_scope_sha256=public.memory_scope_digest(aid) AND b.selection_sha256=public.memory_choice_digest(aid)\n AND b.selected_count=(SELECT count(*) FROM public.activity_memory_choices WHERE activity_id=aid)\n AND NOT EXISTS(SELECT 1 FROM public.activity_memory_choices c JOIN public.learning_memories h USING(memory_id)\n WHERE c.activity_id=aid AND(h.revision<>c.selected_revision OR h.current_version<>c.version\n OR NOT public.memory_revision_eligible(c.memory_id,c.version)\n OR c.body_sha256 IS DISTINCT FROM(SELECT body_sha256 FROM public.learning_memory_revisions WHERE memory_id=c.memory_id AND version=c.version)\n OR EXISTS(SELECT 1 FROM public.learning_memory_dependencies d WHERE d.memory_id=c.memory_id AND d.version=c.version\n AND d.dependency_kind='source' AND NOT EXISTS(SELECT 1 FROM public.activity_scope_sources s\n WHERE s.activity_id=aid AND s.source_id=d.source_id AND s.version_id=d.source_version_id AND s.source_revision=d.source_revision))))\n )\n",
+      "s",
+      false,
+      [
+        "search_path=pg_catalog, pg_temp"
+      ],
+      "retrolume_memory_owner",
+      "{retrolume_memory_owner=X/retrolume_memory_owner,retrolume_memory_app=X/retrolume_memory_owner}"
+    ],
+    [
+      "memory_body_guard",
+      "",
+      "\nDECLARE h record; r record; value JSONB;\nBEGIN\n IF TG_OP='UPDATE' THEN RAISE EXCEPTION '记忆正文不可覆盖'; END IF;\n IF TG_OP='DELETE' THEN\n  IF current_user<>'retrolume_memory_purger' THEN RAISE EXCEPTION '只可用获准精确清理函数'; END IF;\n  RETURN OLD;\n END IF;\n SELECT state,current_version INTO h FROM public.learning_memories WHERE memory_id=NEW.memory_id FOR KEY SHARE;\n IF h.state IS DISTINCT FROM 'active' OR NEW.version NOT IN(h.current_version,h.current_version+1) THEN\n  RAISE EXCEPTION '撤销正文不可重插'; END IF;\n SELECT body_sha256,body_bytes,claim_kind,uncertainty INTO r FROM public.learning_memory_revisions WHERE memory_id=NEW.memory_id AND version=NEW.version;\n IF r.body_sha256 IS DISTINCT FROM encode(sha256(convert_to(NEW.body,'UTF8')),'hex')\n OR r.body_bytes IS DISTINCT FROM octet_length(NEW.body) THEN RAISE EXCEPTION '记忆正文hash/字节不符'; END IF;\n value=NEW.body::jsonb;\n IF jsonb_typeof(value)<>'object' OR value->>'schema'<>'memory.body.v1'\n OR value->>'kind' IS DISTINCT FROM r.claim_kind OR value->>'uncertainty' IS DISTINCT FROM r.uncertainty\n OR jsonb_typeof(value->'title') IS DISTINCT FROM 'string' OR char_length(value->>'title')>80\n OR jsonb_typeof(value->'text') IS DISTINCT FROM 'string' OR char_length(value->>'text')>1024\n OR EXISTS(SELECT 1 FROM jsonb_object_keys(value) k WHERE k NOT IN('schema','title','kind','text','uncertainty','observation')) THEN\n  RAISE EXCEPTION '记忆正文性质或字段不符';\n END IF;\n RETURN NEW;\nEND ",
+      "v",
+      false,
+      [
+        "search_path=pg_catalog, pg_temp"
+      ],
+      "retrolume_memory_owner",
+      "{retrolume_memory_owner=X/retrolume_memory_owner,retrolume_memory_app=X/retrolume_memory_owner}"
+    ],
+    [
+      "memory_choice_digest",
+      "aid uuid",
+      "\n SELECT encode(sha256(convert_to(coalesce(string_agg(concat_ws('|',memory_id,version,selected_revision,body_sha256),\n E'\\n' ORDER BY ordinal),''),'UTF8')),'hex') FROM public.activity_memory_choices WHERE activity_id=aid\n",
+      "s",
+      false,
+      [
+        "search_path=pg_catalog, pg_temp"
+      ],
+      "retrolume_memory_owner",
+      "{retrolume_memory_owner=X/retrolume_memory_owner,retrolume_memory_app=X/retrolume_memory_owner}"
+    ],
+    [
+      "memory_dependency_digest",
+      "mid uuid, ver integer",
+      "\n SELECT encode(sha256(convert_to(coalesce(string_agg(public.memory_dependency_line(d),E'\\n' ORDER BY ordinal),''),'UTF8')),'hex')\n FROM public.learning_memory_dependencies d WHERE d.memory_id=mid AND d.version=ver\n",
+      "s",
+      false,
+      [
+        "search_path=pg_catalog, pg_temp"
+      ],
+      "retrolume_memory_owner",
+      "{retrolume_memory_owner=X/retrolume_memory_owner,retrolume_memory_app=X/retrolume_memory_owner}"
+    ],
+    [
+      "memory_dependency_line",
+      "d learning_memory_dependencies",
+      "\n SELECT CASE d.dependency_kind\n WHEN 'source' THEN concat_ws('|','source',d.source_id,d.source_version_id,d.source_revision,d.original_sha256)\n WHEN 'event' THEN concat_ws('|','event',d.origin_activity_id,d.record_id,d.record_kind,d.origin_scope_revision,d.origin_goal_version,d.record_sha256)\n WHEN 'memory' THEN concat_ws('|','memory',d.upstream_memory_id,d.upstream_version,d.upstream_body_sha256) END\n",
+      "i",
+      false,
+      [
+        "search_path=pg_catalog, pg_temp"
+      ],
+      "retrolume_memory_owner",
+      "{retrolume_memory_owner=X/retrolume_memory_owner,retrolume_memory_app=X/retrolume_memory_owner}"
+    ],
+    [
+      "memory_final_shape_guard",
+      "",
+      "\nDECLARE r record; b record;\nBEGIN\n IF TG_TABLE_NAME='activity_memory_choices' OR TG_TABLE_NAME='activity_memory_bindings' THEN\n  SELECT selected_count,selection_sha256,bound_scope_sha256 INTO b FROM public.activity_memory_bindings WHERE activity_id=NEW.activity_id;\n  IF b.selected_count IS DISTINCT FROM(SELECT count(*)::smallint FROM public.activity_memory_choices WHERE activity_id=NEW.activity_id)\n  OR b.selection_sha256 IS DISTINCT FROM public.memory_choice_digest(NEW.activity_id)\n  OR b.bound_scope_sha256 IS DISTINCT FROM public.memory_scope_digest(NEW.activity_id) THEN RAISE EXCEPTION '记忆选择数量/摘要不符'; END IF;\n ELSE\n  SELECT dependency_count,dependencies_sha256,claim_kind INTO r FROM public.learning_memory_revisions WHERE memory_id=NEW.memory_id AND version=NEW.version;\n  IF r.dependency_count IS DISTINCT FROM(SELECT count(*)::smallint FROM public.learning_memory_dependencies WHERE memory_id=NEW.memory_id AND version=NEW.version)\n  OR r.dependencies_sha256 IS DISTINCT FROM public.memory_dependency_digest(NEW.memory_id,NEW.version)\n  OR(r.claim_kind='learning_observation' AND NOT EXISTS(SELECT 1 FROM public.learning_memory_dependencies WHERE memory_id=NEW.memory_id AND version=NEW.version AND dependency_kind='event')) THEN\n   RAISE EXCEPTION '记忆依赖数量/摘要不符'; END IF;\n END IF;\n RETURN NULL;\nEND ",
+      "v",
+      false,
+      [
+        "search_path=pg_catalog, pg_temp"
+      ],
+      "retrolume_memory_owner",
+      "{retrolume_memory_owner=X/retrolume_memory_owner,retrolume_memory_app=X/retrolume_memory_owner}"
+    ],
+    [
+      "memory_head_guard",
+      "",
+      "\nDECLARE ok BOOLEAN;\nBEGIN\n IF TG_OP='DELETE' THEN RAISE EXCEPTION '记忆头不可直接删除'; END IF;\n IF TG_OP='INSERT' THEN\n  IF NEW.revision<>1 OR NEW.current_version<>1 OR NEW.state<>'active' THEN RAISE EXCEPTION '记忆初始身份不符'; END IF;\n  RETURN NEW;\n END IF;\n IF ROW(NEW.memory_id,NEW.created_at) IS DISTINCT FROM ROW(OLD.memory_id,OLD.created_at) THEN RAISE EXCEPTION '记忆身份不可改'; END IF;\n IF current_user='retrolume_memory_purger' THEN\n  IF ROW(NEW.revision,NEW.current_version,NEW.state,NEW.revoked_at,NEW.revocation_key,NEW.updated_at)\n   IS DISTINCT FROM ROW(OLD.revision,OLD.current_version,OLD.state,OLD.revoked_at,OLD.revocation_key,OLD.updated_at)\n   OR OLD.state<>'revoked' OR OLD.purge_state<>'pending' OR NEW.purge_state<>'done' OR NEW.purged_at IS NULL THEN\n   RAISE EXCEPTION '清理只可完成原墓碑'; END IF;\n  RETURN NEW;\n END IF;\n IF OLD.state='revoked' OR NEW.revision<>OLD.revision+1 OR NEW.purged_at IS DISTINCT FROM OLD.purged_at THEN\n  RAISE EXCEPTION '撤销不可复活或CAS不符'; END IF;\n SELECT EXISTS(SELECT 1 FROM public.learning_memory_commands c WHERE c.memory_id=NEW.memory_id\n AND c.effect_applied AND c.before_revision=OLD.revision AND c.after_revision=NEW.revision\n AND c.after_version=NEW.current_version\n AND((NEW.state='active' AND c.action='revise' AND NEW.current_version=OLD.current_version+1)\n OR(NEW.state='revoked' AND c.action='revoke' AND c.business_key=NEW.revocation_key\n AND NEW.current_version=OLD.current_version))) INTO ok;\n IF NOT ok THEN RAISE EXCEPTION '记忆修改缺同事务收据'; END IF;\n RETURN NEW;\nEND ",
+      "v",
+      false,
+      [
+        "search_path=pg_catalog, pg_temp"
+      ],
+      "retrolume_memory_owner",
+      "{retrolume_memory_owner=X/retrolume_memory_owner,retrolume_memory_app=X/retrolume_memory_owner}"
+    ],
+    [
+      "memory_immutable_guard",
+      "",
+      "\nBEGIN RAISE EXCEPTION '学习记忆身份不可改写或直接删除'; END ",
+      "v",
+      false,
+      [
+        "search_path=pg_catalog, pg_temp"
+      ],
+      "retrolume_memory_owner",
+      "{retrolume_memory_owner=X/retrolume_memory_owner,retrolume_memory_app=X/retrolume_memory_owner}"
+    ],
+    [
+      "memory_revision_eligible",
+      "mid uuid, ver integer",
+      "\n SELECT public.memory_revision_readable(mid,ver) AND EXISTS(SELECT 1 FROM public.learning_memories WHERE memory_id=mid AND current_version=ver AND state='active')\n",
+      "s",
+      false,
+      [
+        "search_path=pg_catalog, pg_temp"
+      ],
+      "retrolume_memory_owner",
+      "{retrolume_memory_owner=X/retrolume_memory_owner,retrolume_memory_app=X/retrolume_memory_owner}"
+    ],
+    [
+      "memory_revision_readable",
+      "mid uuid, ver integer",
+      "\n SELECT EXISTS(\n SELECT 1 FROM public.learning_memories h JOIN public.learning_memory_revisions r USING(memory_id)\n JOIN public.learning_memory_bodies b USING(memory_id,version)\n WHERE h.memory_id=mid AND r.version=ver AND h.state='active'\n AND r.body_sha256=encode(sha256(convert_to(b.body,'UTF8')),'hex') AND r.body_bytes=octet_length(b.body)\n AND r.dependency_count=(SELECT count(*) FROM public.learning_memory_dependencies WHERE memory_id=mid AND version=ver)\n AND r.dependencies_sha256=public.memory_dependency_digest(mid,ver)\n AND NOT EXISTS(\n SELECT 1 FROM public.learning_memory_dependencies d\n LEFT JOIN public.material_sources s ON s.id=d.source_id\n LEFT JOIN public.material_versions v ON v.source_id=d.source_id AND v.id=d.source_version_id\n WHERE d.memory_id=mid AND d.version=ver AND d.dependency_kind='source'\n AND(s.current_version IS DISTINCT FROM d.source_version_id OR s.revision IS DISTINCT FROM d.source_revision\n OR v.sha256 IS DISTINCT FROM d.original_sha256\n OR(v.format='pdf' AND NOT EXISTS(SELECT 1 FROM public.pdf_review_candidates c WHERE c.version_id=v.id\n AND c.status='confirmed' AND c.page_count BETWEEN 1 AND 50\n AND(SELECT count(*) FROM public.pdf_review_pages p WHERE p.candidate_id=c.id)=c.page_count\n AND(SELECT count(*) FROM public.pdf_extracted_pages p WHERE p.version_id=c.version_id)=c.page_count))))\n AND NOT EXISTS(\n SELECT 1 FROM public.learning_memory_dependencies d LEFT JOIN public.teaching_records t\n ON t.activity_id=d.origin_activity_id AND t.record_id=d.record_id\n WHERE d.memory_id=mid AND d.version=ver AND d.dependency_kind='event'\n AND(t.kind IS DISTINCT FROM d.record_kind OR t.body_sha256 IS DISTINCT FROM d.record_sha256\n OR t.scope_revision IS DISTINCT FROM d.origin_scope_revision OR t.goal_version IS DISTINCT FROM d.origin_goal_version\n OR EXISTS(SELECT 1 FROM public.teaching_records x WHERE x.activity_id=t.activity_id\n AND((x.kind='correction' AND x.parent_record_id=t.record_id)\n OR(x.kind='answer' AND x.supersedes_record_id=t.record_id)\n OR(x.kind='feedback' AND t.kind IN ('feedback','progress') AND x.answer_record_id=t.answer_record_id AND x.seq>t.seq)))))\n AND NOT EXISTS(\n SELECT 1 FROM public.learning_memory_dependencies d\n LEFT JOIN public.learning_memories up ON up.memory_id=d.upstream_memory_id\n LEFT JOIN public.learning_memory_revisions ur ON ur.memory_id=d.upstream_memory_id AND ur.version=d.upstream_version\n LEFT JOIN public.learning_memory_bodies ub ON ub.memory_id=ur.memory_id AND ub.version=ur.version\n WHERE d.memory_id=mid AND d.version=ver AND d.dependency_kind='memory'\n AND(up.state IS DISTINCT FROM 'active' OR up.current_version IS DISTINCT FROM d.upstream_version\n OR ur.body_sha256 IS DISTINCT FROM d.upstream_body_sha256 OR ub.body IS NULL\n OR encode(sha256(convert_to(ub.body,'UTF8')),'hex') IS DISTINCT FROM d.upstream_body_sha256\n OR EXISTS(SELECT 1 FROM public.learning_memory_dependencies pd WHERE pd.memory_id=d.upstream_memory_id\n AND pd.version=d.upstream_version AND NOT EXISTS(SELECT 1 FROM public.learning_memory_dependencies cd\n WHERE cd.memory_id=mid AND cd.version=ver AND public.memory_dependency_line(cd)=public.memory_dependency_line(pd)))))\n )\n",
+      "s",
+      false,
+      [
+        "search_path=pg_catalog, pg_temp"
+      ],
+      "retrolume_memory_owner",
+      "{retrolume_memory_owner=X/retrolume_memory_owner,retrolume_memory_app=X/retrolume_memory_owner}"
+    ],
+    [
+      "memory_scope_digest",
+      "aid uuid",
+      "\n SELECT encode(sha256(convert_to(coalesce(string_agg(concat_ws('|',s.source_id,s.version_id,s.source_revision,v.sha256),\n E'\\n' ORDER BY s.source_id),''),'UTF8')),'hex')\n FROM public.activity_scope_sources s JOIN public.material_versions v ON v.source_id=s.source_id AND v.id=s.version_id WHERE s.activity_id=aid\n",
+      "s",
+      false,
+      [
+        "search_path=pg_catalog, pg_temp"
+      ],
+      "retrolume_memory_owner",
+      "{retrolume_memory_owner=X/retrolume_memory_owner,retrolume_memory_app=X/retrolume_memory_owner}"
+    ],
+    [
+      "purge_learning_memory",
+      "revocation_key uuid, manifest_sha256 text, purge_business_key uuid, request_sha256 text",
+      "\nDECLARE cmd record; h record; existing record; item record; bodyrow record; manifest JSONB; meta TEXT; total INTEGER; slot TEXT;\nBEGIN\n SELECT c.memory_id,c.cleanup_manifest,c.manifest_sha256 INTO cmd FROM public.learning_memory_commands c\n WHERE c.business_key=purge_learning_memory.revocation_key AND c.action='revoke' AND c.effect_applied;\n IF cmd.memory_id IS NULL OR cmd.manifest_sha256 IS DISTINCT FROM manifest_sha256\n OR encode(sha256(convert_to(cmd.cleanup_manifest,'UTF8')),'hex') IS DISTINCT FROM manifest_sha256 THEN RAISE EXCEPTION '精确清理清单无效'; END IF;\n SELECT mh.revision,mh.current_version,mh.state,mh.purge_state,mh.revocation_key INTO h\n FROM public.learning_memories mh WHERE mh.memory_id=cmd.memory_id FOR UPDATE;\n SELECT c.request_sha256,c.result_meta INTO existing FROM public.learning_memory_commands c WHERE c.business_key=purge_business_key;\n IF existing.result_meta IS NOT NULL THEN\n  IF existing.request_sha256 IS DISTINCT FROM request_sha256 THEN RAISE EXCEPTION '清理键冲突'; END IF;\n  RETURN existing.result_meta;\n END IF;\n slot=encode(sha256(convert_to('purge|'||revocation_key::text||'|'||manifest_sha256,'UTF8')),'hex');\n SELECT c.result_meta INTO meta FROM public.learning_memory_commands c WHERE c.slot_sha256=slot AND c.effect_applied;\n IF meta IS NOT NULL THEN RETURN meta; END IF;\n IF h.state<>'revoked' OR h.purge_state<>'pending' OR h.revocation_key IS DISTINCT FROM purge_learning_memory.revocation_key THEN RAISE EXCEPTION '清理要求原撤销墓碑'; END IF;\n manifest=cmd.cleanup_manifest::jsonb;\n IF manifest->>'policy'<>'memory.purge.v1' OR (manifest->>'memory_id')::uuid<>cmd.memory_id\n OR (manifest->>'revocation_key')::uuid<>revocation_key OR (manifest->>'revision')::integer<>h.revision\n OR jsonb_typeof(manifest->'targets')<>'array' THEN RAISE EXCEPTION '清理身份不符'; END IF;\n total=jsonb_array_length(manifest->'targets');\n IF total NOT BETWEEN 1 AND 32 OR total<>(SELECT count(DISTINCT value->>'version') FROM jsonb_array_elements(manifest->'targets')) OR total<>(SELECT count(*) FROM public.learning_memory_bodies WHERE memory_id=cmd.memory_id) THEN RAISE EXCEPTION '清理集合不符'; END IF;\n FOR item IN SELECT value FROM jsonb_array_elements(manifest->'targets') LOOP\n  IF (item.value->>'memory_id')::uuid<>cmd.memory_id THEN RAISE EXCEPTION '清理不得越记忆'; END IF;\n  SELECT b.body,r.body_sha256,r.body_bytes INTO bodyrow FROM public.learning_memory_bodies b\n  JOIN public.learning_memory_revisions r USING(memory_id,version)\n  WHERE b.memory_id=cmd.memory_id AND b.version=(item.value->>'version')::integer;\n  IF bodyrow.body IS NULL OR bodyrow.body_sha256 IS DISTINCT FROM item.value->>'body_sha256'\n   OR bodyrow.body_bytes IS DISTINCT FROM (item.value->>'body_bytes')::integer\n   OR encode(sha256(convert_to(bodyrow.body,'UTF8')),'hex') IS DISTINCT FROM bodyrow.body_sha256\n   OR octet_length(bodyrow.body)<>bodyrow.body_bytes THEN RAISE EXCEPTION '清理目标hash不符'; END IF;\n END LOOP;\n FOR item IN SELECT value FROM jsonb_array_elements(manifest->'targets') ORDER BY (value->>'version')::integer LOOP\n  DELETE FROM public.learning_memory_bodies WHERE memory_id=cmd.memory_id AND version=(item.value->>'version')::integer;\n END LOOP;\n meta=json_build_object('memory_id',cmd.memory_id,'revision_after',h.revision,'version_after',h.current_version,\n  'status','committed','purge_state_now','done','revocation_key',revocation_key,'manifest_sha256',manifest_sha256)::text;\n INSERT INTO public.learning_memory_commands(business_key,action,memory_id,request_sha256,slot_sha256,effect_applied,\n before_revision,after_revision,after_version,result_meta) VALUES(purge_business_key,'purge',cmd.memory_id,\n request_sha256,slot,true,h.revision,h.revision,h.current_version,meta);\n UPDATE public.learning_memories SET purge_state='done',purged_at=CURRENT_TIMESTAMP WHERE memory_id=cmd.memory_id;\n RETURN meta;\nEND ",
+      "v",
+      true,
+      [
+        "search_path=pg_catalog, pg_temp"
+      ],
+      "retrolume_memory_purger",
+      "{retrolume_memory_purger=X/retrolume_memory_purger,retrolume_memory_app=X/retrolume_memory_purger}"
+    ],
+    [
+      "teaching_command_identity_guard",
+      "",
+      "\nBEGIN\n    IF ROW(NEW.activity_id,NEW.business_key,NEW.action,NEW.request_sha256,NEW.request_body,\n           NEW.slot_sha256,NEW.expected_revision,NEW.goal_version,NEW.scope_revision,\n           NEW.parent_record_id,NEW.context_body,NEW.context_sha256,NEW.operation_id,\n           NEW.retry_of,NEW.created_at)\n       IS DISTINCT FROM\n       ROW(OLD.activity_id,OLD.business_key,OLD.action,OLD.request_sha256,OLD.request_body,\n           OLD.slot_sha256,OLD.expected_revision,OLD.goal_version,OLD.scope_revision,\n           OLD.parent_record_id,OLD.context_body,OLD.context_sha256,OLD.operation_id,\n           OLD.retry_of,OLD.created_at) THEN\n        RAISE EXCEPTION '教学命令身份不可改写';\n    END IF;\n    IF OLD.launch_claimed_at IS NOT NULL AND\n       NEW.launch_claimed_at IS DISTINCT FROM OLD.launch_claimed_at THEN\n        RAISE EXCEPTION '教学启动资格不可重置';\n    END IF;\n    RETURN NEW;\nEND;\n",
+      "v",
+      false,
+      null,
+      "postgres",
+      null
+    ],
+    [
+      "teaching_records_immutable",
+      "",
+      "\nBEGIN\n    RAISE EXCEPTION '教学历史不可覆盖或直接删除';\nEND;\n",
+      "v",
+      false,
+      null,
+      "postgres",
+      null
+    ]
+  ],
+  "triggers": [
+    [
+      "activity_memory_bindings",
+      "memory_binding_immutable",
+      "O",
+      "CREATE TRIGGER memory_binding_immutable BEFORE DELETE OR UPDATE ON public.activity_memory_bindings FOR EACH ROW EXECUTE FUNCTION memory_immutable_guard()"
+    ],
+    [
+      "activity_memory_bindings",
+      "memory_binding_shape",
+      "O",
+      "CREATE CONSTRAINT TRIGGER memory_binding_shape AFTER INSERT ON public.activity_memory_bindings DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION memory_final_shape_guard()"
+    ],
+    [
+      "activity_memory_choices",
+      "memory_choice_immutable",
+      "O",
+      "CREATE TRIGGER memory_choice_immutable BEFORE DELETE OR UPDATE ON public.activity_memory_choices FOR EACH ROW EXECUTE FUNCTION memory_immutable_guard()"
+    ],
+    [
+      "activity_memory_choices",
+      "memory_choices_shape",
+      "O",
+      "CREATE CONSTRAINT TRIGGER memory_choices_shape AFTER INSERT ON public.activity_memory_choices DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION memory_final_shape_guard()"
+    ],
+    [
+      "learning_memories",
+      "memory_head_identity",
+      "O",
+      "CREATE TRIGGER memory_head_identity BEFORE INSERT OR DELETE OR UPDATE ON public.learning_memories FOR EACH ROW EXECUTE FUNCTION memory_head_guard()"
+    ],
+    [
+      "learning_memory_bodies",
+      "memory_body_integrity",
+      "O",
+      "CREATE TRIGGER memory_body_integrity BEFORE INSERT OR DELETE OR UPDATE ON public.learning_memory_bodies FOR EACH ROW EXECUTE FUNCTION memory_body_guard()"
+    ],
+    [
+      "learning_memory_commands",
+      "memory_command_immutable",
+      "O",
+      "CREATE TRIGGER memory_command_immutable BEFORE DELETE OR UPDATE ON public.learning_memory_commands FOR EACH ROW EXECUTE FUNCTION memory_immutable_guard()"
+    ],
+    [
+      "learning_memory_dependencies",
+      "memory_dependencies_shape",
+      "O",
+      "CREATE CONSTRAINT TRIGGER memory_dependencies_shape AFTER INSERT ON public.learning_memory_dependencies DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION memory_final_shape_guard()"
+    ],
+    [
+      "learning_memory_dependencies",
+      "memory_dependency_immutable",
+      "O",
+      "CREATE TRIGGER memory_dependency_immutable BEFORE DELETE OR UPDATE ON public.learning_memory_dependencies FOR EACH ROW EXECUTE FUNCTION memory_immutable_guard()"
+    ],
+    [
+      "learning_memory_revisions",
+      "memory_revision_immutable",
+      "O",
+      "CREATE TRIGGER memory_revision_immutable BEFORE DELETE OR UPDATE ON public.learning_memory_revisions FOR EACH ROW EXECUTE FUNCTION memory_immutable_guard()"
+    ],
+    [
+      "learning_memory_revisions",
+      "memory_revision_shape",
+      "O",
+      "CREATE CONSTRAINT TRIGGER memory_revision_shape AFTER INSERT ON public.learning_memory_revisions DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION memory_final_shape_guard()"
+    ],
+    [
+      "teaching_commands",
+      "teaching_command_identity_guard",
+      "O",
+      "CREATE TRIGGER teaching_command_identity_guard BEFORE UPDATE ON public.teaching_commands FOR EACH ROW EXECUTE FUNCTION teaching_command_identity_guard()"
+    ],
+    [
+      "teaching_records",
+      "teaching_records_immutable",
+      "O",
+      "CREATE TRIGGER teaching_records_immutable BEFORE DELETE OR UPDATE ON public.teaching_records FOR EACH ROW EXECUTE FUNCTION teaching_records_immutable()"
+    ]
+  ],
+  "roles": [
+    [
+      "retrolume_memory_app",
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ],
+    [
+      "retrolume_memory_owner",
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ],
+    [
+      "retrolume_memory_purger",
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ],
+    [
+      "retrolume_task103_app",
+      true,
+      false,
+      false,
+      false,
+      false,
+      false
+    ],
+    [
+      "retrolume_task103_denied",
+      true,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  ]
+}

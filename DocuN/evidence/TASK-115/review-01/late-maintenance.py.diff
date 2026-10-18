@@ -1,0 +1,44 @@
+--- as-run/backend/app/data_exit/maintenance.py
++++ final/backend/app/data_exit/maintenance.py
+@@ -55,8 +55,10 @@
+     lease: object
+     owned_id: str | None = None
+     live: bool = True
++    operation: object | None = None
+ 
+     def check(self, *, outgoing=False):
++        if self.operation is not None:self.operation.check()
+         if not self.live: raise DataError("mutation_permit_closed", 503)
+         self.lease.check()
+         state = self.gate.hub.assert_writable()
+@@ -70,7 +72,9 @@
+             if outgoing or owner is None or owner.get("state") != "registered" or owner.get("origin") != self.context.public():
+                 raise DataError("maintenance_unconfirmed", 503)
+         validate=getattr(self.gate,'validate_source',None)
+-        if validate is not None:validate(self.context)
++        if validate is not None:
++            if self.operation is not None:validate(self.context,operation=self.operation)
++            else:validate(self.context)
+ 
+ 
+ class MutationGate:
+@@ -85,15 +89,16 @@
+             with self.acquire(outgoing=True) as permit:yield permit
+ 
+     @contextmanager
+-    def acquire(self, *, outgoing=False, expected=None):
++    def acquire(self, *, outgoing=False, expected=None, operation=None):
++        if operation is not None:operation.check()
+         inherited = CURRENT_PERMIT.get()
+         if inherited is not None and inherited.gate is self:
+             inherited.check(outgoing=outgoing)
+             if expected is not None and inherited.context != expected: raise DataError("selection_changed")
+             yield inherited
+             return
+-        with self.lock.acquire() as lease:
+-            permit = MutationPermit(self, self.context(), lease)
++        with self.lock.acquire(timeout=operation.remaining(30) if operation else 30) as lease:
++            permit = MutationPermit(self, self.context(), lease,operation=operation)
+             if expected is not None and permit.context != expected: raise DataError("selection_changed")
+             permit.check(outgoing=outgoing)
+             token = CURRENT_PERMIT.set(permit)

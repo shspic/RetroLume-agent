@@ -1,0 +1,12 @@
+--- pre/backend/app/activities/teaching_repository.py
++++ post/backend/app/activities/teaching_repository.py
+@@ -131,6 +131,9 @@
+             extra=refs
+         state=await self._memory_lock_prefix(connection,activity_id,extra_sources=extra)
+         activity=state['activity']
++        from app.interview.contracts import InterviewRefusal
++        try: await self._interview_require_non_domain(connection,activity_id)
++        except InterviewRefusal as exc: raise TeachingRefusal('stage_conflict','此活动属于面试域或其资格不可靠') from None
+         if activity is None:raise TeachingRefusal('not_found','活动不存在')
+         await self._teaching_lock_operations(connection,activity_id)
+         activity['_teaching_sources_valid']=state['sources_valid'] and state['eligible']

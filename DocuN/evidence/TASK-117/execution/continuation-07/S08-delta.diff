@@ -1,0 +1,923 @@
+--- S07-initial/frontend/src/activities/TeachingWorkspace.tsx
++++ final/frontend/src/activities/TeachingWorkspace.tsx
+@@ -24,7 +24,7 @@
+ import { HtmlExplanationPanel } from "../explanations/HtmlExplanationPanel";
+ import type { HtmlParent } from "../explanations/contracts";
+ import {RetrievalPanel} from './RetrievalPanel';
+-import {retrieveForCommand,storeRetrievalChain,type RetrievalChain} from './retrieval-api';
++import {retrieveForCommand,storeRetrievalChain,type RetrievalChain,type ServiceIdentity} from './retrieval-api';
+ import {canonical,dataNamespace,getDataContext} from '../data/context';
+ 
+ const POLL_MS = 3000;
+@@ -114,7 +114,7 @@
+ }
+ 
+ export function TeachingWorkspace({
+-  activityId, token, scopeRevision, teachingAvailable, calculationAvailable, memoryModelAvailable = false,
++  activityId, token, scopeRevision, teachingAvailable, calculationAvailable, memoryModelAvailable = false,modelService=null,
+   onCapabilitiesDirty, seed,
+ }: {
+   activityId: string;
+@@ -123,6 +123,7 @@
+   teachingAvailable: boolean;
+   calculationAvailable: boolean;
+   memoryModelAvailable?: boolean;
++  modelService?: ServiceIdentity|null;
+   onCapabilitiesDirty?: () => void;
+   seed?: TeachingSeed | null;
+ }) {
+@@ -156,6 +157,7 @@
+   const workspaceToken = useRef("");
+   const observedHead = useRef("");
+   const [retrievalMode,setRetrievalMode]=useState<'hybrid'|'terms'>('hybrid');
++  const [modelNoticeReady,setModelNoticeReady]=useState(false);
+   const historySeq = useRef(0);
+   const historyAbort = useRef<AbortController|null>(null);
+   const pageSeq = useRef(0);
+@@ -323,6 +325,7 @@
+   async function submit(action: TeachingAction, body: Record<string, unknown>,
+                          extra?: Partial<TeachingIntentSummary>, recovered?:RetrievalChain) {
+     if (busy || !intentsOk) return;
++    if(['plan','exercise','evaluate'].includes(action)&&!modelNoticeReady){setError('供应商、模型或用途额度无法核对，未提交');return;}
+     if ((action==='answer'||action==='correct') && editConflict) { setError("输入仍属于旧作答身份；请先核对并明确沿用草稿"); return; }
+     const submittedContext=contextKey.current;
+     const origin={activity:activityId,owner:editorOwner.current,view:workspaceToken.current,head:observedHead.current,
+@@ -351,7 +354,7 @@
+         if(!owner||!stillCurrent()||origin.owner!==owner)throw new Error('编辑身份不可核对，未提交');
+         if(recovered&&JSON.stringify(recovered.domain_input)!==JSON.stringify({...input,body}))throw new Error('原动作版本不同，不能改绑');
+         const query=String(workspace?.goal?.goal??goalText).trim().slice(0,1024);
+-        const result=await retrieveForCommand(token,activityId,owner,'teaching',{...input,body},scopeRevision,input.expected_revision,query,()=>stillCurrent()&&editorOwner.current===owner,recovered);
++        const result=await retrieveForCommand(token,activityId,owner,'teaching',{...input,body},scopeRevision,input.expected_revision,query,()=>stillCurrent()&&editorOwner.current===owner,recovered,modelService);
+         if(!stillCurrent()||!result.ref)return;
+         input.retrieval_ref=result.ref;retrievalChain=result.row;
+       }
+@@ -385,7 +388,9 @@
+         editor_owner_id:origin.owner??undefined,view_token:origin.view,namespace:origin.namespace,
+         ...extra,
+       };
+-      if (!await appendTeachingIntent(summary)) {
++      const appended=await appendTeachingIntent(summary,stillCurrent);
++      if(!stillCurrent())return;
++      if (!appended) {
+         setError("本机恢复台账写入失败，未发出任何请求");
+         return;
+       }
+@@ -544,7 +549,7 @@
+     ||Number(budgets.running_reserved_seconds)+Number(budgets.running_settled_seconds)>=Number(budgets.max_running_seconds)));
+   const canLocal = Boolean(workspace) && !readError && !overlay?.cancelled && !overlay?.expired;
+   const memoryModelBlocked=Boolean(workspace?.memory_selected&&!memoryModelAvailable);
+-  const canModel = !memoryModelBlocked && !workspace?.memory_invalid && canLocal && Boolean(teachingAvailable) && !exhausted && !overlay?.source_invalid && !overlay?.processing && !overlay?.unknown;
++  const canModel = modelNoticeReady && !memoryModelBlocked && !workspace?.memory_invalid && canLocal && Boolean(teachingAvailable) && !exhausted && !overlay?.source_invalid && !overlay?.processing && !overlay?.unknown;
+   const canTool = !workspace?.memory_invalid && canLocal && calculationAvailable && !overlay?.source_invalid && !overlay?.processing && !overlay?.unknown
+     && Number(budgets?.tools_reserved)<Number(budgets?.max_tool_calls)
+     && Number(budgets?.running_reserved_seconds)+Number(budgets?.running_settled_seconds)<Number(budgets?.max_running_seconds);
+@@ -557,7 +562,7 @@
+ 
+   return (
+     <section className="ws-teaching" aria-label="教学工作区">
+-      <RetrievalPanel token={token} activityId={activityId} scopeRevision={scopeRevision} domainRevision={workspace?.head.revision??0} owner={editorOwner.current} mode={retrievalMode} onMode={setRetrievalMode} onContinue={chain=>{const saved=chain.domain_input;void submit(saved.action as TeachingAction,saved.body as Record<string,unknown>,undefined,chain);}}/>
++      <RetrievalPanel token={token} activityId={activityId} scopeRevision={scopeRevision} domainRevision={workspace?.head.revision??0} owner={editorOwner.current} mode={retrievalMode} modelService={modelService} onDisclosureChange={setModelNoticeReady} onMode={setRetrievalMode} onContinue={chain=>{const saved=chain.domain_input;void submit(saved.action as TeachingAction,saved.body as Record<string,unknown>,undefined,chain);}}/>
+       <div className="section-title">
+         <h4>教学闭环（零费保存 · 显式评价）</h4>
+         <span className="quiet">
+--- S07-initial/frontend/src/activities/teachingIntents.ts
++++ final/frontend/src/activities/teachingIntents.ts
+@@ -109,19 +109,21 @@
+   }
+ }
+ 
+-async function mutateSummaries(change: (items: TeachingIntentSummary[]) => TeachingIntentSummary[]): Promise<boolean> {
++async function mutateSummaries(change: (items: TeachingIntentSummary[]) => TeachingIntentSummary[],guard=()=>true): Promise<boolean> {
+   // 回环原生浏览器具有 Web Locks；缺失时保持零 POST，不退回竞态写入。
+   if (!navigator.locks) return false;
+   try {
+-    return await navigator.locks.request(SUMMARY_KEY(), () => {
++    const storageKey=SUMMARY_KEY();
++    return await navigator.locks.request(storageKey, () => {
++      if(!guard()||storageKey!==SUMMARY_KEY())return false;
+       const current = loadTeachingIntents();
+       return current.ok && saveTeachingIntents(change(current.items));
+     });
+   } catch { return false; }
+ }
+ 
+-export function appendTeachingIntent(summary: TeachingIntentSummary): Promise<boolean> {
+-  return mutateSummaries(items => [summary, ...items.filter(item => item.key !== summary.key)]);
++export function appendTeachingIntent(summary: TeachingIntentSummary,guard=()=>true): Promise<boolean> {
++  return mutateSummaries(items => [summary, ...items.filter(item => item.key !== summary.key)],guard);
+ }
+ 
+ export function updateTeachingIntent(key: string, patch: Partial<TeachingIntentSummary>): Promise<boolean> {
+--- S07-initial/frontend/src/activities/RetrievalPanel.tsx
++++ final/frontend/src/activities/RetrievalPanel.tsx
+@@ -1,21 +1,26 @@
+ import {useEffect,useRef,useState} from 'react';
+-import {retrievalRequest,retrievalChains,retrieveForCommand,storeRetrievalChain,type RetrievalChain,type RetrievalReceipt,type RetrievalStatus} from './retrieval-api';
++import {retrievalRequest,retrievalChains,retrieveForCommand,storeRetrievalChain,retrievalDisclosureKnown,serviceIdentityKnown,type ServiceIdentity,type RetrievalChain,type RetrievalReceipt,type RetrievalStatus} from './retrieval-api';
+ 
+-export function RetrievalPanel({token,activityId,scopeRevision,domainRevision,owner,mode,onMode,onContinue,indexAllowed=true}:{token:string;activityId:string;scopeRevision:number;domainRevision:number;owner:string|null;mode:'hybrid'|'terms';onMode:(mode:'hybrid'|'terms')=>void;onContinue?:(chain:RetrievalChain)=>void;indexAllowed?:boolean}){
++export function RetrievalPanel({token,activityId,scopeRevision,domainRevision,owner,mode,onMode,onContinue,indexAllowed=true,modelService=null,onDisclosureChange}:{token:string;activityId:string;scopeRevision:number;domainRevision:number;owner:string|null;mode:'hybrid'|'terms';onMode:(mode:'hybrid'|'terms')=>void;onContinue?:(chain:RetrievalChain)=>void;indexAllowed?:boolean;modelService?:ServiceIdentity|null;onDisclosureChange?:(ready:boolean)=>void}){
+   const [status,setStatus]=useState<RetrievalStatus|null>(null),[chains,setChains]=useState<RetrievalChain[]>([]),[error,setError]=useState(''),[busy,setBusy]=useState(false);
+   const current=useRef('');current.current=`${activityId}:${scopeRevision}:${domainRevision}:${owner}`;
+   const mounted=useRef(false);useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;};},[]);
++  const vectorKnown=retrievalDisclosureKnown(status),chatKnown=serviceIdentityKnown(modelService);
++  const modelNoticeReady=chatKnown&&(mode==='terms'||vectorKnown);
++  useEffect(()=>{onDisclosureChange?.(modelNoticeReady);},[modelNoticeReady,onDisclosureChange]);
+   async function refresh(){const identity=current.current;const live=()=>mounted.current&&identity===current.current;try{const s=await retrievalRequest<RetrievalStatus>(token,activityId,'/status',undefined,live);const c=await retrievalChains(activityId);if(live()){setStatus(s);setChains(c);}}catch(e){if(live())setError((e as Error).message);}}
+   useEffect(()=>{setStatus(null);setChains([]);void refresh();},[activityId,scopeRevision,domainRevision,owner,token]);
+-  async function index(){if(!owner||busy||!indexAllowed)return;const identity=current.current;setBusy(true);setError('');try{await retrieveForCommand(token,activityId,owner,'index',{},scopeRevision,domainRevision,'',()=>mounted.current&&identity===current.current);await refresh();}catch(e){if(identity===current.current)setError((e as Error).message);}finally{if(identity===current.current)setBusy(false);}}
++  async function index(){if(!owner||busy||!indexAllowed||!vectorKnown)return;const identity=current.current;setBusy(true);setError('');try{await retrieveForCommand(token,activityId,owner,'index',{},scopeRevision,domainRevision,'',()=>mounted.current&&identity===current.current);await refresh();}catch(e){if(identity===current.current)setError((e as Error).message);}finally{if(identity===current.current)setBusy(false);}}
+   async function reconcile(row:RetrievalChain){const identity=current.current;setBusy(true);setError('');try{const receipt=await retrievalRequest<RetrievalReceipt>(token,activityId,`/commands/${row.query.business_key}`,undefined,()=>mounted.current&&identity===current.current);if(receipt.business_key!==row.query.business_key)throw new Error('原操作身份不同');await storeRetrievalChain({...row,receipt});await refresh();}catch(e){if(identity===current.current)setError((e as Error).message);}finally{if(identity===current.current)setBusy(false);}}
+   return <section aria-label="资料检索与恢复"><h4>资料检索</h4><p>只使用当前确认的资料片段与本轮必要问题；回答和学习记忆不发送给向量服务。</p>
+     <p>选择混合检索后，每次生成或评价先查询一次，合格后再调用一次模型，共需2次请求、两笔费用预留及两个运行窗口。未确认时保留原键，不自动重发。</p>
++    {vectorKnown&&status?<p data-service-disclosure="vector">向量供应商：{status.provider}；模型：{status.model}。用途：{status.purpose}；索引单批预留 {status.reserve_cost_microunits} 微单位，每批运行窗口 {status.window_reserve_seconds} 秒。</p>:<p role="status">向量供应商、模型、用途或额度无法核对；索引及混合检索动作暂停。</p>}
++    {chatKnown?<p data-service-disclosure="chat">聊天供应商：{modelService.provider}；模型：{modelService.model}。用途：后续教学或面试生成与评价，使用本轮目标、回答、必要历史及明确选择的学习记忆。</p>:<p role="status">聊天供应商或模型无法核对；模型动作暂停。本地保存、取消和只读核对仍按原资格可用。</p>}
+     <label><input type="radio" checked={mode==='hybrid'} onChange={()=>onMode('hybrid')}/>结合原文词项与向量检索</label> <label><input type="radio" checked={mode==='terms'} onChange={()=>onMode('terms')}/>明确使用词项降级（不算混合检索通过）</label>
+     <p>{status?.available?`已核对 ${status.fragments??0} 个片段，缓存 ${status.cached_fragments??0} 个。${status.ready?'当前索引就绪。':`本次至多 ${status.index_batches??0} 批，单批预留 ${status.reserve_cost_microunits} 微单位。`}`:'混合检索尚未就绪，请检查本机服务配置。'}</p>
+     {status?.available&&<p>当前剩余 {status.remaining_requests} 次请求、{status.remaining_cost_microunits} 微单位费用额度、{status.remaining_running_seconds} 秒；查询及后续模型需预留 {status.query_then_model_reserve_microunits} 微单位、{2*status.window_reserve_seconds} 秒。预览后服务器仍逐笔核准；不足时整步不发。</p>}
+     {!indexAllowed&&<p>请先保存面试目标并开始场次，再确认资料索引。</p>}
+-    <button disabled={busy} onClick={()=>void refresh()}>只读核对索引与原意图</button> <button disabled={busy||!owner||!status?.available||status.ready||!indexAllowed} onClick={()=>void index()}>确认用途、费用与索引当前资料</button>
+-    {chains.filter(c=>c.owner===owner).map(c=><div key={c.key}><p>{c.domain==='index'?'资料索引':'本轮查询'} · {c.receipt?.terminal_disposition??'未确认'}{c.domain_sent?' · 后续动作已交付，请核对领域原意图':''}</p><button disabled={busy} onClick={()=>void reconcile(c)}>按原键只读核对</button>{c.domain!=='index'&&!c.domain_sent&&c.receipt?.current&&c.receipt.terminal_disposition==='received'&&onContinue&&<button disabled={busy||c.query.expected_scope_revision!==scopeRevision||c.query.expected_domain_revision!==domainRevision} onClick={()=>onContinue(c)}>明确继续尚未发送的原动作</button>}</div>)}
++    <button disabled={busy} onClick={()=>void refresh()}>只读核对索引与原意图</button> <button disabled={busy||!owner||!vectorKnown||status?.ready||!indexAllowed} onClick={()=>void index()}>确认用途、费用与索引当前资料</button>
++    {chains.filter(c=>c.owner===owner).map(c=><div key={c.key}><p>{c.domain==='index'?'资料索引':'本轮查询'} · {c.receipt?.terminal_disposition??'未确认'}{c.domain_sent?' · 后续动作已交付，请核对领域原意图':''}</p><button disabled={busy} onClick={()=>void reconcile(c)}>按原键只读核对</button>{c.domain!=='index'&&!c.domain_sent&&c.receipt?.current&&c.receipt.terminal_disposition==='received'&&onContinue&&<button disabled={busy||!modelNoticeReady||c.query.expected_scope_revision!==scopeRevision||c.query.expected_domain_revision!==domainRevision} onClick={()=>onContinue(c)}>明确继续尚未发送的原动作</button>}</div>)}
+     {error&&<p role="alert">{error}</p>}</section>;
+ }
+--- S07-initial/frontend/src/activities/retrieval-api.ts
++++ final/frontend/src/activities/retrieval-api.ts
+@@ -3,7 +3,20 @@
+ export type RetrievalRef={business_key:string;query_sha256:string;space_id:string;result_sha256:string};
+ export type RetrievalCommand={business_key:string;action:'source_index'|'query';expected_scope_revision:number;expected_domain_revision:number;query:string|null;confirmed:true};
+ export type RetrievalReceipt={business_key:string;action:string;status:string;current:boolean;terminal_disposition:string|null;error_code:string|null;retrieval_ref?:RetrievalRef};
+-export type RetrievalStatus={available:boolean;reason:string|null;ready?:boolean;fragments?:number;cached_fragments?:number;index_batches?:number;domain_revision?:number;purpose:string;reserve_cost_microunits:number;remaining_requests:number;remaining_cost_microunits:number;remaining_running_seconds:number;query_then_model_reserve_microunits:number;window_reserve_seconds:number};
++export type ServiceIdentity={provider:string;model:string};
++export type RetrievalStatus={available:boolean;reason:string|null;provider:string|null;model:string|null;ready?:boolean;fragments?:number;cached_fragments?:number;index_batches?:number;domain_revision?:number;purpose:string;reserve_cost_microunits:number;remaining_requests:number;remaining_cost_microunits:number;remaining_running_seconds:number;query_then_model_requests:number;query_then_model_reserve_microunits:number;window_reserve_seconds:number};
++// D04：只认可只读配置给出的有限服务身份，不能从服务类型猜模型。
++export function serviceIdentityKnown(value:unknown):value is ServiceIdentity{
++  if(!value||typeof value!=='object')return false;
++  const row=value as Record<string,unknown>;
++  return ['provider','model'].every(key=>typeof row[key]==='string'&&/^[A-Za-z0-9._:/-]{1,128}$/.test(row[key] as string));
++}
++export function retrievalDisclosureKnown(status:RetrievalStatus|null):boolean{
++  return Boolean(status?.available&&serviceIdentityKnown(status)&&typeof status.purpose==='string'&&status.purpose.trim().length>0&&status.purpose.length<=300
++    &&[status.reserve_cost_microunits,status.window_reserve_seconds,status.query_then_model_reserve_microunits].every(n=>Number.isSafeInteger(n)&&n>0)
++    &&status.query_then_model_requests===2&&status.query_then_model_reserve_microunits>=2*status.reserve_cost_microunits
++    &&[status.remaining_requests,status.remaining_cost_microunits,status.remaining_running_seconds].every(n=>Number.isFinite(n)&&n>=0));
++}
+ export type RetrievalChain={key:string;namespace:string;activity_id:string;owner:string;domain:'teaching'|'interview'|'index';domain_input:Record<string,unknown>;query:RetrievalCommand;domain_sent:boolean;receipt?:RetrievalReceipt;created_at:string};
+ const base=(aid:string)=>`/api/activities/${encodeURIComponent(aid)}/retrieval`;
+ export async function retrievalRequest<T>(token:string,aid:string,suffix:string,body?:unknown,guard=()=>true):Promise<T>{
+@@ -19,14 +32,14 @@
+   const db=await database();try{await new Promise<void>((resolve,reject)=>{const tx=db.transaction('chains','readwrite');tx.objectStore('chains').put(row);tx.oncomplete=()=>resolve();tx.onabort=tx.onerror=()=>reject(new Error('本机意图不可写，未提交'));});}finally{db.close();}
+ }
+ export async function retrievalChains(aid:string){const db=await database();try{return await new Promise<RetrievalChain[]>((resolve,reject)=>{const r=db.transaction('chains').objectStore('chains').getAll();r.onsuccess=()=>resolve((r.result as RetrievalChain[]).filter(x=>x.activity_id===aid&&x.namespace===dataNamespace()));r.onerror=()=>reject(new Error('本机检索意图无法读取'));});}finally{db.close();}}
+-export async function retrieveForCommand(token:string,aid:string,owner:string,domain:RetrievalChain['domain'],input:Record<string,unknown>,scope:number,revision:number,query:string,guard:()=>boolean,recovered?:RetrievalChain){
++export async function retrieveForCommand(token:string,aid:string,owner:string,domain:RetrievalChain['domain'],input:Record<string,unknown>,scope:number,revision:number,query:string,guard:()=>boolean,recovered?:RetrievalChain,modelService?:ServiceIdentity|null){
+   const row:RetrievalChain=recovered??{key:crypto.randomUUID(),namespace:dataNamespace(),activity_id:aid,owner,domain,domain_input:input,query:{business_key:crypto.randomUUID(),action:domain==='index'?'source_index':'query',expected_scope_revision:scope,expected_domain_revision:revision,query:domain==='index'?null:query.trim(),confirmed:true},domain_sent:false,created_at:new Date().toISOString()};
+   const live=()=>guard()&&row.namespace===dataNamespace();
+   if(!live()||row.owner!==owner||row.domain!==domain||row.domain_sent||row.query.expected_scope_revision!==scope||row.query.expected_domain_revision!==revision)throw new Error('原动作资格已变化，请只读核对');
+   await storeRetrievalChain(row);if(!live())throw new Error('页面身份已变化，未提交');
++  const preview=await retrievalRequest<RetrievalStatus>(token,aid,'/status',undefined,live);
++  if(!retrievalDisclosureKnown(preview)||(domain!=='index'&&!serviceIdentityKnown(modelService)))throw new Error('本步供应商、模型、用途或额度尚不可核对，未发送。');
+   if(!recovered){
+-    const preview=await retrievalRequest<RetrievalStatus>(token,aid,'/status',undefined,live);
+-    if(!preview.available||![preview.remaining_requests,preview.remaining_cost_microunits,preview.remaining_running_seconds,preview.reserve_cost_microunits,preview.window_reserve_seconds].every(Number.isFinite))throw new Error('本步用途或额度尚不可核对，未发送。');
+     const needed=domain==='index'?(preview.index_batches??0):2;
+     if(preview.remaining_requests<needed||preview.remaining_cost_microunits<needed*preview.reserve_cost_microunits||preview.remaining_running_seconds<needed*preview.window_reserve_seconds)throw new Error('剩余额度不足以完成本步，查询和后续动作均未发送。');
+   }
+--- S07-initial/frontend/src/activities/InterviewWorkspace.tsx
++++ final/frontend/src/activities/InterviewWorkspace.tsx
+@@ -6,7 +6,7 @@
+ import {InterviewCitations} from "./InterviewCitations";
+ import "./interview-workspace.css";
+ import {RetrievalPanel} from './RetrievalPanel';
+-import {retrieveForCommand,retrievalChains,storeRetrievalChain,type RetrievalChain} from './retrieval-api';
++import {retrieveForCommand,retrievalChains,storeRetrievalChain,type RetrievalChain,type ServiceIdentity} from './retrieval-api';
+ import type {InterviewCommand} from './interviewApi';
+ 
+ const PHASE:Record<string,string>={needs_goal:"请补充具体目标",ready:"可开始提问",question_ready:"等待你的回答",answer_ready:"回答已保存，可请求追问或反馈",feedback_ready:"本轮反馈已保存",ended:"本场次已结束，只读历史"};
+@@ -15,7 +15,7 @@
+ type Material={id:string;title:string;version_id:string;revision:number;sha256:string};
+ type HistoryEdit={activity:string;owner:string;record:string;version:number;bodyHash:string;view:string;revision:number;goal:number;scope:number;text:string};
+ 
+-export function InterviewWorkspace({activityId,token,scopeRevision,onChanged}:{activityId:string;token:string;scopeRevision:number;onChanged?:()=>void}){
++export function InterviewWorkspace({activityId,token,scopeRevision,onChanged,modelService=null}:{activityId:string;token:string;scopeRevision:number;onChanged?:()=>void;modelService?:ServiceIdentity|null}){
+   const [view,setView]=useState<InterviewWorkspaceView|null>(null),[details,setDetails]=useState<Record<string,InterviewDetail>>({}),[history,setHistory]=useState<InterviewHistory|null>(null);
+   const [target,setTarget]=useState(""),[focus,setFocus]=useState(""),[answer,setAnswer]=useState(""),[roles,setRoles]=useState<Record<string,MaterialRole>>({});
+   const [error,setError]=useState(""),[notice,setNotice]=useState(""),[busy,setBusy]=useState(false),[owner,setOwner]=useState<string|null>(null),[intents,setIntents]=useState<InterviewIntent[]>([]);
+@@ -25,6 +25,7 @@
+   const draftIdentity=useRef<{key:string;hash:string;text:string}|null>(null),viewRef=useRef<InterviewWorkspaceView|null>(null);
+   const readGeneration=useRef(0),reconciliation=useRef<string|null>(null);
+   const [retrievalMode,setRetrievalMode]=useState<'hybrid'|'terms'>('hybrid');
++  const [modelNoticeReady,setModelNoticeReady]=useState(false);
+   active.current={activityId,token,owner,viewToken:view?.view_token??""};viewRef.current=view;
+   const alive=(stamp:number,aid=activityId)=>panel.current===stamp&&active.current.activityId===aid;
+   function controller(){const c=new AbortController();controllers.current.add(c);return c;}
+@@ -63,6 +64,7 @@
+   function goal():InterviewGoal{return {target,focus:focus.trim()?focus:null,clarifications:[],material_roles:(view?.sources??[]).map(s=>({source_id:s.source_id,role:roles[s.source_id]??"unspecified"}))};}
+   async function submit(action:InterviewAction,body:Record<string,unknown>,recovered?:RetrievalChain){
+     if(busy||!owner||!view)return;
++    if(['ask','review'].includes(action)&&!modelNoticeReady){setError('供应商、模型或用途额度无法核对，未提交');return;}
+     const expectedOwner=owner,stamp=panel.current,aid=activityId,expectedView=view.view_token;
+     let command=makeInterviewCommand(action,view.head,view.head?.scope_revision??scopeRevision,body,recovered?String(recovered.domain_input.business_key):crypto.randomUUID(),view.head?view.profile==='interview.v2':retrievalMode==='hybrid');
+     if(command.schema==='interview.command.v2'&&['ask','review'].includes(action)){
+@@ -71,7 +73,7 @@
+       setBusy(true);setError('');
+       try{
+         if(recovered&&requestText(aid,command)!==requestText(aid,recovered.domain_input as InterviewCommand))throw new Error('原动作版本不同，不能改绑');
+-        const result=await retrieveForCommand(token,aid,expectedOwner,'interview',command as unknown as Record<string,unknown>,view.head?.scope_revision??scopeRevision,view.head?.revision??0,[currentGoal.target,currentGoal.focus].filter(Boolean).join(' ').slice(0,1024),()=>alive(stamp,aid)&&active.current.owner===expectedOwner&&active.current.viewToken===expectedView,recovered);
++        const result=await retrieveForCommand(token,aid,expectedOwner,'interview',command as unknown as Record<string,unknown>,view.head?.scope_revision??scopeRevision,view.head?.revision??0,[currentGoal.target,currentGoal.focus].filter(Boolean).join(' ').slice(0,1024),()=>alive(stamp,aid)&&active.current.owner===expectedOwner&&active.current.viewToken===expectedView,recovered,modelService);
+         if(!result.ref||!alive(stamp,aid)||active.current.owner!==expectedOwner||active.current.viewToken!==expectedView)return;
+         command={...command,retrieval_ref:result.ref};
+       }catch(e){if(alive(stamp,aid))setError((e as Error).message);return;}
+@@ -184,7 +186,7 @@
+     </article>;
+   }
+   return <div className="interview-workspace" aria-label="文字模拟面试工作区" data-interview-activity-id={activityId}><h3>文字模拟面试</h3><p>新混合检索场次可明确选择最多四条学习记忆作低信任背景。经历与收益保留自报身份；模型反馈是建议。</p>
+-    <RetrievalPanel token={token} activityId={activityId} scopeRevision={view?.head?.scope_revision??scopeRevision} domainRevision={view?.head?.revision??0} owner={owner} mode={retrievalMode} indexAllowed={Boolean(head)} onMode={mode=>{if(!view?.head)setRetrievalMode(mode);}} onContinue={chain=>{const saved=chain.domain_input;void submit(saved.action as InterviewAction,saved.body as Record<string,unknown>,chain);}}/>
++    <RetrievalPanel token={token} activityId={activityId} scopeRevision={view?.head?.scope_revision??scopeRevision} domainRevision={view?.head?.revision??0} owner={owner} mode={retrievalMode} modelService={modelService} onDisclosureChange={setModelNoticeReady} indexAllowed={Boolean(head)} onMode={mode=>{if(!view?.head)setRetrievalMode(mode);}} onContinue={chain=>{const saved=chain.domain_input;void submit(saved.action as InterviewAction,saved.body as Record<string,unknown>,chain);}}/>
+     {error&&<p role="alert" className="failure">{error}</p>}{notice&&<p role="status">{notice}</p>}<button type="button" onClick={()=>void refresh()}>只读刷新／恢复场次</button>
+     {!owner&&<p>本机编辑身份或锁不可用，保持只读。可以复制自己的草稿。</p>}
+     {view&&<><section><h4>本次资料范围与预算</h4>{view.sources.map(s=><p key={s.source_id}>{s.title} · 版本{s.source_revision} · {s.valid?"当前可用":"已更新，须重新确认范围"}</p>)}
+@@ -199,9 +201,9 @@
+       {!view.capabilities.model&&<p>模型动作未开放：{view.capabilities.model_reason}；本地答案与只读核对仍按当前资格可用。</p>}
+       {detailCard(question)}{detailCard(savedAnswer)}{(head.phase==="question_ready"||head.phase==="answer_ready"||head.phase==="feedback_ready")&&<section><label>{head.phase==="question_ready"?"你的回答":"修改当前回答（另存新版本）"}<textarea aria-label="面试回答" value={answer} maxLength={4096} disabled={writeDisabled} onChange={e=>setAnswer(e.target.value)}/></label><button type="button" disabled={writeDisabled||!answer.trim()||(!head.current_question_id)} onClick={()=>void submit(head.current_answer_id?"correct_answer":"answer",head.current_answer_id?{answer_record_id:head.current_answer_id,expected_answer_version:savedAnswer?.record.answer_version??1,text:answer}:{question_record_id:head.current_question_id,text:answer})}>保存回答{head.current_answer_id?"新版本":""}（不调用模型）</button></section>}
+       {detailCard(feedback)}<div className="interview-actions">
+-        {head.phase==="ready"&&<button type="button" disabled={writeDisabled||pending||!modelGoalReady} onClick={()=>void submit("ask",{mode:"first"})}>开始提问</button>}
+-        {head.phase==="answer_ready"&&<button type="button" disabled={writeDisabled||pending||!modelGoalReady} onClick={()=>void submit("review",{question_record_id:head.current_question_id,answer_record_id:head.current_answer_id})}>获取必要追问或反馈</button>}
+-        {head.phase==="feedback_ready"&&<button type="button" disabled={writeDisabled||pending||!modelGoalReady} onClick={()=>void submit("ask",{mode:"next",parent_feedback_id:head.current_feedback_id})}>继续下一题（显式调用）</button>}
++        {head.phase==="ready"&&<button type="button" disabled={writeDisabled||pending||!modelGoalReady||!modelNoticeReady} onClick={()=>void submit("ask",{mode:"first"})}>开始提问</button>}
++        {head.phase==="answer_ready"&&<button type="button" disabled={writeDisabled||pending||!modelGoalReady||!modelNoticeReady} onClick={()=>void submit("review",{question_record_id:head.current_question_id,answer_record_id:head.current_answer_id})}>获取必要追问或反馈</button>}
++        {head.phase==="feedback_ready"&&<button type="button" disabled={writeDisabled||pending||!modelGoalReady||!modelNoticeReady} onClick={()=>void submit("ask",{mode:"next",parent_feedback_id:head.current_feedback_id})}>继续下一题（显式调用）</button>}
+         {pending&&<button type="button" disabled={writeDisabled} onClick={()=>void submit("abandon",{pending_key:head.pending_key})}>显式放弃原意图（不退款／不重发）</button>}
+         {!finished&&<button type="button" disabled={writeDisabled||pending} onClick={()=>void submit("finish",{})}>结束本场次</button>}
+       </div></>}
+--- S07-initial/backend/tests/test_step018_control_snapshot.py
++++ final/backend/tests/test_step018_control_snapshot.py
+@@ -12,7 +12,7 @@
+ 
+ class SnapshotTests(unittest.TestCase):
+     def setUp(self):
+-        self.root = Path(mkdtemp(prefix='retrolume-snapshot-check-'))
++        self.root = Path(mkdtemp(prefix='retrolume-snapshot-check-',dir=os.environ.get('S08_EVIDENCE')))
+         self.hub = ControlHub(self.root)
+         context = DataContext(self.hub.control_id, 0, str(uuid4()), str(uuid4()), 'normal')
+         self.job = self.hub.create_or_get_job(DataJobCommand('restore', str(uuid4()), {'plan_id':str(uuid4()), 'plan_sha256':'0'*64}), context)
+@@ -66,7 +66,7 @@
+ 
+     def test_valid_foreign_hub_replacement_cannot_keep_writable_identity(self):
+         self.hub.assert_writable()
+-        foreign=ControlHub(Path(mkdtemp(prefix='retrolume-foreign-hub-')))
++        foreign=ControlHub(Path(mkdtemp(prefix='retrolume-foreign-hub-',dir=os.environ.get('S08_EVIDENCE'))))
+         try:
+             self.hub.path.write_bytes(foreign.path.read_bytes())
+             with self.assertRaises(DataError):self.hub.assert_writable()
+@@ -83,5 +83,39 @@
+             with self.assertRaises(DataError): self.hub.assert_writable()
+         finally: peer.lock.close(); peer.operation_lock.close()
+ 
++    def foreign_write_refused(self, action):
++        """D01：有效B日志取代已读缓存的A，三个写入口均不得追加或返回B事实。"""
++        self.hub.state()
++        foreign=ControlHub(Path(mkdtemp(prefix='s08-foreign-write-',dir=os.environ.get('S08_EVIDENCE'))))
++        try:
++            command=DataJobCommand('restore',self.job['business_key'],{'plan_id':str(uuid4()),'plan_sha256':'0'*64})
++            context=DataContext(foreign.control_id,0,str(uuid4()),str(uuid4()),'normal')
++            job=foreign.create_or_get_job(command,context)
++            raw=foreign.path.read_bytes();self.hub.path.write_bytes(raw)
++            invoked=[]
++            def decide(value):invoked.append(value);return {'stage':'错误混入B'}
++            with self.assertRaises(DataError) as caught:
++                if action=='commit':self.hub.commit('maintenance.fence',{'state':'frozen'})
++                elif action=='same-key':self.hub.create_or_get_job(command,context)
++                else:self.hub.change_job(job['job_id'],decide)
++            self.assertEqual(caught.exception.code,'control_corrupt')
++            self.assertEqual(self.hub.path.read_bytes(),raw)
++            self.assertEqual(invoked,[])
++        finally:foreign.lock.close();foreign.operation_lock.close()
++
++    def test_foreign_log_commit_rejects_without_append(self):self.foreign_write_refused('commit')
++    def test_foreign_log_same_business_key_cannot_return_foreign_job(self):self.foreign_write_refused('same-key')
++    def test_foreign_log_change_known_foreign_job_never_calls_decide(self):self.foreign_write_refused('change')
++
++    def test_all_write_entries_refuse_readable_committed_prefix_with_tail(self):
++        with self.hub.path.open('ab') as stream:stream.write(b'\x00\x00')
++        self.hub.state();raw=self.hub.path.read_bytes()
++        command=DataJobCommand('restore',self.job['business_key'],{'plan_id':str(uuid4()),'plan_sha256':'0'*64})
++        origin=DataContext(self.hub.control_id,0,str(uuid4()),str(uuid4()),'normal')
++        for call in (lambda:self.hub.commit('maintenance.fence',{}),lambda:self.hub.create_or_get_job(command,origin),lambda:self.hub.change_job(self.job['job_id'],lambda _:{})):
++            with self.assertRaises(DataError) as caught:call()
++            self.assertEqual(caught.exception.code,'control_tail_unconfirmed')
++            self.assertEqual(self.hub.path.read_bytes(),raw)
++
+ 
+ if __name__ == '__main__': unittest.main()
+--- S07-initial/backend/tests/test_step018_audit_repairs.py
++++ final/backend/tests/test_step018_audit_repairs.py
+@@ -0,0 +1,226 @@
++"""S08/D02：实际网关完整正文边界，仅test-only本机ledger/最低transport。"""
++import copy
++from dataclasses import replace
++from datetime import datetime,timedelta,timezone
++import hashlib
++import json
++import os
++from pathlib import Path
++from tempfile import mkdtemp
++import unittest
++from unittest.mock import patch
++from uuid import uuid4
++
++from app.capabilities.contracts import (AdmissionPermit,CallContext,CallStatus,ModelCallRequest,ModelServiceConfig,
++    RecordOutcome,LedgerDisposition,ResponseMode,Message)
++from app.capabilities.embedding import OutboundSourceManifest,OutboundGrant
++from app.capabilities.gateway import ControlledModelGateway
++from app.capabilities.transport import TransportResponse
++from app.learning.contracts import SourceIdentity,canonical,sha
++from app.learning.teaching_contracts import TeachingCommandInput,TeachingProfile
++from app.learning.teaching_prompt import messages_for_teaching
++from app.learning.teaching_service import TeachingService
++from app.retrieval.contracts import digest
++from app.retrieval.service import load_integration_config,IntegrationConfig
++from app.worker.one_call import OneCallInput
++from test_step018_flows import adopted_fixture
++from tests.fixtures.step018.s08_loop import ClosedAsyncTestCase
++
++
++def qualified_messages(action,document):
++    # 产品教学adapter按typed Message（含默认空tool_calls）核摘要。
++    return [Message.model_validate(value).model_dump(mode='json',exclude_none=True) for value in messages_for_teaching(action,document)]
++
++
++def assembled_request(action='plan',edit=None):
++    """真实StoredTeachingDocument装配；选用背景投影只测正文范围，不冒v2记忆资格。"""
++    entry,manifest,grant,_=adopted_fixture();aid=grant.allowed_activity_ids[0]
++    body={'confirmed':True} if action=='plan' else {'confirmed':True,'exercise_record_id':str(uuid4()),'answer_record_id':str(uuid4())}
++    command=TeachingCommandInput(business_key=str(uuid4()),expected_revision=1,expected_goal_version=1,
++        expected_scope_revision=1,action=action,body=body)
++    request_sha=command.request_sha256(aid)
++    entry=entry.model_copy(update={'citation_id':'lc_'+sha(request_sha+entry.evidence_id)[:24]})
++    facts={'goal_text':'合成分钟换秒目标','answer_text':'合成回答为120秒','exercise_projection':{'stem':'两分钟是多少秒'},
++           'correction_texts':['合成纠错说明'],'prior_observations':[{'message':'合成历史建议'}],'calculation_summary':None}
++    document=TeachingService._stored_document(command,{'scope_revision':1},[entry],{'goal_version':1},facts)
++    document['learning_background']=[{'memory_id':'01800000-0000-4000-8000-000000009001','version':1,
++        'kind':'self_report','uncertainty':'self_reported','title':'合成背景','text':'合成选择背景正文','observation':None,
++        'use':'仅背景，旧作答不算本活动独立表现，不是正确性引用或授权。'}]
++    if edit:edit(document)
++    messages=qualified_messages(action,document)
++    profile=TeachingProfile(action=action,command_key=command.business_key,request_sha256=request_sha,context_sha256='f'*64,
++        activity_id=aid,expected_revision=1,goal_record_id=str(uuid4()),goal_version=1,scope_revision=1,
++        sources=[SourceIdentity(source_id=entry.source_id,version_id=entry.version_id,source_revision=entry.source_revision)],
++        catalog=[entry],messages_sha256=sha(canonical(messages)),max_output_tokens=256)
++    request=ModelCallRequest(messages=messages,max_output_tokens=256,teaching_profile=profile,response_mode=ResponseMode.JSON_OBJECT)
++    context=CallContext(activity_id=aid,operation_id='teach8m.'+command.business_key+'.'+request_sha,
++        executor_id='test-only-s08',execution_generation=1,scope_revision=1)
++    return context,request,manifest,grant
++
++
++def config_for(request,manifest,grant):
++    config=ModelServiceConfig(provider='deepseek_chat_completions',base_url='https://api.deepseek.com',model='deepseek-chat',
++        api_key='test-only-not-a-real-key',timeout_seconds=1,max_request_bytes=65536,max_response_bytes=65536)
++    payload=ControlledModelGateway(config)._build_payload(request)
++    manifest=OutboundSourceManifest.from_wire(manifest.model_dump(mode='json')|{'model_requests':[
++        {'payload_sha256':digest(payload),'request_sha256':digest(request.model_dump(mode='json'))}]})
++    grant=grant.model_copy(update={'grant_id':'TEST-ONLY-S08-NOT-Q-ACTIVATION','source_manifest_sha256':manifest.sha256})
++    config=config.model_copy(update={'outbound_grant':grant.model_dump(mode='json'),'outbound_source_manifest':manifest.model_dump(mode='json')})
++    return config,manifest,grant,payload
++
++
++class Ledger:
++    def __init__(self,profile,after_admit=None,after_mark=None):
++        self.profile=profile;self.intents=[];self.marks=[];self.outcomes=[];self.after_admit=after_admit;self.after_mark=after_mark
++    async def read_learning_snapshot(self,activity):
++        return {'scope_revision':1,'sources':[{'source_id':e.source_id,'valid':True,'ready':True,'sha256':e.original_sha256,'title':e.title,'format':e.format} for e in self.profile.catalog]}
++    async def admit(self,intent):
++        self.intents.append(intent)
++        if self.after_admit:self.after_admit(intent)
++        return AdmissionPermit('test-only-permit',intent.context.operation_id,intent.context.executor_id)
++    async def mark_dispatch_started(self,permit,**kwargs):
++        self.marks.append(permit)
++        if self.after_mark:self.after_mark()
++    async def record_outcome(self,permit,outcome):self.outcomes.append(outcome);return RecordOutcome.RECORDED
++
++
++class Transport:
++    is_external=False
++    def __init__(self):self.calls=[]
++    async def send(self,**kwargs):
++        self.calls.append({k:v for k,v in kwargs.items() if k!='api_key'})
++        value={'result_type':'no_evidence','message':'合成替身不作语义结论','missing':['合成补充说明']}
++        raw=json.dumps({'model':'deepseek-chat','choices':[{'finish_reason':'stop','message':{'role':'assistant','content':json.dumps(value)}}],
++                        'usage':{'prompt_tokens':10,'completion_tokens':10,'total_tokens':20}}).encode()
++        return TransportResponse(200,raw,len(raw))
++
++
++class AuditModelScopeTests(ClosedAsyncTestCase):
++    async def test_complete_approved_payload_sends_exactly_once_and_wire_keeps_scope(self):
++        context,request,old,grant=assembled_request();config,manifest,grant,payload=config_for(request,old,grant)
++        ledger=Ledger(request.teaching_profile);transport=Transport()
++        result=await ControlledModelGateway(config,ledger=ledger,transport=transport).call(context,request)
++        self.assertEqual(result.status,CallStatus.SUCCEEDED)
++        self.assertEqual((len(ledger.intents),len(ledger.marks),len(transport.calls)),(1,1,1))
++        self.assertEqual(transport.calls[0]['payload'],json.loads(json.dumps(payload)))
++        self.assertEqual(ledger.intents[0].outbound_source_manifest,manifest.model_dump(mode='json'))
++        restored=OneCallInput.from_wire(OneCallInput(context.operation_id,request,config).to_wire())
++        self.assertEqual(OutboundSourceManifest.from_wire(restored.service.outbound_source_manifest).sha256,manifest.sha256)
++        self.assertEqual(restored.service.outbound_grant['source_manifest_sha256'],manifest.sha256)
++        self.assertNotEqual(old.sha256,manifest.sha256)
++
++    async def test_unapproved_actual_teaching_goal_answer_correction_history_memory_and_version_zero_admit(self):
++        context,request,old,grant=assembled_request('evaluate');config,manifest,grant,_=config_for(request,old,grant)
++        original=json.loads(request.messages[-1].content)
++        edits={
++          'goal':lambda x:x.update(goal='未批准目标正文'),
++          'answer':lambda x:x['task'].update(answer_text='未批准回答正文'),
++          'correction':lambda x:x['task'].update(corrections=['未批准纠错正文']),
++          'history':lambda x:x['task'].update(prior_observations=[{'message':'未批准历史正文'}]),
++          'selected-memory-text':lambda x:x['learning_background'][0].update(text='未批准记忆正文'),
++          'selected-memory-version':lambda x:x['learning_background'][0].update(version=2)}
++        for name,edit in edits.items():
++            with self.subTest(name=name):
++                value=copy.deepcopy(original);edit(value);messages=qualified_messages('evaluate',value)
++                profile=request.teaching_profile.model_copy(update={'messages_sha256':sha(canonical(messages))})
++                variant=ModelCallRequest(messages=messages,max_output_tokens=256,teaching_profile=profile)
++                ledger=Ledger(profile);transport=Transport()
++                result=await ControlledModelGateway(config,ledger=ledger,transport=transport).call(context,variant)
++                self.assertEqual(result.status,CallStatus.REJECTED);self.assertEqual(result.error_code,'outbound_conditions_unverified')
++                self.assertEqual(ledger.intents,[]);self.assertEqual(transport.calls,[])
++
++    async def test_unapproved_complete_request_payload_shape_and_system_zero_send(self):
++        context,request,old,grant=assembled_request();config,_,_,_=config_for(request,old,grant)
++        variants=[request.model_copy(update={'response_mode':ResponseMode.TEXT}),
++            request.model_copy(update={'messages':(request.messages[0].model_copy(update={'content':'未批准system'}),request.messages[1])})]
++        for variant in variants:
++            ledger=Ledger(variant.teaching_profile);transport=Transport()
++            result=await ControlledModelGateway(config,ledger=ledger,transport=transport).call(context,variant)
++            self.assertEqual(result.status,CallStatus.REJECTED);self.assertEqual(ledger.intents,[]);self.assertEqual(transport.calls,[])
++
++    async def test_after_admit_original_request_config_or_private_scope_change_keeps_reservation_no_dispatch(self):
++        for target in ('request','config','intent'):
++            with self.subTest(target=target):
++                context,request,old,grant=assembled_request();config,_,_,_=config_for(request,old,grant)
++                def change(intent):
++                    if target=='request':request.teaching_profile.catalog.append(request.teaching_profile.catalog[0])
++                    elif target=='config':config.outbound_source_manifest['query_input_sha256'].append('0'*64)
++                    else:intent.outbound_source_manifest['query_input_sha256'].append('0'*64)
++                ledger=Ledger(request.teaching_profile,after_admit=change);transport=Transport()
++                result=await ControlledModelGateway(config,ledger=ledger,transport=transport).call(context,request)
++                self.assertEqual(result.status,CallStatus.REJECTED)
++                self.assertEqual((len(ledger.intents),len(ledger.marks),len(transport.calls)),(1,0,0))
++                self.assertEqual(ledger.outcomes,[])
++
++    async def test_change_during_mark_records_not_sent_without_refund_or_retry(self):
++        context,request,old,grant=assembled_request();config,_,_,_=config_for(request,old,grant)
++        ledger=Ledger(request.teaching_profile,after_mark=lambda:config.outbound_grant.update(grant_id='test-only-changed'))
++        transport=Transport();result=await ControlledModelGateway(config,ledger=ledger,transport=transport).call(context,request)
++        self.assertEqual(result.status,CallStatus.NOT_SENT)
++        self.assertEqual((len(ledger.intents),len(ledger.marks),len(transport.calls)),(1,1,0))
++        self.assertEqual(ledger.outcomes[0].disposition,LedgerDisposition.NOT_SENT)
++
++    async def test_old_empty_approval_denies_model_but_local_no_grant_stays_usable(self):
++        context,request,old,grant=assembled_request();config,_,_,_=config_for(request,old,grant)
++        old_config=config.model_copy(update={'outbound_grant':grant.model_dump(mode='json'),'outbound_source_manifest':old.model_dump(mode='json')})
++        ledger=Ledger(request.teaching_profile);transport=Transport()
++        result=await ControlledModelGateway(old_config,ledger=ledger,transport=transport).call(context,request)
++        self.assertEqual(result.status,CallStatus.REJECTED);self.assertEqual(ledger.intents,[]);self.assertEqual(transport.calls,[])
++        self.assertEqual(old.sha256,digest(old.model_dump(mode='json',exclude={'model_requests'})))
++        local=config.model_copy(update={'outbound_grant':None,'outbound_source_manifest':None})
++        ledger=Ledger(request.teaching_profile);transport=Transport()
++        result=await ControlledModelGateway(local,ledger=ledger,transport=transport).call(context,request)
++        self.assertEqual(result.status,CallStatus.SUCCEEDED);self.assertEqual(len(transport.calls),1)
++
++    async def test_model_grant_expiry_after_admit_keeps_reservation_zero_send(self):
++        context,request,old,grant=assembled_request();config,_,_,_=config_for(request,old,grant)
++        now=[datetime.now(timezone.utc)]
++        class Clock(datetime):
++            @classmethod
++            def now(cls,tz=None):return now[0]
++        ledger=Ledger(request.teaching_profile,after_admit=lambda _:now.__setitem__(0,now[0]+timedelta(hours=2)))
++        transport=Transport()
++        with patch('app.capabilities.embedding.datetime',Clock):result=await ControlledModelGateway(config,ledger=ledger,transport=transport).call(context,request)
++        self.assertEqual(result.status,CallStatus.REJECTED)
++        self.assertEqual((len(ledger.intents),len(ledger.marks),len(transport.calls)),(1,0,0))
++
++
++class AuditManifestLoaderTests(unittest.TestCase):
++    def test_manifest_strict_fields_and_duplicate_pairs(self):
++        _,request,old,grant=assembled_request();_,manifest,_,_=config_for(request,old,grant)
++        wire=manifest.model_dump(mode='json')
++        for approvals in ([wire['model_requests'][0]]*2,[{'payload_sha256':'x','request_sha256':'0'*64}],
++                          [wire['model_requests'][0]|{'automatic':True}]):
++            with self.assertRaises(ValueError):OutboundSourceManifest.from_wire(wire|{'model_requests':approvals})
++
++    def test_real_local_loader_and_private_wire_bind_new_hash_without_normal_Q_files(self):
++        context,request,old,grant=assembled_request();_,manifest,grant,_=config_for(request,old,grant)
++        root=Path(mkdtemp(prefix='s08-TEST-ONLY-NOT-Q-',dir=os.environ.get('S08_EVIDENCE')))
++        price=b'TEST-ONLY-NOT-OFFICIAL-PRICE';(root/'test-price.bin').write_bytes(price)
++        receipt={'TEST_ONLY_NOT_Q_ACTIVATION':True,'stage':'Q','status':'enabled','TASK':'TASK-117',
++                 'approved_receipt_sha256':grant.approved_receipt_sha256,'source_manifest_sha256':manifest.sha256,
++                 'independent_audit_result_sha256':'0'*64}
++        raw=json.dumps(receipt).encode();(root/'test-receipt.json').write_bytes(raw)
++        grant=grant.model_copy(update={'q_activation_receipt_sha256':hashlib.sha256(raw).hexdigest(),'price_snapshot_sha256':hashlib.sha256(price).hexdigest()})
++        (root/'test-grant.json').write_text(grant.model_dump_json(),encoding='utf-8')
++        (root/'test-manifest.json').write_text(manifest.model_dump_json(),encoding='utf-8')
++        body={'schema':'retrolume.integration.v1','enabled':True,'embedding':{},'outbound_grant_file':str(root/'test-grant.json'),
++              'q_activation_receipt_file':str(root/'test-receipt.json'),'price_snapshot_file':str(root/'test-price.bin'),
++              'source_manifest_file':str(root/'test-manifest.json')}
++        (root/'test-integration.json').write_text(json.dumps(body),encoding='utf-8')
++        with patch.dict(os.environ,{'RETROLUME_EMBEDDING_API_KEY':'test-only-key'}):loaded=load_integration_config(root/'test-integration.json')
++        self.assertTrue(loaded.available);self.assertEqual(loaded.service.outbound_grant['source_manifest_sha256'],manifest.sha256)
++        self.assertEqual(OutboundSourceManifest.from_wire(loaded.service.outbound_source_manifest).sha256,manifest.sha256)
++        model=ModelServiceConfig(provider='deepseek_chat_completions',base_url='https://api.deepseek.com',model='deepseek-chat',api_key='test-only',max_request_bytes=65536,max_response_bytes=65536,
++            outbound_grant=loaded.service.outbound_grant,outbound_source_manifest=loaded.service.outbound_source_manifest)
++        restored=OneCallInput.from_wire(OneCallInput(context.operation_id,request,model).to_wire())
++        self.assertEqual(OutboundSourceManifest.from_wire(restored.service.outbound_source_manifest).sha256,manifest.sha256)
++        (root/'test-manifest.json').write_text(old.model_dump_json(),encoding='utf-8')
++        with patch.dict(os.environ,{'RETROLUME_EMBEDDING_API_KEY':'test-only-key'}):rejected=load_integration_config(root/'test-integration.json')
++        self.assertFalse(rejected.available);self.assertEqual(rejected.reason,'retrieval_config_invalid')
++
++    def test_public_identity_is_actual_config_or_explicitly_unknown(self):
++        self.assertIsNone(IntegrationConfig().public()['provider']);self.assertIsNone(IntegrationConfig().public()['model'])
++
++
++if __name__=='__main__':unittest.main()
+--- S07-initial/README.md
++++ final/README.md
+@@ -1,6 +1,8 @@
+ # RetroLume 本地工程入口
+ 
+ 本目录为 RetroLume 本地工程，提供资料、学习、文字面试、低信任记忆和隔离只读恢复入口。STEP018 的混合检索集成仍在 TASK117 合成候选收口中；实际验收状态以 [执行动态文档](DocuS/执行动态文档.MD) 为准。合成传输与真实供应商语义分别验证。
++
++TASK117 S08已形成四项缺陷修正的合成工程候选，正式bundle8完成八项定向浏览器检查；等待原TASK118增量独审，Q继续冻结。已有PG、恢复、PDF和固定预览证据按原版本继承，本轮未重跑这些业务链，也未启用真实供应商或费用。
+ 
+ TASK117 的 S06 工程候选已补齐本轮定向证据，提交主控安排独立复核，真实供应商调用保持关闭。面试须先开始场次，再明确确认资料索引；模型动作等待持久目标正文核对就绪，并使用该版本的目标构造查询。合成 source/compat 已应用记忆资格的传递只读授权及删源触发器别名修补，通过受信目录与业务行不变检查。该事实只适用于本次两个合成库，不授权自动迁移用户库。
+ 
+@@ -51,6 +53,18 @@
+ 一次动作最多检查10个来源、合计5 MiB原件和512个候选片段，PDF最多50物理页。旧词项入口保持原有限行为。集成入口显式确认当前资料索引，再对本轮必要问题查询；512维向量与词项按固定规则合并，仍逐段核对当前原件。索引按每批最多4段预览次数和预留，缓存命中不重复索引。查询后还需一次模型时，先检查完整两次调用的次数、费用与时间余量；预览不替代服务器逐笔事务准入。同名歧义、证据不足和冲突保持可见，检索排序不证明结论正确。
+ 
+ `RETROLUME_INTEGRATION_CONFIG` 指向私有配置，结构见 `config/integration.example.json`。真实外发需要主控采用的激活回执、独立审核结果、价格原件、不可重绑的 OutboundGrant 和实际 source/version/revision/原件哈希及必要片段白名单。grant 的 `source_manifest_sha256` 绑定 `retrolume.outbound-sources.v1` 规范JSON摘要，清单另保留冻结设计样本摘要；不能以文件名或64位格式检查替代范围核对。provider密钥只在服务器环境，不能通过浏览器、资料或operator预览票据批准模型外发。当前TASK117的Q未启用。
++
++S08修正进一步要求模型清单批准完整发送范围。`model_requests`最多128项，每项只有`payload_sha256`和`request_sha256`，分别绑定规范JSON的完整供应商payload与`ModelCallRequest.model_dump(mode='json')`。payload包含模型、system/user/history、选用记忆及版本、派生上下文、输出/格式/工具等实际发送字段；仅批准资料片段不足以批准这些正文。空字段保持原Embedding清单摘要，旧清单的模型外发失败关闭。非空字段进入新的manifest摘要，loader、grant和私有wire必须共同绑定新值；不能改活动已绑定的grant或复用旧hash。准入和dispatch前核同一冻结对象，await中变化保留已预扣、停止发送，不退款或自动重发。
++
++无秘密字段示意如下；尖括号是说明占位，不是可采用的摘要，也不启用Q：
++
++```json
++{"model_requests":[{"payload_sha256":"<审核后完整供应商payload的规范JSON SHA256>","request_sha256":"<同一完整typed request的规范JSON SHA256>"}]}
++```
++
++operator必须先固定有限样本的business_key、活动/记录ID、scope/head、明确选择的记忆版本和必要本地事实，用当前装配器形成确切请求及payload，审核全部正文后离线计算这两个摘要，一次采用到本地受信清单与绑定grant；运行时不能把任意新请求加入白名单。服务生成的ID和上下文也没有“任意值”例外。可执行样本限已完整冻结且获批的请求；依赖未知模型输出的新正文、变化后的版本或新key会被拒绝，不能据此自动换绑grant。后续有限Q若需要这种新请求，由主控在不可重绑及持久共享总门合同内另行采用，当前修复不声称所有Q流程已能运行。测试中的grant、费用原件和receipt只在隔离test-only目录，不能复制到正常operator配置。
++
++索引确认前会显示只读配置给出的向量provider/model、用途、单批预留及运行窗口；教学与面试混合动作同时显示聊天provider/model及两次请求、两笔费用和两个窗口。字段缺失或资格无法核对时相关外发按钮停用，本地零费保存、取消及原键只读核对保持原资格。S08的正式产物与合成验证结果见TASK117结果；Q仍冻结，合成HTTP和transport不代表真实PG或供应商通过。
+ 
+ 成果从活动存储读取，展示答案或必要提示、确认目标、引用和能力限制。点击“查看引用”回查该版本的真实行段；PDF显示物理页并区分原文和用户补充。版本被替换或来源失效时明确不可用，不拿新版本替代旧引用。引用身份与位置合法不代表结论已独立证实，真实供应商的整体语义质量仍待获准样本验证。
+ 
+--- S07-initial/frontend/src/activities/ActivityWorkspace.tsx
++++ final/frontend/src/activities/ActivityWorkspace.tsx
+@@ -851,7 +851,7 @@
+                 </div>
+               )}
+ 
+-              {(variant === "interview" || detail.business_domain === "interview") ? detail.activity_id === selectedId ? <InterviewWorkspace key={detail.activity_id} activityId={detail.activity_id} token={token} scopeRevision={detail.scope_revision} onChanged={() => { void refreshDetail(detail.activity_id, true); }}/> : <p role="status">正在读取选中的面试活动…</p> : detail.business_domain === "unknown" ? <p role="alert">活动领域资格不可核对，保持只读；请核对服务状态。</p> : <>
++              {(variant === "interview" || detail.business_domain === "interview") ? detail.activity_id === selectedId ? <InterviewWorkspace key={detail.activity_id} activityId={detail.activity_id} token={token} scopeRevision={detail.scope_revision} modelService={caps?.provider??null} onChanged={() => { void refreshDetail(detail.activity_id, true); }}/> : <p role="status">正在读取选中的面试活动…</p> : detail.business_domain === "unknown" ? <p role="alert">活动领域资格不可核对，保持只读；请核对服务状态。</p> : <>
+               <div className="ws-block">
+                 <h4>资料范围 · 范围修订 {detail.scope_revision}</h4>
+                 {(detail.sources ?? []).map(source => (
+@@ -910,6 +910,7 @@
+                   activityId={detail.activity_id}
+                   token={token}
+                   scopeRevision={detail.scope_revision}
++                  modelService={caps?.provider??null}
+                   teachingAvailable={Boolean(caps?.teaching?.available)}
+                   calculationAvailable={Boolean(caps?.teaching_calculation?.available)}
+                   memoryModelAvailable={Boolean(caps?.memory_model?.available)}
+--- S07-initial/backend/app/retrieval/service.py
++++ final/backend/app/retrieval/service.py
+@@ -40,7 +40,7 @@
+         from app.capabilities.transport import HttpxModelTransport
+         return self.service is not None and self.reason is None and (self.service.outbound_grant is not None or not HttpxModelTransport.is_external)
+     def public(self):return {'available':self.available,'reason':self.reason,'method':'hybrid.cosine-terms.rrf60.v1',
+-      'purpose':'当前已确认资料片段与本轮必要问题','provider':'zhipu_embeddings','model':'embedding-3','dimensions':512,
++      'purpose':'当前已确认资料片段与本轮必要问题','provider':self.service.provider if self.service else None,'model':self.service.model if self.service else None,'dimensions':512,
+       'batch_size':4,'max_index_fragments':self.max_index_fragments,'query_limit_chars':1024,'query_limit_bytes':4096,
+       'real_outbound_authorized':bool(self.service and self.service.outbound_grant),'reserve_cost_microunits':250000}
+ 
+--- S07-initial/backend/tests/test_step018_flows.py
++++ final/backend/tests/test_step018_flows.py
+@@ -103,7 +103,8 @@
+             async def send(self,**kwargs):counts['send']+=1;raise AssertionError('expired grant sent')
+         context=CallContext(activity_id=request.activity_id,operation_id='emb18i.'+request.binding.business_key+'.0',executor_id='S02-pure',execution_generation=1,scope_revision=1)
+         config=EmbeddingServiceConfig(api_key='synthetic',outbound_grant=grant.model_dump(mode='json'),outbound_source_manifest=manifest.model_dump(mode='json'))
+-        with patch('app.capabilities.embedding.datetime',Clock):result=asyncio.run(ControlledEmbeddingGateway(config,ledger=Ledger(),transport=Transport()).call(context,request))
++        from tests.fixtures.step018.s08_loop import run_no_io
++        with patch('app.capabilities.embedding.datetime',Clock):result=run_no_io(ControlledEmbeddingGateway(config,ledger=Ledger(),transport=Transport()).call(context,request))
+         self.assertEqual(result.status,CallStatus.REJECTED);self.assertEqual(counts,{'admit':1,'dispatch':0,'send':0})
+ 
+     def test_frozen_numeric_variants_and_safe_preview_descriptor(self):
+@@ -135,7 +136,8 @@
+ 
+     def test_valid_adopted_source_and_both_capabilities(self):
+         entry,manifest,grant,request=adopted_fixture();manifest.check_embedding(request)
+-        manifest.check_model(SimpleNamespace(learning_profile=None,teaching_profile=SimpleNamespace(catalog=[entry]),interview_profile=None,html_profile=None))
++        # D02：旧清单仍可批准Embedding；完整模型正文缺少独立批准时必须拒绝。
++        with self.assertRaises(AdmissionDenied):manifest.check_model(SimpleNamespace(learning_profile=None,teaching_profile=SimpleNamespace(catalog=[entry]),interview_profile=None,html_profile=None))
+         manifest.check_sources(manifest.sources)
+         for provider,model in [('zhipu_embeddings','embedding-3'),('deepseek_chat_completions','deepseek-chat')]:grant.check(request.activity_id,provider,model,1000,200)
+         self.assertEqual(OutboundGrant.from_wire(grant.model_dump(mode='json')).sha256,grant.sha256)
+--- S07-initial/frontend/tests/step018-s08.mjs
++++ final/frontend/tests/step018-s08.mjs
+@@ -0,0 +1,252 @@
++// S08：正式dist + 封闭合成HTTP；不访问PG、用户数据或真实供应商。
++import {chromium} from 'playwright';
++import fs from 'node:fs';
++import path from 'node:path';
++import http from 'node:http';
++import os from 'node:os';
++import {createHash,randomUUID} from 'node:crypto';
++import assert from 'node:assert/strict';
++
++const canonical=x=>x===null||typeof x!=='object'?JSON.stringify(x):Array.isArray(x)?`[${x.map(canonical).join(',')}]`:`{${Object.keys(x).sort().map(k=>`${JSON.stringify(k)}:${canonical(x[k])}`).join(',')}}`;
++const sha=x=>createHash('sha256').update(x).digest('hex');
++const aid='01800000-0000-4000-8000-000000000001',sid='01800000-0000-4000-8000-000000001001',vid='01800000-0000-4000-8000-000000002001',gid='01800000-0000-4000-8000-000000004001';
++const origin='http://127.0.0.1:18119';
++const routes=['GET /','GET /assets/*','GET /api/session','GET /api/materials','GET /api/pdf-candidates',
++ 'GET /api/activities/capabilities','GET /api/activities','GET /api/activities/:aid','GET /api/activities/:aid/operations',
++ 'GET /api/activities/:aid/teaching/workspace','POST /api/activities/:aid/teaching/commands',
++ 'GET /api/activities/:aid/retrieval/status','POST /api/activities/:aid/retrieval/commands','GET /api/activities/:aid/retrieval/commands/:key',
++ 'GET /api/activities/:aid/interview/workspace','GET /api/activities/:aid/interview/records/:id','GET /api/activities/:aid/interview/history',
++ 'GET /api/memories','GET /api/memories/choices','GET /api/memories/capabilities','GET /api/activities/:aid/memory-selection'];
++const closedResponseShapes={session:['token','storage_configured','max_bytes','data_context'],status:['available','provider','model','purpose','query_then_model_requests','query_then_model_reserve_microunits','window_reserve_seconds'],
++ teaching:['head','overlay','goal','history','pending','budgets','view_token'],interview:['head','records','sources','budget','capabilities','view_token']};
++if(process.argv.includes('--contract-check')){
++ assert.equal(sha(canonical({b:2,a:1})),sha('{"a":1,"b":2}'));
++ assert(routes.includes('GET /api/activities/:aid/retrieval/commands/:key'));
++ assert(routes.every(x=>!x.includes('http:')&&!x.includes('https:')));
++ console.log(JSON.stringify({static_contract_only:true,routes,closedResponseShapes,barrier:'真实draft事务commit之后、产品oncomplete回调之前；正常只读刷新驱动原activity的owner/view/head变化',
++   post_count:'server实际path+method+case计数，显式索引/query/domain分别计；没有自动重发推断混计'}));
++ process.exit(0);
++}
++assert(process.env.S08_SPEC,'必须由S08精确控制器启动');
++const spec=JSON.parse(fs.readFileSync(process.env.S08_SPEC,'utf8')),dir=spec.evidence;
++assert.equal(spec.permit,'TASK-117-STEP018-AUDIT-REPAIR-S08-20261017');
++const proof={status:'running',Q:'FROZEN',real_PG:false,real_provider:false,formal_dist:true,cases:[],assets:[],requests:[],external_attempts:[],unknown_routes:[],observation_errors:[],routes,closedResponseShapes};
++const save=()=>fs.writeFileSync(path.join(dir,'proof.json'),JSON.stringify(proof,null,2));
++let context,server,closing=false,shutdownPromise,fixture,caseNumber=0,deadlineTimer,watchTimer;
++const observations=new Set();
++function observe(work){const pending=Promise.resolve().then(work).catch(error=>proof.observation_errors.push(String(error))).finally(()=>observations.delete(pending));observations.add(pending);}
++function count(counter){
++ const b=JSON.parse(fs.readFileSync(spec.budget,'utf8')),s=b.segments.find(x=>x.permit===spec.permit);
++ assert.equal(b.active_segment,spec.permit);assert.equal(b.active_root,spec.root.id);
++ assert(Date.now()<Date.parse(spec.root.business_deadline_utc));assert(b.counts[counter]+1<=s.cumulative_caps[counter]);
++ b.counts[counter]++;fs.writeFileSync(spec.budget,JSON.stringify(b,null,2)+'\n');
++}
++const budget={max_requests:80,requests_reserved:0,max_cost_microunits:20000000,cost_reserved_microunits:0,reserve_cost_microunits:250000,
++ max_running_seconds:3600,running_reserved_seconds:0,running_settled_seconds:0,max_tool_calls:10,tools_reserved:0};
++function setup(name,{interview=false,missingVector=false,missingChat=false,changed=false,ready=true}={}){
++ caseNumber++;fixture={name,interview,ready,view:'s08-view-A',revision:1,scope:1,
++  vector:{provider:missingVector?null:changed?'synthetic_vector_b':'zhipu_embeddings',model:changed?'s08-vector-model-b':'embedding-3'},
++  chat:missingChat?{provider:'deepseek_chat_completions',model:null}:changed?{provider:'synthetic_chat_b',model:'s08-chat-model-b'}:{provider:'deepseek_chat_completions',model:'deepseek-chat'},
++  context:{control_id:'01800000-0000-4000-8000-000000008001',selection_generation:0,dataset_id:`01800000-0000-4000-8000-${String(8000+caseNumber).padStart(12,'0')}`,
++   instance_id:`01800000-0000-4000-8000-${String(9000+caseNumber).padStart(12,'0')}`,current_mode:'normal',read_only:false},receipts:new Map()};
++ return fixture;
++}
++function facts(){return {activity_id:aid,status:'idle',created_at:'2026-10-18T01:30:00Z',updated_at:'2026-10-18T01:30:00Z',deadline_at:'2099-01-01T00:00:00Z',cancelled_at:null,
++ scope_revision:fixture.scope,...budget,source_count:1,source_titles:['合成速度.md'],sources:[{source_id:sid,title:'合成速度.md',valid:true}],memory_selection:{selected:false,eligible:true},
++ ...(fixture.interview?{business_domain:'interview'}:{})};}
++function status(){return {available:true,reason:null,ready:fixture.ready,...fixture.vector,purpose:'当前已确认资料片段与本轮必要问题',fragments:1,cached_fragments:fixture.ready?1:0,index_batches:1,
++ reserve_cost_microunits:250000,remaining_requests:80,remaining_cost_microunits:20000000,remaining_running_seconds:3600,
++ query_then_model_requests:2,query_then_model_reserve_microunits:500000,window_reserve_seconds:30};}
++function teaching(){return {schema:'teaching.workspace.v1',activity_id:aid,view_token:fixture.view,read_at:new Date().toISOString(),
++ head:{revision:fixture.revision,goal_version:1,phase:'needs_plan',goal_record_id:gid,path_record_id:null,node_id:null,exercise_record_id:null,answer_record_id:null,feedback_record_id:null,reason_record_id:null,pending_business_key:null},
++ overlay:{source_invalid:false,cancelled:false,expired:false,processing:false,unknown:false},goal:{qualification:'current',record_id:gid,goal:'合成分钟换秒目标'},
++ path:null,proposal:null,exercise:null,answer:null,feedback:null,reason:null,nodes:{},budgets:budget,pending:[],history:[],next_cursor:null,sources:[],limits:{},memory_selected:false,memory_invalid:false};}
++function goalMeta(){return {record_id:gid,seq:1,kind:'goal',origin:'local',goal_version:1,scope_revision:1,round_index:0,probe_depth:0,answer_version:null,
++ question_record_id:null,body_sha256:'a'.repeat(64),operation_id:null,eligible:true,can_correct_answer:false};}
++function interview(){return {schema:'interview.view.v1',profile:'interview.v2',activity_id:aid,domain:'interview',head:{revision:1,goal_version:1,scope_revision:1,phase:'ready',round_index:0,probe_depth:0,last_seq:1,
++ goal_record_id:gid,root_question_id:null,current_question_id:null,current_answer_id:null,current_feedback_id:null,pending_key:null},
++ sources:[{source_id:sid,version_id:vid,source_revision:1,original_sha256:'b'.repeat(64),title:'合成速度.md',format:'md',valid:true}],budget,pending:null,records:[goalMeta()],
++ view_token:fixture.view,qualification:'current',suppression_reason:null,capabilities:{local:true,model:true,model_reason:null,max_followups_per_round:1,max_output_tokens:2048}};}
++function json(response,value,code=200){response.writeHead(code,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-RetroLume-Data-Context':canonical(fixture.context)});response.end(JSON.stringify(value));}
++async function handler(request,response){
++ const url=new URL(request.url,origin),p=url.pathname,method=request.method;
++ count('http');let body=null;
++ if(method==='POST'){const chunks=[];for await(const chunk of request){chunks.push(chunk);if(chunks.reduce((n,x)=>n+x.length,0)>65536)throw new Error('fixture_body_limit');}body=JSON.parse(Buffer.concat(chunks).toString());}
++ const row={at:new Date().toISOString(),case:fixture?.name,method,path:p,query:url.search,body};proof.requests.push(row);
++ if(method==='GET'&&(p==='/'||p.startsWith('/assets/'))){
++  const relative=p==='/'?'index.html':p.slice(1),file=path.resolve(spec.project,'frontend/dist',relative),base=path.resolve(spec.project,'frontend/dist')+path.sep;
++  assert(file.startsWith(base));assert(fs.statSync(file).isFile());const raw=fs.readFileSync(file);
++  response.writeHead(200,{'Content-Type':p.endsWith('.css')?'text/css':p.endsWith('.js')||p.endsWith('.mjs')?'text/javascript':'text/html','Cache-Control':'no-store'});response.end(raw);row.response_sha256=sha(raw);return;
++ }
++ if(p==='/favicon.ico'){response.writeHead(204);response.end();return;}
++ if(method==='GET'&&p==='/api/session')return json(response,{token:'test-only-s08-session',storage_configured:true,max_bytes:5242880,data_context:fixture.context});
++ if(method==='GET'&&p==='/api/materials')return json(response,{items:[],next_offset:null});
++ if(method==='GET'&&p==='/api/pdf-candidates')return json(response,{items:[]});
++ if(method==='GET'&&p==='/api/activities/capabilities')return json(response,{storage_ready:true,storage_reason:null,create:{available:true,reason:null},continue:{available:false,reason:'test_only'},
++  learning:{available:false,reason:'test_only',max_input_chars:1024,max_output_tokens:256},teaching:{available:true,reason:null,profile:'teaching.v3',max_output_tokens:2048},
++  teaching_calculation:{available:false,reason:'test_only',tool:'finite_calculate'},memory_model:{available:false,reason:'test_only'},provider:fixture.chat,quota_preview:budget,
++  supervision_management_budget_seconds:10,window_seconds:30,followup_max_chars:1024});
++ if(method==='GET'&&p==='/api/activities')return json(response,{items:[facts()],next_cursor:null});
++ if(method==='GET'&&p===`/api/activities/${aid}`)return json(response,{activity:facts()});
++ if(method==='GET'&&p===`/api/activities/${aid}/operations`)return json(response,{items:[],next_cursor:null});
++ if(method==='GET'&&p===`/api/activities/${aid}/teaching/workspace`)return json(response,teaching());
++ if(method==='GET'&&p===`/api/activities/${aid}/retrieval/status`)return json(response,status());
++ if(method==='POST'&&p===`/api/activities/${aid}/retrieval/commands`){
++  const value={business_key:body.business_key,action:body.action,status:'received',current:true,terminal_disposition:'received',error_code:null,
++   ...(body.action==='query'?{retrieval_ref:{business_key:body.business_key,query_sha256:sha(body.query),space_id:'c'.repeat(64),result_sha256:'d'.repeat(64)}}:{})};
++  fixture.receipts.set(body.business_key,value);if(body.action==='source_index')fixture.ready=true;return json(response,value);
++ }
++ if(method==='GET'&&p.startsWith(`/api/activities/${aid}/retrieval/commands/`)){
++  const value=fixture.receipts.get(p.split('/').at(-1));assert(value,'不存在的原检索键');return json(response,value);
++ }
++ if(method==='POST'&&p===`/api/activities/${aid}/teaching/commands`){
++  const {business_key,...rest}=body;const normalized={activity_id:aid,...rest};
++  return json(response,{activity_id:aid,business_key,action:body.action,request_sha256:sha(canonical(normalized)),status:'accepted',duplicate_of:null,record_ids:[],operation_id:null,
++   payload_sha256:null,applied_revision:null,head_revision_now:fixture.revision,qualification:'current',error_code:null,model_called:false,tool_called:false,retry_policy:'read_only',exposed_part:null});
++ }
++ if(method==='GET'&&p===`/api/activities/${aid}/interview/workspace`)return json(response,interview());
++ if(method==='GET'&&p===`/api/activities/${aid}/interview/records/${gid}`)return json(response,{schema:'interview.record.v1',activity_id:aid,record:goalMeta(),view_token:fixture.view,qualification:'current',suppression_reason:null,
++  body:{value:{goal:{target:'合成分钟换秒面试目标',focus:'只依据合成资料',clarifications:[],material_roles:[{source_id:sid,role:'reference'}]}}}});
++ if(method==='GET'&&p===`/api/activities/${aid}/interview/history`)return json(response,{records:[],view_token:fixture.view,next_before_seq:null,last_seq:1});
++ if(method==='GET'&&['/api/memories','/api/memories/choices'].includes(p))return json(response,{items:[],next_cursor:null});
++ if(method==='GET'&&p==='/api/memories/capabilities')return json(response,{read:true,write:false,cleanup:false});
++ if(method==='GET'&&p===`/api/activities/${aid}/memory-selection`)return json(response,{selected:false,eligible:true,entries:[],selection_sha256:null});
++ proof.unknown_routes.push({method,path:p});return json(response,{detail:{code:'fixture_route_not_closed',message:'封闭合成夹具未声明此路由'}},404);
++}
++async function shutdown(reason){
++ if(shutdownPromise)return shutdownPromise;
++ shutdownPromise=(async()=>{closing=true;proof.shutdown_reason=reason;clearTimeout(deadlineTimer);clearInterval(watchTimer);
++  await Promise.race([Promise.allSettled([...observations]),new Promise(resolve=>setTimeout(resolve,3000))]);
++  if(context){await context.close();proof.context_closed=true;}
++  if(server){server.closeAllConnections();await new Promise(resolve=>server.close(resolve));proof.server_closed=true;}
++  save();process.stdin.removeAllListeners();process.stdin.pause();process.stdin.unref?.();})();return shutdownPromise;
++}
++function installBarrier(){
++ const descriptor=Object.getOwnPropertyDescriptor(IDBTransaction.prototype,'oncomplete');
++ const nativePut=IDBObjectStore.prototype.put;
++ window.__s08Barrier={hit:false};window.__s08Arm=false;window.__s08Release=null;
++ IDBObjectStore.prototype.put=function(value,...rest){
++  if(window.__s08Arm&&typeof value?.draft_id==='string'&&value.draft_id.startsWith('draft-')){
++   this.transaction.__s08Draft=value;
++  }
++  return nativePut.call(this,value,...rest);
++ };
++ Object.defineProperty(IDBTransaction.prototype,'oncomplete',{configurable:true,enumerable:descriptor.enumerable,
++  get(){return descriptor.get.call(this);},set(callback){descriptor.set.call(this,typeof callback==='function'?function(event){
++   if(window.__s08Arm&&this.__s08Draft){window.__s08Arm=false;window.__s08Barrier={hit:true,draft:this.__s08Draft,committed:true};
++    window.__s08Release=()=>{window.__s08Release=null;callback.call(this,event);};
++   }else callback.call(this,event);
++  }:callback);}});
++}
++async function openPage(options={}){
++ const page=await context.newPage();page.setDefaultTimeout(15000);await page.addInitScript(installBarrier);
++ await page.goto(origin,{waitUntil:'networkidle'});
++ await page.getByRole('navigation').getByRole('button',{name:fixture.interview?/模拟面试/:/学习活动/}).click();
++ await page.locator(`[data-activity-id="${aid}"]`).click();
++ const area=page.locator(fixture.interview?'.interview-workspace':'section.ws-teaching');await area.waitFor();
++ await page.waitForFunction(()=>Object.keys(sessionStorage).some(k=>k.includes('editor-owner')));
++ await area.getByRole('button',{name:fixture.interview?'开始提问':'生成/重订路径（1 次模型）',exact:true}).waitFor();
++ return {page,area,panel:area.locator('section[aria-label="资料检索与恢复"]')};
++}
++async function waitUntil(fn){const end=Date.now()+15000;while(!fn()){assert(Date.now()<end,'观察超时');await new Promise(resolve=>setTimeout(resolve,30));}}
++function posts(name,suffix){return proof.requests.filter(x=>x.case===name&&x.method==='POST'&&x.path.endsWith(suffix));}
++async function disclosure(area,changed=false){
++ const vector=await area.locator('[data-service-disclosure="vector"]').innerText(),chat=await area.locator('[data-service-disclosure="chat"]').innerText();
++ for(const value of Object.values(fixture.vector))assert(vector.includes(value));for(const value of Object.values(fixture.chat))assert(chat.includes(value));
++ assert(vector.includes('250000')&&vector.includes('用途')&&vector.includes('30'));
++ const text=await area.innerText();assert(text.includes('2次请求')&&text.includes('两笔费用')&&text.includes('500000')&&text.includes('60'));
++ if(changed){assert(!vector.includes('embedding-3'));assert(!chat.includes('deepseek-chat'));}
++ return {vector,chat};
++}
++async function localRows(page){return page.evaluate(async()=>{
++ const chains=[],drafts=[];
++ for(const entry of await indexedDB.databases()){
++  if(!entry.name?.includes('retrolume-teaching'))continue;
++  const db=await new Promise((resolve,reject)=>{const r=indexedDB.open(entry.name);r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
++  for(const store of ['chains','drafts'])if(db.objectStoreNames.contains(store)){
++   const values=await new Promise((resolve,reject)=>{const r=db.transaction(store).objectStore(store).getAll();r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
++   (store==='chains'?chains:drafts).push(...values.map(value=>({database:entry.name,...value})));
++  }db.close();
++ }
++ return {chains,drafts};
++});}
++
++try{
++ setup('startup');
++ const remaining=Math.min(Date.parse(spec.root.business_deadline_utc)-Date.now(),1500000);assert(remaining>0);
++ deadlineTimer=setTimeout(()=>void shutdown('independent_original_deadline'),remaining);
++ process.stdin.on('data',()=>void shutdown('stdin_stop'));process.stdin.on('end',()=>void shutdown('stdin_EOF'));process.stdin.resume();
++ let low=0;watchTimer=setInterval(()=>{low=os.freemem()/1048576<256?low+1:0;if(low>=2)void shutdown('pressure_two_samples');try{process.kill(process.ppid,0);}catch{void shutdown('parent_exit');}},2000);
++ assert(os.freemem()/1048576>=512,'fixture内存门');count('fixture_server_starts');
++ server=http.createServer((request,response)=>handler(request,response).catch(error=>{proof.server_error=String(error);if(!response.headersSent)json(response,{error:'fixture_failure'},500);else response.destroy();void shutdown('server_error');}));
++ await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(18119,'127.0.0.1',resolve);});
++ assert(os.freemem()/1048576>=768,'browser内存门');count('browser_starts');
++ context=await chromium.launchPersistentContext(spec.profile,{headless:true,viewport:{width:1440,height:1000},serviceWorkers:'block',args:['--disable-background-networking']});
++ if(closing){await context.close();throw new Error('stopped_during_browser_start');}
++ await context.route('**/*',route=>{const url=new URL(route.request().url());if(url.origin===origin)return route.continue();proof.external_attempts.push(url.href);return route.abort('blockedbyclient');});
++ context.on('response',response=>{const p=new URL(response.url()).pathname;if(p.startsWith('/assets/')&&/\.(js|css)$/.test(p))observe(async()=>proof.assets.push({url:response.url(),sha256:sha(await response.body())}));});
++ for(const variant of ['same','owner','view','head']){
++  const name='D03-'+variant;setup(name,{ready:variant!=='same'});const {page,area,panel}=await openPage();
++  const identities=await disclosure(panel);
++  if(variant==='same'){
++   await page.screenshot({path:path.join(dir,'D04-index-teaching-before-confirm.png'),fullPage:true});
++   await panel.getByRole('button',{name:'确认用途、费用与索引当前资料',exact:true}).click();
++   await waitUntil(()=>posts(name,'/retrieval/commands').some(x=>x.body.action==='source_index'));
++   await page.waitForTimeout(200);
++  }
++  const plan=area.getByRole('button',{name:'生成/重订路径（1 次模型）',exact:true});await plan.waitFor();assert.equal(await plan.isEnabled(),true);
++  await page.evaluate(()=>{window.__s08Arm=true;});await plan.click();
++  await page.waitForFunction(()=>window.__s08Barrier.hit===true);
++  const barrier=await page.evaluate(()=>window.__s08Barrier);
++  const queries=posts(name,'/retrieval/commands').filter(x=>x.body.action==='query');assert.equal(queries.length,1);
++  const originalKey=queries[0].body.business_key,before=posts(name,'/teaching/commands').length;assert.equal(before,0);
++  const ownerBefore=await page.evaluate(()=>Object.fromEntries(Object.entries(sessionStorage).filter(([k])=>k.includes('teaching-editor-owner'))));
++  if(variant==='owner')await page.evaluate(id=>{const key=Object.keys(sessionStorage).find(k=>k.includes('teaching-editor-owner'));sessionStorage.setItem(key,id);},randomUUID());
++  if(variant==='view')fixture.view='s08-view-B';
++  if(variant==='head')fixture.revision=2;
++  if(variant!=='same'){
++   const reads=proof.requests.filter(x=>x.case===name&&x.path.endsWith('/teaching/workspace')).length;
++   await area.getByRole('button',{name:'刷新教学工作区（只读）',exact:true}).click();
++   await waitUntil(()=>proof.requests.filter(x=>x.case===name&&x.path.endsWith('/teaching/workspace')).length>reads);
++   await page.waitForTimeout(150);
++  }
++  await page.evaluate(()=>window.__s08Release());
++  if(variant==='same')await waitUntil(()=>posts(name,'/teaching/commands').length===1);
++  await page.waitForTimeout(650);
++  assert.equal(posts(name,'/teaching/commands').length,variant==='same'?1:0);
++  const stored=await localRows(page),chain=stored.chains.find(x=>x.query.business_key===originalKey),draft=stored.drafts.find(x=>x.draft_id===barrier.draft.draft_id);
++  assert(chain&&draft);assert.equal(chain.domain_sent,variant==='same');assert.equal(chain.domain_input.business_key,barrier.draft.draft_id.slice(6));assert.equal(chain.receipt.current,true);
++  assert.equal(draft.content,barrier.draft.content);assert.equal(JSON.parse(draft.content).body.confirmed,true);
++  const get=await page.evaluate(async({aid,key})=>{const response=await fetch(`/api/activities/${aid}/retrieval/commands/${key}`,{headers:{'X-RetroLume-Session':'test-only-s08-session'}});return {http:response.status,body:await response.json()};},{aid,key:originalKey});
++  assert.equal(get.http,200);assert.equal(get.body.business_key,originalKey);
++  proof.cases.push({name,status:'passed',same_activity:aid,barrier:'actual_IDB_commit_before_native_oncomplete_callback',query_key:originalKey,domain_key:chain.domain_input.business_key,
++   original_owner:ownerBefore,owner_after:await page.evaluate(()=>Object.fromEntries(Object.entries(sessionStorage).filter(([k])=>k.includes('teaching-editor-owner')))),
++   changed_only:variant,post_query_domain_posts:posts(name,'/teaching/commands').length,domain_sent:chain.domain_sent,draft_full_body_retained:true,original_key_GET:get,identities,
++   owner_case_boundary:variant==='owner'?'同activity会话owner A改B，原lease A失效为只读；未声称成功取得B编辑lease':null});
++  await page.screenshot({path:path.join(dir,name+'.png'),fullPage:true});save();await page.close();
++ }
++ for(const variant of ['missing-vector','missing-chat-teaching','missing-chat-interview','changed-interview']){
++  const name='D04-'+variant,isInterview=variant.includes('interview');setup(name,{interview:isInterview,missingVector:variant==='missing-vector',missingChat:variant.startsWith('missing-chat'),changed:variant==='changed-interview'});
++  const {page,area,panel}=await openPage();const model=area.getByRole('button',{name:isInterview?'开始提问':'生成/重订路径（1 次模型）',exact:true});
++  let identities=null;
++  if(variant==='changed-interview'){
++   identities=await disclosure(panel,true);await page.waitForTimeout(150);assert.equal(await model.isEnabled(),true);
++  }else{
++   await panel.getByRole('status').filter({hasText:variant==='missing-vector'?'向量供应商':'聊天供应商'}).waitFor();
++   assert.equal(await model.isDisabled(),true);
++   if(variant==='missing-vector')assert.equal(await panel.getByRole('button',{name:'确认用途、费用与索引当前资料',exact:true}).isDisabled(),true);
++   assert.equal(await area.getByRole('button',{name:isInterview?'保存修正目标（另存版本）':'保存目标（不调用模型）',exact:true}).isEnabled(),true);
++  }
++  assert.equal(proof.requests.filter(x=>x.case===name&&x.method==='POST').length,0);
++  proof.cases.push({name,status:'passed',before_confirm:true,model_enabled:await model.isEnabled(),no_POST:true,local_save_qualification_kept:variant!=='changed-interview',identities});
++  await page.screenshot({path:path.join(dir,name+'.png'),fullPage:true});save();await page.close();
++ }
++ await Promise.allSettled([...observations]);
++ assert.equal(proof.external_attempts.length,0);assert.equal(proof.unknown_routes.length,0);assert.equal(proof.observation_errors.length,0);
++ for(const suffix of ['.js','.css']){
++  const files=fs.readdirSync(path.join(spec.project,'frontend/dist/assets')).filter(x=>x.endsWith(suffix)&&x.startsWith('index-'));
++  assert(files.length);for(const file of files)assert(proof.assets.some(x=>x.url.endsWith('/'+file)&&x.sha256===sha(fs.readFileSync(path.join(spec.project,'frontend/dist/assets',file)))));
++ }
++ proof.status='passed';save();
++}catch(error){proof.status='failed';proof.error=String(error);proof.stack=error.stack;save();process.exitCode=1;}
++finally{await shutdown(proof.status);}
+--- S07-initial/backend/tests/test_step018_embedding_contracts.py
++++ final/backend/tests/test_step018_embedding_contracts.py
+@@ -18,7 +18,8 @@
+ 
+ 
+ def run_async(awaitable):
+-    with asyncio.Runner(loop_factory=psycopg_compatible_loop_factory) as runner:
++    from tests.fixtures.step018.s08_loop import ClosedLoop
++    with asyncio.Runner(loop_factory=ClosedLoop) as runner:
+         return runner.run(awaitable)
+ 
+ 
+--- S07-initial/backend/tests/fixtures/step018/s08_loop.py
++++ final/backend/tests/fixtures/step018/s08_loop.py
+@@ -0,0 +1,29 @@
++"""只用于无实际I/O的有限协程夹具；保留asyncio调度/timeout，拒绝注册真实fd。"""
++import asyncio
++import selectors
++import time
++import unittest
++
++
++class ClosedSelector(selectors.SelectSelector):
++    def register(self,*args,**kwargs):raise RuntimeError('纯离线夹具不允许实际I/O')
++    def select(self,timeout=None):
++        if timeout and timeout>0:time.sleep(timeout)
++        return []
++
++
++class ClosedLoop(asyncio.SelectorEventLoop):
++    def __init__(self):super().__init__(selector=ClosedSelector())
++    def _make_self_pipe(self):self._ssock=self._csock=None
++    def _close_self_pipe(self):pass
++    def _write_to_self(self):pass
++
++
++def run_no_io(awaitable):
++    with asyncio.Runner(loop_factory=ClosedLoop) as runner:return runner.run(awaitable)
++
++
++class ClosedAsyncTestCase(unittest.IsolatedAsyncioTestCase):
++    def _setupAsyncioRunner(self):
++        assert self._asyncioRunner is None
++        self._asyncioRunner=asyncio.Runner(debug=True,loop_factory=ClosedLoop)

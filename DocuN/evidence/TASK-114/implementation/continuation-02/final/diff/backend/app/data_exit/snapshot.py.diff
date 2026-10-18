@@ -1,0 +1,32 @@
+--- pre/backend/app/data_exit/snapshot.py
++++ final/backend/app/data_exit/snapshot.py
+@@ -85,7 +85,8 @@
+         result.update(b'}')
+         return result.hexdigest()
+ 
+-    def capture(self, job_id, kind, scope, *, check_cancel=lambda: None, on_stage=lambda _: None):
++    def capture(self, job_id, kind, scope, *, check_cancel=lambda: None, on_stage=lambda _: None, operation=None):
++        check_cancel()
+         scope = validate_scope(scope, kind)
+         safe_root(self.backup_root)
+         spool_parent = self.backup_root / ".spool"
+@@ -98,7 +99,7 @@
+         total_bytes, row_count = 0, 0
+         def bounded():
+             check_cancel()
+-            if time.monotonic() - start > self.limits.operation_seconds:
++            if operation is None and time.monotonic() - start > self.limits.operation_seconds:
+                 raise DataError("operation_timeout", 504)
+         def write_entry(name, content, entry_kind="relation_records"):
+             import hashlib
+@@ -142,8 +143,8 @@
+                 stream.flush();os.fsync(stream.fileno())
+             return SpoolRows(path,count,self.limits)
+         on_stage("reading")
+-        with self.lease.acquire():
+-            with self.repository.connection(readonly=True, repeatable=True) as connection:
++        with self.lease.acquire(timeout=operation.remaining(30) if operation else 30):
++            with self.repository.connection(readonly=True, repeatable=True, operation=operation) as connection:
+                 role = connection.execute("SELECT rolname,rolcanlogin,rolsuper,rolcreatedb,rolcreaterole,rolreplication,rolbypassrls FROM pg_roles WHERE rolname=SESSION_USER").fetchone()
+                 if role is None or role['rolcanlogin'] is not True or any(role[k] for k in ("rolsuper", "rolcreatedb", "rolcreaterole",'rolreplication', "rolbypassrls")):
+                     raise DataError("snapshot_role_unsafe", 503)

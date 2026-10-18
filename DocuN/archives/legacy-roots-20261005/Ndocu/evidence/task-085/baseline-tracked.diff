@@ -1,0 +1,287 @@
+diff --git a/backend/app/activities/__init__.py b/backend/app/activities/__init__.py
+index 6ab448c..9e1638c 100644
+--- a/backend/app/activities/__init__.py
++++ b/backend/app/activities/__init__.py
+@@ -4,18 +4,22 @@ from .repository import (
+     ActivityLease,
+     ActivityLedgerConflict,
+     ActivitySpec,
++    CloseResult,
+     PostgresAdmissionLedger,
+     SettleResult,
+     SourceSnapshot,
+     UnresolvedOperation,
++    WindowSnapshot,
+ )
+ 
+ __all__ = [
+     "ActivityLease",
+     "ActivityLedgerConflict",
+     "ActivitySpec",
++    "CloseResult",
+     "PostgresAdmissionLedger",
+     "SettleResult",
+     "SourceSnapshot",
+     "UnresolvedOperation",
++    "WindowSnapshot",
+ ]
+diff --git a/backend/app/activities/repository.py b/backend/app/activities/repository.py
+index 0a78d00..8a5dc74 100644
+--- a/backend/app/activities/repository.py
++++ b/backend/app/activities/repository.py
+@@ -31,6 +31,7 @@ _MAX_RESPONSE_BYTES = 67_108_864
+ # 时间账本（TASK-077）：M/R/S 计数上限与 004 迁移的 BIGINT CHECK 上界一致。
+ _MAX_RUNNING_SECONDS = 2_147_483_647
+ _MAX_WINDOW_SECONDS = 3_600
++_MAX_WINDOWS_SESSION_ID = 4_294_967_295
+ 
+ 
+ class ActivityLedgerConflict(RuntimeError):
+@@ -44,6 +45,22 @@ class SettleResult(enum.Enum):
+     ALREADY_SETTLED = "already_settled"
+ 
+ 
++class CloseResult(enum.Enum):
++    CLOSED = "closed"
++    ALREADY_CLOSED = "already_closed"
++
++
++@dataclass(frozen=True)
++class WindowSnapshot:
++    status: str
++    execution_generation: int
++    running_reserved_seconds: int
++    dispatch_closed: bool
++    running_owner_session_id: int | None = None
++    lease_recoverable: bool = False
++    sources_valid: bool = False
++
++
+ @dataclass(frozen=True)
+ class SourceSnapshot:
+     source_id: str
+@@ -75,6 +92,7 @@ class ActivityLease:
+     scope_revision: int
+     lease_expires_at: datetime
+     window_seconds: int
++    running_owner_session_id: int | None = None
+ 
+ 
+ @dataclass(frozen=True)
+@@ -301,6 +319,8 @@ class PostgresAdmissionLedger:
+         *,
+         lease_seconds: int,
+         window_seconds: int,
++        running_owner_session_id: int | None = None,
++        expected_previous_generation: int | None = None,
+     ) -> ActivityLease | None:
+         """认领活动租约并预扣时间预算；时间预算耗尽返回 None，其余冲突仍抛异常。
+ 
+@@ -317,6 +337,8 @@ class PostgresAdmissionLedger:
+           代次失效）同样 +1，返回 None，不以事务内异常回滚撤销折叠；
+         - 活动已是 pending 且 A=0：不写任何行、不递增代次，直接返回 None。
+ 
++        低层缺省 NULL 仅供合成调用兼容，不授予旧 Job 自动恢复资格；
++        生产 SUP 必须提供自身 Windows 会话号并先完成旧树核查。
+         过期 running 租约按既有接续规则处理：先把真实残留 R 全额保守折叠
+         入 S 并清零、关闭旧代次资格；已结算（pending、R=0）的窗口不折叠。
+         不得抢占有效租约。
+@@ -331,15 +353,30 @@ class PostgresAdmissionLedger:
+             or not 1 <= window_seconds <= _MAX_WINDOW_SECONDS
+         ):
+             raise ValueError("时间窗口必须在 1 到 3600 秒之间")
++        if running_owner_session_id is not None and (
++            type(running_owner_session_id) is not int
++            or not 0 <= running_owner_session_id <= _MAX_WINDOWS_SESSION_ID
++        ):
++            raise ValueError("Windows 会话号必须在 DWORD 域内")
++        if expected_previous_generation is not None and (
++            type(expected_previous_generation) is not int or expected_previous_generation < 0
++        ):
++            raise ValueError("旧执行代次必须是非负整数")
+ 
+         async def operation(connection: object) -> ActivityLease | None:
+             snapshots = await self._source_rows(connection, activity_id)
+             sources_valid = bool(snapshots) and await self._lock_sources(connection, snapshots)
+             cursor = await connection.execute("SELECT * FROM activities WHERE id = %s FOR UPDATE", (activity_id,))
+             row = await cursor.fetchone()
+-            now = datetime.now(timezone.utc)
++            now = datetime.now(timezone.utc)  # 来源及活动锁均已取得。
+             if row is None or not sources_valid:
+                 raise ActivityLedgerConflict("活动或来源快照不可用")
++            if expected_previous_generation is not None and (
++                row["status"] != "running"
++                or row["execution_generation"] != expected_previous_generation
++                or row["running_owner_session_id"] != running_owner_session_id
++            ):
++                raise ActivityLedgerConflict("已核查旧代次或会话身份已变化")
+             if row["status"] == "cancelled" or row["deadline_at"] <= now:
+                 raise ActivityLedgerConflict("活动已取消或过期")
+             if row["status"] == "running" and row["lease_expires_at"] is not None and row["lease_expires_at"] > now:
+@@ -362,6 +399,8 @@ class PostgresAdmissionLedger:
+                               SET status = 'pending',
+                                   execution_generation = execution_generation + 1,
+                                   executor_id = NULL, lease_expires_at = NULL,
++                                  running_owner_session_id = NULL,
++                                  dispatch_closed = TRUE,
+                                   running_reserved_seconds = 0,
+                                   running_settled_seconds = %s,
+                                   updated_at = CURRENT_TIMESTAMP
+@@ -376,9 +415,12 @@ class PostgresAdmissionLedger:
+                 """UPDATE activities
+                       SET status = 'running', executor_id = %s, execution_generation = %s,
+                           lease_expires_at = %s, running_reserved_seconds = %s,
++                          running_owner_session_id = %s,
++                          dispatch_closed = FALSE,
+                           running_settled_seconds = %s, updated_at = CURRENT_TIMESTAMP
+                     WHERE id = %s""",
+-                (executor_id, generation, lease_expires_at, effective_window, settled, activity_id),
++                (executor_id, generation, lease_expires_at, effective_window,
++                 running_owner_session_id, settled, activity_id),
+             )
+             return ActivityLease(
+                 activity_id,
+@@ -387,10 +429,74 @@ class PostgresAdmissionLedger:
+                 row["scope_revision"],
+                 lease_expires_at,
+                 effective_window,
++                running_owner_session_id,
++            )
++
++        return await self._transaction(operation)
++
++    async def inspect_window(self, activity_id: str) -> WindowSnapshot:
++        """恢复入口短事务快照；来源锁沿用 claim 顺序，调用方须持活动互斥。"""
++        activity_id = self._uuid(activity_id, "activity_id")
++
++        async def operation(connection: object) -> WindowSnapshot:
++            snapshots = await self._source_rows(connection, activity_id)
++            sources_valid = bool(snapshots) and await self._lock_sources(connection, snapshots)
++            cursor = await connection.execute(
++                """SELECT status, execution_generation, running_reserved_seconds, dispatch_closed,
++                          running_owner_session_id, lease_expires_at, deadline_at
++                     FROM activities WHERE id = %s FOR UPDATE""",
++                (activity_id,),
++            )
++            row = await cursor.fetchone()
++            if row is None:
++                raise ActivityLedgerConflict("活动不存在")
++            now = datetime.now(timezone.utc)  # 与 claim 一致，在锁后判断资格。
++            return WindowSnapshot(
++                row["status"], row["execution_generation"],
++                row["running_reserved_seconds"], row["dispatch_closed"],
++                row["running_owner_session_id"],
++                bool((row["lease_expires_at"] is None or row["lease_expires_at"] <= now)
++                     and row["deadline_at"] > now),
++                sources_valid,
+             )
+ 
+         return await self._transaction(operation)
+ 
++    async def begin_window_close(
++        self, activity_id: str, executor_id: str, execution_generation: int,
++    ) -> CloseResult:
++        """只关闭当前代次的出站门；不退款、不改预扣或代次。"""
++        activity_id = self._uuid(activity_id, "activity_id")
++        executor_id = self._bounded_name(executor_id, "executor_id")
++        if (
++            isinstance(execution_generation, bool)
++            or not isinstance(execution_generation, int)
++            or execution_generation < 0
++        ):
++            raise ValueError("执行代次必须是非负整数")
++
++        async def operation(connection: object) -> CloseResult:
++            snapshots = await self._source_rows(connection, activity_id)
++            await self._lock_sources(connection, snapshots)
++            cursor = await connection.execute("SELECT * FROM activities WHERE id = %s FOR UPDATE", (activity_id,))
++            row = await cursor.fetchone()
++            if (
++                row is None or row["status"] != "running"
++                or row["executor_id"] != executor_id
++                or row["execution_generation"] != execution_generation
++            ):
++                raise ActivityLedgerConflict("关闭请求与当前运行代次不匹配")
++            if row["dispatch_closed"]:
++                return CloseResult.ALREADY_CLOSED
++            await connection.execute(
++                """UPDATE activities SET dispatch_closed = TRUE, updated_at = CURRENT_TIMESTAMP
++                     WHERE id = %s""",
++                (activity_id,),
++            )
++            return CloseResult.CLOSED
++
++        return await self._transaction(operation)
++
+     async def settle_execution_window(
+         self,
+         activity_id: str,
+@@ -459,6 +565,7 @@ class PostgresAdmissionLedger:
+                 or row["executor_id"] != executor_id
+                 or row["execution_generation"] != execution_generation
+                 or row["running_reserved_seconds"] != window_seconds
++                or not row["dispatch_closed"]
+             ):
+                 raise ActivityLedgerConflict("执行窗口与当前运行代次不匹配")
+             await connection.execute(
+@@ -466,8 +573,10 @@ class PostgresAdmissionLedger:
+                       SET status = 'pending',
+                           execution_generation = execution_generation + 1,
+                           executor_id = NULL, lease_expires_at = NULL,
++                          running_owner_session_id = NULL,
+                           running_reserved_seconds = 0,
+                           running_settled_seconds = running_settled_seconds + %s,
++                          dispatch_closed = TRUE,
+                           last_settled_generation = %s, last_settled_seconds = %s,
+                           updated_at = CURRENT_TIMESTAMP
+                     WHERE id = %s""",
+@@ -499,6 +608,8 @@ class PostgresAdmissionLedger:
+                 """UPDATE activities
+                       SET status = 'cancelled', execution_generation = %s, executor_id = NULL,
+                           lease_expires_at = NULL, cancelled_at = CURRENT_TIMESTAMP,
++                          running_owner_session_id = NULL,
++                          dispatch_closed = TRUE,
+                           running_reserved_seconds = 0,
+                           running_settled_seconds = running_settled_seconds + running_reserved_seconds,
+                           updated_at = CURRENT_TIMESTAMP
+@@ -692,6 +803,7 @@ class PostgresAdmissionLedger:
+         context = intent.context
+         return (
+             activity["status"] == "running"
++            and not activity["dispatch_closed"]
+             and activity["executor_id"] == executor_id
+             and activity["execution_generation"] == context.execution_generation
+             and activity["scope_revision"] == context.scope_revision
+@@ -815,7 +927,10 @@ class PostgresAdmissionLedger:
+     async def mark_dispatch_started(self, permit: AdmissionPermit) -> None:
+         async def operation(connection: object) -> None:
+             activity, call, sources_valid = await self._locked_operation(connection, permit)
+-            if call["state"] != "reserved" or not self._operation_is_current(activity, call, sources_valid):
++            if (
++                call["state"] != "reserved" or activity["dispatch_closed"]
++                or not self._operation_is_current(activity, call, sources_valid)
++            ):
+                 raise AdmissionDenied("发送资格已消费或活动已失效")
+             await connection.execute(
+                 """UPDATE activity_operations
+diff --git a/backend/tests/test_activity_time_budget.py b/backend/tests/test_activity_time_budget.py
+index 47d876b..c9aa886 100644
+--- a/backend/tests/test_activity_time_budget.py
++++ b/backend/tests/test_activity_time_budget.py
+@@ -136,6 +136,16 @@ class ActivityTimeBudgetPostgresTests(PsycopgLoopIsolatedAsyncioTestCase):
+         )
+ 
+     async def settle(self, lease, *, elapsed_seconds, executor: str | None = None, window: int | None = None):
++        # 仅对仍是当前合法运行代次的基础合成用例先关门；旧幂等/旧代次请求不碰新门。
++        row = await self.budget_row()
++        if (
++            row["status"] == "running"
++            and row["execution_generation"] == lease.execution_generation
++            and row["executor_id"] == (executor or lease.executor_id)
++        ):
++            await self.ledger.begin_window_close(
++                self.activity_id, lease.executor_id, lease.execution_generation
++            )
+         return await self.ledger.settle_execution_window(
+             self.activity_id,
+             executor or lease.executor_id,

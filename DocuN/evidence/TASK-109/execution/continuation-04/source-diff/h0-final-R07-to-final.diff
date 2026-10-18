@@ -1,0 +1,20 @@
+--- R07/controller-as-run.py
++++ final/h0-final.py
+@@ -127,7 +127,7 @@
+                 if row["kind"] == "diagnostic_begin":
+                     if "diagnostic_start_ns" in observation_state or row["data"].get("limit_seconds") != 15 or row["data"].get("each_observation_ms") != 2000:
+                         raise ValueError("真实诊断窗口或观察时间不符")
+-                    observation_state["diagnostic_start_ns"] = time.monotonic_ns()
++                    observation_state["diagnostic_start_ns"] = packet_timings[-1]["received_ns"]
+                     observation_state["diagnostic_deadline_ns"] = observation_state["diagnostic_start_ns"] + 15000000000
+                     atomic_json(run / "diagnostic-window.json", observation_state)
+                 if row["kind"] == "load_identity":
+@@ -310,7 +310,7 @@
+         terminal_data = terminal.get("data") if terminal else None
+         descriptor.update({"state": "ERROR" if failure or not isinstance(terminal_data, dict) else terminal_data.get("verdict", "ERROR"), "failure": failure, "terminal": terminal, "end_ns": time.monotonic_ns(), "elapsed_seconds": (time.monotonic_ns() - t0) / 1000000000, "cleanup_seconds": cleanup["elapsed_seconds"], "business_phase_entered": False})
+         atomic_json(run / "root-result.json", descriptor)
+-        session["attempts"][attempt_index - 1] = descriptor
++        # 描述对象已直接附加到attempts，根序号不等于实际预览列表下标。
+         session["stage"] = "C04_attempt_stopped_business_frozen"
+         session["cleanup_seconds"] += cleanup["elapsed_seconds"]
+         if "runtime_start_ns" in descriptor:

@@ -1,0 +1,156 @@
+--- pre/backend/tests/fixtures/task114/c02_common.py
++++ final/backend/tests/fixtures/task114/c02_common.py
+@@ -0,0 +1,153 @@
++"""仅C02精确合成域；不读取旧source-reference/业务Hub/凭据。"""
++from datetime import datetime, timezone
++import json
++import os
++from pathlib import Path
++import secrets
++import socket
++import sys
++import time
++import traceback
++from uuid import uuid4
++from budget import ROOT, EVIDENCE, Budget, FactoryHooks
++from setup_source import memory_guard, IMAGE
++sys.path.insert(0, str(ROOT/'backend'))
++from app.data_exit.contracts import canonical, digest, PROFILE
++from app.data_exit.control import ControlHub, CredentialVault
++from app.data_exit.restore import TargetRef, TargetFactory, docker_call, inspect_target
++from app.data_exit.files import private_file
++from app.data_exit.codec import plain
++
++SYNTHETIC=EVIDENCE/'synthetic'
++NAME='retrolume-task-114-c02-source'
++DB='retrolume_task114_c02_source'
++PREFIX='retrolume_c02_'
++REFERENCE=EVIDENCE/'source-reference.json'
++
++
++def profile():
++    return {'enabled':True,'snapshot_url_env':'RETROLUME_DATA_SNAPSHOT_URL','maintenance_key_env':'RETROLUME_DATA_MAINTENANCE_KEY',
++      'limits':{'operation_seconds':120,'package_bytes':33554432,'rows':5000,'component_rows':1000,'component_bytes':1048576},
++      'factory':{'id':'TASK-114-C02-PG17','image_id':IMAGE,'pg_major':17,'login_prefix':PREFIX,'source_name':NAME,
++        'slots':[{'id':'target'+n,'name':'retrolume-task-114-c02-target'+n,'volume':'retrolume-task-114-c02-target'+n+'-data',
++                 'port':15452+int(n),'database':'retrolume_task114_c02_target'} for n in ('02','01')]}}
++
++
++def directories():
++    for name in ('source-root','backup-root','restore-root','control-root','scratch','sentinel-root','browser-root'):
++        (SYNTHETIC/name).mkdir(parents=True,exist_ok=True)
++
++
++def environment(credentials):
++    directories();path=SYNTHETIC/'scratch/data-exit-c02.json';raw=canonical(profile()).encode()
++    if path.exists() and path.read_bytes()!=raw:raise RuntimeError('C02受信profile漂移')
++    if not path.exists():path.write_bytes(raw)
++    values={'RETROLUME_DATA_DIR':str(SYNTHETIC/'source-root'),'RETROLUME_BACKUP_DIR':str(SYNTHETIC/'backup-root'),
++      'RETROLUME_CONTROL_ROOT':str(SYNTHETIC/'control-root'),'RETROLUME_RESTORE_ROOT':str(SYNTHETIC/'restore-root'),
++      'RETROLUME_DATA_EXIT_CONFIG':str(path),'RETROLUME_DATABASE_URL':credentials['app_dsn'],
++      'RETROLUME_ACTIVITY_CONFIG':str(SYNTHETIC/'scratch/explicitly-unconfigured-activity-c02.json'),
++      'RETROLUME_DATA_SNAPSHOT_URL':credentials['snapshot_dsn'],'RETROLUME_DATA_MAINTENANCE_KEY':credentials['maintenance_key']}
++    os.environ.update(values)
++    for name in ('RETROLUME_PREVIEW_CONFIG','RETROLUME_PROVIDER_CONFIG'):os.environ.pop(name,None)
++    return values
++
++
++class Evidence:
++    def __init__(self,label,credentials=None):
++        self.path=EVIDENCE/'batches'/label;self.path.mkdir(parents=True)
++        self.needles=[]
++        if credentials:
++            from psycopg.conninfo import conninfo_to_dict
++            for key,value in credentials.items():
++                if key.endswith('_dsn'):self.needles.extend((value,conninfo_to_dict(value).get('password','')))
++                elif key=='maintenance_key':self.needles.append(value)
++    def scrub(self,raw):
++        for value in sorted(self.needles,key=len,reverse=True):
++            if value:raw=raw.replace(value,'[private value removed]')
++        return raw
++    def save(self,name,value):
++        path=self.path/(name+'.json')
++        with path.open('x',encoding='utf-8') as f:f.write(self.scrub(json.dumps(plain(value),ensure_ascii=False,indent=2)))
++        print(json.dumps({'observation':name,'path':str(path)}),flush=True)
++    def fail(self,error):
++        self.save('failure',{'type':type(error).__name__,'code':getattr(error,'code',None),'sqlstate':getattr(error,'sqlstate',None)})
++        (self.path/'failure.txt').write_text(self.scrub(traceback.format_exc()),encoding='utf-8')
++
++
++def reference():
++    value=json.loads(REFERENCE.read_bytes());target=TargetRef(**{**value['target'],'data_root':Path(value['target']['data_root'])})
++    if target.name!=NAME or target.port!=15452 or target.profile_id!='TASK-114-C02-PG17':raise RuntimeError('C02身份不符')
++    hub=ControlHub(SYNTHETIC/'control-root')
++    return target,CredentialVault(hub).read(value['credentials'])
++
++
++def start_source(budget,target):
++    if inspect_target(target,IMAGE)['running']:raise RuntimeError('不借未登记Running source')
++    if not memory_guard()['ready']:raise RuntimeError('C02 source启动内存门')
++    budget.reserve('pg_start');budget.begin(target.cid)
++    try:docker_call(['start',target.cid]);budget.event('running_observed',inspect_target(target,IMAGE))
++    except BaseException:stop_source(budget,target);raise
++
++
++def stop_source(budget,target):
++    value=inspect_target(target,IMAGE)
++    if value['running']:docker_call(['stop','--time','10',target.cid],timeout=20)
++    value=inspect_target(target,IMAGE)
++    if value['running']:raise RuntimeError('source停止未知')
++    budget.end(target.cid,value)
++
++
++def create_source(budget,evidence):
++    import psycopg
++    from psycopg import sql
++    from psycopg.conninfo import make_conninfo
++    directories()
++    if REFERENCE.exists():raise RuntimeError('C02 source已有原件；只沿原CID继续，不能重建')
++    if not memory_guard()['ready']:raise RuntimeError('C02 source入口内存门')
++    for name in (NAME,'retrolume-task-114-c02-target01','retrolume-task-114-c02-target02'):
++        if docker_call(['ps','-aq','--filter','name=^/'+name+'$']):raise RuntimeError('C02名称碰撞')
++        if name+'-data' in docker_call(['volume','ls','--format','{{.Name}}']).splitlines():raise RuntimeError('C02卷碰撞')
++    for port in (15452,15453,15454):
++        with socket.socket() as sock:sock.bind(('127.0.0.1',port))
++    image=json.loads(docker_call(['image','inspect',IMAGE]))[0]
++    if (image['Id'],image['Os'],image['Architecture'])!=(IMAGE,'linux','amd64'):raise RuntimeError('镜像漂移')
++    if not memory_guard()['ready']:raise RuntimeError('Docker唤醒后内存门；未创建source')
++    hub=ControlHub(SYNTHETIC/'control-root');jobid=str(uuid4())
++    password=secrets.token_urlsafe(32);env=dict(os.environ)
++    env.update(POSTGRES_USER=PREFIX+'admin',POSTGRES_PASSWORD=password,POSTGRES_DB=DB)
++    budget.reserve('pg_create')
++    cid=docker_call(['create','--name',NAME,'--label','retrolume.task=TASK-114','--label','retrolume.data.profile=TASK-114-C02-PG17',
++      '--label','retrolume.data.job='+jobid,'--cpus','1','--memory','512m','--pids-limit','128','--restart','no','--publish','127.0.0.1:15452:5432',
++      '--mount','type=volume,src='+NAME+'-data,dst=/var/lib/postgresql/data','--env','POSTGRES_USER','--env','POSTGRES_PASSWORD','--env','POSTGRES_DB',IMAGE],environment=env)
++    target=TargetRef(str(uuid4()),jobid,'TASK-114-C02-PG17',cid,NAME,NAME+'-data',15452,str(uuid4()),str(uuid4()),str(uuid4()),SYNTHETIC/'source-root')
++    identity=inspect_target(target,IMAGE);budget.reserve('pg_success');budget.created(cid,'pg',identity)
++    credentials={'admin_dsn':make_conninfo(host='127.0.0.1',port=15452,dbname=DB,user=PREFIX+'admin',password=password),'maintenance_key':secrets.token_hex(32)}
++    def persist(stage):
++        ref=CredentialVault(hub).save(credentials)
++        REFERENCE.write_text(json.dumps({'target':{**target.__dict__,'data_root':str(target.data_root)},'credentials':ref,'stage':stage},indent=2),encoding='utf-8')
++    persist('created')
++    try:
++        start_source(budget,target);TargetFactory._wait_pg(credentials['admin_dsn'])
++        from app.data_exit.schema import MIGRATIONS,MIGRATION_013
++        with psycopg.connect(credentials['admin_dsn'],autocommit=True,connect_timeout=3) as conn:
++            conn.execute("SET statement_timeout='30s'")
++            if conn.execute("SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='r'").fetchone()[0]:raise RuntimeError('新source非空')
++            for path in sorted((ROOT/'backend/migrations').glob('*.sql')):
++                n=int(path.name[:3])
++                if not 1<=n<=13:continue
++                if digest(path.read_bytes())!=(MIGRATION_013 if n==13 else MIGRATIONS[path.name]):raise RuntimeError('迁移漂移')
++                conn.execute(path.read_text(encoding='utf-8-sig'))
++            conn.execute('INSERT INTO public.data_control(dataset_id,instance_id,schema_profile,mode,originals_root_id,maintenance_key_sha256) VALUES(%s,%s,%s,\'normal\',%s,%s)',
++                (target.dataset_id,target.instance_id,PROFILE,target.root_id,digest(credentials['maintenance_key'])))
++            for suffix in ('app','snapshot','readonly'):
++                password=secrets.token_urlsafe(32)
++                conn.execute(sql.SQL('CREATE ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD {}').format(sql.Identifier(PREFIX+suffix),sql.Literal(password)))
++                credentials[suffix+'_dsn']=make_conninfo(host='127.0.0.1',port=15452,dbname=DB,user=PREFIX+suffix,password=password)
++            for role in ('retrolume_data_app','retrolume_memory_app','retrolume_interview_app','retrolume_html_app'):
++                conn.execute(sql.SQL('GRANT {} TO {}').format(sql.Identifier(role),sql.Identifier(PREFIX+'app')))
++            for suffix in ('snapshot','readonly'):conn.execute(sql.SQL('GRANT retrolume_data_snapshot TO {}').format(sql.Identifier(PREFIX+suffix)))
++            conn.execute('GRANT SELECT,INSERT,UPDATE ON public.material_sources,public.material_versions,public.pdf_review_candidates,public.pdf_extracted_pages,public.pdf_review_pages,public.pdf_user_supplements,public.activities,public.activity_scope_sources,public.activity_allowed_models,public.activity_operations,public.activity_operation_results,public.teaching_commands,public.teaching_records,public.teaching_heads TO retrolume_data_app')
++            version=int(conn.execute('SHOW server_version_num').fetchone()[0]);assert version//10000==17
++        persist('initialized');evidence.save('source-created',{'identity':identity,'server_version_num':version,'dataset_id':target.dataset_id,'instance_id':target.instance_id,'root_id':target.root_id})
++        return target,credentials
++    finally:stop_source(budget,target)

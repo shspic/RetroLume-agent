@@ -1,0 +1,10 @@
+--- as-run/backend/app/data_exit/reference.py
++++ final/backend/app/data_exit/reference.py
+@@ -154,6 +154,6 @@
+             return outcomes
+         if already_exclusive is not None:
+             return perform(already_exclusive)
+-        with self.gate.acquire():
++        with self.gate.acquire(operation=operation):
+             with self.lease.acquire(True, timeout=operation.remaining(30) if operation else 30) as lease:
+                 return perform(lease)

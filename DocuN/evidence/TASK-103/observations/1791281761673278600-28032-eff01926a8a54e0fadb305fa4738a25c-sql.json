@@ -1,0 +1,9 @@
+{
+  "kind": "sql",
+  "pid": 28032,
+  "value": {
+    "tag": "memory-detail",
+    "sql": "SELECT\n          (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace\n           WHERE n.nspname='public' AND c.relname=ANY(%s) AND c.relkind='r') AS tables,\n          (SELECT count(*) FROM pg_roles WHERE rolname=ANY(%s)) AS roles,\n          (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace\n           WHERE n.nspname='public' AND p.proname=ANY(%s)) AS functions",
+    "arguments_saved": false
+  }
+}

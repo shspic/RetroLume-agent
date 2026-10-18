@@ -1,0 +1,97 @@
+{
+  "009_sha256": "e6d9628e98b74c42aba217b9068825a5fafac93b61e21cda729856ff48a984b2",
+  "cases": [
+    {
+      "status": "pass",
+      "legacy_before": {
+        "material_sources": {
+          "count": 1,
+          "sha256": "c952c25eb4e29a5d173a1afe34ba7bb4da75c1fcc3b47444baaf60eb38419103"
+        },
+        "material_versions": {
+          "count": 1,
+          "sha256": "de0386f603db9e30d02b263b8db4a07b2d24b9038848a4f6ecb2cbcf6475921d"
+        },
+        "activities": {
+          "count": 1,
+          "sha256": "46191af9334f1efe07af260d5943c0922fb477cacbe03ddea108460dd9640324"
+        },
+        "activity_operations": {
+          "count": 1,
+          "sha256": "eb7847168cb84c8673692537aa071517f3de7caf3cae193f9937e30886315ec3"
+        },
+        "activity_operation_results": {
+          "count": 0,
+          "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      "legacy_after": {
+        "material_sources": {
+          "count": 1,
+          "sha256": "c952c25eb4e29a5d173a1afe34ba7bb4da75c1fcc3b47444baaf60eb38419103"
+        },
+        "material_versions": {
+          "count": 1,
+          "sha256": "de0386f603db9e30d02b263b8db4a07b2d24b9038848a4f6ecb2cbcf6475921d"
+        },
+        "activities": {
+          "count": 1,
+          "sha256": "46191af9334f1efe07af260d5943c0922fb477cacbe03ddea108460dd9640324"
+        },
+        "activity_operations": {
+          "count": 1,
+          "sha256": "eb7847168cb84c8673692537aa071517f3de7caf3cae193f9937e30886315ec3"
+        },
+        "activity_operation_results": {
+          "count": 0,
+          "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        }
+      },
+      "no_backfill": true,
+      "name": "nonempty",
+      "schema": "task100_m01_nonempty"
+    },
+    {
+      "status": "pass",
+      "sqlstate": "P0001",
+      "message": "检测到 009 已有痕迹：重复执行不支持，本事务整体回滚",
+      "objects_unchanged": true,
+      "name": "duplicate",
+      "schema": "task100_m02_duplicate"
+    },
+    {
+      "status": "pass",
+      "sqlstate": "P0001",
+      "message": "009 前置不完整：缺少 008 的 kind/工具预算列",
+      "objects_unchanged": true,
+      "name": "missing",
+      "schema": "task100_m03_missing"
+    },
+    {
+      "status": "pass",
+      "sqlstate": "P0001",
+      "message": "009 前置约束定义不符：不得采用同名篡改 CHECK",
+      "objects_unchanged": true,
+      "same_name_tamper": true,
+      "name": "tampered",
+      "schema": "task100_m04_tampered"
+    },
+    {
+      "status": "pass",
+      "sqlstate": "P0001",
+      "message": "TASK100_midway_after_two_tables",
+      "objects_unchanged": true,
+      "name": "midway",
+      "schema": "task100_m05_midway"
+    },
+    {
+      "status": "pass",
+      "sqlstate": "42501",
+      "message": "permission denied for schema task100_m06_denied",
+      "objects_unchanged": true,
+      "name": "denied",
+      "schema": "task100_m06_denied"
+    }
+  ],
+  "deleted": false
+}

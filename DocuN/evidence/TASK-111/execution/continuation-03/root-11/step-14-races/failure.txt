@@ -1,0 +1,25 @@
+Traceback (most recent call last):
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task111\c03_step.py", line 84, in main
+    execute(resource,built,folder,action)
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task111\c03_matrix.py", line 246, in execute
+    elif action=="races":runner.run(races(resource,built,folder))
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task111\c03_matrix.py", line 153, in races
+    parent_item=await teaching_parent(h,"energy",memory_selection=selection,activity_id=aid_for("race_memory"))
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task111\c01_seeds.py", line 64, in teaching_parent
+    proposal,_=await record("plan",{"confirmed":True,"correction_record_id":None,"retry_of":None})
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task111\c01_seeds.py", line 35, in record
+    cmd=await command(action,body);frozen,identity=await service._freeze_model_context(aid,cmd,config);profile=service._build_profile(aid,cmd,frozen,identity)
+                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\learning\teaching_service.py", line 292, in _freeze_model_context
+    except MemoryRefusal as exc:raise TeachingRefusal(exc.code,exc.message) from None
+                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+app.learning.teaching_contracts.TeachingRefusal: memory_not_configured

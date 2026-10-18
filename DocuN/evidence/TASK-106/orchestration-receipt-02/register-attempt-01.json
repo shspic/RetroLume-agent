@@ -1,0 +1,9 @@
+{
+  "operation": "register-next.py 纯编排登记",
+  "exit_code": 1,
+  "exception": "UnicodeDecodeError: unexpected end of data at UTF-8 byte slice 498-499",
+  "location": "register-next.py:56，先切500字节再decode，切到了汉字中间",
+  "effect": "发生在NEW.mkdir、状态占号及正式卡保存之前；共享状态和产品尚未写入",
+  "correction": "版本核证用UTF-8完整字节标记，不截断解码",
+  "product_SQL_tests_build_starts": 0
+}

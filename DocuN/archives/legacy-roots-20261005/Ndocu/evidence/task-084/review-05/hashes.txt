@@ -1,0 +1,29 @@
+# TASK-084 review-05 hash 复核与读入范围（只读取证；本卡运行额度 0，未运行任何脚本/测试）
+
+## 独立复核（托管 Python 3.13.12 hashlib，只读；2026-09-25 review-05 窗口）
+dfaaf814bb6abeea0a7f82d8499b1e03915c87bad50aa4a50295fcfde3995259  backend/tests/fixtures/task083/focused_unit.py  == 卡面冻结 MATCH（083 修正06 后值）
+5bc35bf185de71e3ce94aa1a12e3e2a1466e6fd372e5c3f5d6aca196233980d2  backend/tests/fixtures/task083/job_control.py   == 卡面冻结 MATCH（未变）
+3029a709f615ab068d65004d1083568d0a96e577417380b26109defaf0a64c5c  backend/tests/fixtures/task083/offline_unit.py  == 卡面冻结 MATCH（未变）
+
+## pre 副本复核（fixture-completion-06/pre/）
+4a633aff536f833cdbf3a266be2d44de70b8e01105a204b68d7947995627a1ca  pre__focused_unit.py  == 卡面 pre 冻结 MATCH（即 review-04 轮 focused_unit 终值，pre→post 连续性成立）
+5bc35bf185de71e3ce94aa1a12e3e2a1466e6fd372e5c3f5d6aca196233980d2  pre__job_control.py   MATCH（与当前一致，本轮未动）
+3029a709f615ab068d65004d1083568d0a96e577417380b26109defaf0a64c5c  pre__offline_unit.py  MATCH（与当前一致，本轮未动）
+
+六项全 MATCH，零漂移。其余直接依赖（launcher/supervisor_ipc/supervisor_main/session/command/worker_main/gate/windows_job/repository/005/fixture/scenario_child/job_batch 等 13 文件）沿 fixture-completion-06/final-hashes.txt 与 review-04 证据复用，未全仓重采；session.py 期望值 502a3743…（供 05 日志 imports 绑定核对）。
+
+## 独立 difflib 比对（自写只读代码，非实现者脚本）
+pre__focused_unit.py vs 当前 focused_unit.py：+51/−30 行，全部差异限定 StartLifecycleTests 区段（pre 57-240 / cur 57-261）；区段外 head/tail 字节级相等。incremental.diff 与独立比对逐块一致。
+
+## 读入清单（顺序即接触顺序）
+1. 项目 AGENTS.md、公共 docu/AGENTS.MD
+2. review-04 基线：Ndocu/evidence/task-084/review-04/{prelog-assessment.md, hashes.txt}、Ndocu/results/TASK-084-result.md（review-04 段及历史）
+3. 六项独立 hash 复算（上列）
+4. fixture-completion-06/{pre/pre-hashes.txt, final-hashes.txt, incremental.diff}
+5. focused_unit.py 全文、job_control.py 全文、offline_unit.py（_TestClock/FakeJob/test_05 区段）
+6. 独立 difflib 比对 —— 独立初判落笔（prelog-assessment.md）——
+7. fixture-completion-06/{manifest-final.txt, unit-lifecycle-06.log, unit-lifecycle-06-meta.txt, offline-05-06.log, offline-05-06-meta.txt, static-check.txt}
+8. Ndocu/results/TASK-083-result.md 当前段（待评陈述，最后读取）
+
+## 边界声明
+未读实现聊天；未运行 AST/import/compile/单元/Job/spawn/PG/Docker/网络/安装/模型/真实配置/实现者脚本；源码/测试/迁移/正式docu/公共库/旧证据/Git 零写入；Job/PG 启动数 0。仅执行两条托管 Python 内联只读取证命令（hashlib 哈希、difflib 比对），零写入。

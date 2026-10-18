@@ -1,0 +1,22 @@
+"use strict";
+// 调用生产函数，验证实际脚本文本与CSP，覆盖替换模板的全部特殊美元符。
+const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto'),assert=require('node:assert/strict');
+const root=path.resolve(__dirname,'../../..'),out=process.argv[2];
+const {compiledHTML}=require(path.join(root,'deploy/preview/renderer-assembly.cjs'));
+const read=name=>fs.readFileSync(path.join(root,'deploy/preview',name),'utf8');
+const template=read('runtime.html'),script=read('runtime.cjs'),style=read('runtime.css');
+const sha=value=>crypto.createHash('sha256').update(value,'utf8').digest('hex');
+const html=compiledHTML(template,script,style),actualScript=html.match(/<script>([\s\S]*?)<\/script>/)[1],actualStyle=html.match(/<style>([\s\S]*?)<\/style>/)[1];
+assert.equal(actualScript,script);assert.equal(actualStyle,style);
+for(const [kind,text] of [['script',script],['style',style]])assert.ok(html.includes(kind+"-src 'sha256-"+crypto.createHash('sha256').update(text,'utf8').digest('base64')+"'"));
+assert.equal((html.match(/<script>/g)||[]).length,1);assert.equal((html.match(/<\/script>/g)||[]).length,1);
+assert.ok(!/__POLICY__|__STYLE__|__SCRIPT__/.test(html));
+const special="$& $$ $` $'";
+const literal=compiledHTML(template,'// '+special,'/* '+special+' */');
+assert.equal(literal.match(/<script>([\s\S]*?)<\/script>/)[1],'// '+special);
+assert.equal(literal.match(/<style>([\s\S]*?)<\/style>/)[1],'/* '+special+' */');
+assert.throws(()=>compiledHTML(template,'</script>','x'),/renderer_integrity_error/);
+assert.throws(()=>compiledHTML(template,'x','</style>'),/renderer_integrity_error/);
+assert.throws(()=>compiledHTML(template,'x'.repeat(65536),'x'),/renderer_size_limit/);
+fs.writeFileSync(path.join(out,'actual-production.html'),html);
+fs.writeFileSync(path.join(out,'node-assembly.json'),JSON.stringify({status:'PASS_LITERAL_ASSEMBLY',script_bytes:Buffer.byteLength(script),script_sha256:sha(actualScript),style_sha256:sha(actualStyle),html_sha256:sha(html),special_replacements_preserved:true},null,2));

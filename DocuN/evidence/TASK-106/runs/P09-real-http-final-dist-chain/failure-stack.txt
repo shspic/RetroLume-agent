@@ -1,0 +1,13 @@
+Traceback (most recent call last):
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task106\control.py", line 70, in batch
+    yield folder
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task106\http_group.py", line 119, in main
+    try:materials=verify(http,folder)
+                  ^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task106\http_group.py", line 68, in verify
+    value=http.ok('POST','/api/materials',params={'filename':name},content=SAMPLES[name].encode('utf-8'),headers={**http.headers,'Content-Type':'application/octet-stream'})
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task106\http_group.py", line 55, in ok
+    r=self.request(method,path,**kwargs);assert r.status_code in (200,201,202),dict(status=r.status_code,body=r.text[:5000],path=path)
+                                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: {'status': 403, 'body': '{"detail":"拒绝未知来源"}', 'path': '/api/materials'}

@@ -1,0 +1,17 @@
+--- /dev/null
++++ final/backend/tests/fixtures/task114/check_offline.py
+@@ -0,0 +1,14 @@
++"""有限离线 AST 和必要入口导入，不连接 PG 或启动服务。"""
++import ast
++import json
++import sys
++from budget import ROOT
++sys.path.insert(0,str(ROOT/'backend'))
++
++files=list((ROOT/'backend/app').rglob('*.py'))+list((ROOT/'backend/tests/fixtures/task114').glob('*.py'))
++for path in files:ast.parse(path.read_text(encoding='utf-8-sig'),filename=str(path))
++from app.main import create_app
++from app.memory.service import MemoryService
++from app.data_exit.restore import TargetFactory,RestoreController
++from app.data_exit.schema_checks import check_data_shape
++print(json.dumps({'parsed_python_files':len(files),'entry_imports':'passed','pg_connections':0,'services_started':0}))

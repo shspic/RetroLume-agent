@@ -1,0 +1,72 @@
+=== backend/migrations/004_activities_time_budget.sql  post_sha256=8f04f57c743c260f5081e0c6f232860301b30c7b03fef69498d7c0704c0a97cc
+--- pre/pre__004_activities_time_budget.sql
++++ backend/migrations/004_activities_time_budget.sql
+@@ -25,5 +25,6 @@
+     ADD COLUMN running_settled_seconds BIGINT NOT NULL DEFAULT 0
+         CHECK (running_settled_seconds >= 0),
+-    ADD COLUMN last_settled_generation INTEGER,
++    ADD COLUMN last_settled_generation INTEGER
++        CHECK (last_settled_generation IS NULL OR last_settled_generation >= 0),
+     ADD COLUMN last_settled_seconds BIGINT
+         CHECK (last_settled_seconds IS NULL OR last_settled_seconds >= 0);
+
+=== backend/tests/test_activity_recovery.py  post_sha256=0e5d9c89a7a3fce490cc60deb7c0a608b8c54356edd7c4b18ee66165bf88bf7a
+--- pre/pre__test_activity_recovery.py
++++ backend/tests/test_activity_recovery.py
+@@ -291,4 +291,5 @@
+             max_request_bytes=4096,
+             max_output_tokens=256,
++            max_running_seconds=3600,
+             allowed_models=((Provider.DEEPSEEK_CHAT_COMPLETIONS.value, "synthetic-model"),),
+             allowed_tools=(),
+@@ -299,5 +300,8 @@
+         self.extra_activity_ids.append(other.activity_id)
+         await self.ledger.create_activity(other)
+-        other_lease = await self.ledger.claim_lease(other.activity_id, "worker-1", lease_seconds=300)
++        other_lease = await self.ledger.claim_lease(
++            other.activity_id, "worker-1", lease_seconds=300, window_seconds=300
++        )
++        self.assertIsNotNone(other_lease)
+         await self.ledger.admit(self.intent(other, other_lease, "xb-op-1"))
+         await self.ledger.admit(self.intent(other, other_lease, "xb-op-2"))
+
+=== backend/tests/test_activity_time_budget.py  post_sha256=63a19d1f2a99236d56bd1cc1841953908fa8c1f955ff0c6d5d61b4ee84621a86
+--- pre/pre__test_activity_time_budget.py
++++ backend/tests/test_activity_time_budget.py
+@@ -324,5 +324,5 @@
+             )
+ 
+-    async def test_08_ceiling_rounding_zero_and_budget_exhaustion(self) -> None:
++    async def test_08_ceiling_rounding_zero_and_fold_reclaim_partial_window(self) -> None:
+         await self.build_activity(max_running_seconds=200)
+         # 向上取整：20.2 → C21。
+@@ -341,7 +341,26 @@
+         with self.assertRaises(ActivityLedgerConflict):
+             await self.claim(window_seconds=100, executor="worker-2")
+-        # 预算耗尽：None，且与未知活动冲突可区分。
++        # 过期残留全额折叠（R100 → S121）后 A=79，仍可取得 W_eff=79 的新租约，
++        # 不因"余额不足全额窗口"误判为预算耗尽（预算耗尽路径由 test_04 覆盖）。
+         await self.expire_lease()
+-        self.assertIsNone(await self.claim(window_seconds=100, executor="worker-2"))
++        fourth = await self.claim(window_seconds=100, executor="worker-2")
++        self.assertIsNotNone(fourth)
++        self.assertEqual(fourth.window_seconds, 79)
++        row = await self.budget_row()
++        self.assertEqual(row["max_running_seconds"], 200)
++        self.assertEqual(row["running_settled_seconds"], 121)
++        self.assertEqual(row["running_reserved_seconds"], 79)
++        # 折叠加新预扣后可用余额为 0：M - S - R = 0。
++        self.assertEqual(
++            row["max_running_seconds"]
++            - row["running_settled_seconds"]
++            - row["running_reserved_seconds"],
++            0,
++        )
++        self.assertEqual(row["status"], "running")
++        # 租约身份/代次与返回一致；不硬编码 generation 数字。
++        self.assertEqual(row["execution_generation"], fourth.execution_generation)
++        self.assertEqual(row["executor_id"], fourth.executor_id)
++        # 未知活动：冲突异常，与预算耗尽 None 可区分。
+         with self.assertRaises(ActivityLedgerConflict):
+             await self.ledger.claim_lease(
+

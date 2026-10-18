@@ -1,0 +1,65 @@
+--- a/backend/app/learning/teaching_policy.py
++++ b/backend/app/learning/teaching_policy.py
+@@ -85,24 +85,50 @@
+     "min": ("time", 60, 1), "分钟": ("time", 60, 1),
+     "m": ("distance", 1, 1), "米": ("distance", 1, 1),
+ }
+-_ANSWER_NUMBER = r"(?<![0-9A-Za-z_.+\-])(-?[0-9]+(?:\.[0-9]+)?)"
+-_ANSWER_QUANTITY = re.compile(_ANSWER_NUMBER + r"\s*(m\s*/\s*min|m\s*/\s*s|米\s*/\s*秒|米每秒|min|分钟|秒|s|m|米)(?![A-Za-z0-9/])")
++_ANSWER_NUMBER = r"-?[0-9]+(?:\.[0-9]+)?"
++_ANSWER_QUANTITY = re.compile(
++    rf"({_ANSWER_NUMBER})\s*(m\s*/\s*min|m\s*/\s*s|米\s*/\s*秒|米每秒|min|分钟|秒|s|m|米)"
++)
++_ANSWER_TIME_CONVERSION = re.compile(
++    rf"({_ANSWER_NUMBER})\s*(?:分钟|min)\s*=\s*({_ANSWER_NUMBER})\s*(?:秒|s)"
++)
++_ANSWER_AUXILIARY_PHRASES = frozenset({
++    "先统一秒", "先统一时间单位", "先换算秒", "分钟乘60",
++    "单位与数量级合理", "单位与数量级正确", "数量级合理", "数量级正确",
++})
++
++
++def _answer_auxiliary(clause: str) -> bool:
++    """封闭辅助说明：固定肯定短语，或非负且精确成立的分钟转秒等式。"""
++    if clause in _ANSWER_AUXILIARY_PHRASES:
++        return True
++    match = _ANSWER_TIME_CONVERSION.fullmatch(clause)
++    if match is None:
++        return False
++    minutes, seconds = Decimal(match[1]), Decimal(match[2])
++    with localcontext() as context:
++        context.prec = max(64, len(match[1]) + len(match[2]) + 2)
++        return minutes >= 0 and seconds >= 0 and minutes * 60 == seconds
+ 
+ 
+ def _answer_quantity(text: str, unit: str | None):
+-    """仅核一个明确的有限数值量；多值/开放语义/程序原文不猜结论。"""
++    """完整匹配肯定答案，不从否定、引用或开放文字筛选数值。
++
++    有单位：首部一个量值，逗号/分号分隔的后部仅允许封闭辅助说明。
++    无单位：仅一个数值，可前置“约”。两者可有外围空白和一个句末句号。
++    任何未识别内容（含额外量值或开放尾文）均返回 None，保留未检验。
++    """
+     unit = re.sub(r"\s+", "", unit or "")
+-    candidates = [(Decimal(m[1]), re.sub(r"\s+", "", m[2])) for m in _ANSWER_QUANTITY.finditer(text)]
++    text = text.strip()
++    if text.endswith(("。", ".")):
++        text = text[:-1].rstrip()
+     if unit in _ANSWER_UNITS:
+-        family = _ANSWER_UNITS[unit][0]
+-        same = [c for c in candidates if _ANSWER_UNITS[c[1]][0] == family]
+-        if len(same) == 1:
+-            return same[0]
+-        if not same and len(candidates) == 1:
+-            return candidates[0]
+-        return None
++        clauses = re.split(r"\s*[,，;；]\s*", text)
++        match = _ANSWER_QUANTITY.fullmatch(clauses[0])
++        if match and all(_answer_auxiliary(clause) for clause in clauses[1:]):
++            return Decimal(match[1]), re.sub(r"\s+", "", match[2])
+     if not unit:
+-        match = re.fullmatch(r"\s*(?:约\s*)?(-?[0-9]+(?:\.[0-9]+)?)\s*", text)
++        match = re.fullmatch(rf"(?:约\s*)?({_ANSWER_NUMBER})", text)
+         if match:
+             return Decimal(match[1]), ""
+     return None

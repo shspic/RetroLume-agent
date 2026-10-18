@@ -1,0 +1,316 @@
+{
+  "experiment": "TASK-003 / SPIKE-001 / HYP-001",
+  "schema_version": 1,
+  "authorship": "执行 Agent 预先独立编写，Work 在提取前核对；未调用解析器、未从待测提取结果生成。样本文字在生成器独立列出；不以提取结果修改预期。",
+  "comparison": [
+    "pypdf plain",
+    "pypdf layout"
+  ],
+  "position_contract": "PDF physical_page 从 1 开始，不等于印刷页码；文本和 Markdown 记录从 1 开始的源文件行号。PDF offset 仅为本次提取字符串位置，不是原件字符跨度或 bbox。",
+  "bare_batch_order": [
+    "ordinary",
+    "broken",
+    "complex",
+    "text",
+    "markdown",
+    "version_1",
+    "version_2"
+  ],
+  "cases": [
+    {
+      "id": "text",
+      "path": "fixtures/bilingual.txt",
+      "kind": "text",
+      "expected_status": "success",
+      "fragments": [
+        {
+          "id": "TX1",
+          "text": "学习目标：理解能量守恒。",
+          "line": 2
+        },
+        {
+          "id": "TX2",
+          "text": "Energy is conserved in an isolated system.",
+          "line": 3
+        },
+        {
+          "id": "TX3",
+          "text": "核对单位：焦耳。 Check units: joules.",
+          "line": 4
+        }
+      ],
+      "orders": [
+        {
+          "name": "source_lines",
+          "ids": [
+            "TX1",
+            "TX2",
+            "TX3"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "markdown",
+      "path": "fixtures/bilingual.md",
+      "kind": "markdown",
+      "expected_status": "success",
+      "fragments": [
+        {
+          "id": "MD1",
+          "text": "# 复习卡片 / Review card",
+          "line": 1
+        },
+        {
+          "id": "MD2",
+          "text": "- 中文：先解释，再举例。",
+          "line": 3
+        },
+        {
+          "id": "MD3",
+          "text": "- English: explain first, then give an example.",
+          "line": 4
+        },
+        {
+          "id": "MD4",
+          "text": "| 时间 / Time | 3 seconds |",
+          "line": 8
+        }
+      ],
+      "orders": [
+        {
+          "name": "source_lines",
+          "ids": [
+            "MD1",
+            "MD2",
+            "MD3",
+            "MD4"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ordinary",
+      "path": "fixtures/ordinary_two_pages.pdf",
+      "kind": "pdf",
+      "expected_status": "success",
+      "expected_pages": 2,
+      "fragments": [
+        {
+          "id": "P1ZH",
+          "text": "第一页：先定义问题，再检查证据。",
+          "physical_page": 1
+        },
+        {
+          "id": "P1EN",
+          "text": "Page one: define the question before checking evidence.",
+          "physical_page": 1
+        },
+        {
+          "id": "P1FOOT",
+          "text": "Printed page 101",
+          "physical_page": 1
+        },
+        {
+          "id": "P2ZH",
+          "text": "第二页：复测结果可以改变下一步练习。",
+          "physical_page": 2
+        },
+        {
+          "id": "P2EN",
+          "text": "Page two: use a second attempt to choose the next exercise.",
+          "physical_page": 2
+        },
+        {
+          "id": "P2FOOT",
+          "text": "Printed page 205",
+          "physical_page": 2
+        }
+      ],
+      "orders": [
+        {
+          "name": "page_then_body",
+          "ids": [
+            "P1ZH",
+            "P1EN",
+            "P1FOOT",
+            "P2ZH",
+            "P2EN",
+            "P2FOOT"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "complex",
+      "path": "fixtures/two_columns_table.pdf",
+      "kind": "pdf",
+      "expected_status": "success",
+      "expected_pages": 1,
+      "visual_reading_rule": "先完整阅读左栏 L1-L3，再完整阅读右栏 R1-R3；表格按行从左到右阅读。规则同时印在 PDF 顶部。",
+      "fragments": [
+        {
+          "id": "L1",
+          "text": "L1 左栏一：先理解概念。",
+          "physical_page": 1
+        },
+        {
+          "id": "L2",
+          "text": "L2 Left two: connect the evidence.",
+          "physical_page": 1
+        },
+        {
+          "id": "L3",
+          "text": "L3 左栏三：最后给出解释。",
+          "physical_page": 1
+        },
+        {
+          "id": "R1",
+          "text": "R1 右栏一：开始另一道题。",
+          "physical_page": 1
+        },
+        {
+          "id": "R2",
+          "text": "R2 Right two: compare two attempts.",
+          "physical_page": 1
+        },
+        {
+          "id": "R3",
+          "text": "R3 右栏三：更新复习计划。",
+          "physical_page": 1
+        },
+        {
+          "id": "TH1",
+          "text": "T-H1 Topic",
+          "physical_page": 1
+        },
+        {
+          "id": "TH2",
+          "text": "T-H2 Value",
+          "physical_page": 1
+        },
+        {
+          "id": "T1A",
+          "text": "T-1A Energy",
+          "physical_page": 1
+        },
+        {
+          "id": "T1B",
+          "text": "T-1B 12 joules",
+          "physical_page": 1
+        },
+        {
+          "id": "T2A",
+          "text": "T-2A Time",
+          "physical_page": 1
+        },
+        {
+          "id": "T2B",
+          "text": "T-2B 3 seconds",
+          "physical_page": 1
+        }
+      ],
+      "orders": [
+        {
+          "name": "column_reading",
+          "ids": [
+            "L1",
+            "L2",
+            "L3",
+            "R1",
+            "R2",
+            "R3"
+          ]
+        },
+        {
+          "name": "table_row_reading",
+          "ids": [
+            "TH1",
+            "TH2",
+            "T1A",
+            "T1B",
+            "T2A",
+            "T2B"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "broken",
+      "path": "fixtures/broken.pdf",
+      "kind": "pdf",
+      "expected_status": "error",
+      "rationale": "只写 PDF 头和故意截断的对象，缺少根对象/xref/EOF，不是扫描件或无文字 PDF。",
+      "fragments": [],
+      "orders": []
+    },
+    {
+      "id": "version_1",
+      "path": "fixtures/version_1/notes.pdf",
+      "kind": "pdf",
+      "expected_status": "success",
+      "expected_pages": 1,
+      "fragments": [
+        {
+          "id": "V1",
+          "text": "VERSION=1",
+          "physical_page": 1
+        },
+        {
+          "id": "V1ZH",
+          "text": "复习间隔：三天。",
+          "physical_page": 1
+        },
+        {
+          "id": "V1EN",
+          "text": "Retention interval: 3 days.",
+          "physical_page": 1
+        }
+      ],
+      "orders": [
+        {
+          "name": "body",
+          "ids": [
+            "V1",
+            "V1ZH",
+            "V1EN"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "version_2",
+      "path": "fixtures/version_2/notes.pdf",
+      "kind": "pdf",
+      "expected_status": "success",
+      "expected_pages": 1,
+      "fragments": [
+        {
+          "id": "V2",
+          "text": "VERSION=2",
+          "physical_page": 1
+        },
+        {
+          "id": "V2ZH",
+          "text": "复习间隔：七天。",
+          "physical_page": 1
+        },
+        {
+          "id": "V2EN",
+          "text": "Retention interval: 7 days.",
+          "physical_page": 1
+        }
+      ],
+      "orders": [
+        {
+          "name": "body",
+          "ids": [
+            "V2",
+            "V2ZH",
+            "V2EN"
+          ]
+        }
+      ]
+    }
+  ]
+}

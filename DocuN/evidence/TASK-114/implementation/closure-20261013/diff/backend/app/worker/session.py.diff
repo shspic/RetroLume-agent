@@ -1,0 +1,64 @@
+--- before/backend/app/worker/session.py
++++ final/backend/app/worker/session.py
+@@ -293,6 +293,11 @@
+                     "statement_timeout_ms": self.ledger._statement_timeout_ms,
+                     "lock_timeout_ms": self.ledger._lock_timeout_ms,
+                 }
++                if getattr(self.ledger,'data_owned_id',None) is not None:
++                    gate=self.ledger.mutation_gate
++                    owned=gate.hub.state()['owned'][self.ledger.data_owned_id]
++                    ledger_data['data_guard']={'root':str(gate.hub.root),'control_id':gate.hub.control_id,
++                                              'origin':owned['origin'],'owned_id':self.ledger.data_owned_id}
+                 if tool_action is not None:
+                     exchange.write_request(worker_request_tool(
+                         tool_action, ledger_data, lease, run_tag, stop_ns,
+@@ -301,18 +306,38 @@
+                     exchange.write_request(worker_request(
+                         one_call, ledger_data, lease, run_tag, stop_ns,
+                         config.request_timeout_seconds))
+-            job = NamedJob.create(activity_id, lease.execution_generation)
+-            created_job = True
+-            name = job.name
+-            pid = job.spawn_suspended(command.argv(exchange.name) if exchange is not None else command.argv(), cwd=command.cwd)
+-            worker_created_100ns = job.process_creation_time_100ns()
+-            if time.monotonic_ns() >= min(t0_ns + int(config.startup_limit_seconds * 1e9), stop_ns):
+-                state = "startup_deadline"
+-                raise _StopSession
+-            # 唯一 Job/悬停 worker 已登记且截止固定，才 armed/Resume。
+-            job.resume()
++            from contextlib import nullcontext
++            data_gate=getattr(self.ledger,'mutation_gate',None)
++            with data_gate.outgoing_section() if data_gate is not None else nullcontext():
++                job = NamedJob.create(activity_id, lease.execution_generation)
++                created_job = True
++                name = job.name
++                pid = job.spawn_suspended(command.argv(exchange.name) if exchange is not None else command.argv(), cwd=command.cwd)
++                worker_created_100ns = job.process_creation_time_100ns()
++                if time.monotonic_ns() >= min(t0_ns + int(config.startup_limit_seconds * 1e9), stop_ns):
++                    state = "startup_deadline"
++                    raise _StopSession
++                # 唯一 Job/悬停 worker 已登记且截止固定，才 armed/Resume。
++                job.resume()
+             state = "running"
+-            tree_empty = job.wait_empty_until(stop_ns)
++            if data_gate is None:
++                tree_empty = job.wait_empty_until(stop_ns)
++            else:
++                while time.monotonic_ns()<stop_ns:
++                    tree_empty=job.wait_empty_until(min(stop_ns,time.monotonic_ns()+100_000_000))
++                    if tree_empty:break
++                    if data_gate.hub.state()['fence'] is not None:
++                        await self._db(self.ledger.begin_window_close(activity_id,executor_id,lease.execution_generation),manager_deadline_ns)
++                        # worker 的 ClosingCallGate 同时观察围栏；仍由原 SUP/Job 证明整树结束。
++                        grace=min(stop_ns,time.monotonic_ns()+int(config.cleanup_seconds*1e9))
++                        tree_empty=job.wait_empty_until(grace)
++                        if not tree_empty:
++                            job.terminate()
++                            tree_empty=job.wait_empty_until(min(deadline_ns,manager_deadline_ns))
++                            state='maintenance_stopped_full_reservation' if tree_empty else 'maintenance_stop_unconfirmed'
++                            elapsed_seconds=(time.monotonic_ns()-t0_ns)/1e9
++                            raise _StopSession
++                        break
+             if not tree_empty:
+                 job.terminate()
+                 tree_empty = job.wait_empty_until(min(deadline_ns, manager_deadline_ns))

@@ -1,0 +1,164 @@
+frontend/src/activities/retrieval-api.ts
+1: import {canonical,dataFetch,dataNamespace} from '../data/context';
+2: 
+3: export type RetrievalRef={business_key:string;query_sha256:string;space_id:string;result_sha256:string};
+4: export type RetrievalCommand={business_key:string;action:'source_index'|'query';expected_scope_revision:number;expected_domain_revision:number;query:string|null;confirmed:true};
+5: export type RetrievalReceipt={business_key:string;action:string;status:string;current:boolean;terminal_disposition:string|null;error_code:string|null;retrieval_ref?:RetrievalRef};
+6: export type ServiceIdentity={provider:string;model:string};
+7: export type RetrievalStatus={available:boolean;reason:string|null;provider:string|null;model:string|null;ready?:boolean;fragments?:number;cached_fragments?:number;index_batches?:number;domain_revision?:number;purpose:string;reserve_cost_microunits:number;remaining_requests:number;remaining_cost_microunits:number;remaining_running_seconds:number;query_then_model_requests:number;query_then_model_reserve_microunits:number;window_reserve_seconds:number};
+8: // D04：只认可只读配置给出的有限服务身份，不能从服务类型猜模型。
+9: export function serviceIdentityKnown(value:unknown):value is ServiceIdentity{
+10:   if(!value||typeof value!=='object')return false;
+11:   const row=value as Record<string,unknown>;
+12:   return ['provider','model'].every(key=>typeof row[key]==='string'&&/^[A-Za-z0-9._:/-]{1,128}$/.test(row[key] as string));
+13: }
+14: export function retrievalDisclosureKnown(status:RetrievalStatus|null):boolean{
+15:   return Boolean(status?.available&&serviceIdentityKnown(status)&&typeof status.purpose==='string'&&status.purpose.trim().length>0&&status.purpose.length<=300
+16:     &&[status.reserve_cost_microunits,status.window_reserve_seconds,status.query_then_model_reserve_microunits].every(n=>Number.isSafeInteger(n)&&n>0)
+17:     &&status.query_then_model_requests===2&&status.query_then_model_reserve_microunits>=2*status.reserve_cost_microunits
+18:     &&[status.remaining_requests,status.remaining_cost_microunits,status.remaining_running_seconds].every(n=>Number.isFinite(n)&&n>=0));
+19: }
+20: export type RetrievalChain={key:string;namespace:string;activity_id:string;owner:string;domain:'teaching'|'interview'|'index';domain_input:Record<string,unknown>;query:RetrievalCommand;domain_sent:boolean;receipt?:RetrievalReceipt;created_at:string};
+21: const base=(aid:string)=>`/api/activities/${encodeURIComponent(aid)}/retrieval`;
+22: export async function retrievalRequest<T>(token:string,aid:string,suffix:string,body?:unknown,guard=()=>true):Promise<T>{
+23:   if(!guard())throw new Error('页面身份已变化，未提交');
+24:   const response=await dataFetch(base(aid)+suffix,{method:body===undefined?'GET':'POST',headers:{'X-RetroLume-Session':token,...(body===undefined?{}:{'Content-Type':'application/json'})},body:body===undefined?undefined:canonical(body),cache:'no-store'});
+25:   if(!guard())throw new Error('页面身份已变化，保留原意图');
+26:   const value=await response.json();if(!guard())throw new Error('页面身份已变化，保留原意图');
+27:   if(!response.ok)throw new Error(value.detail?.message??'资料检索未完成，请核对原操作');return value;
+28: }
+29: async function database(){return new Promise<IDBDatabase>((resolve,reject)=>{const r=indexedDB.open(`retrolume-teaching:retrieval:${dataNamespace()}`,1);r.onupgradeneeded=()=>r.result.createObjectStore('chains',{keyPath:'key'});r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(new Error('本机意图不可写，未提交'));});}
+30: export async function storeRetrievalChain(row:RetrievalChain){
+31:   if(row.namespace!==dataNamespace())throw new Error('数据已切换，原意图保留');
+32:   const db=await database();try{await new Promise<void>((resolve,reject)=>{const tx=db.transaction('chains','readwrite');tx.objectStore('chains').put(row);tx.oncomplete=()=>resolve();tx.onabort=tx.onerror=()=>reject(new Error('本机意图不可写，未提交'));});}finally{db.close();}
+33: }
+34: export async function retrievalChains(aid:string){const db=await database();try{return await new Promise<RetrievalChain[]>((resolve,reject)=>{const r=db.transaction('chains').objectStore('chains').getAll();r.onsuccess=()=>resolve((r.result as RetrievalChain[]).filter(x=>x.activity_id===aid&&x.namespace===dataNamespace()));r.onerror=()=>reject(new Error('本机检索意图无法读取'));});}finally{db.close();}}
+35: export async function retrieveForCommand(token:string,aid:string,owner:string,domain:RetrievalChain['domain'],input:Record<string,unknown>,scope:number,revision:number,query:string,guard:()=>boolean,recovered?:RetrievalChain,modelService?:ServiceIdentity|null){
+36:   const row:RetrievalChain=recovered??{key:crypto.randomUUID(),namespace:dataNamespace(),activity_id:aid,owner,domain,domain_input:input,query:{business_key:crypto.randomUUID(),action:domain==='index'?'source_index':'query',expected_scope_revision:scope,expected_domain_revision:revision,query:domain==='index'?null:query.trim(),confirmed:true},domain_sent:false,created_at:new Date().toISOString()};
+37:   const live=()=>guard()&&row.namespace===dataNamespace();
+38:   if(!live()||row.owner!==owner||row.domain!==domain||row.domain_sent||row.query.expected_scope_revision!==scope||row.query.expected_domain_revision!==revision)throw new Error('原动作资格已变化，请只读核对');
+39:   await storeRetrievalChain(row);if(!live())throw new Error('页面身份已变化，未提交');
+40:   const preview=await retrievalRequest<RetrievalStatus>(token,aid,'/status',undefined,live);
+41:   if(!retrievalDisclosureKnown(preview)||(domain!=='index'&&!serviceIdentityKnown(modelService)))throw new Error('本步供应商、模型、用途或额度尚不可核对，未发送。');
+42:   if(!recovered){
+43:     const needed=domain==='index'?(preview.index_batches??0):2;
+44:     if(preview.remaining_requests<needed||preview.remaining_cost_microunits<needed*preview.reserve_cost_microunits||preview.remaining_running_seconds<needed*preview.window_reserve_seconds)throw new Error('剩余额度不足以完成本步，查询和后续动作均未发送。');
+45:   }
+46:   const receipt=await retrievalRequest<RetrievalReceipt>(token,aid,recovered?`/commands/${row.query.business_key}`:'/commands',recovered?undefined:row.query,live);
+47:   if(receipt.business_key!==row.query.business_key)throw new Error('检索回执身份不同');row.receipt=receipt;await storeRetrievalChain(row);
+48:   if(!live()||(domain==='index'?!['received','cache_ready'].includes(receipt.terminal_disposition??''):receipt.terminal_disposition!=='received'||!receipt.current||!receipt.retrieval_ref))throw new Error('检索尚无当前合格结果，后续动作未发送；请按原键核对');
+49:   return {row,ref:receipt.retrieval_ref};
+50: }
+
+frontend/src/activities/RetrievalPanel.tsx
+1: import {useEffect,useRef,useState} from 'react';
+2: import {retrievalRequest,retrievalChains,retrieveForCommand,storeRetrievalChain,retrievalDisclosureKnown,serviceIdentityKnown,type ServiceIdentity,type RetrievalChain,type RetrievalReceipt,type RetrievalStatus} from './retrieval-api';
+3: 
+4: export function RetrievalPanel({token,activityId,scopeRevision,domainRevision,owner,mode,onMode,onContinue,indexAllowed=true,modelService=null,onDisclosureChange}:{token:string;activityId:string;scopeRevision:number;domainRevision:number;owner:string|null;mode:'hybrid'|'terms';onMode:(mode:'hybrid'|'terms')=>void;onContinue?:(chain:RetrievalChain)=>void;indexAllowed?:boolean;modelService?:ServiceIdentity|null;onDisclosureChange?:(ready:boolean)=>void}){
+5:   const [status,setStatus]=useState<RetrievalStatus|null>(null),[chains,setChains]=useState<RetrievalChain[]>([]),[error,setError]=useState(''),[busy,setBusy]=useState(false);
+6:   const current=useRef('');current.current=`${activityId}:${scopeRevision}:${domainRevision}:${owner}`;
+7:   const mounted=useRef(false);useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;};},[]);
+8:   const vectorKnown=retrievalDisclosureKnown(status),chatKnown=serviceIdentityKnown(modelService);
+9:   const modelNoticeReady=chatKnown&&(mode==='terms'||vectorKnown);
+10:   useEffect(()=>{onDisclosureChange?.(modelNoticeReady);},[modelNoticeReady,onDisclosureChange]);
+11:   async function refresh(){const identity=current.current;const live=()=>mounted.current&&identity===current.current;try{const s=await retrievalRequest<RetrievalStatus>(token,activityId,'/status',undefined,live);const c=await retrievalChains(activityId);if(live()){setStatus(s);setChains(c);}}catch(e){if(live())setError((e as Error).message);}}
+12:   useEffect(()=>{setStatus(null);setChains([]);void refresh();},[activityId,scopeRevision,domainRevision,owner,token]);
+13:   async function index(){if(!owner||busy||!indexAllowed||!vectorKnown)return;const identity=current.current;setBusy(true);setError('');try{await retrieveForCommand(token,activityId,owner,'index',{},scopeRevision,domainRevision,'',()=>mounted.current&&identity===current.current);await refresh();}catch(e){if(identity===current.current)setError((e as Error).message);}finally{if(identity===current.current)setBusy(false);}}
+14:   async function reconcile(row:RetrievalChain){const identity=current.current;setBusy(true);setError('');try{const receipt=await retrievalRequest<RetrievalReceipt>(token,activityId,`/commands/${row.query.business_key}`,undefined,()=>mounted.current&&identity===current.current);if(receipt.business_key!==row.query.business_key)throw new Error('原操作身份不同');await storeRetrievalChain({...row,receipt});await refresh();}catch(e){if(identity===current.current)setError((e as Error).message);}finally{if(identity===current.current)setBusy(false);}}
+15:   return <section aria-label="资料检索与恢复"><h4>资料检索</h4><p>只使用当前确认的资料片段与本轮必要问题；回答和学习记忆不发送给向量服务。</p>
+16:     <p>选择混合检索后，每次生成或评价先查询一次，合格后再调用一次模型，共需2次请求、两笔费用预留及两个运行窗口。未确认时保留原键，不自动重发。</p>
+17:     {vectorKnown&&status?<p data-service-disclosure="vector">向量供应商：{status.provider}；模型：{status.model}。用途：{status.purpose}；索引单批预留 {status.reserve_cost_microunits} 微单位，每批运行窗口 {status.window_reserve_seconds} 秒。</p>:<p role="status">向量供应商、模型、用途或额度无法核对；索引及混合检索动作暂停。</p>}
+18:     {chatKnown?<p data-service-disclosure="chat">聊天供应商：{modelService.provider}；模型：{modelService.model}。用途：后续教学或面试生成与评价，使用本轮目标、回答、必要历史及明确选择的学习记忆。</p>:<p role="status">聊天供应商或模型无法核对；模型动作暂停。本地保存、取消和只读核对仍按原资格可用。</p>}
+19:     <label><input type="radio" checked={mode==='hybrid'} onChange={()=>onMode('hybrid')}/>结合原文词项与向量检索</label> <label><input type="radio" checked={mode==='terms'} onChange={()=>onMode('terms')}/>明确使用词项降级（不算混合检索通过）</label>
+20:     <p>{status?.available?`已核对 ${status.fragments??0} 个片段，缓存 ${status.cached_fragments??0} 个。${status.ready?'当前索引就绪。':`本次至多 ${status.index_batches??0} 批，单批预留 ${status.reserve_cost_microunits} 微单位。`}`:'混合检索尚未就绪，请检查本机服务配置。'}</p>
+21:     {status?.available&&<p>当前剩余 {status.remaining_requests} 次请求、{status.remaining_cost_microunits} 微单位费用额度、{status.remaining_running_seconds} 秒；查询及后续模型需预留 {status.query_then_model_reserve_microunits} 微单位、{2*status.window_reserve_seconds} 秒。预览后服务器仍逐笔核准；不足时整步不发。</p>}
+22:     {!indexAllowed&&<p>请先保存面试目标并开始场次，再确认资料索引。</p>}
+23:     <button disabled={busy} onClick={()=>void refresh()}>只读核对索引与原意图</button> <button disabled={busy||!owner||!vectorKnown||status?.ready||!indexAllowed} onClick={()=>void index()}>确认用途、费用与索引当前资料</button>
+24:     {chains.filter(c=>c.owner===owner).map(c=><div key={c.key}><p>{c.domain==='index'?'资料索引':'本轮查询'} · {c.receipt?.terminal_disposition??'未确认'}{c.domain_sent?' · 后续动作已交付，请核对领域原意图':''}</p><button disabled={busy} onClick={()=>void reconcile(c)}>按原键只读核对</button>{c.domain!=='index'&&!c.domain_sent&&c.receipt?.current&&c.receipt.terminal_disposition==='received'&&onContinue&&<button disabled={busy||!modelNoticeReady||c.query.expected_scope_revision!==scopeRevision||c.query.expected_domain_revision!==domainRevision} onClick={()=>onContinue(c)}>明确继续尚未发送的原动作</button>}</div>)}
+25:     {error&&<p role="alert">{error}</p>}</section>;
+26: }
+
+frontend/src/activities/teachingApi.ts
+1: import {dataFetch} from "../data/context";
+2: // 教学命令 API 客户端：本地先存意图再 POST；核对/恢复只 GET。
+3: // 不含密钥、DSN、provider 或任何授权字段。
+4: 
+5: export type TeachingAction =
+6:   | "goal" | "plan" | "accept_path" | "exercise" | "expose" | "answer"
+7:   | "calculate" | "evaluate" | "correct" | "abandon" | "select_node";
+8: 
+9: export type TeachingCommandInput = {
+10:   business_key: string;
+11:   expected_revision: number;
+12:   expected_goal_version: number;
+13:   expected_scope_revision: number;
+14:   action: TeachingAction;
+15:   body: Record<string, unknown>;
+16:   retrieval_ref?: import('./retrieval-api').RetrievalRef;
+17: };
+18: 
+19: export type TeachingReceipt = {
+20:   activity_id: string;
+21:   business_key: string;
+22:   action: TeachingAction;
+23:   request_sha256: string;
+24:   status: "accepted" | "started" | "committed" | "history" | "not_sent" | "failed" | "unknown" | "abandoned";
+25:   duplicate_of: string | null;
+26:   record_ids: { record_id: string; kind: string; seq: number }[];
+27:   operation_id: string | null;
+28:   payload_sha256: string | null;
+29:   applied_revision: number | null;
+30:   head_revision_now: number;
+31:   qualification: string;
+32:   error_code: string | null;
+33:   model_called: boolean | null;
+34:   tool_called: boolean | null;
+35:   retry_policy: string;
+36:   exposed_part: Record<string, unknown> | null;
+37: };
+38: 
+39: export type TeachingRegion = {
+40:   qualification: string;
+41:   record_id?: string;
+42:   [key: string]: unknown;
+43: };
+44: 
+45: export type TeachingWorkspace = {
+46:   schema: string;
+47:   activity_id: string;
+48:   view_token: string;
+49:   memory_invalid?: boolean;
+50:   memory_selected?: boolean;
+51:   read_at: string;
+52:   head: {
+53:     revision: number;
+54:     goal_version: number;
+55:     phase: string;
+56:     goal_record_id: string | null;
+57:     path_record_id: string | null;
+58:     node_id: string | null;
+59:     exercise_record_id: string | null;
+
+frontend/src/activities/teachingApi.ts
+116:   }
+117:   return data as Record<string, unknown>;
+118: }
+119: 
+120: export async function postTeachingCommand(
+121:   activityId: string, command: TeachingCommandInput, token: string, guard=()=>true,
+122: ): Promise<TeachingReceipt> {
+123:   if(!guard())throw new TeachingApiError(0,"view_changed","原页面身份已变化，草稿与原键保留，未提交");
+124:   const data = await request(`/api/activities/${activityId}/teaching/commands`, token, {
+125:     method: "POST",
+126:     headers: { "Content-Type": "application/json" },
+127:     body: JSON.stringify(command),
+128:   });
+129:   return data as unknown as TeachingReceipt;
+130: }
+131: 
+132: export async function getTeachingCommand(
+133:   activityId: string, businessKey: string, token: string,
+134: ): Promise<Record<string, unknown> | null> {
+135:   return request(`/api/activities/${activityId}/teaching/commands/${businessKey}`, token);
+136: }
+137: 

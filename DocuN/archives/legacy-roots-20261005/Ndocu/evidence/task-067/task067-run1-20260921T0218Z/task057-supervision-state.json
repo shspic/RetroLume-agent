@@ -1,0 +1,108 @@
+{
+  "schema": 2,
+  "run_tag": "ram8p8h",
+  "main_pid": 28944,
+  "started_at": "2026-09-21T02:18:19.457Z",
+  "deadline_at": "2026-09-21T02:28:19.457Z",
+  "budget_ms": 600000,
+  "browser_budget_ms": 120000,
+  "app_port": 8000,
+  "phase": "released",
+  "finished": true,
+  "cleanup_incomplete": false,
+  "container": {
+    "base_name": "retrolume-task-054-pg",
+    "name": "retrolume-task-054-pg-ram8p8h",
+    "run_label": "ram8p8h",
+    "image_sha": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+    "expect": true,
+    "id": "a9913fcfe8300f3e58d39a92afb07affb01bf647d1a805cab279503e45964366",
+    "id_source": "state-id+run-label-verified",
+    "stop_confirmed": true,
+    "port_precheck": "free",
+    "created_by_run": true,
+    "running": true,
+    "post_start_verified_at": "2026-09-21T02:18:31.956Z",
+    "stop_result": "stopped-confirmed"
+  },
+  "app": {
+    "generation": 2,
+    "pid": 8880,
+    "created": "2026-09-21T02:18:57.2294610Z",
+    "tree": [
+      {
+        "pid": 37332,
+        "created": "2026-09-21T02:18:34.9127760Z",
+        "name": "python.exe",
+        "cmd_tail": "venv python -m uvicorn",
+        "source": "spawn-launcher(g1,spawn-direct-query)",
+        "owned": true,
+        "generation": 1
+      },
+      {
+        "pid": 38464,
+        "created": "2026-09-21T02:18:35.0922960Z",
+        "name": "python.exe",
+        "cmd_tail": "\"C:\\Users\\28432\\AppData\\Local\\Programs\\Python\\Python312\\python.exe\" -m uvicorn app.main:create_app --factory --loop app.runtime:psycopg_compatible_loop_factory --host 127.0.0.1 --port 8000",
+        "source": "descendants-of-launcher(g1)",
+        "owned": true,
+        "generation": 1
+      },
+      {
+        "pid": 8880,
+        "created": "2026-09-21T02:18:57.2294610Z",
+        "name": "python.exe",
+        "cmd_tail": "venv python -m uvicorn",
+        "source": "spawn-launcher(g2,spawn-direct-query)",
+        "owned": true,
+        "generation": 2
+      },
+      {
+        "pid": 25264,
+        "created": "2026-09-21T02:18:57.4396680Z",
+        "name": "python.exe",
+        "cmd_tail": "\"C:\\Users\\28432\\AppData\\Local\\Programs\\Python\\Python312\\python.exe\" -m uvicorn app.main:create_app --factory --loop app.runtime:psycopg_compatible_loop_factory --host 127.0.0.1 --port 8000",
+        "source": "descendants-of-launcher(g2)",
+        "owned": true,
+        "generation": 2
+      }
+    ],
+    "port_observations": [
+      {
+        "at": "2026-09-21T02:18:42.024Z",
+        "where": "post-ready:first start",
+        "pid": 38464,
+        "created": "2026-09-21T02:18:35.0922960Z",
+        "name": "python.exe",
+        "claimed_by_this_run": true
+      },
+      {
+        "at": "2026-09-21T02:19:03.338Z",
+        "where": "post-ready:restart",
+        "pid": 25264,
+        "created": "2026-09-21T02:18:57.4396680Z",
+        "name": "python.exe",
+        "claimed_by_this_run": true
+      }
+    ],
+    "stop_confirmed": true,
+    "identity_source": "spawn-direct-query",
+    "stop_result": "sigterm-timeout",
+    "stop_steps": [
+      {
+        "action": "sigterm-launcher",
+        "pid": 8880,
+        "exited": false
+      }
+    ],
+    "unresolved": []
+  },
+  "browser": {
+    "profile_dir": null,
+    "tree": [],
+    "stop_confirmed": null
+  },
+  "cleanup": null,
+  "supervision_released_at": "2026-09-21T02:19:26.910Z",
+  "release_reason": "normal-complete"
+}

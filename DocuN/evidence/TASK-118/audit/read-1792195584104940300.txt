@@ -1,0 +1,563 @@
+
+DocuN/evidence/TASK-118/audit/diffs/backend__app__capabilities__contracts.py.diff
+1: --- first-pre/backend/app/capabilities/contracts.py
+2: +++ current/backend/app/capabilities/contracts.py
+3: @@ -12,14 +12,16 @@
+4:  from uuid import UUID
+5: 
+6:  
+7: 
+8:  from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
+9: 
+10: -from app.learning.contracts import LearningProfile
+11: 
+12: -from app.interview.contracts import InterviewProfile, InterviewCallBinding
+13: 
+14: -from app.learning.teaching_contracts import TeachingCallBinding, TeachingProfile, TeachingMemoryCallBinding, TeachingMemoryProfile
+15: +from app.learning.contracts import LearningProfile,LearningHybridProfile
+16: 
+17: +from app.interview.contracts import InterviewProfile, InterviewHybridProfile,InterviewCallBinding
+18: 
+19: +from app.learning.teaching_contracts import TeachingCallBinding, TeachingProfile, TeachingMemoryCallBinding, TeachingMemoryProfile,TeachingHybridCallBinding,TeachingHybridProfile
+20: 
+21:  from app.preview.business_contracts import HtmlProfile, HtmlCallBinding
+22: +from app.retrieval.contracts import RetrievalRef
+23: 
+24:  
+25: 
+26:  
+27: 
+28:  class Provider(StrEnum):
+29: 
+30:      DEEPSEEK_CHAT_COMPLETIONS = "deepseek_chat_completions"
+31: 
+32: +    ZHIPU_EMBEDDINGS = "zhipu_embeddings"
+33: 
+34:  
+35: 
+36:  
+37: 
+38:  class ThinkingMode(StrEnum):
+39: 
+40: @@ -46,6 +48,8 @@
+41:      max_output_tokens_limit: int = Field(default=8192, ge=1, le=32768)
+42: 
+43:      max_request_bytes: int = Field(default=262_144, ge=1024, le=2_097_152)
+44: 
+45:      max_response_bytes: int = Field(default=1_048_576, ge=1024, le=4_194_304)
+46: 
+47: +    outbound_grant: dict | None = Field(default=None, repr=False)
+48: 
+49: +    outbound_source_manifest: dict | None = Field(default=None, repr=False)
+50: 
+51:  
+52: 
+53:      @field_validator("base_url")
+54: 
+55:      @classmethod
+56: 
+57: @@ -129,10 +133,11 @@
+58:  class ModelCallRequest(BaseModel):
+59: 
+60:      model_config = ConfigDict(extra="forbid", frozen=True)
+61: 
+62:  
+63: 
+64: +    retrieval_ref: RetrievalRef | None = Field(default=None, repr=False)
+65: 
+66:      input_result: ResultConsumptionRef | None = Field(default=None, repr=False)
+67: 
+68: -    learning_profile: LearningProfile | None = Field(default=None, repr=False)
+69: 
+70: -    teaching_profile: TeachingProfile | TeachingMemoryProfile | None = Field(default=None, repr=False)
+71: 
+72: -    interview_profile: InterviewProfile | None = Field(default=None, repr=False)
+73: +    learning_profile: LearningProfile | LearningHybridProfile | None = Field(default=None, repr=False)
+74: 
+75: +    teaching_profile: TeachingProfile | TeachingMemoryProfile | TeachingHybridProfile | None = Field(default=None, repr=False)
+76: 
+77: +    interview_profile: InterviewProfile | InterviewHybridProfile | None = Field(default=None, repr=False)
+78: 
+79:      html_profile: HtmlProfile | None = Field(default=None, repr=False)
+80:      messages: tuple[Message, ...] = Field(min_length=1, max_length=128)
+81: 
+82:      max_output_tokens: int = Field(ge=1)
+83: 
+84: @@ -205,6 +210,9 @@
+85:      teaching_binding: TeachingCallBinding | TeachingMemoryCallBinding | None = None
+86: 
+87:      interview_binding: InterviewCallBinding | None = None
+88:      html_binding: HtmlCallBinding | None = None
+89: +    retrieval_ref: RetrievalRef | None = None
+90: 
+91: +    outbound_grant: dict | None = field(default=None, repr=False)
+92: 
+93: +    outbound_source_manifest: dict | None = field(default=None, repr=False)
+94: 
+95:  
+96: 
+97:  
+98: 
+99:  @dataclass(frozen=True)
+100: 
+101: @@ -242,12 +250,18 @@
+102:  
+103: 
+104:  def _walk_payload_value(value: Any) -> None:
+105: 
+106:      """封套 value 的类型/有限数/深度/节点复查；与 gateway 成功解析不变式同界。"""
+107: 
+108: +    # 仅独立embedding值允许4×512项；旧模型正文仍是原2000节点上限。
+109: 
+110: +    maximum = 2000
+111: 
+112: +    if isinstance(value, dict) and value.get('profile') == 'embedding.v1':
+113: 
+114: +        from .embedding import validate_stored_value
+115: 
+116: +        validate_stored_value(value)
+117: 
+118: +        maximum = 3072
+119: 
+120:      nodes = 0
+121: 
+122:  
+123: 
+124:      def visit(item: Any, depth: int) -> None:
+125: 
+126:          nonlocal nodes
+127: 
+128:          nodes += 1
+129: 
+130: -        if nodes > 2000 or depth > 12:
+131: 
+132: +        if nodes > maximum or depth > 12:
+133: 
+134:              raise ValueError("payload_structure_limit")
+135: 
+136:          if isinstance(item, dict):
+137: 
+138:              for key, child in item.items():
+139: 
+
+DocuN/evidence/TASK-118/audit/diffs/backend__app__capabilities__gateway.py.diff
+1: --- first-pre/backend/app/capabilities/gateway.py
+2: +++ current/backend/app/capabilities/gateway.py
+3: @@ -30,7 +30,7 @@
+4:      Usage,
+5: 
+6:      build_business_payload,
+7: 
+8:  )
+9: 
+10: -from app.learning.teaching_contracts import TeachingCallBinding, TeachingMemoryCallBinding
+11: 
+12: +from app.learning.teaching_contracts import TeachingCallBinding, TeachingMemoryCallBinding,TeachingHybridCallBinding
+13: 
+14:  from .tools import ToolRegistry, ToolValidationError
+15: 
+16:  from .transport import DeliveryUnknown, HttpxModelTransport, ModelTransport, RequestNotSent, TransportResponse
+17: 
+18:  
+19: 
+20: @@ -108,7 +108,7 @@
+21:          if request.learning_profile is None and request.teaching_profile is None \
+22: 
+23:                  and context.operation_id.startswith(("learn-first-v1.", "learn-next-v1.")):
+24: 
+25:              return self._result(context, CallStatus.REJECTED, "invalid_learning_profile")
+26: 
+27: -        if context.operation_id.startswith("int10m.") and request.interview_profile is None:
+28: 
+29: +        if context.operation_id.startswith(("int10m.",'int18m.')) and request.interview_profile is None:
+30: 
+31:              return self._result(context, CallStatus.REJECTED, "interview_profile_required")
+32: 
+33:          if request.interview_profile is not None:
+34: 
+35:              from app.interview.policy import validate_request
+36: 
+37: @@ -144,6 +144,23 @@
+38:          if len(encoded) > self._config.max_request_bytes:
+39: 
+40:              return self._result(context, CallStatus.REJECTED, "context_limit")
+41: 
+42:  
+43: 
+44: +        approved_grant = None
+45: 
+46: +        approved_manifest=None
+47: 
+48: +        if getattr(self._transport, 'is_external', True) or self._config.outbound_grant is not None:
+49: 
+50: +            from .embedding import OutboundGrant,OutboundSourceManifest
+51: 
+52: +            if self._config.outbound_grant is None:
+53: 
+54: +                return self._result(context, CallStatus.REJECTED, 'outbound_not_authorized')
+55: 
+56: +            try:
+57: 
+58: +                grant = OutboundGrant.from_wire(self._config.outbound_grant)
+59: 
+60: +                grant.check(context.activity_id,self._config.provider.value,self._config.model,len(encoded),request.max_output_tokens)
+61: 
+62: +                manifest=OutboundSourceManifest.from_wire(self._config.outbound_source_manifest)
+63: 
+64: +                if manifest.sha256!=grant.source_manifest_sha256:raise AdmissionDenied('outbound_manifest_mismatch')
+65: 
+66: +                manifest.check_model(request)
+67: 
+68: +                approved_grant = grant.model_dump(mode='json')
+69: 
+70: +                approved_manifest=manifest.model_dump(mode='json')
+71: 
+72: +            except (ValueError,AdmissionDenied):
+73: 
+74: +                return self._result(context,CallStatus.REJECTED,'outbound_conditions_unverified')
+75: 
+76: +
+77: 
+78:          intent = AdmissionIntent(
+79: 
+80:              context=context,
+81: 
+82:              provider=self._config.provider,
+83: 
+84: @@ -152,21 +169,23 @@
+85:              max_output_tokens=request.max_output_tokens,
+86: 
+87:              tool_names=tuple(sorted(request.allowed_tools)),
+88: 
+89:              input_result=request.input_result,
+90: 
+91: -            teaching_binding=((TeachingMemoryCallBinding if request.teaching_profile.profile=='teaching.v2' else TeachingCallBinding)(
+92: 
+93: +            teaching_binding=((TeachingHybridCallBinding if request.teaching_profile.profile=='teaching.v3' else TeachingMemoryCallBinding if request.teaching_profile.profile=='teaching.v2' else TeachingCallBinding)(
+94: 
+95:                  command_key=request.teaching_profile.command_key,
+96: 
+97:                  request_sha256=request.teaching_profile.request_sha256,
+98: 
+99:                  context_sha256=request.teaching_profile.context_sha256,
+100: 
+101:                  expected_revision=request.teaching_profile.expected_revision,
+102: 
+103:                  goal_version=request.teaching_profile.goal_version,
+104: 
+105: -                **({'memory_selection_sha256':request.teaching_profile.memory_selection_sha256,'assembled_messages_sha256':request.teaching_profile.assembled_messages_sha256} if request.teaching_profile.profile=='teaching.v2' else {}),
+106: 
+107: +                **({'memory_selection_sha256':request.teaching_profile.memory_selection_sha256,'assembled_messages_sha256':request.teaching_profile.assembled_messages_sha256} if request.teaching_profile.profile in ('teaching.v2','teaching.v3') else {}),
+108: 
+109: +                **({'memory_dependency_sha256':request.teaching_profile.memory_dependency_sha256,'retrieval_ref':request.teaching_profile.retrieval_ref} if request.teaching_profile.profile=='teaching.v3' else {}),
+110: 
+111:              ) if request.teaching_profile is not None else None),
+112: 
+113:          )
+114: 
+115:          if request.interview_profile is not None:
+116: -            from app.interview.contracts import InterviewCallBinding
+117: +            from app.interview.contracts import InterviewCallBinding,InterviewHybridCallBinding
+118: 
+119:              p=request.interview_profile
+120: 
+121:              intent=AdmissionIntent(context=intent.context,provider=intent.provider,configured_model=intent.configured_model,request_bytes=intent.request_bytes,
+122: 
+123: -                max_output_tokens=intent.max_output_tokens,tool_names=intent.tool_names,interview_binding=InterviewCallBinding(
+124: -                    business_key=p.business_key,request_sha256=p.request_sha256,context_sha256=p.context_sha256,expected_head_revision=p.expected_head_revision,goal_version=p.goal_version))
+125: +                max_output_tokens=intent.max_output_tokens,tool_names=intent.tool_names,interview_binding=(InterviewHybridCallBinding if p.schema_id=='interview.v2' else InterviewCallBinding)(
+126: 
+127: +                    business_key=p.business_key,request_sha256=p.request_sha256,context_sha256=p.context_sha256,expected_head_revision=p.expected_head_revision,goal_version=p.goal_version,
+128: 
+129: +                    **({'retrieval_ref':p.retrieval_ref,'memory_selection_sha256':p.memory_selection_sha256,'memory_dependency_sha256':p.memory_dependency_sha256} if p.schema_id=='interview.v2' else {})))
+130: 
+131:          if request.html_profile is not None:
+132:              from app.preview.business_contracts import HtmlCallBinding
+133:              from app.preview.description import load_json
+134: @@ -177,13 +196,16 @@
+135:                  html_binding=HtmlCallBinding(business_key=p.business_key, request_sha256=p.request_sha256,
+136:                      context_sha256=p.context_sha256, renderer_sha256=p.renderer_sha256,
+137:                      memory_selection_sha256=frozen.get("memory_selection_sha256")))
+138: +        intent = replace(intent,retrieval_ref=request.retrieval_ref,outbound_grant=approved_grant,outbound_source_manifest=approved_manifest)
+139: 
+140:          stage = "admit"
+141: 
+142:          try:
+143: 
+144:              permit = await self._ledger.admit(intent)
+145: 
+146:              stage = "permit_check"
+147: 
+148:              self._validate_permit(permit, context)
+149: 
+150:              stage = "mark_dispatch"
+151: 
+152: -            await self._ledger.mark_dispatch_started(permit)
+153: 
+154: +            if approved_grant is not None:grant.check(context.activity_id,self._config.provider.value,self._config.model,len(encoded),request.max_output_tokens)
+155: 
+156: +            if request.retrieval_ref is not None:await self._ledger.mark_dispatch_started(permit,retrieval_ref=request.retrieval_ref)
+157: 
+158: +            else:await self._ledger.mark_dispatch_started(permit)
+159: 
+160:          except AdmissionDenied as exc:
+161: 
+162:              code = str(exc)
+163: 
+164:              if not code.startswith("interview_") and code not in {"scope_conflict","source_invalid","result_invalidated","cancelled","budget_exhausted","integrity_error","invalid_input"}:
+165: 
+
+DocuN/evidence/TASK-118/audit/diffs/backend__app__capabilities__transport.py.diff
+1: --- first-pre/backend/app/capabilities/transport.py
+2: +++ current/backend/app/capabilities/transport.py
+3: @@ -39,6 +39,8 @@
+4:  
+5:  class HttpxModelTransport:
+6:      """单次 POST；禁代理、禁重定向、禁 SDK/transport 自动重试。"""
+7: +    # 默认真实传输，只有获准合成夹具的最低传输替身可另标False。
+8: +    is_external = True
+9:  
+10:      async def send(
+11:          self,
+
+backend/app/capabilities/embedding.py
+1: """独立Embedding能力、规范float32向量、受信外发许可与一次受控调用。"""
+2: from __future__ import annotations
+3: import asyncio
+4: from dataclasses import dataclass, field
+5: from datetime import datetime, timezone
+6: from decimal import Decimal, ROUND_CEILING
+7: import hashlib
+8: import json
+9: import math
+10: import re
+11: import struct
+12: from typing import Literal
+13: from uuid import UUID
+14: from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
+15: from .contracts import (AdmissionDenied, AdmissionUnavailable, CallContext, CallStatus, LedgerDisposition,
+16:                         Provider, RecordOutcome, Usage, build_business_payload)
+17: from .transport import HttpxModelTransport, RequestNotSent, DeliveryUnknown
+18: from app.retrieval.contracts import canonical, digest, space_identity
+19: 
+20: HEX=r'^[0-9a-f]{64}$'
+21: NAME=r'^[A-Za-z0-9._:/-]+$'
+22: FROZEN_SAMPLE_SHA='304a4b131d04cd4132334bebd091f94ff62bec5660698457487e14136023c113'
+23: 
+24: 
+25: def float32_values(values,*,normalize=False):
+26:     """hash对象为实际PG存储的512个LE float32；从规范JSON或PG文字回读同一表示。"""
+27:     if not isinstance(values,(list,tuple)) or len(values)!=512:raise ValueError('embedding_dimensions_invalid')
+28:     if any(type(x) not in (int,float) or not math.isfinite(x) for x in values):raise ValueError('embedding_nonfinite')
+29:     norm=math.hypot(*values)
+30:     if not math.isfinite(norm) or norm<=0:raise ValueError('embedding_zero_norm')
+31:     converted=[]
+32:     try:
+33:         for x in values:
+34:             converted.append(struct.unpack('<f',struct.pack('<f',x/norm if normalize else x))[0])
+35:     except (OverflowError,struct.error):raise ValueError('embedding_float32_overflow') from None
+36:     if any(not math.isfinite(x) for x in converted) or math.hypot(*converted)<=0:raise ValueError('embedding_float32_invalid')
+37:     return tuple(converted)
+38: 
+39: 
+40: def vector_digest(values):return hashlib.sha256(struct.pack('<512f',*float32_values(values))).hexdigest()
+41: 
+42: 
+43: def validate_stored_value(value):
+44:     """007封闭Embedding值校验；不能由普通JSON标签绕过原模型节点限制。"""
+45:     if type(value) is not dict or set(value)!={'profile','purpose','space_id','request_sha256','manifest_sha256','inputs','usage'}:
+46:         raise ValueError('embedding_payload_invalid')
+47:     if value['profile']!='embedding.v1' or value['purpose'] not in ('source_index','query'):raise ValueError('embedding_payload_invalid')
+48:     for key in ('space_id','request_sha256','manifest_sha256'):
+49:         if not isinstance(value[key],str) or re.fullmatch(HEX,value[key]) is None:raise ValueError('embedding_payload_invalid')
+50:     inputs=value['inputs']
+51:     if not isinstance(inputs,list) or not 1<=len(inputs)<=4 or (value['purpose']=='query' and len(inputs)!=1):raise ValueError('embedding_payload_invalid')
+52:     for index,item in enumerate(inputs):
+53:         if type(item) is not dict or set(item)!={'ordinal','identity_sha256','vector','vector_sha256'} or type(item['ordinal']) is not int or item['ordinal']!=index:
+54:             raise ValueError('embedding_payload_invalid')
+55:         if not isinstance(item['identity_sha256'],str) or re.fullmatch(HEX,item['identity_sha256']) is None:raise ValueError('embedding_payload_invalid')
+56:         if vector_digest(item['vector'])!=item['vector_sha256'] or list(float32_values(item['vector']))!=item['vector']:
+57:             raise ValueError('embedding_vector_identity_invalid')
+58:     usage=value['usage']
+59:     if type(usage) is not dict or set(usage)!={'prompt_tokens','total_tokens'} or type(usage['prompt_tokens']) is not int or usage['prompt_tokens']<0 or usage['total_tokens']!=usage['prompt_tokens']:
+60:         raise ValueError('embedding_usage_invalid')
+61: 
+62: 
+63: class EmbeddingInput(BaseModel):
+64:     model_config=ConfigDict(extra='forbid',frozen=True,strict=True)
+65:     ordinal:int=Field(ge=0,le=3)
+66:     identity_sha256:str=Field(pattern=HEX)
+67:     text:str=Field(min_length=1,max_length=2048,repr=False)
+68: 
+69: 
+70: class EmbeddingBinding(BaseModel):
+71:     model_config=ConfigDict(extra='forbid',frozen=True,strict=True)
+72:     business_key:str
+73:     purpose:Literal['source_index','query']
+74:     request_sha256:str=Field(pattern=HEX)
+75:     manifest_sha256:str=Field(pattern=HEX)
+76:     batch_ordinal:int=Field(ge=0,le=127)
+77:     scope_revision:int=Field(ge=1)
+78:     domain:Literal['learning','interview']
+79:     domain_revision:int=Field(ge=0)
+80:     memory_selection_sha256:str|None=Field(default=None,pattern=HEX)
+81:     memory_dependency_sha256:str|None=Field(default=None,pattern=HEX)
+82: 
+83:     @field_validator('business_key')
+84:     @classmethod
+85:     def uuid(cls,value):
+86:         if str(UUID(value))!=value:raise ValueError('embedding_binding_invalid')
+87:         return value
+88: 
+89: 
+90: class EmbeddingRequest(BaseModel):
+91:     model_config=ConfigDict(extra='forbid',frozen=True,strict=True)
+92:     profile:Literal['embedding.v1']='embedding.v1'
+93:     activity_id:str
+94:     dimensions:Literal[512]=512
+95:     space_id:str=Field(pattern=HEX)
+96:     binding:EmbeddingBinding
+97:     inputs:tuple[EmbeddingInput,...]=Field(min_length=1,max_length=4,repr=False)
+98: 
+99:     @property
+100:     def input_result(self):return None
+101: 
+102:     @field_validator('dimensions',mode='before')
+103:     @classmethod
+104:     def dimension_integer(cls,value):
+105:         if type(value) is not int or value!=512:raise ValueError('embedding_dimensions_invalid')
+106:         return value
+107: 
+108:     @model_validator(mode='after')
+109:     def bound(self):
+110:         if str(UUID(self.activity_id))!=self.activity_id:raise ValueError('embedding_binding_invalid')
+111:         if tuple(x.ordinal for x in self.inputs)!=tuple(range(len(self.inputs))):raise ValueError('embedding_input_order')
+112:         if len({x.identity_sha256 for x in self.inputs})!=len(self.inputs):raise ValueError('embedding_duplicate_input')
+113:         if self.binding.purpose=='query' and (len(self.inputs)!=1 or len(self.inputs[0].text)>1024 or len(self.inputs[0].text.encode('utf-8'))>4096):
+114:             raise ValueError('embedding_query_limit')
+115:         return self
+116: 
+117: 
+118: def approved_fragment_identity(value):
+119:     """与source_index冻结身份同一规范；引用ID随命令变化，不进入白名单键。"""
+120:     v=value.model_dump() if hasattr(value,'model_dump') else value
+121:     return digest({'evidence_id':v['evidence_id'],'source_id':str(v['source_id']),
+122:       'source_version_id':str(v.get('source_version_id',v.get('version_id'))),'source_revision':v['source_revision'],
+123:       'origin':v.get('origin',v.get('origin_kind')),'physical_page':v.get('physical_page'),
+124:       'supplement_id':v.get('supplement_id'),'start_codepoint':v.get('start_codepoint',v.get('start_offset')),
+125:       'end_codepoint':v.get('end_codepoint',v.get('end_offset')),'text_sha256':v.get('text_sha256',v.get('fragment_sha256')),
+126:       'unit_sha256':v['unit_sha256'],'original_sha256':v['original_sha256']})
+127: 
+128: 
+129: class OutboundSourceManifest(BaseModel):
+130:     """operator采用的有限实际版本/片段，不把样本文件hash冒实际外发范围。"""
+131:     model_config=ConfigDict(extra='forbid',frozen=True,strict=True)
+132:     schema:Literal['retrolume.outbound-sources.v1']='retrolume.outbound-sources.v1'
+133:     frozen_samples_sha256:Literal[FROZEN_SAMPLE_SHA]
+134:     sources:tuple[dict,...]=Field(min_length=1,max_length=128)
+135:     fragments:tuple[dict,...]=Field(min_length=1,max_length=512)
+136:     query_input_sha256:tuple[str,...]=Field(min_length=1,max_length=128)
+137: 
+138:     @model_validator(mode='after')
+139:     def closed(self):
+140:         identities=set()
+141:         for row in self.sources:
+142:             if set(row)!={'source_id','source_version_id','source_revision','original_sha256'}:raise ValueError('outbound_source_shape')
+143:             if any(str(UUID(row[k]))!=row[k] for k in ('source_id','source_version_id')) or type(row['source_revision']) is not int or row['source_revision']<1 or not re.fullmatch(HEX,row['original_sha256']):raise ValueError('outbound_source_shape')
+144:             identity=(row['source_id'],row['source_version_id'],row['source_revision'])
+145:             if identity in identities:raise ValueError('outbound_source_duplicate')
+146:             identities.add(identity)
+147:         ids=set()
+148:         for row in self.fragments:
+149:             if set(row)!={'identity_sha256','input_sha256'} or any(not isinstance(v,str) or not re.fullmatch(HEX,v) for v in row.values()) or row['identity_sha256'] in ids:raise ValueError('outbound_fragment_shape')
+150:             ids.add(row['identity_sha256'])
+151:         if len(set(self.query_input_sha256))!=len(self.query_input_sha256) or any(not re.fullmatch(HEX,x) for x in self.query_input_sha256):raise ValueError('outbound_query_shape')
+152:         return self
+153: 
+154:     @property
+155:     def sha256(self):return digest(self.model_dump(mode='json'))
+156:     @classmethod
+157:     def from_wire(cls,value):return cls.model_validate_json(json.dumps(value,ensure_ascii=False,separators=(',',':')))
+158: 
+159:     def check_sources(self,rows):
+160:         allowed={(r['source_id'],r['source_version_id'],r['source_revision'],r['original_sha256']) for r in self.sources}
+161:         if not rows or any((str(r['source_id']),str(r.get('source_version_id',r.get('version_id'))),r['source_revision'],r.get('original_sha256',r.get('sha256'))) not in allowed for r in rows):raise AdmissionDenied('outbound_source_not_approved')
+162: 
+163:     def check_embedding(self,request):
+164:         approved={r['identity_sha256']:r['input_sha256'] for r in self.fragments}
+165:         for item in request.inputs:
+166:             if request.binding.purpose=='source_index':
+167:                 valid=approved.get(item.identity_sha256)==digest(item.text)
+168:             else:valid=digest(item.text) in self.query_input_sha256
+169:             if not valid:raise AdmissionDenied('outbound_input_not_approved')
+170: 
+171:     def check_model(self,request):
+172:         profile=request.learning_profile or request.teaching_profile or request.interview_profile
+173:         if profile is not None:catalog=profile.catalog
+174:         elif request.html_profile is not None:catalog=json.loads(request.html_profile.context_json).get('catalog',[])
+175:         else:raise AdmissionDenied('outbound_profile_required')
+176:         allowed={r['identity_sha256'] for r in self.fragments}
+177:         if not catalog:raise AdmissionDenied('outbound_source_not_approved')
+178:         for entry in catalog:
+179:             row=entry.model_dump() if hasattr(entry,'model_dump') else entry
+180:             if not isinstance(row.get('text'),str) or hashlib.sha256(row['text'].encode('utf-8')).hexdigest()!=row.get('fragment_sha256'):raise AdmissionDenied('outbound_fragment_not_approved')
+181:             if approved_fragment_identity(row) not in allowed:raise AdmissionDenied('outbound_fragment_not_approved')
+182:             self.check_sources([{'source_id':row['source_id'],'source_version_id':row['version_id'],'source_revision':row['source_revision'],'original_sha256':row['original_sha256']}])
+183: 
+184: 
+185: class OutboundGrant(BaseModel):
+186:     """仅来自operator配置/私有IPC；客户端不能指定或改变活动grant。"""
+187:     model_config=ConfigDict(extra='forbid',frozen=True,strict=True)
+188:     schema:Literal['retrolume.outbound-grant.v1']='retrolume.outbound-grant.v1'
+189:     grant_id:str
+190:     approved_receipt_sha256:str=Field(pattern=HEX)
+191:     q_activation_receipt_sha256:str=Field(pattern=HEX)
+192:     source_manifest_sha256:str=Field(pattern=HEX)
+193:     price_snapshot_sha256:str=Field(pattern=HEX)
+194:     valid_from_utc:str
+195:     valid_until_utc:str
+196:     data_class:Literal['synthetic']='synthetic'
+197:     allowed_activity_ids:tuple[str,...]=Field(min_length=1,max_length=3)
+198:     provider_capabilities:tuple[str,...]=Field(min_length=1,max_length=2)
+199:     global_max_requests:Literal[80]=80
+200:     global_max_cost_microunits:Literal[20000000]=20000000
+201:     capabilities_verified:bool
+202:     account_terms_verified:bool
+203:     token_upper_bound_verified:bool
+204:     input_rate_cny_per_million:str
+205:     output_rate_cny_per_million:str
+206:     framing_token_upper_bound:int=Field(ge=0,le=4096)
+207:     margin_percent:int=Field(ge=25,le=100)
+208: 
+209:     @model_validator(mode='after')
+210:     def bounds(self):
+211:         start,end=datetime.fromisoformat(self.valid_from_utc),datetime.fromisoformat(self.valid_until_utc)
+212:         if start.tzinfo is None or end.tzinfo is None or not 0<(end-start).total_seconds()<=72*3600:raise ValueError('outbound_grant_time_invalid')
+213:         roster={'01800000-0000-4000-8000-000000000001','01800000-0000-4000-8000-000000000002','01800000-0000-4000-8000-000000000003'}
+214:         if len(set(self.allowed_activity_ids))!=len(self.allowed_activity_ids) or not set(self.allowed_activity_ids)<=roster:raise ValueError('outbound_grant_roster_invalid')
+215:         if not set(self.provider_capabilities)<={'deepseek_chat_completions/deepseek-chat','zhipu_embeddings/embedding-3'}:raise ValueError('outbound_grant_capability_invalid')
+216:         for value in (self.input_rate_cny_per_million,self.output_rate_cny_per_million):
+217:             number=Decimal(value)
+218:             if not number.is_finite() or number<0:raise ValueError('outbound_price_invalid')
+219:         return self
+220: 
+221:     @property
+222:     def sha256(self):return digest(self.model_dump(mode='json'))
+223: 
+224:     @classmethod
+225:     def from_wire(cls,value):
+226:         # JSON数组经严格JSON校验成为冻结tuple，其他标量仍保持strict边界。
+227:         return cls.model_validate_json(json.dumps(value,ensure_ascii=False,separators=(',',':')))
+228: 
+229:     def check(self,activity_id,provider,model,request_bytes,output_tokens):
+230:         now=datetime.now(timezone.utc)
+231:         if not self.capabilities_verified or not self.account_terms_verified or not self.token_upper_bound_verified:
+232:             raise AdmissionDenied('outbound_conditions_unverified')
+233:         if not datetime.fromisoformat(self.valid_from_utc)<=now<datetime.fromisoformat(self.valid_until_utc):raise AdmissionDenied('outbound_grant_expired')
+234:         if activity_id not in self.allowed_activity_ids or f'{provider}/{model}' not in self.provider_capabilities:raise AdmissionDenied('outbound_grant_mismatch')
+235:         # bytes在这里仅是已核保守token上界的一部分，绝不称精确tokens；未核上界不发。
+236:         worst=(Decimal(request_bytes+self.framing_token_upper_bound)*Decimal(self.input_rate_cny_per_million)
+237:                +Decimal(output_tokens)*Decimal(self.output_rate_cny_per_million))*(Decimal(100+self.margin_percent)/100)
+238:         microunits=int(worst.to_integral_value(rounding=ROUND_CEILING))
+239:         if microunits>250000:raise AdmissionDenied('outbound_price_limit')
+240:         return microunits

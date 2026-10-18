@@ -1,0 +1,11 @@
+--- first-audit/backend/app/retrieval/service.py
++++ current/backend/app/retrieval/service.py
+@@ -40,7 +40,7 @@
+         from app.capabilities.transport import HttpxModelTransport
+         return self.service is not None and self.reason is None and (self.service.outbound_grant is not None or not HttpxModelTransport.is_external)
+     def public(self):return {'available':self.available,'reason':self.reason,'method':'hybrid.cosine-terms.rrf60.v1',
+-      'purpose':'当前已确认资料片段与本轮必要问题','provider':'zhipu_embeddings','model':'embedding-3','dimensions':512,
++      'purpose':'当前已确认资料片段与本轮必要问题','provider':self.service.provider if self.service else None,'model':self.service.model if self.service else None,'dimensions':512,
+       'batch_size':4,'max_index_fragments':self.max_index_fragments,'query_limit_chars':1024,'query_limit_bytes':4096,
+       'real_outbound_authorized':bool(self.service and self.service.outbound_grant),'reserve_cost_microunits':250000}
+ 

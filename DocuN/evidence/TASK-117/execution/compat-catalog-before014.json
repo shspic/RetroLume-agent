@@ -1,0 +1,59 @@
+{
+  "constraints": [
+    {
+      "conname": "activity_operations_kind_domain",
+      "definition": "CHECK ((kind = ANY (ARRAY['model'::text, 'tool'::text])))"
+    },
+    {
+      "conname": "activity_operations_kind_shape",
+      "definition": "CHECK ((((kind = 'model'::text) AND (provider IS NOT NULL) AND (configured_model IS NOT NULL) AND (request_bytes IS NOT NULL) AND (request_bytes > 0) AND (max_output_tokens IS NOT NULL) AND (max_output_tokens > 0) AND (reserved_cost_microunits > 0) AND (arguments_sha256 IS NULL) AND (tool_call_id IS NULL)) OR ((kind = 'tool'::text) AND (provider IS NULL) AND (configured_model IS NULL) AND (request_bytes IS NULL) AND (max_output_tokens IS NULL) AND (reserved_cost_microunits = 0) AND (tool_names = ARRAY['finite_calculate'::character varying(64)]) AND (arguments_sha256 IS NOT NULL) AND (octet_length(arguments_sha256) = 64) AND (arguments_sha256 ~ '^[0-9a-f]{64}$'::text) AND (tool_call_id IS NOT NULL) AND ((char_length((tool_call_id)::text) >= 1) AND (char_length((tool_call_id)::text) <= 128)) AND ((tool_call_id)::text !~ '[^A-Za-z0-9._:/-]'::text) AND (remote_request_id IS NULL) AND (returned_model IS NULL) AND (finish_reason IS NULL) AND (prompt_tokens IS NULL) AND (completion_tokens IS NULL) AND (response_bytes IS NULL))))"
+    },
+    {
+      "conname": "interview_command_execution",
+      "definition": "CHECK ((((duplicate_of IS NOT NULL) AND (operation_id IS NULL) AND (context_body IS NULL) AND (context_sha256 IS NULL) AND (NOT effect_applied) AND (NOT launch_claimed)) OR ((duplicate_of IS NULL) AND (execution_kind = 'local'::text) AND (operation_id IS NULL) AND (context_body IS NULL) AND (context_sha256 IS NULL) AND (NOT launch_claimed)) OR ((duplicate_of IS NULL) AND (execution_kind = 'model'::text) AND (action = ANY (ARRAY['ask'::text, 'review'::text])) AND (context_body IS NOT NULL) AND (context_sha256 IS NOT NULL) AND (operation_id = ('int10m.'::text || replace((business_key)::text, '-'::text, ''::text))))))"
+    }
+  ],
+  "functions": [
+    {
+      "proname": "interview_head_guard",
+      "prosrc": "\nDECLARE a public.activities; ptr uuid; p public.interview_records;\nBEGIN\n IF TG_OP='DELETE' THEN RAISE EXCEPTION 'interview heads retained'; END IF;\n SELECT * INTO a FROM public.activities WHERE id=NEW.activity_id;\n IF TG_OP='INSERT' THEN\n  IF NOT public.data_loading_allowed() AND (a.status<>'pending' OR a.execution_generation<>0 OR a.executor_id IS NOT NULL OR a.lease_expires_at IS NOT NULL\n     OR a.requests_reserved<>0 OR a.cost_reserved_microunits<>0 OR a.tools_reserved<>0 OR a.running_reserved_seconds<>0 OR a.running_settled_seconds<>0\n     OR EXISTS(SELECT 1 FROM public.teaching_heads WHERE activity_id=NEW.activity_id)\n     OR EXISTS(SELECT 1 FROM public.activity_operations WHERE activity_id=NEW.activity_id)\n     OR EXISTS(SELECT 1 FROM public.activity_memory_bindings WHERE activity_id=NEW.activity_id)\n     OR NEW.revision<>1) THEN RAISE EXCEPTION 'interview requires fresh unselected activity'; END IF;\n ELSE\n  IF NEW.activity_id<>OLD.activity_id OR NEW.created_at<>OLD.created_at OR NEW.revision NOT BETWEEN OLD.revision AND OLD.revision+1\n    OR NEW.goal_version NOT BETWEEN OLD.goal_version AND OLD.goal_version+1 OR NEW.last_seq<OLD.last_seq\n    OR (NEW.revision=OLD.revision AND (to_jsonb(NEW)-ARRAY['pending_key','updated_at']) IS DISTINCT FROM (to_jsonb(OLD)-ARRAY['pending_key','updated_at']))\n    OR (OLD.phase='ended' AND NEW.phase<>'ended') THEN RAISE EXCEPTION 'interview head revision invalid'; END IF;\n END IF;\n IF NEW.scope_revision<>a.scope_revision OR NEW.last_seq<>(SELECT max(seq) FROM public.interview_records WHERE activity_id=NEW.activity_id)\n    THEN RAISE EXCEPTION 'interview head scope/sequence invalid'; END IF;\n FOREACH ptr IN ARRAY ARRAY[NEW.goal_record_id,NEW.root_question_id,NEW.current_question_id,NEW.current_answer_id,NEW.current_feedback_id] LOOP\n  IF ptr IS NOT NULL THEN\n   SELECT * INTO p FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=ptr;\n   IF p.record_id IS NULL OR p.goal_version<>NEW.goal_version OR p.scope_revision<>NEW.scope_revision THEN RAISE EXCEPTION 'interview head pointer invalid'; END IF;\n  END IF;\n END LOOP;\n IF NEW.goal_record_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=NEW.goal_record_id AND kind='goal') THEN RAISE EXCEPTION 'goal pointer kind'; END IF;\n IF NEW.current_question_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=NEW.current_question_id AND kind IN ('question','probe')) THEN RAISE EXCEPTION 'question pointer kind'; END IF;\n IF NEW.current_answer_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=NEW.current_answer_id AND kind='answer' AND question_record_id=NEW.current_question_id) THEN RAISE EXCEPTION 'answer pointer kind'; END IF;\n IF NEW.current_feedback_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=NEW.current_feedback_id AND kind='feedback') THEN RAISE EXCEPTION 'feedback pointer kind'; END IF;\n RETURN NEW;\nEND;\n"
+    },
+    {
+      "proname": "interview_record_insert_guard",
+      "prosrc": "\nDECLARE c public.interview_commands; p public.interview_records; r public.activity_operation_results; o public.activity_operations; b jsonb; ref jsonb;\nBEGIN\n SELECT * INTO c FROM public.interview_commands WHERE activity_id=NEW.activity_id AND business_key=NEW.business_key;\n IF c.activity_id IS NULL OR c.duplicate_of IS NOT NULL OR (NOT public.data_loading_allowed() AND (c.effect_applied OR c.status NOT IN ('accepted','started')))\n    OR NEW.seq<>(SELECT COALESCE(max(seq),0)+1 FROM public.interview_records WHERE activity_id=NEW.activity_id)\n    THEN RAISE EXCEPTION 'interview record command/sequence invalid'; END IF;\n IF cardinality(NEW.parent_ids)<>(SELECT count(DISTINCT x) FROM unnest(NEW.parent_ids) x) THEN RAISE EXCEPTION 'duplicate parents'; END IF;\n FOR p IN SELECT * FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=ANY(NEW.parent_ids) LOOP\n  IF p.seq>=NEW.seq OR p.goal_version<>NEW.goal_version OR p.scope_revision<>NEW.scope_revision THEN RAISE EXCEPTION 'interview parent invalid'; END IF;\n END LOOP;\n IF cardinality(NEW.parent_ids)<>(SELECT count(*) FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=ANY(NEW.parent_ids)) THEN RAISE EXCEPTION 'missing parents'; END IF;\n IF NEW.kind='answer' THEN\n  SELECT * INTO p FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=NEW.question_record_id;\n  IF p.kind NOT IN ('question','probe') OR p.goal_version<>NEW.goal_version OR p.scope_revision<>NEW.scope_revision\n     OR NEW.answer_version<>(SELECT COALESCE(max(answer_version),0)+1 FROM public.interview_records WHERE activity_id=NEW.activity_id AND question_record_id=NEW.question_record_id)\n     THEN RAISE EXCEPTION 'answer version invalid'; END IF;\n  IF NEW.answer_version>1 AND NOT EXISTS(SELECT 1 FROM public.interview_records a WHERE a.activity_id=NEW.activity_id AND a.record_id=NEW.supersedes_record_id\n     AND a.question_record_id=NEW.question_record_id AND a.answer_version=NEW.answer_version-1) THEN RAISE EXCEPTION 'supersedes invalid'; END IF;\n END IF;\n IF NEW.origin='model' THEN\n  SELECT * INTO r FROM public.activity_operation_results WHERE activity_id=NEW.activity_id AND operation_id=NEW.operation_id;\n  SELECT * INTO o FROM public.activity_operations WHERE activity_id=NEW.activity_id AND operation_id=NEW.operation_id;\n  b:=r.payload::jsonb->'value';\n  IF c.execution_kind<>'model' OR c.operation_id<>NEW.operation_id OR (NOT public.data_loading_allowed() AND (NOT c.launch_claimed OR c.obsolete OR c.status<>'started'))\n    OR r.payload_format<>'json' OR r.payload_sha256<>NEW.body_sha256 OR o.kind<>'model' OR o.state<>'received'\n    OR r.admission_id<>o.admission_id OR r.execution_generation<>o.execution_generation OR r.scope_revision<>NEW.scope_revision\n    OR b->>'profile' IS DISTINCT FROM 'interview.v1' OR b->>'activity_id' IS DISTINCT FROM NEW.activity_id::text OR b->>'business_key' IS DISTINCT FROM NEW.business_key::text\n    OR b->>'request_sha256' IS DISTINCT FROM c.request_sha256 OR b->>'context_sha256' IS DISTINCT FROM c.context_sha256 OR b->'value'->>'type' IS DISTINCT FROM NEW.kind\n    THEN RAISE EXCEPTION 'interview result binding invalid'; END IF;\n ELSE\n  b:=NEW.local_body::jsonb;\n  IF b->>'schema' IS DISTINCT FROM 'interview.local.v1' OR b->>'activity_id' IS DISTINCT FROM NEW.activity_id::text OR b->>'business_key' IS DISTINCT FROM NEW.business_key::text\n     OR b->>'kind' IS DISTINCT FROM NEW.kind OR (b->>'goal_version')::integer IS DISTINCT FROM NEW.goal_version OR (b->>'scope_revision')::integer IS DISTINCT FROM NEW.scope_revision\n     OR jsonb_typeof(b->'value') IS DISTINCT FROM 'object'\n     THEN RAISE EXCEPTION 'interview local binding invalid'; END IF;\n END IF;\n RETURN NEW;\nEND;\n"
+    },
+    {
+      "proname": "interview_result_eligible",
+      "prosrc": "\n SELECT EXISTS(SELECT 1 FROM public.interview_commands c JOIN public.interview_heads h USING(activity_id)\n  JOIN public.interview_records ir ON ir.activity_id=c.activity_id AND ir.business_key=c.business_key AND ir.origin='model'\n  JOIN public.activities a ON a.id=c.activity_id\n  JOIN public.activity_operations o ON o.activity_id=c.activity_id AND o.operation_id=c.operation_id\n  JOIN public.activity_operation_results r ON r.activity_id=o.activity_id AND r.operation_id=o.operation_id\n WHERE c.activity_id=aid AND c.operation_id=op AND c.duplicate_of IS NULL AND c.effect_applied AND c.status IN ('committed','history')\n  AND NOT c.obsolete AND c.goal_version=h.goal_version AND c.scope_revision=h.scope_revision AND h.scope_revision=a.scope_revision\n  AND a.status<>'cancelled' AND ir.operation_id=c.operation_id AND ir.payload_sha256=r.payload_sha256 AND ir.body_sha256=r.payload_sha256\n  AND r.admission_id=o.admission_id AND r.execution_generation=o.execution_generation AND r.scope_revision=o.scope_revision AND o.state='received' AND o.kind='model'\n  AND r.payload_format='json'\n  AND NOT EXISTS(SELECT 1 FROM public.activity_scope_sources s LEFT JOIN public.material_sources m ON m.id=s.source_id\n    WHERE s.activity_id=aid AND (m.id IS NULL OR m.current_version IS DISTINCT FROM s.version_id OR m.revision<>s.source_revision))\n  AND EXISTS(SELECT 1 FROM public.activity_scope_sources WHERE activity_id=aid)\n  AND NOT EXISTS(SELECT 1 FROM public.activity_memory_bindings WHERE activity_id=aid))\n"
+    }
+  ],
+  "legacy": [
+    {
+      "operation_id": "legacy-model",
+      "kind": "model",
+      "request_bytes": 64,
+      "max_output_tokens": 1,
+      "reserved_cost_microunits": 250000,
+      "state": "received",
+      "disposition": "received"
+    },
+    {
+      "operation_id": "legacy-tool",
+      "kind": "tool",
+      "request_bytes": null,
+      "max_output_tokens": null,
+      "reserved_cost_microunits": 0,
+      "state": "received",
+      "disposition": "received"
+    },
+    {
+      "operation_id": "legacy-unknown",
+      "kind": "model",
+      "request_bytes": 64,
+      "max_output_tokens": 1,
+      "reserved_cost_microunits": 250000,
+      "state": "unknown",
+      "disposition": "unknown"
+    }
+  ]
+}

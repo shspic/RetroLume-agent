@@ -1,0 +1,53 @@
+--- first-pre/backend/app/interview/policy.py
++++ current/backend/app/interview/policy.py
+@@ -1,5 +1,5 @@
+ """Domain transitions and low-trust suggestion normalization, no scoring."""
+-from .contracts import (InterviewContext, InterviewProfile, InterviewRefusal, QuestionOutput,
++from .contracts import (InterviewContext, InterviewHybridContext,parse_context, InterviewProfile, InterviewRefusal, QuestionOutput,
+     ProbeOutput, FeedbackOutput, MAX_VALUE, canonical, load_json, sha, profile_for)
+ from .prompt import messages
+ 
+@@ -59,28 +59,36 @@
+ 
+ 
+ def stored_result(raw, profile: InterviewProfile, request_messages):
+-    frozen=InterviewContext.model_validate(load_json(request_messages[1].content))
++    input_value=load_json(request_messages[1].content)
++    frozen=parse_context(input_value.get('context',input_value))
++    background=input_value.get('learning_background') if isinstance(frozen,InterviewHybridContext) else None
+     expected=profile_for(frozen)
+-    if expected!=profile or [m.model_dump(mode='json',exclude_none=True) for m in request_messages]!=messages(frozen):
++    if expected!=profile or [m.model_dump(mode='json',exclude_none=True) for m in request_messages]!=messages(frozen,background):
+         raise ValueError('interview_binding_invalid')
+-    return dict(profile='interview.v1',activity_id=frozen.activity_id,business_key=frozen.business_key,
++    return dict(profile='interview.v2' if isinstance(frozen,InterviewHybridContext) else 'interview.v1',activity_id=frozen.activity_id,business_key=frozen.business_key,
+         action=frozen.action,goal_version=frozen.expected_goal_version,head_revision=frozen.expected_head_revision,
+         scope_revision=frozen.expected_scope_revision,prompt_version=frozen.prompt_version,
+         request_sha256=frozen.request_sha256,context_sha256=sha(canonical(frozen.model_dump())),
+         source_refs=[s.model_dump() for s in frozen.sources],catalog=[c.model_dump() for c in frozen.catalog],
+-        value=normalize_output(raw,frozen))
++        value=normalize_output(raw,frozen),**({'retrieval_ref':frozen.retrieval_ref.model_dump(),'memory_recipe':frozen.memory_recipe,
++          'memory_selection_sha256':frozen.memory_selection_sha256,'memory_dependency_sha256':frozen.memory_dependency_sha256} if isinstance(frozen,InterviewHybridContext) else {}))
+ 
+ 
+ async def validate_request(context,request,ledger):
+     from .contracts import operation_id
+     profile=request.interview_profile
+-    if profile is None or context.activity_id!=profile.activity_id or context.operation_id!=operation_id(profile.business_key) or context.scope_revision!=profile.scope_revision:
++    if profile is None or context.activity_id!=profile.activity_id or context.operation_id!=operation_id(profile.business_key,profile.schema_id) or context.scope_revision!=profile.scope_revision:
+         return 'interview_binding_invalid'
+     if request.allowed_tools or request.input_result is not None or len(request.messages)!=2:
+         return 'interview_binding_invalid'
+     try:
+-        frozen=InterviewContext.model_validate(load_json(request.messages[1].content))
+-        if profile_for(frozen)!=profile or [m.model_dump(mode='json',exclude_none=True) for m in request.messages]!=messages(frozen): return 'interview_binding_invalid'
++        input_value=load_json(request.messages[1].content);frozen=parse_context(input_value.get('context',input_value))
++        background=None
++        if isinstance(frozen,InterviewHybridContext):
++            from app.memory.context import interview_background
++            background=interview_background(await ledger.read_memory_selection(context.activity_id,include_bodies=True),frozen)
++            if request.retrieval_ref!=frozen.retrieval_ref:return 'interview_binding_invalid'
++        if profile_for(frozen)!=profile or [m.model_dump(mode='json',exclude_none=True) for m in request.messages]!=messages(frozen,background): return 'interview_binding_invalid'
+         if request.max_output_tokens!=frozen.limits.max_output_tokens: return 'interview_binding_invalid'
+         validator=getattr(ledger,'validate_interview_request',None)
+         if validator is None: return 'interview_profile_required'

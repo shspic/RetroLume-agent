@@ -1,0 +1,83 @@
+--- reads-pre-5a7c8941
++++ reads-current-ed32fe37
+@@ -41,12 +41,15 @@
+ 
+ 
+ class CountingLedger(PostgresAdmissionLedger):
+-    """统计一次读取调用实际执行的 SQL 条数；用于单条 SQL 快照合同验证。"""
++    """统计一次读取调用实际执行的 SQL 条数与真实返回列；用于单条 SQL
++    快照与"列表投影不向数据库请求正文"合同的运行时观察（非 SQL 字符串断言）。"""
+ 
+     count = 0
++    columns: list[list[str]] = []
+ 
+     async def _transaction(self, operation):
+         calls: list[object] = []
++        columns: list[list[str]] = []
+ 
+         async def wrapped(connection):
+             class _Proxy:
+@@ -58,12 +61,16 @@
+ 
+                 async def execute(self, *args, **kwargs):
+                     calls.append(args[0] if args else None)
+-                    return await self._inner.execute(*args, **kwargs)
++                    cursor = await self._inner.execute(*args, **kwargs)
++                    description = getattr(cursor, "description", None)
++                    columns.append([] if description is None else [item.name for item in description])
++                    return cursor
+ 
+             return await operation(_Proxy(connection))
+ 
+         result = await super()._transaction(wrapped)
+         self.count = len(calls)
++        self.columns = columns
+         return result
+ 
+ 
+@@ -183,6 +190,7 @@
+         self.assertEqual(ledger.count, 1, "活动列表必须恰一条 SQL")
+         await ledger.list_operations(self.activity, limit=10)
+         self.assertEqual(ledger.count, 1, "操作列表必须恰一条 SQL")
++        self.assertNotIn("payload", ledger.columns[-1], "列表投影必须不向数据库请求正文列（真实返回列观察）")
+         await ledger.read_operation(self.activity, "P")
+         self.assertEqual(ledger.count, 1, "单操作必须恰一条 SQL")
+         await ledger.read_committed_result(self.activity, "P")
+@@ -232,7 +240,18 @@
+         )
+         seen = [item.activity_id for item in first_page] + [item.activity_id for item in second_page]
+         self.assertEqual(len(seen), len(set(seen)))
+-        self.assertEqual(set(seen), {self.activity, second, third})
++        # 续作01 夹具适配：专用库中存在 095 批次3 运行期返工中断的残留合成行
++        # （本用例首次在非空库上运行暴露）。库内既有行按卡不删除；游标语义
++        # 断言改为：本用例试例必须全部遍历到、首页只含本用例最新创建的行、
++        # 全局倒序与无重复保持——翻页正确性验证不弱化。
++        self.assertTrue(
++            {self.activity, second, third} <= set(seen),
++            f"本用例活动必须全部被翻页遍历：seen={sorted(set(seen))}",
++        )
++        self.assertTrue(
++            {item.activity_id for item in first_page} <= {self.activity, second, third},
++            "首页必须只含本用例最新创建的行（残留行不得挤占首页）",
++        )
+         keys = [
+             (item.created_at, item.activity_id)
+             for item in list(first_page) + list(second_page)
+@@ -301,8 +320,15 @@
+         )
+         with self.assertRaises(ResultIntegrityError):
+             await self.ledger.read_operation(self.activity, "T1")
+-        with self.assertRaises(ResultIntegrityError):
+-            await self.ledger.list_operations(self.activity, limit=100)
++        # 续作01（O1 修正）：正文损坏只拒绝单项读取，不得使整页元数据列表失败；
++        # 列表候选资格由绑定/scope/来源投影判定，不承诺正文已通过内容完整性
++        # 校验——T1 行资格仍为真而单条读取拒绝，两者并置即语义证明。
++        rows_after = {item.operation_id: item for item in await self.ledger.list_operations(self.activity, limit=100)}
++        self.assertEqual(set(rows_after), {"P", "U", "N", "T1"}, "正文损坏不得影响元数据列表")
++        self.assertIsNone(rows_after["T1"].payload)
++        self.assertTrue(rows_after["T1"].payload_available)
++        self.assertIsNone(rows_after["P"].payload)
++        self.assertTrue(rows_after["P"].payload_available)
+ 
+     async def test_invalidated_source_suppresses_payload(self):
+         await self.committed_parent("P")

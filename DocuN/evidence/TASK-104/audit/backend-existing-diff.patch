@@ -1,0 +1,1198 @@
+--- a/backend/app/activities/api.py
++++ b/backend/app/activities/api.py
+@@ -41,11 +41,15 @@
+ _EXECUTOR_ID = "local-ui"
+ 
+ 
++from app.memory.contracts import MemorySelectionInput, MemoryRefusal, read_bounded_json
++
++
+ class CreateActivityInput(BaseModel):
+     model_config = ConfigDict(extra="forbid")
+ 
+     activity_id: str
+     source_ids: list[str] = Field(min_length=1, max_length=128)
++    memory_selection: MemorySelectionInput | None = None
+ 
+ 
+ class ContinueInput(BaseModel):
+@@ -93,6 +97,7 @@
+     data = {
+         "activity_id": fact.activity_id,
+         "status": fact.status,
++        **({"memory_selection":fact.memory_selection} if fact.memory_selection is not None else {}),
+         "created_at": _iso(fact.created_at),
+         "updated_at": _iso(fact.updated_at),
+         "deadline_at": _iso(fact.deadline_at),
+@@ -216,6 +221,15 @@
+     provider_info = None
+     if config.provider is not None and config.model is not None:
+         provider_info = {"provider": config.provider, "model": config.model}
++    memory_layer=getattr(config,'memory_layer',None)
++    memory_available=False
++    memory_reason=memory_layer.reason if memory_layer else 'memory_not_configured'
++    if memory_layer and memory_layer.available and storage_ready and ledger is not None:
++        try:
++            memory_status=await ledger.probe_memory()
++            memory_available=bool(memory_status['read'])
++            memory_reason=None if memory_available else memory_status['reason']
++        except Exception:memory_reason='memory_schema_not_ready'
+     return {
+         "storage_ready": storage_ready,
+         "storage_reason": storage_reason,
+@@ -244,6 +258,9 @@
+                        else (None if storage_ready else storage_reason)) or "teaching_not_configured",
+             "tool": "finite_calculate",
+         },
++        "memory_model":{"available":memory_available,
++            "reason":memory_reason,
++            "selected_items":4,"max_memory_bytes":4096},
+         "quota_preview": config.quota_preview,
+         "provider": provider_info,
+         "supervision_management_budget_seconds": SessionConfig().manager_total_seconds,
+@@ -275,8 +292,12 @@
+ 
+ 
+ @router.post("/activities")
+-async def create_activity(request: Request, body: CreateActivityInput):
+-    _guard(request)
++async def create_activity(request: Request):
++    _guard(request)
++    try:
++        body=CreateActivityInput.model_validate(await read_bounded_json(request))
++    except MemoryRefusal as exc:raise _error(exc.status,exc.code,exc.message) from None
++    except ValueError:raise _error(422,'invalid_input','活动输入不可核对') from None
+     activity_id = _uuid_text(body.activity_id, "activity_id")
+     source_ids = [_uuid_text(item, "source_id") for item in body.source_ids]
+     if len(set(source_ids)) != len(source_ids):
+@@ -327,7 +348,9 @@
+         max_tool_calls=quota.get('max_tool_calls') if config.teaching_calculation_layer.available else None,
+     )
+     try:
+-        await ledger.create_activity(spec)
++        await ledger.create_activity(spec,memory_selection=body.memory_selection)
++    except MemoryRefusal as exc:
++        raise _error(exc.status,exc.code,exc.message) from None
+     except ActivityLedgerConflict as exc:
+         message = str(exc)
+         if "已存在" in message:
+@@ -404,6 +427,8 @@
+         "source_invalid": (409, "source_invalid"),
+         "result_kind_not_consumable": (409, "result_kind_read_only"),
+         "learning_followup_required": (409, "learning_followup_required"),
++        "memory_profile_required": (409, "memory_profile_required"),
++        "memory_dependency_invalid": (409, "memory_dependency_invalid"),
+         "integrity_error": (409, "integrity_error"),
+     }
+     if outcome.status in refusal:
+@@ -442,6 +467,8 @@
+     "source_invalid": "资料范围已失效，不能继续",
+     "result_kind_read_only": "该成果仅可只读查看，不能作为继续依据",
+     "learning_followup_required": "请使用该学习成果的显式续问入口，继续保持学习结构和引用校验",
++    "memory_profile_required": "本活动已固定学习背景，请使用教学工作区",
++    "memory_dependency_invalid": "所选学习背景或其依据已变化，请新建活动并明确重选",
+     "integrity_error": "数据完整性检查失败，未启动任何调用",
+ }
+ 
+--- a/backend/app/activities/repository.py
++++ b/backend/app/activities/repository.py
+@@ -35,6 +35,9 @@
+ from app.learning.teaching_contracts import TeachingRefusal
+ 
+ from .teaching_repository import TeachingLedgerMethods
++from app.memory.repository import MemoryLedgerMethods
++from app.memory.contracts import MemorySelectionInput, MemoryRefusal
++from app.learning.contracts import canonical, sha
+ 
+ 
+ _T = TypeVar("_T")
+@@ -91,6 +94,7 @@
+     COMMITTED_HISTORY_CANCELLED = "committed_history_cancelled"
+     INVALIDATED_SCOPE_CHANGED = "invalidated_scope_changed"
+     INVALIDATED_SOURCE = "invalidated_source"
++    INVALIDATED_MEMORY = "invalidated_memory"
+     UNRESOLVED = "unresolved"
+     TERMINAL_WITHOUT_PAYLOAD = "terminal_without_payload"
+     NO_OPERATION = "no_operation"
+@@ -248,6 +252,7 @@
+     tools_reserved: int
+     allowed_models: tuple[tuple[str, str], ...]
+     sources: tuple[ActivitySourceView, ...]
++    memory_selection: dict | None = None
+ 
+ 
+ @dataclass(frozen=True)
+@@ -272,7 +277,7 @@
+     payload: str | None = field(default=None, repr=False)
+ 
+ 
+-class PostgresAdmissionLedger(TeachingLedgerMethods):
++class PostgresAdmissionLedger(TeachingLedgerMethods, MemoryLedgerMethods):
+     """`AdmissionLedger` 的失败关闭 PostgreSQL 实现。
+ 
+     连接、锁和语句都有限时；任何数据库错误对准入调用统一表现为 unavailable，
+@@ -491,11 +496,28 @@
+             return ScopeSnapshot(activity_id,expected_scope_revision+1,sources)
+         return await self._transaction(operation)
+ 
+-    async def create_activity(self, spec: ActivitySpec) -> None:
++    async def create_activity(self, spec: ActivitySpec, *, memory_selection=None) -> None:
+         activity_id, sources = self._validate_spec(spec)
++        selection = None if memory_selection is None else MemorySelectionInput.model_validate(memory_selection.model_dump() if isinstance(memory_selection, MemorySelectionInput) else memory_selection)
++        create_sha = sha(canonical({'activity_id':activity_id,'source_ids':sorted(x.source_id for x in sources),'memory_selection':selection.model_dump() if selection else None}))
+ 
+         async def operation(connection: object) -> None:
+-            if not await self._lock_sources(connection, sources):
++            if selection:
++                await self._memory_assert_schema(connection)
++                cursor=await connection.execute("SELECT create_request_sha256 FROM public.activity_memory_bindings WHERE activity_id=%s",(activity_id,))
++                previous=await cursor.fetchone()
++                if previous is not None:
++                    if previous['create_request_sha256']==create_sha:return
++                    raise MemoryRefusal('activity_exists_conflict','活动编号已绑定不同选择')
++                extra=[{'source_id':x.source_id,'version_id':x.version_id,'source_revision':x.revision} for x in sources]
++                memory_state=await self._memory_lock_prefix(connection,activity_id,extra_sources=extra,memory_ids=[x.memory_id for x in selection.entries])
++                # 全部来源已在记忆/活动之前锁住；此处只读复核，不反向加新来源锁。
++                cursor=await connection.execute("SELECT id,current_version,revision FROM material_sources WHERE id=ANY(%s::uuid[])",([x.source_id for x in sources],))
++                source_rows={str(r['id']):r for r in await cursor.fetchall()}
++                sources_valid=all(x.source_id in source_rows and str(source_rows[x.source_id]['current_version'])==x.version_id and source_rows[x.source_id]['revision']==x.revision for x in sources)
++            else:
++                sources_valid=await self._lock_sources(connection,sources)
++            if not sources_valid:
+                 raise ActivityLedgerConflict("来源快照已撤销或被替换")
+             cursor = await connection.execute("SELECT 1 FROM activities WHERE id = %s FOR UPDATE", (activity_id,))
+             if await cursor.fetchone() is not None:
+@@ -534,6 +556,9 @@
+                     "INSERT INTO activity_allowed_models(activity_id, provider, model) VALUES (%s, %s, %s)",
+                     (activity_id, provider, model),
+                 )
++
++            if selection:
++                await self._memory_insert_selection(connection,spec,selection,create_sha)
+ 
+         await self._transaction(operation)
+ 
+@@ -1054,11 +1079,11 @@
+         activity_id, operation_id, executor_id, provider, model = self._intent_fields(intent)
+ 
+         async def operation(connection: object) -> AdmissionPermit:
+-            snapshots = await self._source_rows(connection, activity_id)
+-            sources_valid = bool(snapshots) and await self._lock_sources(connection, snapshots)
+-            cursor = await connection.execute("SELECT * FROM activities WHERE id = %s FOR UPDATE", (activity_id,))
+-            activity = await cursor.fetchone()
+-            await self._verify_scope_hint(connection, activity_id, snapshots)
++            memory_state=await self._memory_lock_prefix(connection,activity_id)
++            snapshots=memory_state['snapshots']
++            sources_valid=memory_state['sources_valid']
++            activity=memory_state['activity']
++            self._memory_require_call(activity,operation_id,intent.teaching_binding)
+             if intent.input_result is not None and activity is not None:
+                 if activity["status"]=="cancelled":raise AdmissionDenied("cancelled")
+                 if not sources_valid:raise AdmissionDenied("source_invalid")
+@@ -1210,11 +1235,11 @@
+             raise AdmissionDenied("invalid_input")
+ 
+         async def operation(connection: object) -> ToolAdmissionPermit:
+-            snapshots = await self._source_rows(connection, activity_id)
+-            sources_valid = bool(snapshots) and await self._lock_sources(connection, snapshots)
+-            cursor = await connection.execute("SELECT * FROM activities WHERE id = %s FOR UPDATE", (activity_id,))
+-            activity = await cursor.fetchone()
+-            await self._verify_scope_hint(connection, activity_id, snapshots)
++            memory_state=await self._memory_lock_prefix(connection,activity_id)
++            snapshots=memory_state['snapshots']
++            sources_valid=memory_state['sources_valid']
++            activity=memory_state['activity']
++            self._memory_require_call(activity,operation_id,tool=True)
+             now = datetime.now(timezone.utc)  # 来源与活动锁均已取得。
+             if activity is None or not sources_valid:
+                 raise AdmissionDenied("source_invalid")
+@@ -1327,11 +1352,10 @@
+                 raise AdmissionDenied("admission_permit_unknown")
+             if str(locator["activity_id"]) != activity_id:
+                 raise AdmissionDenied("admission_permit_mismatch")
+-            snapshots = await self._source_rows(connection, activity_id)
+-            sources_valid = bool(snapshots) and await self._lock_sources(connection, snapshots)
+-            cursor = await connection.execute("SELECT * FROM activities WHERE id = %s FOR UPDATE", (activity_id,))
+-            activity = await cursor.fetchone()
+-            await self._verify_scope_hint(connection, activity_id, snapshots)
++            memory_state=await self._memory_lock_prefix(connection,activity_id)
++            snapshots=memory_state['snapshots']
++            sources_valid=memory_state['sources_valid']
++            activity=memory_state['activity']
+             cursor = await connection.execute(
+                 "SELECT * FROM activity_operations WHERE admission_id = %s FOR UPDATE",
+                 (admission_id,),
+@@ -1396,11 +1420,10 @@
+                 raise AdmissionDenied("admission_permit_unknown")
+             if str(locator["activity_id"]) != activity_id:
+                 raise AdmissionDenied("admission_permit_mismatch")
+-            snapshots = await self._source_rows(connection, activity_id)
+-            sources_valid = bool(snapshots) and await self._lock_sources(connection, snapshots)
+-            cursor = await connection.execute("SELECT * FROM activities WHERE id = %s FOR UPDATE", (activity_id,))
+-            activity = await cursor.fetchone()
+-            await self._verify_scope_hint(connection, activity_id, snapshots)
++            memory_state=await self._memory_lock_prefix(connection,activity_id)
++            snapshots=memory_state['snapshots']
++            sources_valid=memory_state['sources_valid']
++            activity=memory_state['activity']
+             cursor = await connection.execute(
+                 "SELECT * FROM activity_operations WHERE admission_id = %s FOR UPDATE",
+                 (admission_id,),
+@@ -1444,11 +1467,10 @@
+         if locator is None:
+             raise AdmissionDenied("准入凭证不存在")
+         activity_id = str(locator["activity_id"])
+-        snapshots = await self._source_rows(connection, activity_id)
+-        sources_valid = bool(snapshots) and await self._lock_sources(connection, snapshots)
+-        cursor = await connection.execute("SELECT * FROM activities WHERE id = %s FOR UPDATE", (activity_id,))
+-        activity = await cursor.fetchone()
+-        await self._verify_scope_hint(connection, activity_id, snapshots)
++        memory_state=await self._memory_lock_prefix(connection,activity_id)
++        snapshots=memory_state['snapshots']
++        sources_valid=memory_state['sources_valid']
++        activity=memory_state['activity']
+         if operation_id.startswith(('teach8m.','teach8t.')):
+             await self._teaching_lock_operations(connection,activity_id)
+         cursor = await connection.execute(
+@@ -1471,6 +1493,7 @@
+         now = datetime.now(timezone.utc)
+         return (
+             sources_valid
++            and activity.get("_memory_eligible", True)
+             and activity["status"] == "running"
+             and activity["executor_id"] == operation["executor_id"]
+             and activity["execution_generation"] == operation["execution_generation"]
+@@ -1707,7 +1730,7 @@
+                AND (m.id IS NULL OR m.current_version IS NULL
+                     OR m.current_version <> s.version_id
+                     OR m.revision <> s.source_revision)
+-        )) AS sources_valid"""
++        )) AS sources_valid, /*memory*/TRUE AS memory_qualified"""
+ 
+     @staticmethod
+     def _read_status(row: dict, *, has_result: bool) -> ResultReadStatus:
+@@ -1720,6 +1743,8 @@
+             return ResultReadStatus.INVALIDATED_SCOPE_CHANGED
+         if not row["sources_valid"]:
+             return ResultReadStatus.INVALIDATED_SOURCE
++        if not row.get("memory_qualified", True):
++            return ResultReadStatus.INVALIDATED_MEMORY
+         if row["activity_status_now"] == "cancelled":
+             return ResultReadStatus.COMMITTED_HISTORY_CANCELLED
+         return ResultReadStatus.COMMITTED_CURRENT
+@@ -1768,7 +1793,7 @@
+ 
+         async def operation(connection: object) -> CommittedResultSnapshot:
+             cursor = await connection.execute(
+-                f"""{self._RESULT_READ_SQL},
++                await self._memory_result_sql(connection,f"""{self._RESULT_READ_SQL},
+        CASE WHEN r.payload_sha256 IS NOT NULL
+              AND r.admission_id = o.admission_id
+              AND r.execution_generation = o.execution_generation
+@@ -1788,7 +1813,7 @@
+   JOIN activities a ON a.id = o.activity_id
+   LEFT JOIN activity_operation_results r
+          ON r.activity_id = o.activity_id AND r.operation_id = o.operation_id
+- WHERE o.activity_id = %s AND o.operation_id = %s""",
++ WHERE o.activity_id = %s AND o.operation_id = %s"""),
+                 (activity_id, operation_id),
+             )
+             row = await cursor.fetchone()
+@@ -1850,7 +1875,7 @@
+ 
+         async def operation(connection: object) -> tuple[CommittedResultSnapshot, ...]:
+             cursor = await connection.execute(
+-                f"""{self._RESULT_READ_SQL},
++                await self._memory_result_sql(connection,f"""{self._RESULT_READ_SQL},
+        CASE WHEN r.payload_sha256 IS NOT NULL
+              AND r.admission_id = o.admission_id
+              AND r.execution_generation = o.execution_generation
+@@ -1872,7 +1897,7 @@
+   JOIN activities a ON a.id = r.activity_id
+  WHERE {conditions}
+  ORDER BY r.operation_id
+- LIMIT %s""",
++ LIMIT %s"""),
+                 tuple(params),
+             )
+             rows = list(await cursor.fetchall())
+@@ -1952,7 +1977,7 @@
+                    FROM activity_scope_sources s
+                    LEFT JOIN material_sources sm ON sm.id = s.source_id
+                   WHERE s.activity_id = a.id),
+-                '[]'::jsonb) AS sources
++                '[]'::jsonb) AS sources, /*memory_meta*/NULL::jsonb AS memory_selection
+   FROM activities a"""
+ 
+     @staticmethod
+@@ -1978,6 +2003,7 @@
+             max_tool_calls=row["max_tool_calls"],
+             tools_reserved=row["tools_reserved"],
+             allowed_models=tuple((str(p), str(m)) for p, m in row["allowed_models"]),
++            memory_selection=row.get("memory_selection"),
+             sources=tuple(
+                 ActivitySourceView(str(x["source_id"]), str(x["title"]), bool(x["valid"]))
+                 for x in row["sources"]
+@@ -2017,11 +2043,11 @@
+ 
+         async def operation(connection: object) -> tuple[ActivityFactView, ...]:
+             cursor = await connection.execute(
+-                f"""{self._ACTIVITY_FACT_SQL}
++                await self._memory_result_sql(connection,f"""{self._ACTIVITY_FACT_SQL}
+  WHERE %s::timestamptz IS NULL
+     OR (a.created_at, a.id) < (%s::timestamptz, %s::uuid)
+  ORDER BY a.created_at DESC, a.id DESC
+- LIMIT %s""",
++ LIMIT %s"""),
+                 (after_created_at, after_created_at, after_activity_id, limit),
+             )
+             return tuple(self._activity_fact_from_row(row) for row in await cursor.fetchall())
+@@ -2034,7 +2060,7 @@
+ 
+         async def operation(connection: object) -> ActivityFactView | None:
+             cursor = await connection.execute(
+-                f"{self._ACTIVITY_FACT_SQL} WHERE a.id = %s", (activity_id,),
++                await self._memory_result_sql(connection,f"{self._ACTIVITY_FACT_SQL} WHERE a.id = %s"), (activity_id,),
+             )
+             row = await cursor.fetchone()
+             return None if row is None else self._activity_fact_from_row(row)
+@@ -2098,7 +2124,7 @@
+              WHERE s.activity_id = o.activity_id
+                AND (m.id IS NULL OR m.current_version IS NULL
+                     OR m.current_version <> s.version_id
+-                    OR m.revision <> s.source_revision))) AS payload_eligible
++                    OR m.revision <> s.source_revision)) AND /*memory*/TRUE) AS payload_eligible
+   FROM activity_operations o
+   JOIN activities a ON a.id = o.activity_id
+   LEFT JOIN activity_operation_results r
+@@ -2212,7 +2238,7 @@
+ 
+         async def operation(connection: object) -> tuple[OperationRow, ...]:
+             cursor = await connection.execute(
+-                f"{self._OPERATIONS_LIST_SELECT} WHERE {conditions} ORDER BY o.operation_id LIMIT %s",
++                await self._memory_result_sql(connection,f"{self._OPERATIONS_LIST_SELECT} WHERE {conditions} ORDER BY o.operation_id LIMIT %s"),
+                 (*params, limit),
+             )
+             return tuple(self._operation_list_row_from_row(row) for row in await cursor.fetchall())
+@@ -2226,7 +2252,7 @@
+ 
+         async def operation(connection: object) -> OperationRow | None:
+             cursor = await connection.execute(
+-                f"{self._OPERATIONS_SELECT} WHERE o.activity_id = %s AND o.operation_id = %s",
++                await self._memory_result_sql(connection,f"{self._OPERATIONS_SELECT} WHERE o.activity_id = %s AND o.operation_id = %s"),
+                 (activity_id, operation_id),
+             )
+             row = await cursor.fetchone()
+@@ -2239,8 +2265,9 @@
+         activity_id = self._uuid(activity_id, "activity_id")
+ 
+         async def operation(connection):
+-            cursor = await connection.execute("""SELECT a.id::text AS activity_id,
++            cursor = await connection.execute(await self._memory_result_sql(connection,"""SELECT a.id::text AS activity_id,
+                 a.status, a.scope_revision, a.deadline_at, a.max_request_bytes,
++                /*learning_memory*/TRUE AS memory_eligible, /*learning_selected*/FALSE AS memory_selected,
+                 a.max_output_tokens, a.max_requests, a.requests_reserved,
+                 a.max_cost_microunits, a.cost_reserved_microunits, a.reserve_cost_microunits,
+                 a.max_running_seconds, a.running_reserved_seconds, a.running_settled_seconds,
+@@ -2261,7 +2288,7 @@
+                     LEFT JOIN material_versions v ON v.id=s.version_id AND v.source_id=s.source_id
+                     WHERE s.activity_id=a.id ORDER BY s.source_id LIMIT 11) bounded),
+                     '[]'::jsonb) AS sources
+-                FROM activities a WHERE a.id=%s""", (activity_id,))
++                FROM activities a WHERE a.id=%s"""), (activity_id,))
+             row = await cursor.fetchone()
+             return None if row is None else dict(row)
+ 
+--- a/backend/app/activities/service.py
++++ b/backend/app/activities/service.py
+@@ -120,6 +120,9 @@
+                 return ContinuationOutcome("invalid_input")
+         except (ValueError,TypeError,AttributeError):
+             return ContinuationOutcome("invalid_input")
++        selected=await self.ledger.read_memory_selection(activity_id)
++        if selected.get('selected') or not selected.get('eligible',True):
++            return ContinuationOutcome('memory_profile_required')
+         # 同键只核事实；无正文、未知或不可读都不生成替代新键、不重发。
+         existing=await self.read_result(activity_id,new_operation_id)
+         if existing.status != ResultReadStatus.NO_OPERATION.value:
+@@ -203,6 +206,9 @@
+             validate_identity(activity_id,executor_id,operation_id,run_tag)
+         except (ValueError,TypeError,AttributeError):
+             return ToolActionOutcome("invalid_input")
++        selected=await self.ledger.read_memory_selection(activity_id)
++        if (selected.get('selected') or not selected.get('eligible',True)) and not operation_id.startswith('teach8t.'):
++            return ToolActionOutcome('memory_profile_required')
+         call=_canonical_tool_execution_input(operation_id,plan)
+         if call is None:
+             return ToolActionOutcome("invalid_input")
+--- a/backend/app/activities/teaching_repository.py
++++ b/backend/app/activities/teaching_repository.py
+@@ -37,6 +37,8 @@
+     TeachingCommandInput,
+     TeachingCommandReceipt,
+     TeachingFrozenContext,
++    TeachingMemoryFrozenContext,
++    parse_frozen_context,
+     TeachingRefusal,
+     semantic_slot,
+ )
+@@ -120,31 +122,23 @@
+     # --- 锁内公共 ---
+ 
+     async def _teaching_lock(self, connection, activity_id: str, *, original_record_id=None) -> _TeachingLocked:
+-        """来源→活动→head 锁序；head 惰性（不存在返回 head=None）。"""
+-        snapshots = await self._source_rows(connection, activity_id)
++        from app.learning.teaching_views import bound_references
++        extra=[]
+         if original_record_id is not None:
+-            from app.learning.teaching_views import bound_references
+-            row = await self._teaching_read_record_row(connection, activity_id, original_record_id)
+-            refs = None if row is None else bound_references(row)
+-            if refs is None:
+-                raise TeachingRefusal('source_invalid', '原练习来源身份不可核对')
+-            # 先按全体来源UUID排序锁定，再锁活动；旧题不依赖新scope资格。
+-            combined = [*snapshots, *refs]
+-            await self._lock_sources(connection, sorted(combined, key=lambda r: (str(r['source_id']), str(r['version_id']))))
+-        sources_valid = bool(snapshots) and await self._lock_sources(connection, snapshots)
+-        cursor = await connection.execute("SELECT * FROM activities WHERE id = %s FOR UPDATE", (activity_id,))
+-        activity = await cursor.fetchone()
+-        await self._verify_scope_hint(connection, activity_id, snapshots)
+-        if activity is None:
+-            raise TeachingRefusal("not_found", "活动不存在")
++            row=await self._teaching_read_record_row(connection,activity_id,original_record_id)
++            refs=None if row is None else bound_references(row)
++            if refs is None:raise TeachingRefusal('source_invalid','原练习来源身份不可核对')
++            extra=refs
++        state=await self._memory_lock_prefix(connection,activity_id,extra_sources=extra)
++        activity=state['activity']
++        if activity is None:raise TeachingRefusal('not_found','活动不存在')
+         await self._teaching_lock_operations(connection,activity_id)
+-        activity["_teaching_sources_valid"] = sources_valid
+-        activity["_teaching_sources"] = _plain(snapshots)
+-        cursor = await connection.execute("SELECT * FROM teaching_heads WHERE activity_id = %s FOR UPDATE",
+-                                          (activity_id,))
+-        head = await cursor.fetchone()
++        activity['_teaching_sources_valid']=state['sources_valid'] and state['eligible']
++        activity['_teaching_sources']=_plain(state['snapshots'])
++        cursor=await connection.execute("SELECT * FROM teaching_heads WHERE activity_id=%s FOR UPDATE",(activity_id,))
++        head=await cursor.fetchone()
+         await connection.execute("SELECT business_key FROM teaching_commands WHERE activity_id=%s ORDER BY business_key FOR UPDATE",(activity_id,))
+-        return _TeachingLocked(activity, head, None)
++        return _TeachingLocked(activity,head,None)
+ 
+     async def _teaching_lock_operations(self,connection,activity_id):
+         await connection.execute("SELECT operation_id FROM activity_operations WHERE activity_id=%s ORDER BY operation_id FOR UPDATE",(activity_id,))
+@@ -332,6 +326,13 @@
+                 or activity["scope_revision"] != command["scope_revision"]
+                 or command.get("obsolete_at") is not None or command.get("abandoned_at") is not None):
+             raise TeachingRefusal("version_conflict", "教学绑定已改变")
++        if not activity.get('_memory_eligible',True):
++            raise TeachingRefusal('memory_dependency_invalid','所选学习背景已更新或撤销')
++        if isinstance(frozen,TeachingMemoryFrozenContext):
++            cursor=await connection.execute("SELECT selection_sha256 FROM public.activity_memory_bindings WHERE activity_id=%s",(str(activity['id']),))
++            selected=await cursor.fetchone()
++            if selected is None or selected['selection_sha256']!=frozen.memory_selection_sha256:
++                raise TeachingRefusal('memory_dependency_invalid','固定背景选择不符')
+         if frozen.operation_id != command["operation_id"]:
+             raise TeachingRefusal("unknown_slot", "冻结操作身份不一致")
+         from app.learning.teaching_contracts import frozen_context_digest
+@@ -408,6 +409,10 @@
+         return rows
+ 
+     async def _teaching_rebuild_progress(self, connection, activity_id, head, extra=None):
++        guard=await self._memory_sql_guard(connection,"%s")
++        cursor=await connection.execute("SELECT "+guard+" AS valid",tuple(activity_id for _ in range(guard.count('%s'))))
++        if not (await cursor.fetchone())['valid']:
++            raise TeachingRefusal('memory_dependency_invalid','失效背景不能重建当前进度')
+         path = await self._teaching_read_record_row(connection, activity_id, head["path_record_id"])
+         path_body = await self._teaching_fact_result(connection, activity_id, path)
+         cursor = await connection.execute(
+@@ -465,6 +470,8 @@
+             locked = await self._teaching_lock_command(connection, activity_id, command.business_key,
+                 original_record_id=command.body.get('exercise_record_id') if command.action == 'expose' else None)
+             activity, head, existing = locked.activity, locked.head, locked.command
++            if not activity.get('_memory_eligible',True) and command.action not in ('goal','answer','correct','abandon'):
++                raise TeachingRefusal('memory_dependency_invalid','所选学习背景已更新或撤销')
+             if existing is not None:
+                 if self._teaching_replay(existing, request_sha, request_body):
+                     head_revision = 0 if head is None else head["revision"]
+@@ -959,6 +966,14 @@
+         async def operation(connection) -> TeachingCommandReceipt:
+             locked = await self._teaching_lock_command(connection, activity_id, command.business_key)
+             activity, head, existing = locked.activity, locked.head, locked.command
++            if activity.get('_memory_selected'):
++                if not activity.get('_memory_eligible'):
++                    raise TeachingRefusal('memory_dependency_invalid','所选学习背景已更新或撤销')
++                if frozen.kind=='model' and not isinstance(frozen,TeachingMemoryFrozenContext):
++                    raise TeachingRefusal('memory_profile_required','本活动须使用明确学习背景协议')
++            elif isinstance(frozen,TeachingMemoryFrozenContext):
++                raise TeachingRefusal('memory_profile_required','本活动未明确选用背景')
++
+             if existing is not None:
+                 if self._teaching_replay(existing, request_sha, request_body):
+                     return await self._teaching_original_receipt(connection,activity_id,existing,0 if head is None else head["revision"])
+@@ -1067,7 +1082,7 @@
+                 return {"launch_allowed": False, "reason": "activity_not_launchable"}
+             self._teaching_gate(activity)
+             try:
+-                frozen = TeachingFrozenContext.model_validate(_decode(command["context_body"]))
++                frozen = parse_frozen_context(_decode(command["context_body"]))
+                 self._teaching_budget(activity,frozen)
+                 await self._teaching_verify_current(connection,activity,head,command,frozen)
+             except TeachingRefusal as exc:
+@@ -1165,9 +1180,13 @@
+             if command["expected_revision"] != binding.expected_revision or command["goal_version"] != binding.goal_version:
+                 raise TeachingRefusal("version_conflict", "教学版本不匹配")
+         try:
+-            frozen = TeachingFrozenContext.model_validate(_decode(command["context_body"]))
++            frozen = parse_frozen_context(_decode(command["context_body"]))
+         except (ValueError,TypeError):
+             raise TeachingRefusal("integrity_error","冻结上下文不可解析") from None
++        if isinstance(frozen,TeachingMemoryFrozenContext) and binding is not None:
++            if (getattr(binding,'memory_selection_sha256',None)!=frozen.memory_selection_sha256
++                    or getattr(binding,'assembled_messages_sha256',None)!=frozen.assembled_messages_sha256):
++                raise TeachingRefusal('memory_profile_required','背景消息受信绑定不符')
+         if phase != "result":
+             await self._teaching_verify_current(connection,activity,head,command,frozen)
+         return command
+@@ -1183,7 +1202,7 @@
+         if command is None or head is None or command["operation_id"] != operation_id or command["request_sha256"] != operation_id.rpartition(".")[2]:
+             raise TeachingRefusal("integrity_error","教学命令或当前投影缺失，原正文提交回滚")
+         try:
+-            frozen = TeachingFrozenContext.model_validate(_decode(command["context_body"]))
++            frozen = parse_frozen_context(_decode(command["context_body"]))
+             request = _decode(command["request_body"])
+         except (ValueError,TypeError):
+             raise TeachingRefusal("integrity_error","教学命令上下文损坏") from None
+@@ -1217,7 +1236,7 @@
+             result = {"result_type":"calculation","value_decimal":value}
+             source_refs = reference_rows[body["exercise_record_id"]]["source_refs"]
+         else:
+-            expected = {"profile":"teaching.v1","action":action,"activity_id":activity_id,
++            expected = {"profile":frozen.profile_version,"action":action,"activity_id":activity_id,
+                 "command_key":str(command["business_key"]),"request_sha256":command["request_sha256"],
+                 "context_sha256":command["context_sha256"],"expected_revision":command["expected_revision"],
+                 "goal_record_id":str(goal["record_id"]),"goal_version":command["goal_version"],"scope_revision":command["scope_revision"]}
+@@ -1340,7 +1359,7 @@
+                                       record_id=None, business_key=None):
+         """每个公开读取只执行本语句；JSONB 由驱动解码，不二次拼装快照。"""
+         async def operation(connection):
+-            cursor = await connection.execute("""
++            cursor = await connection.execute(await self._memory_teaching_sql(connection,"""
+                 WITH a AS (SELECT * FROM activities WHERE id=%(aid)s),
+                 h AS (SELECT * FROM teaching_heads WHERE activity_id=%(aid)s),
+                 sources AS (
+@@ -1381,8 +1400,17 @@
+                     FROM teaching_records WHERE activity_id=%(aid)s
+                     AND (%(before)s::bigint IS NULL OR seq<%(before)s) ORDER BY seq DESC LIMIT %(limit)s),
+                 command AS (SELECT * FROM teaching_commands WHERE activity_id=%(aid)s AND business_key=%(key)s::uuid),
+-                bodies AS (SELECT r.*,r.business_key AS command_key,o.payload,o.payload_format,o.payload_sha256 AS operation_payload_sha256,
+-                    COALESCE(o.payload,po.payload) AS citation_payload,
++                bodies AS (SELECT r.activity_id,r.record_id,r.seq,r.kind,r.business_key,r.ordinal,
++                    r.goal_version,r.scope_revision,r.goal_record_id,r.parent_record_id,r.exercise_record_id,
++                    r.answer_record_id,r.supersedes_record_id,r.operation_id,r.body_sha256,r.source_refs,
++                    r.applied_revision,r.created_at,
++                    CASE WHEN r.kind IN ('goal','answer','correction','exposure') OR /*teach_record_memory*/TRUE
++                         THEN r.body ELSE NULL END AS body,
++                    CASE WHEN /*teach_record_memory*/TRUE THEN r.state_after ELSE NULL END AS state_after,
++                    r.business_key AS command_key,
++                    CASE WHEN /*teach_record_memory*/TRUE THEN o.payload ELSE NULL END AS payload,
++                    o.payload_format,o.payload_sha256 AS operation_payload_sha256,
++                    CASE WHEN /*teach_record_memory*/TRUE THEN COALESCE(o.payload,po.payload) ELSE NULL END AS citation_payload,
+                     COALESCE(o.payload_format,po.payload_format) AS citation_payload_format,
+                     COALESCE(o.payload_sha256,po.payload_sha256) AS citation_payload_sha256
+                     FROM teaching_records r LEFT JOIN activity_operation_results o
+@@ -1408,14 +1436,16 @@
+                     COALESCE((SELECT jsonb_agg(x ORDER BY x.seq) FROM bodies x),'[]'::jsonb) AS bodies,
+                     COALESCE((SELECT jsonb_agg(x) FROM exposures x),'[]'::jsonb) AS exposures,
+                     (SELECT to_jsonb(command) FROM command) AS command,
++                    /*teach_memory*/TRUE AS memory_qualified, /*teach_selected*/FALSE AS memory_selected,
+                     CURRENT_TIMESTAMP AS read_at
+-                """, {"aid":activity_id,"key":business_key,"rid":record_id,"before":before,"limit":limit})
++                """), {"aid":activity_id,"key":business_key,"rid":record_id,"before":before,"limit":limit})
+             row=await cursor.fetchone()
+             if row is None or row['activity'] is None:
+                 return None
+             view = {k:_decode(v) if k!='read_at' else v.isoformat() for k,v in row.items()}
+             from app.learning.teaching_views import record_sources_valid, bound_references
+             for fact in view['bodies']:
++                fact['memory_qualified']=view['memory_qualified']
+                 fact['source_qualified'] = record_sources_valid(fact, view['record_sources'])
+                 refs = bound_references(fact) or []
+                 keys = {(r['source_id'],r['version_id']) for r in refs}
+@@ -1423,6 +1453,8 @@
+             for item in view['history']:
+                 item['qualification'] = ('source_invalid' if item['kind'] not in ('goal','answer','correction','exposure')
+                                          and not record_sources_valid(item,view['record_sources']) else 'history')
++                if not view['memory_qualified'] and item['kind'] not in ('goal','answer','correction','exposure'):
++                    item['qualification']='memory_invalid'
+                 item.pop('source_refs')
+             return view
+         return await self._transaction(operation)
+@@ -1478,6 +1510,24 @@
+         async def operation(connection) -> set[str]:
+             return await self._teaching_exercise_exposures(connection, activity_id, exercise_record_id)
+ 
++        return await self._transaction(operation)
++
++    async def read_teaching_recipe_records(self,activity_id,record_ids):
++        """v2有限recipe一次资格快照复取全部引用，避免逐项重复schema探测。"""
++        activity_id=self._uuid(activity_id,'activity_id')
++        if not 1<=len(record_ids)<=12 or len(set(record_ids))!=len(record_ids):raise ValueError('invalid_input')
++        ids=[self._uuid(rid,'record_id') for rid in record_ids]
++        async def operation(connection):
++            guard=await self._memory_sql_guard(connection,'r.activity_id')
++            cursor=await connection.execute("""SELECT r.record_id::text,r.kind,r.body_sha256,r.exercise_record_id::text,
++              r.answer_record_id::text,r.operation_id,
++              CASE WHEN r.kind IN('goal','answer','correction') OR """+guard+""" THEN r.body ELSE NULL END AS body,
++              CASE WHEN """+guard+""" THEN p.payload ELSE NULL END AS payload,
++              p.payload_format,p.payload_sha256 AS operation_payload_sha256
++              FROM teaching_records r LEFT JOIN activity_operation_results p
++               ON p.activity_id=r.activity_id AND p.operation_id=r.operation_id
++              WHERE r.activity_id=%s AND r.record_id=ANY(%s::uuid[]) ORDER BY r.seq""",(activity_id,ids))
++            return list(await cursor.fetchall())
+         return await self._transaction(operation)
+ 
+     async def read_teaching_head(self, activity_id: str) -> dict | None:
+--- a/backend/app/capabilities/contracts.py
++++ b/backend/app/capabilities/contracts.py
+@@ -13,7 +13,7 @@
+ 
+ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
+ from app.learning.contracts import LearningProfile
+-from app.learning.teaching_contracts import TeachingCallBinding, TeachingProfile
++from app.learning.teaching_contracts import TeachingCallBinding, TeachingProfile, TeachingMemoryCallBinding, TeachingMemoryProfile
+ 
+ 
+ class Provider(StrEnum):
+@@ -129,7 +129,7 @@
+ 
+     input_result: ResultConsumptionRef | None = Field(default=None, repr=False)
+     learning_profile: LearningProfile | None = Field(default=None, repr=False)
+-    teaching_profile: TeachingProfile | None = Field(default=None, repr=False)
++    teaching_profile: TeachingProfile | TeachingMemoryProfile | None = Field(default=None, repr=False)
+     messages: tuple[Message, ...] = Field(min_length=1, max_length=128)
+     max_output_tokens: int = Field(ge=1)
+     response_mode: ResponseMode = ResponseMode.JSON_OBJECT
+@@ -193,7 +193,7 @@
+     tool_names: tuple[str, ...]
+     input_result: ResultConsumptionRef | None = None
+     # G8：受信教学调用绑定；由 gateway 从 teaching_profile 构造，公开 API 不可直接构造。
+-    teaching_binding: TeachingCallBinding | None = None
++    teaching_binding: TeachingCallBinding | TeachingMemoryCallBinding | None = None
+ 
+ 
+ @dataclass(frozen=True)
+--- a/backend/app/capabilities/gateway.py
++++ b/backend/app/capabilities/gateway.py
+@@ -30,7 +30,7 @@
+     Usage,
+     build_business_payload,
+ )
+-from app.learning.teaching_contracts import TeachingCallBinding
++from app.learning.teaching_contracts import TeachingCallBinding, TeachingMemoryCallBinding
+ from .tools import ToolRegistry, ToolValidationError
+ from .transport import DeliveryUnknown, HttpxModelTransport, ModelTransport, RequestNotSent, TransportResponse
+ 
+@@ -138,12 +138,13 @@
+             max_output_tokens=request.max_output_tokens,
+             tool_names=tuple(sorted(request.allowed_tools)),
+             input_result=request.input_result,
+-            teaching_binding=(TeachingCallBinding(
++            teaching_binding=((TeachingMemoryCallBinding if request.teaching_profile.profile=='teaching.v2' else TeachingCallBinding)(
+                 command_key=request.teaching_profile.command_key,
+                 request_sha256=request.teaching_profile.request_sha256,
+                 context_sha256=request.teaching_profile.context_sha256,
+                 expected_revision=request.teaching_profile.expected_revision,
+                 goal_version=request.teaching_profile.goal_version,
++                **({'memory_selection_sha256':request.teaching_profile.memory_selection_sha256,'assembled_messages_sha256':request.teaching_profile.assembled_messages_sha256} if request.teaching_profile.profile=='teaching.v2' else {}),
+             ) if request.teaching_profile is not None else None),
+         )
+         stage = "admit"
+--- a/backend/app/learning/service.py
++++ b/backend/app/learning/service.py
+@@ -28,6 +28,9 @@
+         return None if operation_id is None else await self.ledger.read_operation(activity_id, operation_id)
+ 
+     async def execute(self, activity_id, business_key, text, config, *, parent_operation_id=None, run_tag):
++        selection=await self.ledger.read_memory_selection(activity_id)
++        if selection.get('selected') or not selection.get('eligible',True):
++            raise LearningRefusal('memory_profile_required','此活动的背景请在教学工作区使用')
+         if str(UUID(business_key)) != business_key:
+             raise LearningRefusal("invalid_input", "业务键必须是规范UUID")
+         if parent_operation_id is not None and parent_operation_id.startswith(("teach8m.", "teach8t.")):
+--- a/backend/app/learning/teaching_adapter.py
++++ b/backend/app/learning/teaching_adapter.py
+@@ -14,7 +14,9 @@
+     返回错误码或 None；与 learning adapter 同样只在受控链内调用。
+     """
+     try:
+-        profile = TeachingProfile.model_validate(request.teaching_profile.model_dump())
++        from .teaching_contracts import TeachingMemoryProfile,parse_frozen_context,TeachingMemoryFrozenContext
++        profile_type=TeachingMemoryProfile if request.teaching_profile.profile=='teaching.v2' else TeachingProfile
++        profile = profile_type.model_validate(request.teaching_profile.model_dump())
+         if request.learning_profile is not None or request.allowed_tools:
+             return "invalid_teaching_profile"
+         if (context.activity_id != profile.activity_id
+@@ -29,7 +31,24 @@
+             return "invalid_teaching_profile"
+         # 消息精确匹配（与实际 provider payload 投影一致）。
+         from app.capabilities.contracts import Message
+-        expected = [Message.model_validate(m).model_dump(mode="json",exclude_none=True) for m in messages_for_teaching(profile.action, json.loads(_last_user_content(request)))]
++        if profile.profile=='teaching.v2':
++            from app.memory.context import materialize_recipe
++            from app.memory.contracts import MemoryRefusal
++            view=await ledger.read_teaching_command(context.activity_id,profile.command_key)
++            if view is None:return 'memory_dependency_invalid'
++            frozen=parse_frozen_context(view['command']['context_body'])
++            if not isinstance(frozen,TeachingMemoryFrozenContext) or frozen.context_sha256!=profile.context_sha256:
++                return 'memory_profile_required'
++            selection=await ledger.read_memory_selection(context.activity_id,include_bodies=True)
++            if selection.get('selection_sha256')!=profile.memory_selection_sha256 or frozen.memory_refs!=profile.memory_refs:
++                return 'memory_dependency_invalid'
++            try: raw_expected=await materialize_recipe(ledger,frozen.recipe,frozen.catalog,selection)
++            except MemoryRefusal as exc:return exc.code
++            if sha(canonical([Message.model_validate(m).model_dump(mode='json',exclude_none=True) for m in raw_expected]))!=frozen.assembled_messages_sha256:
++                return 'memory_dependency_invalid'
++        else:
++            raw_expected=messages_for_teaching(profile.action,json.loads(_last_user_content(request)))
++        expected = [Message.model_validate(m).model_dump(mode="json",exclude_none=True) for m in raw_expected]
+         actual = [m.model_dump(mode="json",exclude_none=True) for m in request.messages]
+         if actual != expected or sha(canonical(actual)) != profile.messages_sha256:
+             return "invalid_teaching_profile"
+--- a/backend/app/learning/teaching_api.py
++++ b/backend/app/learning/teaching_api.py
+@@ -22,11 +22,14 @@
+     validate_exposed_part,
+ )
+ from .teaching_service import TeachingService
++from .evidence import LearningRefusal
+ 
+ router = APIRouter(prefix="/api/activities")
+ 
+ _STATUS_MAP = {
+-    "invalid_input": 400, "clarification_required": 400,
++    "invalid_input": 400, "clarification_required": 400, "no_evidence": 409,
++    "memory_dependency_invalid":409,"memory_invalid":409,"memory_profile_required":409,"memory_context_limit":409,
++    "context_version_unavailable":409,"memory_not_configured":503,"memory_schema_not_ready":503,
+     "not_found": 404, "record_not_found": 404, "citation_not_found": 404,
+     "command_key_conflict": 409, "stage_conflict": 409, "version_conflict": 409,
+     "goal_changed": 409, "answer_changed": 409, "source_invalid": 409,
+@@ -40,14 +43,14 @@
+ }
+ 
+ 
+-def _teaching_error(exc: TeachingRefusal):
++def _teaching_error(exc: TeachingRefusal | LearningRefusal):
+     status = _STATUS_MAP.get(exc.code, 422)
+     return _error(status, exc.code, exc.message)
+ 
+ 
+ def _service(request: Request) -> TeachingService:
+     return TeachingService(_ledger(request), getattr(request.app.state, "materials", None),
+-                           request.app.state.originals)
++                           request.app.state.originals,session_config=getattr(request.app.state,'teaching_session_config',None))
+ 
+ @router.get("/{activity_id}/teaching/seeds/{operation_id}")
+ async def read_teaching_seed(request: Request, activity_id: str, operation_id: str):
+@@ -105,7 +108,7 @@
+         receipt = await _service(request).submit_command(
+             activity_id, command, _config(request),
+             run_tag="teach-" + __import__("secrets").token_hex(12))
+-    except TeachingRefusal as exc:
++    except (TeachingRefusal, LearningRefusal) as exc:
+         raise _teaching_error(exc) from None
+     except (AdmissionUnavailable, DatabaseUnavailable):
+         raise _error(503, "database_unavailable", "教学数据暂不可用") from None
+@@ -148,11 +151,11 @@
+         "record_ids":[{"record_id":r["record_id"],"kind":r["kind"],"seq":r["seq"]} for r in records],
+         "payload_sha256":next((r["operation_payload_sha256"] for r in records if r.get("operation_payload_sha256")),None),
+         "applied_revision":next((r["applied_revision"] for r in records if r["applied_revision"] is not None),None),
+-        "qualification":"source_invalid" if source_invalid(current["sources"]) else
++        "qualification":"memory_invalid" if current.get('memory_qualified') is False else "source_invalid" if source_invalid(current["sources"]) else
+             "unconfirmed" if row["status"] in ('accepted','started','unknown') else
+             "history_only" if row["status"]=='history' else "current",
+         "model_called":None,"tool_called":None,
+-        "retry_policy":"same_key_before_claim" if row['status']=='accepted' and row['launch_claimed_at'] is None
++        "retry_policy":"read_only" if current.get('memory_qualified') is False else "same_key_before_claim" if row['status']=='accepted' and row['launch_claimed_at'] is None
+             and row['obsolete_at'] is None and row['abandoned_at'] is None else
+             "read_only" if row["status"] in ('accepted','started','unknown') else
+             "explicit_new_key_after_confirmed_failure" if row["status"] in ('failed','not_sent') else "none",
+@@ -196,7 +199,7 @@
+     projected=regions(view)
+     budget_names=("requests_reserved","max_requests","cost_reserved_microunits","max_cost_microunits",
+         "tools_reserved","max_tool_calls","running_settled_seconds","running_reserved_seconds","max_running_seconds","deadline_at")
+-    return {"schema":"teaching.workspace.v1","activity_id":activity_id,"view_token":view_token(view),
++    return {"schema":"teaching.workspace.v1","activity_id":activity_id,"memory_invalid":view.get("memory_qualified") is False,"memory_selected":view.get("memory_selected",False),"view_token":view_token(view),
+         "read_at":view.get("read_at",datetime_utcnow().isoformat()),
+         "head":{"revision":head.get("revision",0),"goal_version":head.get("goal_version",0),"phase":head.get("phase","needs_goal"),
+             **{key:head.get(key) for key in ("goal_record_id","path_record_id","node_id","exercise_record_id","answer_record_id",
+@@ -450,7 +453,7 @@
+         row=await service.read_record(activity_id,record_id)
+         if row is None: raise TeachingRefusal('record_not_found','教学记录不存在')
+         q,body=public_record(row,row['snapshot_sources'],row['snapshot_exposures'],row['snapshot_head'],row['snapshot_activity'])
+-        if q in ('source_invalid','integrity_error'): raise TeachingRefusal(q,'引用目前不可核对')
++        if q in ('source_invalid','integrity_error','memory_invalid'): raise TeachingRefusal(q,'引用目前不可核对')
+         citation_payload = row.get('citation_payload') or row.get('payload')
+         if citation_payload is None: raise TeachingRefusal('citation_not_found','该记录没有资料引用')
+         # 未暴露参考不能通过猜引用 ID 查看其复制文本。
+--- a/backend/app/learning/teaching_contracts.py
++++ b/backend/app/learning/teaching_contracts.py
+@@ -57,7 +57,7 @@
+ ALL_ACTIONS = sorted(MODEL_ACTIONS | TOOL_ACTIONS | LOCAL_ACTIONS)
+ 
+ COMMAND_STATUSES = ("accepted", "started", "committed", "history", "not_sent", "failed", "unknown", "abandoned")
+-QUALIFICATIONS = ("current", "history_only", "source_invalid", "cancelled", "integrity_error", "unconfirmed")
++QUALIFICATIONS = ("current", "history_only", "source_invalid", "cancelled", "integrity_error", "unconfirmed", "memory_invalid")
+ RECORD_KINDS = ("goal", "path_proposal", "path_accept", "exercise", "exposure", "answer", "calculation",
+                 "feedback", "progress", "correction", "node_selection")
+ PHASES = ("needs_goal", "needs_plan", "path_review", "ready", "exercise_ready", "answer_saved", "feedback_ready")
+@@ -477,7 +477,7 @@
+     applied_revision: int | None = Field(default=None, ge=1, le=2_147_483_647)
+     head_revision_now: int = Field(ge=0)
+     qualification: Literal["current", "history_only", "source_invalid", "cancelled",
+-                           "integrity_error", "unconfirmed"] = "current"
++                           "integrity_error", "unconfirmed", "memory_invalid"] = "current"
+     error_code: str | None = Field(default=None, pattern=r"^[A-Za-z0-9._:/-]{1,64}$")
+     model_called: bool | None = None
+     tool_called: bool | None = None
+@@ -1115,6 +1115,8 @@
+     read_at: str
+     head: TeachingHeadView
+     overlay: TeachingOverlay
++    memory_invalid: bool = False
++    memory_selected: bool = False
+     goal: dict | None = None
+     path: dict | None = None
+     proposal: dict | None = None
+@@ -1146,7 +1148,7 @@
+     body_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+     created_at: str
+     qualification: Literal["current", "history_only", "source_invalid", "cancelled",
+-                           "integrity_error", "unconfirmed"] = "current"
++                           "integrity_error", "unconfirmed", "memory_invalid"] = "current"
+     public_body: dict | None = None
+ 
+ 
+@@ -1157,3 +1159,44 @@
+     watermark_last_seq: int = Field(ge=0, le=MAX_RECORDS)
+     items: list[HistoryItem] = Field(max_length=HISTORY_MAX)
+     next_cursor: str | None = Field(default=None, max_length=1024)
++
++
++# G9 另立v2类型，旧v1字段及model_dump不增加默认键。
++from app.memory.contracts import MemoryChoice
++
++class TeachingMemoryFrozenContext(Strict):
++    schema_: Literal["teaching.context.v2"] = Field(alias="schema",default="teaching.context.v2")
++    kind: Literal["model"] = "model"
++    reference_hashes: list[ReferenceHash] = Field(min_length=1,max_length=12)
++    operation_id: str = Field(min_length=1,max_length=128)
++    context_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
++    profile_version: Literal["teaching.v2"] = "teaching.v2"
++    prompt_version: Literal["teaching-memory-prompt-v1"] = "teaching-memory-prompt-v1"
++    projection_policy_version: Literal["teaching.memory.recipe.v1"] = "teaching.memory.recipe.v1"
++    max_output_tokens: int = Field(ge=1,le=2048)
++    catalog: list[CatalogEntry] = Field(min_length=1,max_length=4)
++    recipe: dict
++    memory_selection_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
++    memory_refs: list[MemoryChoice] = Field(min_length=1,max_length=4)
++    assembled_messages_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
++    model_config=ConfigDict(extra="forbid",strict=True,frozen=True,populate_by_name=True)
++
++
++class TeachingMemoryProfile(TeachingProfile):
++    profile: Literal["teaching.v2"] = "teaching.v2"
++    memory_selection_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
++    memory_refs: list[MemoryChoice] = Field(min_length=1,max_length=4)
++    assembled_messages_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
++
++
++class TeachingMemoryCallBinding(TeachingCallBinding):
++    memory_selection_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
++    assembled_messages_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
++
++
++def parse_frozen_context(value):
++    if isinstance(value,str):
++        import json
++        value=json.loads(value)
++    kind=TeachingMemoryFrozenContext if value.get("schema")=="teaching.context.v2" else TeachingFrozenContext
++    return kind.model_validate(value)
+--- a/backend/app/learning/teaching_policy.py
++++ b/backend/app/learning/teaching_policy.py
+@@ -7,6 +7,7 @@
+ 
+ from decimal import Decimal, InvalidOperation, localcontext
+ import re
++from fractions import Fraction
+ 
+ from .teaching_contracts import (
+     ALL_ACTIONS,
+@@ -196,14 +197,28 @@
+                 family, numerator, denominator = _ANSWER_UNITS[unit]
+                 expected_family, expected_numerator, expected_denominator = _ANSWER_UNITS[expected_unit]
+                 unit_match = family == expected_family
+-                if unit_match:
+-                    with localcontext() as context:
+-                        context.prec = 64
+-                        number = number * numerator * expected_denominator / (denominator * expected_numerator)
+-            value_match = unit_match and _decimal_equal(number, expected, tolerance)
+-            answer_status = "matched" if value_match else "conflict"
+-            detail = {"answer_value_decimal": format(number, "f"), "answer_unit": unit,
+-                      "unit_matched": unit_match, "value_matched": value_match}
++                # 同单位保留原Decimal；跨单位在有限域内用精确比例比较。
++                exact_match = None
++                supported = True
++                if unit_match and unit != expected_unit:
++                    supported = (max(len(number.as_tuple().digits),len(expected.as_tuple().digits)) <= 256
++                                 and abs(number.as_tuple().exponent) <= 256
++                                 and abs(expected.as_tuple().exponent) <= 256)
++                    if supported:
++                        ratio = Fraction(number) * Fraction(numerator) * Fraction(expected_denominator) / (Fraction(denominator) * Fraction(expected_numerator))
++                        delta = abs(ratio-Fraction(expected))
++                        exact_match = delta == 0 if tolerance is None else delta <= Fraction(tolerance)
++                        with localcontext() as context:
++                            context.prec = max(64,len(str(abs(ratio.numerator)))+len(str(ratio.denominator))+8)
++                            number = Decimal(ratio.numerator)/Decimal(ratio.denominator)
++            else:
++                exact_match = None
++                supported = True
++            value_match = unit_match and (exact_match if exact_match is not None else _decimal_equal(number, expected, tolerance))
++            answer_status = ("matched" if value_match else "conflict") if supported else "unchecked"
++            if supported:
++                detail = {"answer_value_decimal": format(number, "f"), "answer_unit": unit,
++                          "unit_matched": unit_match, "value_matched": value_match}
+         checks.append({
+             "point_id": point.get("point_id"),
+             "status": "conflict" if not reference_match or answer_status == "conflict" else answer_status,
+--- a/backend/app/learning/teaching_service.py
++++ b/backend/app/learning/teaching_service.py
+@@ -30,6 +30,9 @@
+     TeachingCommandInput,
+     TeachingCommandReceipt,
+     TeachingFrozenContext,
++    TeachingMemoryFrozenContext,
++    TeachingMemoryProfile,
++    parse_frozen_context,
+     TeachingRefusal,
+     ToolFrozenCall,
+ )
+@@ -41,8 +44,11 @@
+ 
+ 
+ class TeachingService:
+-    def __init__(self, ledger, materials, originals):
++    def __init__(self, ledger, materials, originals, *, session_config=None):
+         self.ledger, self.materials, self.originals = ledger, materials, originals
++        if session_config is not None and type(session_config) is not SessionConfig:
++            raise TypeError('教学窗口配置须为已校验SessionConfig')
++        self.session_config=session_config
+ 
+     # --- 命令入口 ---
+ 
+@@ -64,7 +70,7 @@
+                 original.pop('activity_id')
+                 original['business_key'] = str(row['business_key'])
+                 original = TeachingCommandInput.model_validate(original)
+-                frozen = TeachingFrozenContext.model_validate(json.loads(row['context_body']))
++                frozen = parse_frozen_context(json.loads(row['context_body']))
+                 from .teaching_contracts import frozen_context_digest
+                 if (frozen_context_digest(frozen) != row['context_sha256']
+                         or frozen.operation_id != row['operation_id']
+@@ -90,8 +96,8 @@
+             head_revision_now=view['head_revision'],record_ids=[RecordRef(record_id=str(r['record_id']),kind=r['kind'],seq=r['seq']) for r in records],
+             payload_sha256=next((r['body_sha256'] for r in records if r['operation_id']),None),
+             applied_revision=next((r['applied_revision'] for r in records if r['applied_revision']),None),
+-            qualification='history_only' if row['status']=='history' else 'unconfirmed' if row['status'] in ('accepted','started','unknown') else 'current',
+-            retry_policy='same_key_before_claim' if row['status']=='accepted' and row['launch_claimed_at'] is None
++            qualification='memory_invalid' if view.get('memory_qualified') is False and row['action'] in ('plan','exercise','evaluate','calculate') else 'history_only' if row['status']=='history' else 'unconfirmed' if row['status'] in ('accepted','started','unknown') else 'current',
++            retry_policy='read_only' if view.get('memory_qualified') is False else 'same_key_before_claim' if row['status']=='accepted' and row['launch_claimed_at'] is None
+                 and row['obsolete_at'] is None and row['abandoned_at'] is None else
+                 'explicit_new_key_after_confirmed_failure' if row['status'] in ('failed','not_sent') else
+                 'read_only' if row['status'] in ('accepted','started','unknown') else 'none')
+@@ -132,9 +138,24 @@
+             identity = {name: head.get(name) for name in ('goal_record_id', 'goal_version',
+                         'path_record_id', 'node_id', 'exercise_record_id', 'answer_record_id')}
+             identity['correction_record_id'] = command.body.get('correction_record_id')
++        if isinstance(frozen,TeachingMemoryFrozenContext):
++            from app.memory.context import materialize_recipe,check_capacity
++            from app.memory.contracts import MemoryRefusal
++            try:
++                selection=await self.ledger.read_memory_selection(activity_id,include_bodies=True)
++                messages=await materialize_recipe(self.ledger,frozen.recipe,frozen.catalog,selection)
++                from app.capabilities.contracts import Message
++                messages=[Message.model_validate(m).model_dump(mode='json',exclude_none=True) for m in messages]
++                if sha(canonical(messages))!=frozen.assembled_messages_sha256:
++                    raise MemoryRefusal('memory_dependency_invalid','原背景消息身份不可复建')
++                snapshot=await self.ledger.read_learning_snapshot(activity_id)
++                check_capacity(messages,selection,getattr(config,'memory_context',None),snapshot,config.model_service)
++            except MemoryRefusal as exc:raise TeachingRefusal(exc.code,exc.message) from None
++        else:
++            messages=frozen.messages
+         profile = self._build_profile(activity_id, command, frozen, identity)
+         request = ModelCallRequest(
+-            messages=[{"role": m["role"], "content": m["content"]} for m in frozen.messages],
++            messages=[{"role": m["role"], "content": m["content"]} for m in messages],
+             max_output_tokens=frozen.max_output_tokens,
+             allowed_tools=frozenset(), teaching_profile=profile)
+         service = config.model_service
+@@ -142,7 +163,7 @@
+             OneCallInput(command.operation_id(activity_id), request, service).to_wire()
+         except (ValueError, TypeError):
+             raise TeachingRefusal("context_limit", "教学上下文超过受控通道限额") from None
+-        session = SessionConfig()
++        session = self.session_config or SessionConfig()
+         if service.timeout_seconds > session.request_timeout_seconds:
+             raise TeachingRefusal("teaching_config_incompatible", "模型超时配置超过本地监督预算")
+         receipt = (await self.ledger.accept_teaching_command(activity_id, command, frozen)
+@@ -248,6 +269,27 @@
+         references = [
+             ReferenceHash(record_id=str(row["record_id"]), body_sha256=row["body_sha256"])
+             for row in facts["references"][:12]]
++        selection=await self.ledger.read_memory_selection(activity_id,include_bodies=True)
++        if selection.get('selected') or not selection.get('eligible',True):
++            from app.memory.context import make_recipe,materialize_recipe,check_capacity
++            from app.memory.contracts import MemoryRefusal
++            try:
++                recipe=make_recipe(activity_id,command,identity,facts['references'])
++                recipe['scope_revision']=command.expected_scope_revision
++                messages=await materialize_recipe(self.ledger,recipe,catalog,selection)
++                from app.capabilities.contracts import Message
++                messages=[Message.model_validate(m).model_dump(mode='json',exclude_none=True) for m in messages]
++                check_capacity(messages,selection,getattr(config,'memory_context',None),snapshot,config.model_service)
++                refs=[{k:x[k] for k in ('memory_id','version','revision','body_sha256')} for x in selection['entries']]
++                value={'schema':'teaching.context.v2','kind':'model','reference_hashes':[r.model_dump() for r in references],
++                 'operation_id':command.operation_id(activity_id),'profile_version':'teaching.v2',
++                 'prompt_version':'teaching-memory-prompt-v1','projection_policy_version':'teaching.memory.recipe.v1',
++                 'max_output_tokens':tokens,'catalog':[e.model_dump() for e in catalog],
++                 'recipe':recipe,'memory_selection_sha256':selection['selection_sha256'],'memory_refs':refs,
++                 'assembled_messages_sha256':sha(canonical(messages))}
++                value['context_sha256']=sha(canonical(value))
++                return TeachingMemoryFrozenContext.model_validate(value),identity
++            except MemoryRefusal as exc:raise TeachingRefusal(exc.code,exc.message) from None
+         context_value = {
+             "schema": "teaching.context.v1", "kind": "model",
+             "reference_hashes": [r.model_dump() for r in references],
+@@ -496,7 +538,8 @@
+         ordered = [seen[k] for k in sorted(seen)]
+         # DEF-004：profile 携带真实当前教学身份（goal/路径/题/答/纠错），
+         # 全零占位与 CAS 猜测值不再出现；admit 锁内再据 DB 复核。
+-        return TeachingProfile(
++        profile_type=TeachingMemoryProfile if isinstance(frozen,TeachingMemoryFrozenContext) else TeachingProfile
++        return profile_type(
+             action=command.action if command.action in ("plan", "exercise", "evaluate") else "plan",
+             command_key=command.business_key,
+             request_sha256=command.request_sha256(activity_id),
+@@ -513,8 +556,10 @@
+             scope_revision=command.expected_scope_revision,
+             sources=ordered,
+             catalog=frozen.catalog or [],
+-            messages_sha256=sha(canonical(frozen.messages or [])),
+-            max_output_tokens=frozen.max_output_tokens or 256)
++            messages_sha256=frozen.assembled_messages_sha256 if isinstance(frozen,TeachingMemoryFrozenContext) else sha(canonical(frozen.messages or [])),
++            max_output_tokens=frozen.max_output_tokens or 256,
++            **({"memory_selection_sha256":frozen.memory_selection_sha256,"memory_refs":frozen.memory_refs,
++                "assembled_messages_sha256":frozen.assembled_messages_sha256} if isinstance(frozen,TeachingMemoryFrozenContext) else {}))
+ 
+     # --- 工具动作：沿 G5 原链（ActivityService.execute_tool_action） ---
+ 
+@@ -566,7 +611,7 @@
+                                               "arguments_sha256": arguments_sha})),
+                 call=ToolFrozenCall(call_id="tc-" + command.business_key[:8], name="finite_calculate",
+                                     arguments_json=arguments_json, arguments_sha256=arguments_sha))
+-            frozen = TeachingFrozenContext.model_validate(frozen.model_dump(by_alias=True) | {"context_sha256":frozen_context_digest(frozen)})
++            frozen = parse_frozen_context(frozen.model_dump(by_alias=True) | {"context_sha256":frozen_context_digest(frozen)})
+             receipt = await self.ledger.accept_teaching_command(activity_id, command, frozen)
+         else:
+             current, frozen = recovered
+@@ -583,7 +628,7 @@
+             return receipt
+         plan = ToolCallPlan(call_id=frozen.call.call_id, name="finite_calculate", arguments=arguments)
+         outcome = await ActivityService(self.ledger).execute_tool_action(
+-            activity_id, operation_id, plan, SessionConfig(), "local-ui", run_tag)
++            activity_id, operation_id, plan, self.session_config or SessionConfig(), "local-ui", run_tag)
+         status = outcome.status
+         current = await self.ledger.read_teaching_command(activity_id, command.business_key)
+         row = current["command"] if current else None
+--- a/backend/app/learning/teaching_views.py
++++ b/backend/app/learning/teaching_views.py
+@@ -47,7 +47,7 @@
+     head=view.get("head") or {}
+     return compute_view_token(head.get("revision",0),head.get("last_seq",0),view["activity"]["scope_revision"],
+         sha(canonical({'current':view.get("sources",[]),'bound':view.get('record_sources',[])})),sha(canonical({"pending":view.get("pending",[]),
+-        "pending_business_key":head.get("pending_business_key")})))
++        "pending_business_key":head.get("pending_business_key"), **({"memory":view.get("memory_qualified")} if view.get("memory_selected") else {})})))
+ 
+ 
+ def verified_document(row):
+@@ -102,6 +102,8 @@
+ def public_record(row,sources,exposures,head,activity):
+     kind=row["kind"]
+     derived=kind not in {"goal","answer","correction","exposure"}
++    if derived and row.get('memory_qualified') is False:
++        return 'memory_invalid',None
+     if derived and (source_invalid(sources) or row.get('source_qualified') is False):
+         return "source_invalid",None
+     try:
+@@ -153,5 +155,5 @@
+             elif isinstance(body,dict): value.update(body)
+             else: value["body"]=body
+         result[region]=value
+-    result["nodes"]=[] if source_invalid(view.get("sources",[])) or result.get('path',{}).get('qualification') in ('source_invalid','integrity_error') else projection.get("nodes",[])
++    result["nodes"]=[] if view.get("memory_qualified") is False or source_invalid(view.get("sources",[])) or result.get('path',{}).get('qualification') in ('source_invalid','integrity_error') else projection.get("nodes",[])
+     return result
+--- a/backend/app/main.py
++++ b/backend/app/main.py
+@@ -14,6 +14,7 @@
+ from app.activities.api import router as activities_router
+ from app.learning.api import router as learning_router
+ from app.learning.teaching_api import router as teaching_router
++from app.memory.api import router as memory_router
+ from app.service_config import load_activity_config
+ 
+ class Settings(BaseModel):
+@@ -80,6 +81,7 @@
+     app.include_router(activities_router)
+     app.include_router(learning_router)
+     app.include_router(teaching_router)
++    app.include_router(memory_router)
+     dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+     if dist.is_dir():
+         app.mount("/", StaticFiles(directory=dist, html=True), name="frontend")
+--- a/backend/app/service_config.py
++++ b/backend/app/service_config.py
+@@ -55,6 +55,8 @@
+     teaching_layer: LayerState = LayerState(False, "teaching_not_configured")
+     teaching_output_tokens: int | None = None
+     teaching_calculation_layer: LayerState = LayerState(False, "teaching_not_configured")
++    memory_context: object | None = None
++    memory_layer: LayerState = LayerState(False,"memory_not_configured")
+ 
+ 
+ class _ModelIdentity(BaseModel):
+@@ -299,6 +301,18 @@
+     continue_layer, model_service = _l2_check(data, provider, identity.model, defaults)
+     learning_layer, learning_tokens = _learning_check(data, defaults, continue_layer, model_service)
+     teaching_layer, teaching_tokens, calculation_layer = _teaching_check(data, defaults, continue_layer, model_service)
++    memory_context=None
++    memory_layer=LayerState(False,'memory_not_configured')
++    if data.get('memory_context') is not None:
++        from app.memory.contracts import MemoryContextConfig
++        try:
++            memory_context=MemoryContextConfig.model_validate(data['memory_context'])
++            if (memory_context.model_identity!={'provider':str(provider),'model':identity.model}
++                    or not teaching_layer.available or memory_context.reserved_output_tokens!=teaching_tokens):
++                raise ValueError('memory_config_incompatible')
++            memory_layer=LayerState(True)
++        except (ValueError,ValidationError):
++            memory_context=None;memory_layer=LayerState(False,'memory_config_invalid')
+     return ActivityConfig(
+         provider=str(provider),
+         model=identity.model,
+@@ -311,4 +325,5 @@
+         teaching_layer=teaching_layer,
+         teaching_output_tokens=teaching_tokens,
+         teaching_calculation_layer=calculation_layer,
++        memory_context=memory_context,memory_layer=memory_layer,
+     )

@@ -1,0 +1,54 @@
+--- pre/backend/app/capabilities/gateway.py
++++ post/backend/app/capabilities/gateway.py
+@@ -101,6 +101,13 @@
+         if request.learning_profile is None and request.teaching_profile is None \
+                 and context.operation_id.startswith(("learn-first-v1.", "learn-next-v1.")):
+             return self._result(context, CallStatus.REJECTED, "invalid_learning_profile")
++        if context.operation_id.startswith("int10m.") and request.interview_profile is None:
++            return self._result(context, CallStatus.REJECTED, "interview_profile_required")
++        if request.interview_profile is not None:
++            from app.interview.policy import validate_request
++            code = await validate_request(context, request, self._ledger)
++            if code is not None:
++                return self._result(context, CallStatus.REJECTED, code)
+         if request.teaching_profile is not None:
+             if request.learning_profile is not None or request.allowed_tools \
+                     or not context.operation_id.startswith("teach8m."):
+@@ -147,6 +154,12 @@
+                 **({'memory_selection_sha256':request.teaching_profile.memory_selection_sha256,'assembled_messages_sha256':request.teaching_profile.assembled_messages_sha256} if request.teaching_profile.profile=='teaching.v2' else {}),
+             ) if request.teaching_profile is not None else None),
+         )
++        if request.interview_profile is not None:
++            from app.interview.contracts import InterviewCallBinding
++            p=request.interview_profile
++            intent=AdmissionIntent(context=intent.context,provider=intent.provider,configured_model=intent.configured_model,request_bytes=intent.request_bytes,
++                max_output_tokens=intent.max_output_tokens,tool_names=intent.tool_names,interview_binding=InterviewCallBinding(
++                    business_key=p.business_key,request_sha256=p.request_sha256,context_sha256=p.context_sha256,expected_head_revision=p.expected_head_revision,goal_version=p.goal_version))
+         stage = "admit"
+         try:
+             permit = await self._ledger.admit(intent)
+@@ -156,7 +169,7 @@
+             await self._ledger.mark_dispatch_started(permit)
+         except AdmissionDenied as exc:
+             code = str(exc)
+-            if code not in {"scope_conflict","source_invalid","result_invalidated","cancelled","budget_exhausted","integrity_error","invalid_input"}:
++            if not code.startswith("interview_") and code not in {"scope_conflict","source_invalid","result_invalidated","cancelled","budget_exhausted","integrity_error","invalid_input"}:
+                 code = "admission_denied"
+             return self._result(context, CallStatus.REJECTED, code)
+         except AdmissionUnavailable:
+@@ -413,7 +426,14 @@
+             if not isinstance(value, dict):
+                 raise ResponseValidationError("invalid_output_json")
+             _validate_json_shape(value)
+-            if request.learning_profile is not None:
++            if request.interview_profile is not None:
++                from app.interview.policy import stored_result
++                try:
++                    if completion_tokens > request.max_output_tokens: raise ValueError("invalid_interview_output")
++                    value=stored_result(content,request.interview_profile,request.messages)
++                except (ValueError,TypeError,KeyError,RecursionError):
++                    raise ResponseValidationError("invalid_interview_output") from None
++            elif request.learning_profile is not None:
+                 from app.learning.contracts import normalize_result, parse_output
+                 try:
+                     if completion_tokens > request.max_output_tokens:

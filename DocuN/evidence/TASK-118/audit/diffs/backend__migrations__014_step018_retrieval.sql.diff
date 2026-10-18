@@ -1,0 +1,388 @@
+--- first-pre/backend/migrations/014_step018_retrieval.sql
++++ current/backend/migrations/014_step018_retrieval.sql
+@@ -0,0 +1,385 @@
++-- STEP018前向增量，保留001—013原文、旧tool NULL/零费用及R01包。
++BEGIN;
++DO $f$
++BEGIN
++ IF EXISTS(SELECT 1 FROM public.data_control WHERE mode NOT IN('normal','loading'))
++ OR EXISTS(SELECT 1 FROM public.activities WHERE running_reserved_seconds>0 OR lease_expires_at>CURRENT_TIMESTAMP)
++ OR EXISTS(SELECT 1 FROM public.html_preview_sessions WHERE state NOT IN('stopped','failed_unstarted')) THEN
++  RAISE EXCEPTION 'step018_migration_requires_quiescent_normal';
++ END IF;
++END $f$;
++
++CREATE EXTENSION IF NOT EXISTS vector;
++CREATE ROLE retrolume_retrieval_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
++CREATE ROLE retrolume_retrieval_app NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
++
++ALTER TABLE public.activities ADD COLUMN outbound_grant_sha256 text
++ CHECK(outbound_grant_sha256 IS NULL OR outbound_grant_sha256~'^[0-9a-f]{64}$');
++GRANT SELECT(outbound_grant_sha256) ON public.activities TO retrolume_data_app,retrolume_data_snapshot,retrolume_data_restore_loader;
++GRANT INSERT(outbound_grant_sha256) ON public.activities TO retrolume_data_app,retrolume_data_restore_loader;
++ALTER TABLE public.activity_operations DROP CONSTRAINT activity_operations_kind_domain;
++ALTER TABLE public.activity_operations DROP CONSTRAINT activity_operations_kind_shape;
++ALTER TABLE public.activity_operations DROP CONSTRAINT activity_operations_max_output_tokens_check;
++ALTER TABLE public.activity_operations ADD CONSTRAINT activity_operations_max_output_tokens_check CHECK(max_output_tokens>=0);
++ALTER TABLE public.activity_operations ADD CONSTRAINT activity_operations_kind_domain CHECK(kind IN('model','tool','embedding'));
++ALTER TABLE public.activity_operations ADD CONSTRAINT activity_operations_kind_shape CHECK(
++ (kind='model' AND provider IS NOT NULL AND configured_model IS NOT NULL AND request_bytes IS NOT NULL AND request_bytes>0
++  AND max_output_tokens IS NOT NULL AND max_output_tokens>0 AND reserved_cost_microunits>0 AND arguments_sha256 IS NULL AND tool_call_id IS NULL)
++ OR (kind='tool' AND provider IS NULL AND configured_model IS NULL AND request_bytes IS NULL AND max_output_tokens IS NULL
++  AND reserved_cost_microunits=0 AND tool_names=ARRAY['finite_calculate']::varchar(64)[]
++  AND arguments_sha256 IS NOT NULL AND octet_length(arguments_sha256)=64 AND arguments_sha256~'^[0-9a-f]{64}$'
++  AND tool_call_id IS NOT NULL AND char_length(tool_call_id) BETWEEN 1 AND 128 AND tool_call_id!~'[^A-Za-z0-9._:/-]'
++  AND remote_request_id IS NULL AND returned_model IS NULL AND finish_reason IS NULL AND prompt_tokens IS NULL
++  AND completion_tokens IS NULL AND response_bytes IS NULL)
++ OR (kind='embedding' AND provider='zhipu_embeddings' AND configured_model='embedding-3'
++  AND request_bytes IS NOT NULL AND request_bytes BETWEEN 1 AND 65536
++  AND max_output_tokens IS NOT NULL AND max_output_tokens=0 AND reserved_cost_microunits>0
++  AND tool_names=ARRAY[]::varchar(64)[] AND arguments_sha256 IS NULL AND tool_call_id IS NULL)
++);
++
++CREATE TABLE public.retrieval_spaces(
++ space_id text PRIMARY KEY CHECK(space_id~'^[0-9a-f]{64}$'),
++ provider text NOT NULL CHECK(provider~'^[A-Za-z0-9._:/-]{1,64}$'),
++ configured_model text NOT NULL CHECK(configured_model~'^[A-Za-z0-9._:/-]{1,128}$'),
++ dimensions smallint NOT NULL CHECK(dimensions=512),
++ normalization text NOT NULL CHECK(normalization='l2.v1'),
++ chunk_recipe text NOT NULL CHECK(chunk_recipe='lossless-line-2048cp.v1'),
++ created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
++ UNIQUE(provider,configured_model,dimensions,normalization,chunk_recipe)
++);
++CREATE TABLE public.retrieval_commands(
++ activity_id uuid NOT NULL REFERENCES public.activities(id),business_key uuid NOT NULL,
++ action text NOT NULL CHECK(action IN('source_index','query')),
++ space_id text NOT NULL REFERENCES public.retrieval_spaces(space_id),
++ scope_revision integer NOT NULL CHECK(scope_revision>0),
++ domain text NOT NULL CHECK(domain IN('learning','interview')),
++ domain_revision integer NOT NULL CHECK(domain_revision>=0),
++ request_body text,request_sha256 text NOT NULL CHECK(request_sha256~'^[0-9a-f]{64}$'),
++ source_refs jsonb NOT NULL CHECK(jsonb_typeof(source_refs)='array' AND jsonb_array_length(source_refs) BETWEEN 1 AND 10),
++ parent_refs jsonb NOT NULL CHECK(jsonb_typeof(parent_refs)='array' AND jsonb_array_length(parent_refs)<=12),
++ query_sha256 text,manifest_sha256 text NOT NULL CHECK(manifest_sha256~'^[0-9a-f]{64}$'),
++ batch_count smallint NOT NULL CHECK(batch_count BETWEEN 0 AND 128),
++ status text NOT NULL CHECK(status IN('accepted','launch_claimed','terminal')),
++ terminal_disposition text CHECK(terminal_disposition IN('received','not_sent','unknown','invalidated','partial','cache_ready')),
++ result_sha256 text CHECK(result_sha256 IS NULL OR result_sha256~'^[0-9a-f]{64}$'),
++ error_code text CHECK(error_code IS NULL OR error_code~'^[A-Za-z0-9._:/-]{1,64}$'),
++ created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
++ PRIMARY KEY(activity_id,business_key),
++ CHECK(request_body IS NULL OR octet_length(request_body) BETWEEN 1 AND 65536),
++ CHECK((action='query' AND batch_count=1 AND query_sha256 IS NOT NULL AND query_sha256~'^[0-9a-f]{64}$')
++       OR(action='source_index' AND query_sha256 IS NULL)),
++ CHECK(batch_count<>0 OR(action='source_index' AND status='terminal' AND terminal_disposition IS NOT NULL AND terminal_disposition='cache_ready'))
++);
++CREATE TABLE public.retrieval_chunks(
++ space_id text NOT NULL REFERENCES public.retrieval_spaces(space_id),evidence_id text NOT NULL CHECK(octet_length(evidence_id) BETWEEN 1 AND 128),
++ source_id uuid NOT NULL REFERENCES public.material_sources(id),source_version_id uuid NOT NULL REFERENCES public.material_versions(id),
++ source_revision integer NOT NULL CHECK(source_revision>0),
++ origin text NOT NULL CHECK(origin IN('original','user_supplement')),physical_page integer CHECK(physical_page>0),
++ start_codepoint integer NOT NULL CHECK(start_codepoint>=0),end_codepoint integer NOT NULL CHECK(end_codepoint>start_codepoint),
++ text_sha256 text NOT NULL CHECK(text_sha256~'^[0-9a-f]{64}$'),
++ vector_value public.vector(512),vector_sha256 text CHECK(vector_sha256 IS NULL OR vector_sha256~'^[0-9a-f]{64}$'),
++ committed_activity_id uuid NOT NULL,committed_operation_id text NOT NULL,
++ created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
++ PRIMARY KEY(space_id,evidence_id),
++ FOREIGN KEY(committed_activity_id,committed_operation_id) REFERENCES public.activity_operations(activity_id,operation_id),
++ CHECK((vector_value IS NULL)=(vector_sha256 IS NULL))
++);
++ALTER TABLE public.retrieval_spaces OWNER TO retrolume_retrieval_owner;
++ALTER TABLE public.retrieval_commands OWNER TO retrolume_retrieval_owner;
++ALTER TABLE public.retrieval_chunks OWNER TO retrolume_retrieval_owner;
++REVOKE ALL ON public.retrieval_spaces,public.retrieval_commands,public.retrieval_chunks FROM PUBLIC;
++GRANT SELECT,INSERT ON public.retrieval_spaces,public.retrieval_chunks TO retrolume_retrieval_app;
++GRANT SELECT,INSERT ON public.retrieval_commands TO retrolume_retrieval_app;
++GRANT UPDATE(status,terminal_disposition,result_sha256,error_code,updated_at) ON public.retrieval_commands TO retrolume_retrieval_app;
++GRANT SELECT ON public.retrieval_spaces,public.retrieval_commands,public.retrieval_chunks TO retrolume_data_snapshot,retrolume_data_restore_loader,retrolume_data_owner;
++GRANT INSERT ON public.retrieval_spaces,public.retrieval_commands,public.retrieval_chunks TO retrolume_data_restore_loader;
++GRANT SELECT ON public.activities,public.activity_operations,public.activity_operation_results,public.material_sources,public.material_versions,
++ public.activity_scope_sources,public.data_tombstones TO retrolume_retrieval_owner;
++GRANT DELETE ON public.activity_operation_results TO retrolume_retrieval_owner;
++GRANT EXECUTE ON FUNCTION public.data_loading_allowed() TO retrolume_retrieval_owner,retrolume_retrieval_app;
++GRANT EXECUTE ON FUNCTION public.data_state() TO retrolume_retrieval_owner,retrolume_retrieval_app;
++
++CREATE FUNCTION public.retrieval_vector_digest(value public.vector) RETURNS text LANGUAGE plpgsql IMMUTABLE STRICT
++ SET search_path=pg_catalog,pg_temp AS $f$
++DECLARE raw bytea;part bytea;little bytea:=''::bytea;i integer;
++BEGIN
++ raw:=public.vector_send(value);
++ IF octet_length(raw)<>2052 THEN RAISE EXCEPTION 'retrieval_vector_dimensions'; END IF;
++ FOR i IN 0..511 LOOP
++  part:=substr(raw,5+i*4,4);
++  little:=little||substr(part,4,1)||substr(part,3,1)||substr(part,2,1)||substr(part,1,1);
++ END LOOP;
++ RETURN encode(sha256(little),'hex');
++END $f$;
++CREATE FUNCTION public.retrieval_space_guard() RETURNS trigger LANGUAGE plpgsql
++ SET search_path=pg_catalog,pg_temp AS $f$
++DECLARE body text;
++BEGIN
++ IF TG_OP<>'INSERT' THEN RAISE EXCEPTION 'retrieval_space_immutable'; END IF;
++ body:='{"chunk_recipe":"lossless-line-2048cp.v1","configured_model":'||to_json(NEW.configured_model)::text||
++ ',"dimensions":512,"normalization":"l2.v1","provider":'||to_json(NEW.provider)::text||'}';
++ IF NEW.space_id IS DISTINCT FROM encode(sha256(convert_to(body,'UTF8')),'hex') THEN RAISE EXCEPTION 'retrieval_space_identity'; END IF;
++ RETURN NEW;
++END $f$;
++CREATE FUNCTION public.retrieval_command_guard() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
++ SET search_path=pg_catalog,pg_temp AS $f$
++DECLARE a public.activities;ref jsonb;v public.material_versions;
++BEGIN
++ IF TG_OP='DELETE' THEN RAISE EXCEPTION 'retrieval_commands_retained'; END IF;
++ IF TG_OP='UPDATE' THEN
++  IF (to_jsonb(NEW)-ARRAY['status','terminal_disposition','result_sha256','error_code','updated_at','request_body'])
++    IS DISTINCT FROM(to_jsonb(OLD)-ARRAY['status','terminal_disposition','result_sha256','error_code','updated_at','request_body'])
++   OR(NEW.request_body IS DISTINCT FROM OLD.request_body AND NOT(NEW.request_body IS NULL AND OLD.request_body IS NOT NULL
++       AND EXISTS(SELECT 1 FROM public.data_tombstones t, jsonb_array_elements(OLD.source_refs) s WHERE t.entity_kind='source' AND t.entity_id=(s->>'source_id')::uuid)))
++   OR(OLD.status='terminal' AND NEW.status<>OLD.status)
++   OR(OLD.status='terminal' AND (to_jsonb(NEW)-ARRAY['request_body','updated_at']) IS DISTINCT FROM (to_jsonb(OLD)-ARRAY['request_body','updated_at']))
++   OR(NEW.status<>OLD.status AND NOT(OLD.status='accepted' AND NEW.status IN('launch_claimed','terminal') OR OLD.status='launch_claimed' AND NEW.status='terminal'))
++  THEN RAISE EXCEPTION 'retrieval_command_immutable'; END IF;
++ END IF;
++ IF public.data_loading_allowed() THEN RETURN NEW; END IF;
++ IF TG_OP='INSERT' AND NEW.status NOT IN('accepted','terminal') THEN RAISE EXCEPTION 'retrieval_command_start'; END IF;
++ IF TG_OP='INSERT' AND NEW.status='terminal' AND NEW.terminal_disposition IS DISTINCT FROM 'cache_ready' THEN RAISE EXCEPTION 'retrieval_command_cache'; END IF;
++ IF TG_OP='INSERT' OR NEW.status='launch_claimed' AND OLD.status='accepted' THEN
++  SELECT * INTO a FROM public.activities WHERE id=NEW.activity_id;
++  IF a.id IS NULL OR a.status='cancelled' OR a.scope_revision<>NEW.scope_revision OR a.deadline_at<=CURRENT_TIMESTAMP
++  THEN RAISE EXCEPTION 'retrieval_command_ineligible'; END IF;
++  FOR ref IN SELECT * FROM jsonb_array_elements(NEW.source_refs) LOOP
++   SELECT * INTO v FROM public.material_versions WHERE id=(ref->>'source_version_id')::uuid;
++   IF v.id IS NULL OR v.source_id<>(ref->>'source_id')::uuid
++    OR NOT EXISTS(SELECT 1 FROM public.material_sources s JOIN public.activity_scope_sources x ON x.source_id=s.id
++       WHERE x.activity_id=a.id AND s.id=v.source_id AND s.current_version=v.id AND x.version_id=v.id
++         AND s.revision=x.source_revision AND s.revision=(ref->>'source_revision')::integer)
++    OR EXISTS(SELECT 1 FROM public.data_tombstones WHERE entity_kind='source' AND entity_id=v.source_id)
++   THEN RAISE EXCEPTION 'retrieval_source_invalid'; END IF;
++  END LOOP;
++ END IF;
++ RETURN NEW;
++END $f$;
++CREATE FUNCTION public.retrieval_result_guard() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
++ SET search_path=pg_catalog,pg_temp AS $f$
++DECLARE op public.activity_operations;b jsonb;c public.retrieval_commands;key uuid;ordinal integer;
++BEGIN
++ SELECT * INTO op FROM public.activity_operations WHERE activity_id=NEW.activity_id AND operation_id=NEW.operation_id;
++ IF op.kind IS DISTINCT FROM 'embedding' THEN RETURN NEW; END IF;
++ b:=NEW.payload::jsonb->'value';
++ IF op.state IS DISTINCT FROM 'received' OR NEW.payload_format IS DISTINCT FROM 'json'
++  OR NEW.admission_id IS DISTINCT FROM op.admission_id OR NEW.execution_generation IS DISTINCT FROM op.execution_generation
++  OR NEW.scope_revision IS DISTINCT FROM op.scope_revision OR NEW.payload_sha256 IS DISTINCT FROM encode(sha256(convert_to(NEW.payload,'UTF8')),'hex')
++  OR b->>'profile' IS DISTINCT FROM 'embedding.v1' OR jsonb_typeof(b->'inputs') IS DISTINCT FROM 'array'
++  OR jsonb_array_length(b->'inputs') NOT BETWEEN 1 AND 4
++ THEN RAISE EXCEPTION 'embedding_result_binding'; END IF;
++ key:=split_part(NEW.operation_id,'.',2)::uuid;ordinal:=split_part(NEW.operation_id,'.',3)::integer;
++ SELECT * INTO c FROM public.retrieval_commands WHERE activity_id=NEW.activity_id AND business_key=key;
++ IF c.activity_id IS NULL OR c.scope_revision<>op.scope_revision OR c.space_id IS DISTINCT FROM b->>'space_id'
++  OR c.request_sha256 IS DISTINCT FROM b->>'request_sha256' OR c.manifest_sha256 IS DISTINCT FROM b->>'manifest_sha256'
++  OR c.action IS DISTINCT FROM b->>'purpose' OR ordinal<0 OR ordinal>=c.batch_count
++  OR NOT public.data_loading_allowed() AND c.status IS DISTINCT FROM 'launch_claimed'
++ THEN RAISE EXCEPTION 'embedding_result_command'; END IF;
++ RETURN NEW;
++END $f$;
++CREATE FUNCTION public.retrieval_chunk_guard() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
++ SET search_path=pg_catalog,pg_temp AS $f$
++DECLARE op public.activity_operations;r public.activity_operation_results;c public.retrieval_commands;b jsonb;item jsonb;meta jsonb;key uuid;
++BEGIN
++ IF TG_OP='DELETE' THEN
++  IF NOT EXISTS(SELECT 1 FROM public.data_tombstones WHERE entity_kind='source' AND entity_id=OLD.source_id)
++   AND NOT EXISTS(SELECT 1 FROM public.retrieval_commands purge_command,jsonb_array_elements(purge_command.source_refs) s,public.data_tombstones t
++     WHERE purge_command.activity_id=OLD.committed_activity_id AND purge_command.business_key=split_part(OLD.committed_operation_id,'.',2)::uuid
++       AND t.entity_kind='source' AND t.entity_id=(s->>'source_id')::uuid)
++   THEN RAISE EXCEPTION 'retrieval_purge_not_authorized'; END IF;
++  RETURN OLD;
++ END IF;
++ IF TG_OP='UPDATE' THEN RAISE EXCEPTION 'retrieval_chunk_immutable'; END IF;
++ SELECT * INTO op FROM public.activity_operations WHERE activity_id=NEW.committed_activity_id AND operation_id=NEW.committed_operation_id;
++ SELECT * INTO r FROM public.activity_operation_results WHERE activity_id=NEW.committed_activity_id AND operation_id=NEW.committed_operation_id;
++ key:=split_part(NEW.committed_operation_id,'.',2)::uuid;
++ SELECT * INTO c FROM public.retrieval_commands WHERE activity_id=NEW.committed_activity_id AND business_key=key;
++ b:=r.payload::jsonb->'value';
++ IF op.kind IS DISTINCT FROM 'embedding' OR op.state IS DISTINCT FROM 'received' OR c.action IS DISTINCT FROM 'source_index'
++  OR b->>'profile' IS DISTINCT FROM 'embedding.v1' OR c.space_id<>NEW.space_id THEN RAISE EXCEPTION 'retrieval_chunk_result'; END IF;
++ IF NEW.vector_value IS NOT NULL THEN
++  IF NEW.vector_sha256 IS DISTINCT FROM public.retrieval_vector_digest(NEW.vector_value) THEN RAISE EXCEPTION 'retrieval_vector_digest'; END IF;
++  SELECT x INTO item FROM jsonb_array_elements(b->'inputs') x WHERE x->>'identity_sha256' IN
++   (SELECT y->>'identity_sha256' FROM jsonb_array_elements(c.request_body::jsonb->'manifest') y WHERE y->>'evidence_id'=NEW.evidence_id);
++  IF item IS NULL OR item->>'vector_sha256' IS DISTINCT FROM NEW.vector_sha256
++   OR (((item->'vector')::text::public.vector OPERATOR(public.=) NEW.vector_value) IS NOT TRUE) THEN RAISE EXCEPTION 'retrieval_vector_fact'; END IF;
++ END IF;
++ SELECT x INTO meta FROM jsonb_array_elements(c.request_body::jsonb->'manifest') x WHERE x->>'evidence_id'=NEW.evidence_id;
++ IF meta IS NULL OR meta->>'source_id' IS DISTINCT FROM NEW.source_id::text OR meta->>'source_version_id' IS DISTINCT FROM NEW.source_version_id::text
++  OR (meta->>'source_revision')::integer IS DISTINCT FROM NEW.source_revision OR meta->>'origin' IS DISTINCT FROM NEW.origin
++  OR (meta->>'physical_page')::integer IS DISTINCT FROM NEW.physical_page OR (meta->>'start_codepoint')::integer IS DISTINCT FROM NEW.start_codepoint
++  OR (meta->>'end_codepoint')::integer IS DISTINCT FROM NEW.end_codepoint OR meta->>'text_sha256' IS DISTINCT FROM NEW.text_sha256
++ THEN RAISE EXCEPTION 'retrieval_chunk_source'; END IF;
++ RETURN NEW;
++END $f$;
++CREATE FUNCTION public.retrieval_grant_guard() RETURNS trigger LANGUAGE plpgsql
++ SET search_path=pg_catalog,pg_temp AS $f$
++BEGIN
++ IF NEW.outbound_grant_sha256 IS DISTINCT FROM OLD.outbound_grant_sha256 THEN RAISE EXCEPTION 'outbound_grant_cannot_rebind'; END IF;
++ RETURN NEW;
++END $f$;
++CREATE FUNCTION public.purge_retrieval_payloads() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
++ SET search_path=pg_catalog,pg_temp AS $f$
++DECLARE aid uuid;k uuid;opid text;
++BEGIN
++ IF NEW.entity_kind<>'source' THEN RETURN NEW; END IF;
++ IF public.data_loading_allowed() THEN RETURN NEW; END IF;
++ FOR aid,k IN SELECT activity_id,business_key FROM public.retrieval_commands c
++  WHERE EXISTS(SELECT 1 FROM jsonb_array_elements(c.source_refs) x WHERE (x->>'source_id')::uuid=NEW.entity_id) LOOP
++  DELETE FROM public.retrieval_chunks WHERE source_id=NEW.entity_id OR (committed_activity_id=aid AND split_part(committed_operation_id,'.',2)=k::text);
++  DELETE FROM public.activity_operation_results r USING public.activity_operations o
++   WHERE o.activity_id=aid AND o.kind='embedding' AND split_part(o.operation_id,'.',2)=k::text
++    AND r.activity_id=o.activity_id AND r.operation_id=o.operation_id;
++  UPDATE public.retrieval_commands SET request_body=NULL,updated_at=CURRENT_TIMESTAMP WHERE activity_id=aid AND business_key=k;
++ END LOOP;
++ RETURN NEW;
++END $f$;
++
++ALTER FUNCTION public.retrieval_vector_digest(public.vector) OWNER TO retrolume_retrieval_owner;
++ALTER FUNCTION public.retrieval_space_guard() OWNER TO retrolume_retrieval_owner;
++ALTER FUNCTION public.retrieval_command_guard() OWNER TO retrolume_retrieval_owner;
++ALTER FUNCTION public.retrieval_result_guard() OWNER TO retrolume_retrieval_owner;
++ALTER FUNCTION public.retrieval_chunk_guard() OWNER TO retrolume_retrieval_owner;
++ALTER FUNCTION public.retrieval_grant_guard() OWNER TO retrolume_retrieval_owner;
++ALTER FUNCTION public.purge_retrieval_payloads() OWNER TO retrolume_retrieval_owner;
++REVOKE ALL ON FUNCTION public.retrieval_vector_digest(public.vector),public.retrieval_space_guard(),public.retrieval_command_guard(),
++ public.retrieval_result_guard(),public.retrieval_chunk_guard(),public.retrieval_grant_guard(),public.purge_retrieval_payloads() FROM PUBLIC;
++GRANT EXECUTE ON FUNCTION public.retrieval_vector_digest(public.vector) TO retrolume_retrieval_app,retrolume_data_restore_loader,retrolume_data_snapshot;
++CREATE FUNCTION public.retrieval_embedding_operation_guard() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
++ SET search_path=pg_catalog,pg_temp AS $f$
++DECLARE a public.activities;c public.retrieval_commands;ordinal integer;
++BEGIN
++ IF NEW.kind IS DISTINCT FROM 'embedding' THEN RETURN NEW; END IF;
++ IF NEW.operation_id!~'^emb18[iq]\.[0-9a-f-]{36}\.(0|[1-9][0-9]{0,2})$' THEN RAISE EXCEPTION 'embedding_operation_key'; END IF;
++ SELECT * INTO a FROM public.activities WHERE id=NEW.activity_id;
++ SELECT * INTO c FROM public.retrieval_commands WHERE activity_id=NEW.activity_id AND business_key=split_part(NEW.operation_id,'.',2)::uuid;
++ ordinal:=split_part(NEW.operation_id,'.',3)::integer;
++ IF c.activity_id IS NULL OR NEW.scope_revision<>c.scope_revision OR ordinal>=c.batch_count
++   OR (c.action='source_index') IS DISTINCT FROM (left(NEW.operation_id,7)='emb18i.') THEN RAISE EXCEPTION 'embedding_operation_binding'; END IF;
++ IF public.data_loading_allowed() THEN RETURN NEW; END IF;
++ IF c.status IS DISTINCT FROM 'launch_claimed' OR NEW.state IS DISTINCT FROM 'reserved'
++   OR a.status IS DISTINCT FROM 'running' OR a.dispatch_closed OR a.executor_id IS DISTINCT FROM NEW.executor_id
++   OR a.execution_generation IS DISTINCT FROM NEW.execution_generation OR a.scope_revision IS DISTINCT FROM NEW.scope_revision
++   OR a.lease_expires_at<=CURRENT_TIMESTAMP OR a.deadline_at<=CURRENT_TIMESTAMP
++   THEN RAISE EXCEPTION 'embedding_operation_ineligible'; END IF;
++ RETURN NEW;
++END $f$;
++ALTER FUNCTION public.retrieval_embedding_operation_guard() OWNER TO retrolume_retrieval_owner;
++REVOKE ALL ON FUNCTION public.retrieval_embedding_operation_guard() FROM PUBLIC;
++CREATE TRIGGER retrieval_embedding_operation BEFORE INSERT ON public.activity_operations FOR EACH ROW EXECUTE FUNCTION public.retrieval_embedding_operation_guard();
++CREATE TRIGGER retrieval_space_identity BEFORE INSERT OR UPDATE OR DELETE ON public.retrieval_spaces FOR EACH ROW EXECUTE FUNCTION public.retrieval_space_guard();
++CREATE TRIGGER retrieval_command_identity BEFORE INSERT OR UPDATE OR DELETE ON public.retrieval_commands FOR EACH ROW EXECUTE FUNCTION public.retrieval_command_guard();
++CREATE TRIGGER retrieval_chunk_identity BEFORE INSERT OR UPDATE OR DELETE ON public.retrieval_chunks FOR EACH ROW EXECUTE FUNCTION public.retrieval_chunk_guard();
++CREATE TRIGGER retrieval_embedding_result BEFORE INSERT ON public.activity_operation_results FOR EACH ROW EXECUTE FUNCTION public.retrieval_result_guard();
++CREATE TRIGGER retrieval_grant_immutable BEFORE UPDATE ON public.activities FOR EACH ROW EXECUTE FUNCTION public.retrieval_grant_guard();
++CREATE TRIGGER retrieval_source_tombstone AFTER INSERT ON public.data_tombstones FOR EACH ROW EXECUTE FUNCTION public.purge_retrieval_payloads();
++CREATE TRIGGER data_runtime_write BEFORE INSERT OR UPDATE OR DELETE ON public.retrieval_spaces FOR EACH ROW EXECUTE FUNCTION public.data_runtime_write_guard();
++CREATE TRIGGER data_runtime_write BEFORE INSERT OR UPDATE OR DELETE ON public.retrieval_commands FOR EACH ROW EXECUTE FUNCTION public.data_runtime_write_guard();
++CREATE TRIGGER data_runtime_write BEFORE INSERT OR UPDATE OR DELETE ON public.retrieval_chunks FOR EACH ROW EXECUTE FUNCTION public.data_runtime_write_guard();
++-- STEP018面试v2前向合同
++ALTER TABLE public.interview_commands DROP CONSTRAINT interview_command_execution;
++ALTER TABLE public.interview_commands ADD CONSTRAINT interview_command_execution CHECK(
++ (duplicate_of IS NOT NULL AND operation_id IS NULL AND context_body IS NULL AND context_sha256 IS NULL AND NOT effect_applied AND NOT launch_claimed)
++ OR (duplicate_of IS NULL AND execution_kind='local' AND operation_id IS NULL AND context_body IS NULL AND context_sha256 IS NULL AND NOT launch_claimed)
++ OR (duplicate_of IS NULL AND execution_kind='model' AND action IN('ask','review') AND context_body IS NOT NULL AND context_sha256 IS NOT NULL
++   AND ((request_body::jsonb->>'schema'='interview.command.v1' AND context_body::jsonb->>'schema'='interview.context.v1' AND operation_id='int10m.'||replace(business_key::text,'-',''))
++     OR (request_body::jsonb->>'schema'='interview.command.v2' AND context_body::jsonb->>'schema'='interview.context.v2' AND operation_id='int18m.'||replace(business_key::text,'-','')))));
++GRANT SELECT ON public.learning_memories,public.learning_memory_revisions,public.learning_memory_bodies,public.learning_memory_dependencies,
++ public.learning_memory_commands,public.activity_memory_choices,public.teaching_commands,public.material_versions,public.pdf_review_candidates,public.pdf_review_pages,public.pdf_extracted_pages,public.teaching_records TO retrolume_interview_owner;
++GRANT EXECUTE ON FUNCTION public.memory_revision_readable(uuid,integer),public.memory_revision_eligible(uuid,integer),public.activity_memory_eligible(uuid),
++ public.memory_dependency_line(public.learning_memory_dependencies),public.memory_dependency_digest(uuid,integer),public.memory_scope_digest(uuid),public.memory_choice_digest(uuid) TO retrolume_interview_owner;
++CREATE OR REPLACE FUNCTION public.interview_head_guard() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $body$
++DECLARE a public.activities; ptr uuid; p public.interview_records;
++BEGIN
++ IF TG_OP='DELETE' THEN RAISE EXCEPTION 'interview heads retained'; END IF;
++ SELECT * INTO a FROM public.activities WHERE id=NEW.activity_id;
++ IF TG_OP='INSERT' THEN
++  IF NOT public.data_loading_allowed() AND (a.status<>'pending' OR a.execution_generation<>0 OR a.executor_id IS NOT NULL OR a.lease_expires_at IS NOT NULL
++     OR a.requests_reserved<>0 OR a.cost_reserved_microunits<>0 OR a.tools_reserved<>0 OR a.running_reserved_seconds<>0 OR a.running_settled_seconds<>0
++     OR EXISTS(SELECT 1 FROM public.teaching_heads WHERE activity_id=NEW.activity_id)
++     OR EXISTS(SELECT 1 FROM public.activity_operations WHERE activity_id=NEW.activity_id)
++     OR (EXISTS(SELECT 1 FROM public.activity_memory_bindings WHERE activity_id=NEW.activity_id) AND NOT (public.activity_memory_eligible(NEW.activity_id) AND EXISTS(SELECT 1 FROM public.interview_commands s WHERE s.activity_id=NEW.activity_id AND s.action='start' AND s.execution_kind='local' AND s.before_revision=0 AND s.duplicate_of IS NULL AND s.request_body::jsonb->>'schema'='interview.command.v2')))
++     OR NEW.revision<>1) THEN RAISE EXCEPTION 'interview requires fresh unselected activity'; END IF;
++ ELSE
++  IF NEW.activity_id<>OLD.activity_id OR NEW.created_at<>OLD.created_at OR NEW.revision NOT BETWEEN OLD.revision AND OLD.revision+1
++    OR NEW.goal_version NOT BETWEEN OLD.goal_version AND OLD.goal_version+1 OR NEW.last_seq<OLD.last_seq
++    OR (NEW.revision=OLD.revision AND (to_jsonb(NEW)-ARRAY['pending_key','updated_at']) IS DISTINCT FROM (to_jsonb(OLD)-ARRAY['pending_key','updated_at']))
++    OR (OLD.phase='ended' AND NEW.phase<>'ended') THEN RAISE EXCEPTION 'interview head revision invalid'; END IF;
++ END IF;
++ IF NEW.scope_revision<>a.scope_revision OR NEW.last_seq<>(SELECT max(seq) FROM public.interview_records WHERE activity_id=NEW.activity_id)
++    THEN RAISE EXCEPTION 'interview head scope/sequence invalid'; END IF;
++ FOREACH ptr IN ARRAY ARRAY[NEW.goal_record_id,NEW.root_question_id,NEW.current_question_id,NEW.current_answer_id,NEW.current_feedback_id] LOOP
++  IF ptr IS NOT NULL THEN
++   SELECT * INTO p FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=ptr;
++   IF p.record_id IS NULL OR p.goal_version<>NEW.goal_version OR p.scope_revision<>NEW.scope_revision THEN RAISE EXCEPTION 'interview head pointer invalid'; END IF;
++  END IF;
++ END LOOP;
++ IF NEW.goal_record_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=NEW.goal_record_id AND kind='goal') THEN RAISE EXCEPTION 'goal pointer kind'; END IF;
++ IF NEW.current_question_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=NEW.current_question_id AND kind IN ('question','probe')) THEN RAISE EXCEPTION 'question pointer kind'; END IF;
++ IF NEW.current_answer_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=NEW.current_answer_id AND kind='answer' AND question_record_id=NEW.current_question_id) THEN RAISE EXCEPTION 'answer pointer kind'; END IF;
++ IF NEW.current_feedback_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=NEW.current_feedback_id AND kind='feedback') THEN RAISE EXCEPTION 'feedback pointer kind'; END IF;
++ RETURN NEW;
++END;
++$body$;
++CREATE OR REPLACE FUNCTION public.interview_record_insert_guard() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $body$
++DECLARE c public.interview_commands; p public.interview_records; r public.activity_operation_results; o public.activity_operations; b jsonb; ref jsonb;
++BEGIN
++ SELECT * INTO c FROM public.interview_commands WHERE activity_id=NEW.activity_id AND business_key=NEW.business_key;
++ IF c.activity_id IS NULL OR c.duplicate_of IS NOT NULL OR (NOT public.data_loading_allowed() AND (c.effect_applied OR c.status NOT IN ('accepted','started')))
++    OR NEW.seq<>(SELECT COALESCE(max(seq),0)+1 FROM public.interview_records WHERE activity_id=NEW.activity_id)
++    THEN RAISE EXCEPTION 'interview record command/sequence invalid'; END IF;
++ IF cardinality(NEW.parent_ids)<>(SELECT count(DISTINCT x) FROM unnest(NEW.parent_ids) x) THEN RAISE EXCEPTION 'duplicate parents'; END IF;
++ FOR p IN SELECT * FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=ANY(NEW.parent_ids) LOOP
++  IF p.seq>=NEW.seq OR p.goal_version<>NEW.goal_version OR p.scope_revision<>NEW.scope_revision THEN RAISE EXCEPTION 'interview parent invalid'; END IF;
++ END LOOP;
++ IF cardinality(NEW.parent_ids)<>(SELECT count(*) FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=ANY(NEW.parent_ids)) THEN RAISE EXCEPTION 'missing parents'; END IF;
++ IF NEW.kind='answer' THEN
++  SELECT * INTO p FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=NEW.question_record_id;
++  IF p.kind NOT IN ('question','probe') OR p.goal_version<>NEW.goal_version OR p.scope_revision<>NEW.scope_revision
++     OR NEW.answer_version<>(SELECT COALESCE(max(answer_version),0)+1 FROM public.interview_records WHERE activity_id=NEW.activity_id AND question_record_id=NEW.question_record_id)
++     THEN RAISE EXCEPTION 'answer version invalid'; END IF;
++  IF NEW.answer_version>1 AND NOT EXISTS(SELECT 1 FROM public.interview_records a WHERE a.activity_id=NEW.activity_id AND a.record_id=NEW.supersedes_record_id
++     AND a.question_record_id=NEW.question_record_id AND a.answer_version=NEW.answer_version-1) THEN RAISE EXCEPTION 'supersedes invalid'; END IF;
++ END IF;
++ IF NEW.origin='model' THEN
++  SELECT * INTO r FROM public.activity_operation_results WHERE activity_id=NEW.activity_id AND operation_id=NEW.operation_id;
++  SELECT * INTO o FROM public.activity_operations WHERE activity_id=NEW.activity_id AND operation_id=NEW.operation_id;
++  b:=r.payload::jsonb->'value';
++  IF c.execution_kind<>'model' OR c.operation_id<>NEW.operation_id OR (NOT public.data_loading_allowed() AND (NOT c.launch_claimed OR c.obsolete OR c.status<>'started'))
++    OR r.payload_format<>'json' OR r.payload_sha256<>NEW.body_sha256 OR o.kind<>'model' OR o.state<>'received'
++    OR r.admission_id<>o.admission_id OR r.execution_generation<>o.execution_generation OR r.scope_revision<>NEW.scope_revision
++    OR b->>'profile' IS DISTINCT FROM (CASE WHEN c.request_body::jsonb->>'schema'='interview.command.v2' AND c.context_body::jsonb->>'schema'='interview.context.v2' THEN 'interview.v2' ELSE 'interview.v1' END) OR b->>'activity_id' IS DISTINCT FROM NEW.activity_id::text OR b->>'business_key' IS DISTINCT FROM NEW.business_key::text
++    OR b->>'request_sha256' IS DISTINCT FROM c.request_sha256 OR b->>'context_sha256' IS DISTINCT FROM c.context_sha256 OR b->'value'->>'type' IS DISTINCT FROM NEW.kind
++    THEN RAISE EXCEPTION 'interview result binding invalid'; END IF;
++ ELSE
++  b:=NEW.local_body::jsonb;
++  IF b->>'schema' IS DISTINCT FROM 'interview.local.v1' OR b->>'activity_id' IS DISTINCT FROM NEW.activity_id::text OR b->>'business_key' IS DISTINCT FROM NEW.business_key::text
++     OR b->>'kind' IS DISTINCT FROM NEW.kind OR (b->>'goal_version')::integer IS DISTINCT FROM NEW.goal_version OR (b->>'scope_revision')::integer IS DISTINCT FROM NEW.scope_revision
++     OR jsonb_typeof(b->'value') IS DISTINCT FROM 'object'
++     THEN RAISE EXCEPTION 'interview local binding invalid'; END IF;
++ END IF;
++ RETURN NEW;
++END;
++$body$;
++CREATE OR REPLACE FUNCTION public.interview_result_eligible(aid uuid, op text) RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog,public AS $body$
++ SELECT EXISTS(SELECT 1 FROM public.interview_commands c JOIN public.interview_heads h USING(activity_id)
++  JOIN public.interview_records ir ON ir.activity_id=c.activity_id AND ir.business_key=c.business_key AND ir.origin='model'
++  JOIN public.activities a ON a.id=c.activity_id
++  JOIN public.activity_operations o ON o.activity_id=c.activity_id AND o.operation_id=c.operation_id
++  JOIN public.activity_operation_results r ON r.activity_id=o.activity_id AND r.operation_id=o.operation_id
++ WHERE c.activity_id=aid AND c.operation_id=op AND c.duplicate_of IS NULL AND c.effect_applied AND c.status IN ('committed','history')
++  AND NOT c.obsolete AND c.goal_version=h.goal_version AND c.scope_revision=h.scope_revision AND h.scope_revision=a.scope_revision
++  AND a.status<>'cancelled' AND ir.operation_id=c.operation_id AND ir.payload_sha256=r.payload_sha256 AND ir.body_sha256=r.payload_sha256
++  AND r.admission_id=o.admission_id AND r.execution_generation=o.execution_generation AND r.scope_revision=o.scope_revision AND o.state='received' AND o.kind='model'
++  AND r.payload_format='json'
++  AND NOT EXISTS(SELECT 1 FROM public.activity_scope_sources s LEFT JOIN public.material_sources m ON m.id=s.source_id
++    WHERE s.activity_id=aid AND (m.id IS NULL OR m.current_version IS DISTINCT FROM s.version_id OR m.revision<>s.source_revision))
++  AND EXISTS(SELECT 1 FROM public.activity_scope_sources WHERE activity_id=aid)
++  AND public.activity_memory_eligible(aid) AND (NOT EXISTS(SELECT 1 FROM public.activity_memory_bindings WHERE activity_id=aid) OR EXISTS(SELECT 1 FROM public.interview_commands sc WHERE sc.activity_id=aid AND sc.action='start' AND sc.effect_applied AND sc.duplicate_of IS NULL AND sc.request_body::jsonb->>'schema'='interview.command.v2' AND r.payload::jsonb->'value'->>'profile'='interview.v2')))
++$body$;
++REVOKE ALL ON FUNCTION public.interview_head_guard(),public.interview_record_insert_guard(),public.interview_result_eligible(uuid,text) FROM PUBLIC;
++
++ALTER TABLE public.data_control DROP CONSTRAINT data_control_schema_profile_check;
++ALTER TABLE public.data_control ADD CONSTRAINT data_control_schema_profile_check CHECK(schema_profile IN('data_exit.v1.r01','data_exit.v1.r02'));
++UPDATE public.data_control SET schema_profile='data_exit.v1.r02' WHERE mode='normal';
++COMMIT;

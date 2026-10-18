@@ -1,0 +1,11 @@
+Traceback (most recent call last):
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task103\c01\core_remaining.py", line 41, in run
+    t=time.monotonic();evaluated=submit(aid,'evaluate',{'confirmed':True,'exercise_record_id':eid,'answer_record_id':answer,'correction_record_id':correction['record_ids'][0]['record_id'],'retry_of':None})
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task103\c01\core_remaining.py", line 24, in submit
+    receipt=req(f'/api/activities/{aid}/teaching/commands',payload);atomic_json(EVIDENCE/'receipts'/(payload['business_key']+'.json'),receipt)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task103\c01\core_remaining.py", line 19, in req
+    r=client.get(path,headers=h) if body is None else client.post(path,json=body,headers=h);assert r.status_code==status,(path,r.status_code,r.json());return r.json()
+                                                                                                   ^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ('/api/activities/be3d572f-8e04-4008-96d3-ec4fc99afa6c/teaching/commands', 409, {'detail': {'code': 'stage_conflict', 'message': '当前执行窗口尚未收尾'}})

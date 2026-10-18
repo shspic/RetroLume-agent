@@ -1,0 +1,276 @@
+{
+  "layer": "实际_load/PackageRows/pin/Operation/OriginalStore，合成rowset及原始连接；正常原件路径后明确停止，不是完整恢复",
+  "cases": [
+    {
+      "case": "normal",
+      "error": "fixture_stop_after_original",
+      "execution": {
+        "actor_id": "18d2ab5d-48e1-419a-9938-6d5d02c6b12f",
+        "admission": null,
+        "clock_domain": "7009b5d5-e6ba-44f4-8341-d66e93aac9ef",
+        "deadline_ns": 12800000000,
+        "started_ns": 10000000000
+      },
+      "raw_calls": [
+        {
+          "dsn": "c03-controlled-loader-only",
+          "kwargs": {
+            "connect_timeout": 2,
+            "options": "-c statement_timeout=2800 -c lock_timeout=2800 "
+          },
+          "at_ns": 10000000000
+        },
+        {
+          "dsn": "c03-controlled-loader-only",
+          "kwargs": {
+            "connect_timeout": 2,
+            "options": "-c statement_timeout=2550 -c lock_timeout=2550 "
+          },
+          "at_ns": 10250000000
+        }
+      ],
+      "statements": [
+        {
+          "sql": "SET LOCAL statement_timeout='2550ms'",
+          "at_ns": 10250000000
+        },
+        {
+          "sql": "SET LOCAL lock_timeout='2550ms'",
+          "at_ns": 10250000000
+        },
+        {
+          "sql": "SELECT public.data_loading_allowed(),public.data_state()",
+          "at_ns": 10250000000
+        }
+      ],
+      "archive_open": [
+        "originals/a8db4e5855e29b94499db0d1c08fe415b625c152a7fd1693a338938d390c8995",
+        "metadata/operation_history.jsonl"
+      ],
+      "original_published": true,
+      "verified": false,
+      "same_deadline_unchanged": true
+    },
+    {
+      "case": "connect_late",
+      "error": "operation_timeout",
+      "execution": {
+        "actor_id": "84beaacf-f8f3-493e-8483-ac6c110ccd49",
+        "admission": null,
+        "clock_domain": "7009b5d5-e6ba-44f4-8341-d66e93aac9ef",
+        "deadline_ns": 12800000000,
+        "started_ns": 10000000000
+      },
+      "raw_calls": [
+        {
+          "dsn": "c03-controlled-loader-only",
+          "kwargs": {
+            "connect_timeout": 2,
+            "options": "-c statement_timeout=2800 -c lock_timeout=2800 "
+          },
+          "at_ns": 10000000000
+        }
+      ],
+      "statements": [],
+      "archive_open": [],
+      "original_published": false,
+      "verified": false,
+      "same_deadline_unchanged": true
+    },
+    {
+      "case": "query_late",
+      "error": "operation_timeout",
+      "execution": {
+        "actor_id": "3bc6500f-4171-4129-894c-e6851da842af",
+        "admission": null,
+        "clock_domain": "7009b5d5-e6ba-44f4-8341-d66e93aac9ef",
+        "deadline_ns": 12800000000,
+        "started_ns": 10000000000
+      },
+      "raw_calls": [
+        {
+          "dsn": "c03-controlled-loader-only",
+          "kwargs": {
+            "connect_timeout": 2,
+            "options": "-c statement_timeout=2800 -c lock_timeout=2800 "
+          },
+          "at_ns": 10000000000
+        }
+      ],
+      "statements": [
+        {
+          "sql": "SET LOCAL statement_timeout='2550ms'",
+          "at_ns": 10250000000
+        },
+        {
+          "sql": "SET LOCAL lock_timeout='2550ms'",
+          "at_ns": 10250000000
+        },
+        {
+          "sql": "SELECT public.data_loading_allowed(),public.data_state()",
+          "at_ns": 10250000000
+        }
+      ],
+      "archive_open": [],
+      "original_published": false,
+      "verified": false,
+      "same_deadline_unchanged": true
+    },
+    {
+      "case": "fetch_late",
+      "error": "operation_timeout",
+      "execution": {
+        "actor_id": "069e89c3-3827-4044-bd66-f49a1208c6b6",
+        "admission": null,
+        "clock_domain": "7009b5d5-e6ba-44f4-8341-d66e93aac9ef",
+        "deadline_ns": 12800000000,
+        "started_ns": 10000000000
+      },
+      "raw_calls": [
+        {
+          "dsn": "c03-controlled-loader-only",
+          "kwargs": {
+            "connect_timeout": 2,
+            "options": "-c statement_timeout=2800 -c lock_timeout=2800 "
+          },
+          "at_ns": 10000000000
+        }
+      ],
+      "statements": [
+        {
+          "sql": "SET LOCAL statement_timeout='2550ms'",
+          "at_ns": 10250000000
+        },
+        {
+          "sql": "SET LOCAL lock_timeout='2550ms'",
+          "at_ns": 10250000000
+        },
+        {
+          "sql": "SELECT public.data_loading_allowed(),public.data_state()",
+          "at_ns": 10250000000
+        }
+      ],
+      "archive_open": [],
+      "original_published": false,
+      "verified": false,
+      "same_deadline_unchanged": true
+    },
+    {
+      "case": "commit_late",
+      "error": "operation_timeout",
+      "execution": {
+        "actor_id": "096e6a7b-4e3e-4f47-a579-38f4bbfb0f9f",
+        "admission": null,
+        "clock_domain": "7009b5d5-e6ba-44f4-8341-d66e93aac9ef",
+        "deadline_ns": 12800000000,
+        "started_ns": 10000000000
+      },
+      "raw_calls": [
+        {
+          "dsn": "c03-controlled-loader-only",
+          "kwargs": {
+            "connect_timeout": 2,
+            "options": "-c statement_timeout=2800 -c lock_timeout=2800 "
+          },
+          "at_ns": 10000000000
+        }
+      ],
+      "statements": [
+        {
+          "sql": "SET LOCAL statement_timeout='2550ms'",
+          "at_ns": 10250000000
+        },
+        {
+          "sql": "SET LOCAL lock_timeout='2550ms'",
+          "at_ns": 10250000000
+        },
+        {
+          "sql": "SELECT public.data_loading_allowed(),public.data_state()",
+          "at_ns": 10250000000
+        }
+      ],
+      "archive_open": [],
+      "original_published": false,
+      "verified": false,
+      "same_deadline_unchanged": true
+    },
+    {
+      "case": "wrong_instance",
+      "error": "target_loading_identity_unknown",
+      "execution": {
+        "actor_id": "6d7ced35-9527-42f0-973e-77480627282e",
+        "admission": null,
+        "clock_domain": "7009b5d5-e6ba-44f4-8341-d66e93aac9ef",
+        "deadline_ns": 12800000000,
+        "started_ns": 10000000000
+      },
+      "raw_calls": [
+        {
+          "dsn": "c03-controlled-loader-only",
+          "kwargs": {
+            "connect_timeout": 2,
+            "options": "-c statement_timeout=2800 -c lock_timeout=2800 "
+          },
+          "at_ns": 10000000000
+        }
+      ],
+      "statements": [
+        {
+          "sql": "SET LOCAL statement_timeout='2550ms'",
+          "at_ns": 10250000000
+        },
+        {
+          "sql": "SET LOCAL lock_timeout='2550ms'",
+          "at_ns": 10250000000
+        },
+        {
+          "sql": "SELECT public.data_loading_allowed(),public.data_state()",
+          "at_ns": 10250000000
+        }
+      ],
+      "archive_open": [],
+      "original_published": false,
+      "verified": false,
+      "same_deadline_unchanged": true
+    },
+    {
+      "case": "not_loading",
+      "error": "target_loading_identity_unknown",
+      "execution": {
+        "actor_id": "8db8e3f9-481a-4bad-9024-d2deb341240f",
+        "admission": null,
+        "clock_domain": "7009b5d5-e6ba-44f4-8341-d66e93aac9ef",
+        "deadline_ns": 12800000000,
+        "started_ns": 10000000000
+      },
+      "raw_calls": [
+        {
+          "dsn": "c03-controlled-loader-only",
+          "kwargs": {
+            "connect_timeout": 2,
+            "options": "-c statement_timeout=2800 -c lock_timeout=2800 "
+          },
+          "at_ns": 10000000000
+        }
+      ],
+      "statements": [
+        {
+          "sql": "SET LOCAL statement_timeout='2550ms'",
+          "at_ns": 10250000000
+        },
+        {
+          "sql": "SET LOCAL lock_timeout='2550ms'",
+          "at_ns": 10250000000
+        },
+        {
+          "sql": "SELECT public.data_loading_allowed(),public.data_state()",
+          "at_ns": 10250000000
+        }
+      ],
+      "archive_open": [],
+      "original_published": false,
+      "verified": false,
+      "same_deadline_unchanged": true
+    }
+  ]
+}

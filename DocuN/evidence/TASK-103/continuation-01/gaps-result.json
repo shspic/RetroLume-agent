@@ -1,0 +1,227 @@
+{
+  "status": "PASS",
+  "executed": true,
+  "cases": [
+    {
+      "name": "V07 同answer新feedback使关联观察失效，无关活动与旧feedback注记不误伤",
+      "status": "PASS",
+      "executed": true,
+      "activity": "387188c4-2c62-4683-8f40-2e775d53243f",
+      "answer": "06ffeb4d-c3c1-4166-97c3-15612f132d33",
+      "feedback_ids": [
+        "d00be31c-3a63-4026-a195-1b7115cac520",
+        "abb3ded3-04d0-4579-baac-0dca5bb216cf",
+        "c1153481-7fbc-4b9f-a328-963cb90464c8"
+      ],
+      "memory_ids": [
+        "80e60b09-60f6-4a6c-9586-5cd1726f6a66",
+        "864b56f3-5327-43b3-9cfb-e313a7ac7bb0",
+        "ebdcb45c-5812-461b-9c1a-4627f43f5c13"
+      ],
+      "unrelated": "9d673925-5b7b-4245-98e7-7511030ad35b",
+      "sup_delta": 5
+    },
+    {
+      "name": "V08 最终三函数下真实两层闭包和v2上下文可用",
+      "status": "PASS",
+      "executed": true,
+      "parent": "ebdcb45c-5812-461b-9c1a-4627f43f5c13",
+      "child": "474a6f44-a72a-407c-9699-52f9ff35a154",
+      "child_activity": "a29a945b-a58f-4798-b4b3-93cc1e736aed"
+    },
+    {
+      "name": "V08 伪造漏闭包被最终SQL拒绝",
+      "status": "PASS",
+      "executed": true,
+      "sqlstate": "P0001",
+      "reason": "记忆上游缺选用事实或完整闭包",
+      "before_sha": "36c5521c48bd7b4399221ccf6a37d1d228e8a1dda70f0a14faf78453d290aa4d",
+      "after_sha": "36c5521c48bd7b4399221ccf6a37d1d228e8a1dda70f0a14faf78453d290aa4d",
+      "negative_sample_rolled_back": true
+    },
+    {
+      "name": "V08 无选用事实的上游被最终SQL拒绝",
+      "status": "PASS",
+      "executed": true,
+      "sqlstate": "P0001",
+      "reason": "记忆上游缺选用事实或完整闭包",
+      "before_sha": "36c5521c48bd7b4399221ccf6a37d1d228e8a1dda70f0a14faf78453d290aa4d",
+      "after_sha": "36c5521c48bd7b4399221ccf6a37d1d228e8a1dda70f0a14faf78453d290aa4d",
+      "negative_sample_rolled_back": true
+    },
+    {
+      "name": "V08 自引用CHECK拒绝",
+      "status": "PASS",
+      "executed": true,
+      "sqlstate": "23514",
+      "reason": "new row for relation \"learning_memory_dependencies\" violates check constraint \"learning_memory_dependencies_check\"",
+      "before_sha": "36c5521c48bd7b4399221ccf6a37d1d228e8a1dda70f0a14faf78453d290aa4d",
+      "after_sha": "36c5521c48bd7b4399221ccf6a37d1d228e8a1dda70f0a14faf78453d290aa4d",
+      "negative_sample_rolled_back": true
+    },
+    {
+      "name": "V08 两节点循环无合法固定选用事实，提交拒绝",
+      "status": "PASS",
+      "executed": true,
+      "sqlstate": "P0001",
+      "reason": "记忆上游缺选用事实或完整闭包",
+      "before_sha": "36c5521c48bd7b4399221ccf6a37d1d228e8a1dda70f0a14faf78453d290aa4d",
+      "after_sha": "36c5521c48bd7b4399221ccf6a37d1d228e8a1dda70f0a14faf78453d290aa4d",
+      "negative_sample_rolled_back": true
+    },
+    {
+      "name": "V08 单类来源11超过10，最终SQL拒绝",
+      "status": "PASS",
+      "executed": true,
+      "sqlstate": "P0001",
+      "reason": "记忆依赖种类容量不符",
+      "before_sha": "21ce1c84aab22c230e5c3facc348473374ccebc7d87c28a1abc424ac4dd00dca",
+      "after_sha": "21ce1c84aab22c230e5c3facc348473374ccebc7d87c28a1abc424ac4dd00dca",
+      "negative_sample_rolled_back": true
+    },
+    {
+      "name": "V08 ordinal33超总界，CHECK拒绝",
+      "status": "PASS",
+      "executed": true,
+      "sqlstate": "23514",
+      "reason": "new row for relation \"learning_memory_dependencies\" violates check constraint \"learning_memory_dependencies_ordinal_check\"",
+      "before_sha": "21ce1c84aab22c230e5c3facc348473374ccebc7d87c28a1abc424ac4dd00dca",
+      "after_sha": "21ce1c84aab22c230e5c3facc348473374ccebc7d87c28a1abc424ac4dd00dca",
+      "negative_sample_rolled_back": true
+    },
+    {
+      "name": "V08 HTTP 跨活动capture拒绝且0效果",
+      "status": "PASS",
+      "executed": true,
+      "http_status": 404,
+      "error": {
+        "detail": {
+          "code": "record_not_found",
+          "message": "请选择可回查的学习进度"
+        }
+      }
+    },
+    {
+      "name": "V08 HTTP 伪record哈希拒绝且0效果",
+      "status": "PASS",
+      "executed": true,
+      "http_status": 409,
+      "error": {
+        "detail": {
+          "code": "impact_changed",
+          "message": "保存观察已变化，请重新查看"
+        }
+      }
+    },
+    {
+      "name": "V08 HTTP 伪视图token拒绝且0效果",
+      "status": "PASS",
+      "executed": true,
+      "http_status": 409,
+      "error": {
+        "detail": {
+          "code": "impact_changed",
+          "message": "保存观察已变化，请重新查看"
+        }
+      }
+    },
+    {
+      "name": "V08 客户端手写dependencies不被接纳",
+      "status": "PASS",
+      "executed": true,
+      "http_status": 400,
+      "error_code": "invalid_input",
+      "inherited_actual_response": "real-10-resume-sql-negatives的真实400，不重发原请求；当前全表行hash仍等于其HTTP组前态",
+      "before_sha": "21ce1c84aab22c230e5c3facc348473374ccebc7d87c28a1abc424ac4dd00dca",
+      "after_sha": "21ce1c84aab22c230e5c3facc348473374ccebc7d87c28a1abc424ac4dd00dca"
+    },
+    {
+      "name": "V10 ready但M6无绑定行且result残迹失败关闭",
+      "status": "PASS",
+      "executed": true,
+      "activity": "9d673925-5b7b-4245-98e7-7511030ad35b",
+      "rolled_back": true,
+      "before_sha": "21ce1c84aab22c230e5c3facc348473374ccebc7d87c28a1abc424ac4dd00dca",
+      "after_sha": "21ce1c84aab22c230e5c3facc348473374ccebc7d87c28a1abc424ac4dd00dca"
+    },
+    {
+      "name": "V10 ready但M6无绑定行且accepted_context残迹失败关闭",
+      "status": "PASS",
+      "executed": true,
+      "activity": "9d673925-5b7b-4245-98e7-7511030ad35b",
+      "rolled_back": true,
+      "before_sha": "21ce1c84aab22c230e5c3facc348473374ccebc7d87c28a1abc424ac4dd00dca",
+      "after_sha": "21ce1c84aab22c230e5c3facc348473374ccebc7d87c28a1abc424ac4dd00dca"
+    },
+    {
+      "name": "V10 缺M6且result真实v2残迹，最终仓储SQL拒绝",
+      "status": "PASS",
+      "executed": true,
+      "eligible": false,
+      "sql_guard": "NOT EXISTS(SELECT 1 FROM public.activity_operation_results mr WHERE mr.activity_id='42819f27-6909-49c8-94ee-fa6433ed9dfa'::uuid AND mr.payload_format='json' AND mr.payload::jsonb->'value'->>'profile'='teaching.v2') AND NOT EXISTS(SELECT 1 FROM public.teaching_commands mt WHERE mt.activity_id='42819f27-6909-49c8-94ee-fa6433ed9dfa'::uuid AND mt.context_body IS NOT NULL AND mt.context_body::jsonb->>'schema'='teaching.context.v2')",
+      "template_sha256": "e708d25cc0e4635bf509d2859f4c4c4f07c2eeb2d7e9bf1b18efc5eb92daa937",
+      "synthetic_restore_negative_only": true,
+      "rolled_back": true
+    },
+    {
+      "name": "V10 缺M6且accepted_context真实v2残迹，最终仓储SQL拒绝",
+      "status": "PASS",
+      "executed": true,
+      "eligible": false,
+      "sql_guard": "NOT EXISTS(SELECT 1 FROM public.activity_operation_results mr WHERE mr.activity_id='42819f27-6909-49c8-94ee-fa6433ed9dfa'::uuid AND mr.payload_format='json' AND mr.payload::jsonb->'value'->>'profile'='teaching.v2') AND NOT EXISTS(SELECT 1 FROM public.teaching_commands mt WHERE mt.activity_id='42819f27-6909-49c8-94ee-fa6433ed9dfa'::uuid AND mt.context_body IS NOT NULL AND mt.context_body::jsonb->>'schema'='teaching.context.v2')",
+      "template_sha256": "e708d25cc0e4635bf509d2859f4c4c4f07c2eeb2d7e9bf1b18efc5eb92daa937",
+      "synthetic_restore_negative_only": true,
+      "rolled_back": true
+    },
+    {
+      "name": "V10 实际absent 010升级库，旧007/v1正文和原全部行保留",
+      "status": "PASS",
+      "executed": true,
+      "activity": "42819f27-6909-49c8-94ee-fa6433ed9dfa",
+      "before_sha": "190592afc073646d699ca248c108a2f43c13beca79afb3d0def524145b020f60",
+      "after_sha": "190592afc073646d699ca248c108a2f43c13beca79afb3d0def524145b020f60"
+    }
+  ],
+  "objects": {
+    "source": {
+      "id": "b3ebb313-a31a-420e-b242-b9449999b124",
+      "title": "task103-c01-gaps.md",
+      "revision": 1,
+      "version_id": "73aa683f-9adc-442f-b392-4df06089557e",
+      "sha256": "2cf6d42095064095a7c82760eee133b1ef3f69b1abb7f7a766b154e654e50d80",
+      "size": 171,
+      "filename": "task103-c01-gaps.md",
+      "format": "md",
+      "created_at": "2026-10-06T15:43:52.656868+00:00"
+    },
+    "activity": "387188c4-2c62-4683-8f40-2e775d53243f",
+    "pref": "b44ca991-ce7e-4555-89fb-302608cbe90e",
+    "parent": "ebdcb45c-5812-461b-9c1a-4627f43f5c13",
+    "child": "474a6f44-a72a-407c-9699-52f9ff35a154",
+    "child_activity": "a29a945b-a58f-4798-b4b3-93cc1e736aed",
+    "unrelated": "9d673925-5b7b-4245-98e7-7511030ad35b"
+  },
+  "synthetic_sql_negative_only": true,
+  "resumed_from": "real-10-resume-sql-negatives",
+  "prior_status": "FAIL",
+  "inherited_case_count": 11,
+  "prior_error": "('/api/memories/commands', 400, {'detail': {'code': 'invalid_input', 'message': '输入身份或内容不可核对'}})",
+  "pg1_stop": {
+    "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11",
+    "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+    "name": "retrolume-task-103-g9-pg1",
+    "volume": "retrolume-task-103-g9-pg1-data",
+    "running": false,
+    "pid": 0,
+    "exit_code": 0
+  },
+  "cleanup": {
+    "cid": "f96ac8dcb64648c76a2bc70f3f8b75969ada0ea0ea69b5896fe5ecb71affab85",
+    "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+    "name": "retrolume-task-103-g9-pg2",
+    "volume": "retrolume-task-103-g9-pg2-data",
+    "running": false,
+    "pid": 0,
+    "exit_code": 0
+  }
+}

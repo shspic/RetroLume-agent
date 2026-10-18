@@ -1,0 +1,30 @@
+--- as-run/backend/app/data_exit/packages.py
++++ final/backend/app/data_exit/packages.py
+@@ -237,7 +237,8 @@
+             temporary = self.packages / (job_id + '.pending')
+             def stage(value):
+                 receipt = operation.stage(value)
+-                if self.observer is not None:self.observer(receipt)
++                if self.observer is not None:self.observer(receipt,operation=operation)
++                operation.check()
+             try:
+                 operation = Operation(self.hub, job_id, self.limits.operation_seconds, 'reading')
+                 captured = self.snapshot.capture(job_id, job["kind"], scope, check_cancel=operation.check, on_stage=stage, operation=operation)
+@@ -269,10 +270,13 @@
+                 package_sha, count = hash_file(temporary, self.limits.package_bytes, operation.check)
+                 operation.admit('file_publish')
+                 publish(temporary, self.path(job_id), check=operation.check)
+-                receipt = operation.finish('published',
+-                    package_id=job_id, root_sha256=manifest["root_sha256"], package_sha256=package_sha,
+-                    counts={"bytes": str(count), "files": len(captured.entries) + 1, "rows": sum(map(len, captured.rows.values()))})
+-                if self.observer is not None:self.observer(receipt)
++                facts=dict(package_id=job_id,root_sha256=manifest['root_sha256'],package_sha256=package_sha,
++                    counts={'bytes':str(count),'files':len(captured.entries)+1,'rows':sum(map(len,captured.rows.values()))})
++                if self.observer is not None:
++                    # source mirror仅观察已发布文件；它在最终成功收据之前完成，也消费同D。
++                    observed={**self.hub.get(job_id),**facts,'state':'published','stage':'published'}
++                    self.observer(observed,operation=operation)
++                receipt = operation.finish('published',**facts)
+                 return receipt
+             except BaseException as error:
+                 # 完整文件发布与 Hub 收据是两个点，失败不生成第二个包。

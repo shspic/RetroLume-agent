@@ -1,0 +1,353 @@
+
+DocuN/evidence/TASK-116/design/integration-contract.md
+104: CREATE TABLE retrieval_commands (
+105:  activity_id uuid NOT NULL REFERENCES activities(id), business_key uuid NOT NULL,
+106:  action text NOT NULL CHECK(action IN('source_index','query')),
+107:  space_id text NOT NULL REFERENCES retrieval_spaces(space_id),
+108:  scope_revision integer NOT NULL CHECK(scope_revision>0),
+109:  domain text NOT NULL CHECK(domain IN('learning','interview')),
+110:  domain_revision integer NOT NULL CHECK(domain_revision>=0),
+111:  request_body text, request_sha256 text NOT NULL CHECK(request_sha256 ~ '^[0-9a-f]{64}$'),
+112:  source_refs jsonb NOT NULL, parent_refs jsonb NOT NULL,
+113:  query_sha256 text, manifest_sha256 text NOT NULL,
+114:  batch_count smallint NOT NULL CHECK(batch_count BETWEEN 0 AND 128),
+115:  status text NOT NULL CHECK(status IN('accepted','launch_claimed','terminal')),
+116:  terminal_disposition text CHECK(terminal_disposition IN('received','not_sent','unknown','invalidated','partial','cache_ready')),
+117:  result_sha256 text, error_code text,
+118:  created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
+119:  PRIMARY KEY(activity_id,business_key),
+120:  CHECK(request_body IS NULL OR octet_length(request_body) BETWEEN 1 AND 65536),
+121:  CHECK(jsonb_typeof(source_refs)='array' AND jsonb_array_length(source_refs)<=10),
+122:  CHECK(jsonb_typeof(parent_refs)='array' AND jsonb_array_length(parent_refs)<=12),
+123:  CHECK((action='query' AND batch_count=1 AND query_sha256 IS NOT NULL
+124:         AND query_sha256 ~ '^[0-9a-f]{64}$')
+125:        OR (action='source_index' AND query_sha256 IS NULL)),
+126:  CHECK(batch_count<>0 OR (action='source_index' AND status='terminal'
+127:                          AND terminal_disposition IS NOT NULL
+128:                          AND terminal_disposition='cache_ready'))
+129: );
+130: CREATE TABLE retrieval_chunks (
+131:  space_id text NOT NULL REFERENCES retrieval_spaces(space_id),
+132:  evidence_id text NOT NULL, source_id uuid NOT NULL REFERENCES material_sources(id),
+133:  source_version_id uuid NOT NULL REFERENCES material_versions(id),
+134:  source_revision integer NOT NULL CHECK(source_revision>0),
+135:  origin text NOT NULL CHECK(origin IN('original','user_supplement')),
+136:  physical_page integer CHECK(physical_page>0),
+137:  start_codepoint integer NOT NULL CHECK(start_codepoint>=0),
+138:  end_codepoint integer NOT NULL CHECK(end_codepoint>start_codepoint),
+139:  text_sha256 text NOT NULL CHECK(text_sha256 ~ '^[0-9a-f]{64}$'),
+140:  vector_value vector(512), vector_sha256 text,
+141:  committed_activity_id uuid NOT NULL, committed_operation_id text NOT NULL,
+142:  created_at timestamptz NOT NULL DEFAULT now(),
+143:  PRIMARY KEY(space_id,evidence_id),
+144:  FOREIGN KEY(committed_activity_id,committed_operation_id)
+145:   REFERENCES activity_operations(activity_id,operation_id),
+146:  CHECK((vector_value IS NULL)=(vector_sha256 IS NULL)),
+147:  CHECK(vector_sha256 IS NULL OR vector_sha256 ~ '^[0-9a-f]{64}$')
+148: );
+149: ```
+150: 
+151: 索引准备的request_body只存请求**身份清单**/目录hash/批清单，不存重复原件文本；query正文为用户明确该动作必要文字。批固定operation id `emb18i.{business_key}.{ordinal}`（0..127，本合成许可仅0/1），query为`emb18q.{business_key}.0`，命令读取按这组确定ID回查operations及007；不需第四张批表。全部源向量合法命中时batch_count=0，短事务直接保存terminal/cache_ready及当前manifest/result hash，零operation/外发/收费，不伪造received传输。有新批时整个命令只claim一次，正常同窗口按已确认有限manifest顺序处理；中断不后台重开。全部批received且当前资格一致才complete，任何可能发送未知为unknown；已收到部分且余批确未发送为partial，逐批事实分别呈现，不能假写整命令not_sent或索引全ready。原已COMMIT向量保留，后续显式准备只处理仍需的片段并对旧unknown告知可能重复费用、保原预留。查询向量在007合格结果中，源向量落chunks。request_body可被删除事务清成NULL，仅保hash/元数据，不能以NULL重新提交；immutability trigger仅允许受信purge lane执行这一动作。source_refs/parent_refs须有封闭JSON schema、无用户任意SQL；端点输入只允许服务器重新构造该冻结体。结果正文≤131072bytes沿007，单Embedding响应≤65536bytes；解析和序列化须同时计wire/007限额。
+152: 
+153: Embedding的007值固定`{profile:'embedding.v1',purpose,space_id,request_sha256,manifest_sha256,inputs:[{ordinal,identity_sha256,vector:[512 finite numbers],vector_sha256}],usage}`，外层继续007 format/json及当前admission/scope/generation归属；source_index/query不能互认，不把此值放进聊天messages或学习结果接口。endpoint body上限65536、UTF8/codepoint上限均前拒；query/index冻结体另含domain/head/selection/dependency身份，来源text由worker前重取校验，不由浏览器指定。GET返回command/meta、逐batch operation事实、current eligibility和目录coverage，不返回向量/secret。置信语义不从vectors/距离或schema推定。
+154: 
+155: 014同时精确扩`activity_operations.kind`检查为model/tool/embedding；保留008现有model分支（request_bytes/max_output_tokens/预留费用正数）及tool分支（前两列NULL、费用0、arguments/tool_call身份要求）原含义，增加embedding分支（provider/configured_model非空、request_bytes正数、max_output_tokens=0、预留费用正数、tool_names空、arguments_sha256/tool_call_id为空且存在检索绑定），不能用“所有非embedding都tokens>0/费用>0”破坏非空旧tool行。旧model/tool行不回填、不重算费用。014另增加activities可空outbound_grant_sha256，旧行NULL；新收费准入由受信grant固定roster/global PG预留合计核20元/80次，详见采用包，不加第四张通用账表。新embedding插入/结果触发器核绑定prefix/command/源版本/space/完整input manifest/credential/generation；任何embedding的007正文禁止被learning/teaching/interview/html当父。新增检索事实写入不伪造执行权限，cache资格每次实时核。
+156: 
+157: 新增`retrolume_retrieval_owner` NOLOGIN无super/bypass；`retrolume_retrieval_app` NOLOGIN只授精确SELECT、必要INSERT/UPDATE列，不授DROP/任意DDL、DELETE；应用正常登录通过现role映射获得需要的两种角色。不可变identity/hash/FK及结果guard固定search_path，purge限定SECURITY DEFINER函数由现维护lane调用，PUBLIC execute撤销。三表每张都有R02 data_runtime_write_guard，snapshot只SELECT受控列，loader仅loading期插入，seal撤销loader/应用写。授原data_state/data_loading_allowed必要EXECUTE到新owner，禁止因新表给snapshot/runtime超级权限。旧memory/interview/teaching函数profile变化的精确指纹同时更新R02注册；R01检测留原字节投影，不把未知DDL宽松认作兼容。
+158: 
+159: ### B5. R02退出/删除/恢复增量
+160: 
+161: 新profile `data_exit.v1.r02`包含001—014可信链、31业务表（R01的28+上述3）及原3控制导出视图。013 schema_profile固定CHECK不能原地编辑：014替换为R01/R02允许集合，并仅在正常、无活动执行/预览未清/数据操作未清且maintenance fence持有时将本次新正常库改R02。新包schema_profile/链hash/表shape/角色/函数/trigger和向量空间写明；旧R01包不改、不假装存在新表。采用前核本地vector扩展版本纳入profile身份，未知版本拒绝，不能用模块版本猜。
+162: 
+163: `data_exit/schema_profiles.py`注册R01/R02两份精确常量；`schema_checks`按当前注册profile核对，不全局替换28→31放宽；`ReferenceRootCoordinator`/control/reference pin核profile与dataset/instance/root/epoch同步，继续TASK114的live pin/deadline。`snapshot`、`codec`、`packages`、`readability`、`restore._initialize/_load/_components/seal_readonly`增量用该registry：R01仅1..13链，R02仅1..14链；vector按512个有限十进制数编码、逐项和hash校验，restore无需联网/重嵌入。快照必须包含retrieval_commands和embedding operations/007真实unknown及预留，不因“索引可重建”丢收费事实。向量缓存允许丢失后显式重建，但旧受控调用事实不可丢。
+164: 
+165: 删除源版本/源/记忆沿原tombstone+维护fence/关联闭包：受影响chunk.vector_value/hash清空或由受限purge物理删除；受影响source_index/query的007向量正文通过固定`purge_retrieval_payloads`删除，保operation/命令元数据、请求hash、费用与unknown。该函数仅维护fence/鉴权lane可执行，只删kind=embedding的result行，不改旧model/tool结果保护；新增NOLOGIN owner仅因固定函数取得必要DELETE，PUBLIC/运行登录不能直接删除结果。源索引请求体不存原文，受影响命令正文可NULL且终态不可重交；独立用户query/作答按既有用户记录保留/抑制政策，不假称物理删除全部用户文字。不得让007或cache成为被删源正文/向量的旁路。重建必须新显式许可且仍计累计预算。记忆变动不重嵌入资料，却使绑定它的query/模型命令资格失效。删除前影响展示增加检索对象计数与必要清理范围；旧备份不自动删除，恢复沿现覆盖tombstone策略，deleted-source向量不加载，历史收费元数据仍保留。
+166: 
+167: R01恢复仍新隔离副本、永久restored_readonly；R02也一样，严禁把恢复copy变正常、继承lease/SUP/CID/私密或自动索引。R01应用重开只用R01可信链/读取兼容分支；没有014时hybrid/新写门关闭，正常历史GET不凭未识别DDL失败后回退另库。R02装载只在新loader角色loading，逐表/007/向量/hash/空间/权限核对后seal；verification失败保留隔离failed对象，不激活。原R01证据继续有效，新证只覆盖014/profile/新表/跨链传播。
+168: 
+169: ### B6. 同库重开与一次本机启动
+170: 
+171: 本人Windows、127.0.0.1绑定、PG为Compose服务，API在Windows原生进程内保留Windows Job监督，预览由外部SUP动态拥有容器。没有把应用放Linux容器、把Docker socket给Web应用或新增常驻renderer。Redis目前没有客户端/业务依赖；PG为权威、轮询/GET足够首版，Redis只保留既定可重建缓存方向，采用前核版本/许可。MCP不是有限计算的运行依赖；沿现有限工具gateway，不新起MCP服务或LangChain/LlamaIndex/第三框架。新Embedding用httpx+现psycopg原生SQL，无新增SDK依赖。Nginx/完整Linux和公开发布为后续条件交付，不以renderer Linux运行冒全应用兼容。
+172: 
+173: 最小修改`deploy/start_local.py`，增加受信`--profile <operator profile absolute path>`及`--initialize`/`--migrate`显式动作；默认仍本人normal配置，草案合成profile精确资源见实施卡。就绪报告只给mode/schema/profile/能力/理由、端口/秘密是否就绪，不打印值。配置示例使用环境变量名字：既有RETROLUME_ACTIVITY_CONFIG/MODEL_API_KEY、PREVIEW_CONFIG/PREVIEW_REVIEW_KEY、DATA_SNAPSHOT_URL/DATA_MAINTENANCE_KEY；新增RETROLUME_EMBEDDING_API_KEY和受信retrieval配置字段。private文件由用户/operator正常安全配置，设计不读取、不向用户索key；安全脱敏沿当前logger/导出政策。
+174: 
+175: 启动顺序：校准UTC/mono与资源profile →仅查精确缓存image/卷/CID/labels →Docker已唤醒后可用内存≥2GiB，采于每个新PG/浏览器/预览前（同窗上次不替代实采）→检查所有实际待绑定端口：无listener且bind probe成功方准；同名应用listener仅可身份匹配后复用；其他listener、排除范围WinError10013、只bind失败、未知owner一律明确冲突、不kill用户进程/换端口绕计数 →读取服务器安全配置、验证模型/预算/签票/profile门 →新库显式initialize或正常库显式migrate（预先R01可读备份）→PG readiness核配置实际user/db，不硬编码retrolume →创建hidden uvicorn且记录PID+birth/控制handle →session/capabilities/前端同源就绪 →显示缺能力而非偷偷切库。PG/迁移不可用时留错误与资源ID，不启动业务模型；未完整配置时只读现有成果保留。
+176: 
+177: 一次停止：先拒新mutations，等待/取消属于本launch的窗口并取得既有StopProof，预览按精确CID/nonce/两Job/EOF核证；没有确认标unknown不假写stopped。API对该PID/birth发CTRL_BREAK并保留现有有界20/5/3秒退出流程；仅停本launch启动的精确PG，启动前已由用户运行的不擅自停。卷/数据库/镜像/失败对象保留不自动销毁。Docker daemon和用户进程不在停止范围。
+178: 
+179: 同normal库再次启动：selector、dataset/instance/root必须当前一致，确认旧session/SUP不在途，取得同一全局owner与持久generation。受信profile明确single-host/single-session并允许现session recovery；缺声明/旧birth/停止不确认证据只关闭执行门，GET保留。先GET原意图/命令/operation/heads/预算，UI显示“原调用未知，只读核对；余量未重置”。已COMMIT结果可直接继续下一明确动作；未发送且未claim可显式重交同键，已claim/unknown不可自动POST或重新付费，取消活动不授新旧资格。达到deadline/次数/费用不能重新打开同活动；用户另建活动仍保项目总费用/失败账，不借新号清尝试。选择restored_readonly只重开查看，永不与normal续作混称。
+180: 
+181: ### B7. 基线、许可和产品文档修改
+182: 
+183: 本次只读Git HEAD为`45951501d2741630a229762d6b2d3f4b34d7f702`，porcelain633行含既有删除/未提交源码，原件见design/git-status-before.txt及git-baseline.json。不能把这些改动认成TASK116，不能reset/stash/整仓格式化。关键实际源身份在source-identities.json；编排前只补本卡真正变更文件的冲突核对，不重hash243件。
+184: 
+185: 复用PG缓存image `sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f`、G11 v2-08 renderer `sha256:ec3c70c7a8a8894c647a69b08b0c296727bb052f639e487567e9cd4624766789`、load `8a047050ffe584dffa6e85222c16c8f400c0ab4db82f72a32812c2befd082b3f`及renderer `6cc300164a6cb364d9bd0bae4897f06d3f6a65cf5d4272477d2bccde67312597`。这是原111/112已核事实，TASK116未查Docker缓存/启动；后续启动核现cache，不存在则停该能力，不pull或复活旧对象。签票由原独审既有结果的正常operator部署程序提供，工程不得自己伪签；新embedding/profile审计不重签未改的固定runtime。
+186: 
+187: 现锁定fastapi0.141.1/pydantic2.13.5/psycopg3.3.5/httpx0.28.1/uvicorn0.52.4/pypdf6.17.0、React19.3.0/TS7.0.2/Vite8.3.0/PW1.62.1保持；使用repo内锁与许可原件，不从公共提示词库/DocuN runner或外部参考路径供产品运行。新vector扩展身份及新服务条款由采用包核，历史许可材料不是今日条款。产品新增代码必须backend/frontend/deploy，样本/证据可在新任务DocuN，不能把测试实现变产品依赖。
+188: 
+189: 后续精确文档修订：README资料footer/学习入口“后续接入”改实际流程；词项限定保留为fallback，加入hybrid readiness及费用提示；补teaching配置示例；记忆候选与“完整退出未授权”按已裁定有限STEP017改写限定事实；deploy/preview README旧v2-01/候选/待审文案改v2-08实际签票与有限范围；本机启动/迁移/重开、normal与readonly差别、采用前provider/费用/资料条款、端口与内存收尾说明写入README。原任务失败/报告、用户需求/公共规则不修改；本卡不修改上述产品文档，主控维护正式DocuS时不签未实现的Must。
+
+DocuS/最终需求文档.MD
+74: 
+75: “来源”区分原始资料、外部可信资料、用户作答和计算记录；“证据”含来源身份、版本与可回查位置；“诊断”区分可观察错误与待验证原因；“掌握”不能由一次正确回答直接断言。PDF页指物理页，不能冒充印刷页码或精确坐标。
+76: 
+77: 学习：导入→检查解析（所有PDF需用户对照原页核对）→确定范围/意图及必要追问→目标与路径→练习→反馈→交互解释→复测→保存理由并更新路径。
+78: 
+79: 面试：资料与目标→问题→用户回答→必要追问→基于资料与回答的反馈；允许继续练习，不固定问题数量，不把普通闲聊当完成面试。
+80: 
+81: 失败路径：单文件失败隔离、修正/替换/跳过；证据不足或同名歧义先澄清；来源冲突并列；取消/超时/预算耗尽停止新动作，保留成功成果，展示失败项和可继续入口；未知远端结果不自动重发。
+82: 
+83: ## 5. 范围与优先级
+84: 
+85: Must：文字/TXT、Markdown、可提取文字的PDF，知识库与学习全闭环，证据与反馈，应用内交互HTML，进度保存，文字面试，失败隔离、替换/跳过、有界任务。所有PDF先核对，不能仅凭解析成功进入学习。
+86: 
+87: Should：图片、Word、PPT、Excel、扫描件，可信书单/教材/课标/题库/网站推荐及获准内容使用；逐项验证、明确纳入后实施，不作为首版Must失败理由。
+88: 
+89: Could：语音输入及播报。Won't for now：实时语音面试、公开在线服务与生产发布。独立HTML导出不是当前Must。无所有学科可靠性保证，无指定首学科，无Go/Java服务要求，无固定多Agent数量或三个LLM框架同时采用要求。
+90: 
+91: ## 6. 功能需求与追踪
+92: 
+93: 以下沿用全部FR编号及价值/前置输入；来源U0/U1/C1指初步需求的原始描述、现实约束与确认单。新增验收细化及批准边界已随v1.0-rc1全文批准而生效。表内初步描述与后文冲突时，以本基线明确边界为准；不改初步文档历史。
+94: 
+95: | ID / 目标 | 描述与用户价值 | 优先级 | 前置条件与输入 | 预期结果 | 来源 |
+96: | --- | --- | --- | --- | --- | --- |
+97: | FR-001 / OBJ-001 | 整理用户资料，使原始内容能被后续活动使用。 | Must：文本、Markdown、文字 PDF；Should：图片、Office、扫描件 | 用户选择资料；格式在已声明支持范围内 | 可检查解析结果与来源位置；混合批次中失败项可识别、替换或跳过，成功项继续使用 | U0、C1 |
+98: | FR-002 / OBJ-001、002 | 识别学习/面试意图、理解资料并补齐必要信息。 | Must | 资料、用户目标或不完整描述 | 与实际缺口相关的追问；允许修正识别结果；不将未知能力当事实 | U0、C1 |
+99: | FR-003 / OBJ-001 | 建立个人知识库，维持学习范围和资料上下文。 | Must | 用户选定的资料与活动 | 活动能关联资料和范围；可继续已有学习进度 | U0、C1 |
+100: | FR-004 / OBJ-001、002 | 用证据、规范和可验证计算支持回答与诊断。 | Must | 用户资料、可用可信依据及问题 | 结论可回查原文或计算依据；冲突显式呈现；缺证据可追问或暂不判断 | U0、C1 |
+101: | FR-005 / OBJ-001、002 | 推荐书单、文档、资料、网站，并使用获准内容辅助学习。 | Should | 学习范围、目标和可用来源 | 推荐相关且来源可核查；实际使用的内容可溯源；教材/课程标准/题库的适用性可区分 | U0、C1 |
+102: | FR-006 / OBJ-002 | 形成个性化目标和学习路径，减少学习决策负担。 | Must | 知识库、目标及已知诊断 | 路径与资料、目标、能力判断可关联，理由可理解 | U0、C1 |
+103: | FR-007 / OBJ-002 | 生成与路径和范围相关的问答与练习。 | Must | 当前知识点、学习活动和证据 | 题目、答案及解释有可核查依据；题型和难度由后续标准限定 | U0、C1 |
+104: | FR-008 / OBJ-002 | 解释错题和难点，提供修正建议与针对练习。 | Must | 作答、答案依据及历史反馈 | 区分已支持错误判断与归因假设；反馈能影响后续练习 | U0、C1 |
+105: | FR-009 / OBJ-002 | 生成本地交互 HTML，帮助理解和记忆抽象概念。 | Must | 原始资料、知识点、错题/难点及学习信息 | 可在目标设备交互；关键内容和计算结果可核查，执行边界明确 | U0、C1 |
+106: | FR-010 / OBJ-002 | 依据复测更新学习判断、路径并保存理由和进度。 | Must | 复测表现及此前活动 | 可说明继续、重复或调整的依据；后续可使用更新结果 | U0、C1 |
+107: | FR-011 / OBJ-003 | 根据资料和目标开展可用的文字模拟面试。 | Must | 简历或其他相关资料、面试目标 | 完成提问、回答、必要追问和有依据的反馈；不固定面试方向 | U0、U1、C1 |
+108: | FR-012 / OBJ-001～003 | 通过文本及逐步加入的多模态交互衔接当前活动。 | Must：文字；Should：图片；Could：语音输入/播报；Won't for now：实时语音面试 | 当前活动与已支持交互渠道 | 能识别当前活动及资料；可选渠道不改变已确认的主链 | U0、C1 |
+109: 
+110: ### Must逐项可观察验收（已批准标准）
+111: 
+112: | ID     | 正常与异常验收、依赖                                                                                                            |
+113: | ------ | --------------------------------------------------------------------------------------------------------------------- |
+114: | FR-001 | TXT/MD成功项可用；普通及复杂文字PDF均先显示原页和解析预览，明确用户核对后才能供学习。修正保留原件及可辨修正版本，无法可信定位的内容拒作原文证据；可替换或跳过。混合坏文件不阻断成功项，替换需重新核对。依赖DR-001/003。 |
+115: | FR-002 | 用户能修正学习/面试意图；目标缺失、同名不同义时追问实际缺口，不静默选领域、不虚构能力。依赖FR-001/003。                                                             |
+116: | FR-003 | 新活动可选资料范围，恢复已有活动能读到原范围/进度；不混入未选/失效版本，删除或替换后旧上下文不继续作为当前依据。依赖DR-001/002。                                                |
+117: | FR-004 | 有答案时引用能回到正确源版本/位置且支持结论；无答案明确不足，冲突展示各来源，可核算题展示计算依据；伪源/错版本/不支持结论不得作为有效证据。用户自报与验证事实区分。依赖NFR-001。                         |
+118: | FR-006 | 路径步骤能关联资料、目标和诊断理由；用户可修正目标，信息不足不输出确定能力结论。依赖FR-002/004。                                                                 |
+119: | FR-007 | 生成题、参考答案、解释与当前范围一致且有依据；包含可核算、概念解释、程序推理代表样例；不能仅字符串匹配评价开放答案。依赖FR-004/006。                                               |
+120: | FR-008 | 单位、数量级、否定、等价表述、逻辑错误正反例可核查；反馈指出实际作答和依据，原因不明标假设，正确部分不因缺少其他证据被全盘否定。下一练习针对实际缺口。依赖FR-007。                                  |
+121: | FR-009 | 应用内HTML可交互，正常/边界输入计算及概念可核查，保留资料关联；非法权限动作被阻止且不破坏主链。生成失败可解释并保留此前活动，不能用静态答案冒充交互通过。依赖SEC-003。                             |
+122: | FR-010 | 同一练习后的续答/复测改变或保留活动，并保存可观察依据；错误重复时不强行毕业，单次正确不证明长期掌握/排除背诵；重开活动保留进度且重复提交不重复计分。依赖FR-008/DR-002。                           |
+123: | FR-011 | 完成文字提问→回答→必要追问→反馈；有据回答给予相应认可，缺证据要求具体补充，不能编造简历经历/测量/优化效果；区分自报与可信事实。依赖FR-002/004。                                       |
+124: | FR-012 | 文字渠道衔接当前活动、资料和进度；未启用图片/语音不阻断上述主链。依赖FR-003。                                                                            |
+125: 
+126: 上述Must缺失分别导致资料不能用、范围/意图不清、依据不可信、学习无法闭环或面试不可用，因此不可静默降级。FR-005/INT-001的Should验收：推荐相关且来源可访问核查，区分教材/课标/题库适用性与版本，实际使用内容有许可及证据；无授权来源不冒充已接入。
+127: 
+128: ## 7. 非功能需求与完整产品验收
+129: 
+130: | ID | 优先级 / 目标 | 可观察验收 |
+131: | --- | --- | --- |
+132: | NFR-001 | Must / OBJ-001、002 | 资料、题目、答案、反馈、解释、路径理由的引用能回查；引用位置正确和语义支持分别检查，用户回答以活动/作答版本回查。 |
+133: | NFR-002 | Must / 全目标 | 单文件坏、取消、超时、晚到输出、重复操作、重启场景保留有效成果；取消/旧版本结果不污染当前状态。远端可能继续时如实显示，不称远端已取消。 |
+134: | NFR-003 | Must / 全目标 | 活动启动前有可见的有限次数、时间、重试、工具和成本上限；实际调用含隐藏重试计入，跨恢复不重置，达限实际停止本地自有工作并拒绝新动作；未知远端调用保留预留且不自动重发。数值见第13节。 |
+135: | NFR-004 | Must / 全目标 | 在冻结的代表性资料/正反例及明确预期下验证解析、检索、回答、诊断、HTML、复测和面试；逐例记录失败，性能环境/规模可复现，不从合成小样本推导全学科准确率。 |
+136: | NFR-005 | Must / 全目标 | 当前活动上下文、长期学习记忆、工具权限与持久状态可辨；用户能查看/修正/删除记忆，重开能继续；压缩/摘要保留来源关联和不确定性，不能覆盖原证据或把旧结论升级成事实。 |
+137: 
+138: 产品完整验收必须覆盖第6节全部Must、成功主链、缺目标/证据/冲突/同名歧义、坏文件/替换、HTML非法动作、有据和缺证据面试、超时/取消/恢复/预算耗尽。本次06确定样例类别、责任和时机；具体样本、容量/预算及阈值在相关实现/测试卡派发前冻结，不为规划提前运行测试。阶段08逐项有结果和必要审计，不能用SPIKE替代产品验收。此时机调整依据用户V3指令，未降低验收。
+139: 
+140: ## 8. 数据生命周期与安全
+141: 
+142: | ID | 优先级 | 规则与验收 |
+143: | --- | --- | --- |
+144: | DR-001 | Must | 原件、提取物、人工修正、扩展源及作答分别标身份/版本/位置；替换不覆盖历史依赖关系，原引用可辨历史。人工补正/解释不能冒充原文；无原文依据的修正标用户补充。 |
+145: | DR-002 | Must | 目标、路径、反馈、错题难点、复测和理由本地保存至用户删除；可查看修正删除记忆。历史记录不因模型新判断被无痕覆盖；可导出原件、证据关联及关键学习记录并在不依赖原候选应用时解读。 |
+146: | DR-003 | Must | 成功导入/活动不被其他失败抹去；失败替换保留可用旧版，成功替换明确当前版与重新核对状态；重复作答不重复计分。删除后引用标不可用，不伪造仍可回查。 |
+147: | SEC-001 | Must | 原件/证据/学习记录本地保留至用户删除；外发仅本活动必要片段，显示供应商和用途，不自动发送整库。密钥由本地应用安全读取，不进浏览器、日志、导出或对话。真实资料使用前核实供应商条款和账号适用性。 |
+148: | SEC-002 | Must | 文档、模型输出不能批准工具权限；工具仅执行获准范围，参数非法/越权拒绝并记录脱敏原因。停止只处理本应用自有工作，不影响其他进程；跨恢复状态和预算须完整产品测试及风险对应独立审计。 |
+149: | SEC-003 | Must | HTML允许计算/图形脚本，默认禁联网、本地文件、系统命令、直接模型/工具调用；应用层可在授权范围调用服务。验证真实宿主而非只检查配置，权限反例及正常交互同时通过；新增页面权限须独立批准。 |
+150: 
+151: 备份/恢复须保留原件、版本关系及活动必要状态，并以副本验证可恢复；用户删除不承诺无备份可恢复，不自动清理备份或实验。具体备份介质/频率、导出格式在阶段05～06确定；不将原型数据表定义成正式模型。删除涉及当前与历史引用/索引/记忆的影响须在实际删除前说明。
+152: 
+153: ## 9. 技术约束、复用与退出
+154: 
+155: | ID | 优先级 / 约束 |
+156: | --- | --- |
+157: | CON-001 | Must：原始资料决定范围，课程规范/可信来源/可验证计算辅助正确性；冲突显式呈现，不能自动以资料或模型一方覆盖。 |
+158: | CON-002 | Must约束：Python、FastAPI/Pydantic/REST、React/HTML/CSS及JS/TS，PostgreSQL/Redis/pgvector，Git/Docker/Nginx/Linux为用户选型方向。用户熟悉Python、了解Go/Java不要求新增服务；三个LLM框架按需选择，RAG/MCP/工具调用服务主链，不能为凑技术清单扩围。具体版本/组合由架构论证与采用前检查确定；首版目标在本人Windows环境可运行，Linux部署未来验证。 |
+159: | CON-003 | 已取消的日期约束，编号保留：“2026.05–10”无截止含义，不作为开发排期。 |
+160: 
+161: 已批准路线为自有应用加必要组件，DeepTutor作参考，不整体采用。参考版本v1.6.4，commit 93df3d48b70586c36b20ebf82c613a67ed20677f；覆盖学习、状态、HTML、工具流程参考，不能把其评分、SQLite/FAISS和界面当本项目要求。退出不依赖运行DeepTutor，原件/关键记录/证据可携带。
+162: 
+163: 历史核查：DeepTutor根Apache-2.0不覆盖所有依赖；PyMuPDF存在AGPL/商业许可取舍，不因已安装实验就批准正式引入。实际选择复用代码时保留对应许可/署名/修改说明，具体分发/网络义务按该组件版本核查；未批准购买许可或承担强制开放源码义务。Redis/解析器/权重及其余实际依赖的版本和许可在正式引入前核实，有冲突则替换或另请用户作决定，不隐性接受。当前不将有许可未决的整个候选作为核心基础，故不以其整体许可阻塞本基线。
+164: 
+165: 退出成本包含重建索引/替换解析或模型适配；更换向量模型通常需要重新生成索引，不混用不同模型空间。最终检索策略、状态框架、worker和多Agent分工留架构阶段，不在本文定表或接口。
+166: 
+167: ## 10. 外部集成与费用
+168: 
+169: | ID | 优先级 | 边界与验收 |
+170: | --- | --- | --- |
+171: | INT-001 | Should | 外部教材/课标/题库/网站按内容许可、适用课程/版本和来源可追溯接入；来源未确定不得承诺全覆盖。 |
+172: | INT-002 | Must | 已有模型/Embedding/工具调用支持主链；准确记录请求与返回模型、能力/失败类型，提供超时/无效输出/额度不足的可理解状态，服务不可用不毁进度。不得要求多个框架或供应商同时运行才完成学习。 |
+173: 
+
+DocuN/evidence/TASK-117/orchestration-s06-20261016/X02-contract-correction.md
+1: # TASK117/R111 — X02验收命令映射纠正
+2: 
+3: 2026-10-16，Asia/Shanghai。主控核证补充，适用于原116批准AP1和117当前合成集成；不是新增产品采用包或执行者自签。用户已在工程窗选择“保留缺口，由主控补合同”，本文件处理该冲突。
+4: 
+5: ## 冲突与事实依据
+6: 
+7: 原116 acceptance-contract.md的X02写“修订body、撤销、删除三次明确动作”；主控后续S04/S05又要求不得将revoke重复计为独立delete。但原已批准G9设计、010及当前MemoryCommandInput仅定义save/revise/revoke/purge。MemoryService对明确确认的revoke提交墓碑，再用确定业务键调用purge；purge绑定原撤销收据、版本与清单hash，不能对active记忆任意执行。
+8: 
+9: 原始需求NFR-005、DR-002要求用户能查看、修正、删除记忆，没有要求数据库或HTTP必须存在名为delete的第三种独立命令。原G9合同TASK102的动作域、010不可变身份与清理通道、当前memory/contracts.py和service.py相互一致。010 purge_learning_memory逐版本核清单和正文hash后精确删除learning_memory_bodies，保留版本、依赖、收据和费用历史。
+10: 
+11: 本次是主控验收文字与已批准实现协议没有对齐，执行者没有擅自扩接口/迁移是正确行为。原116文件、S04/S05文字、用户保留决定和全部失败原件保留，不追写成原合同从来没有问题。
+12: 
+13: ## 当前有效验收解释
+14: 
+15: X02分别证明三个可观察效果，不再要求三个彼此独立的持久命令或三次新用户点击：
+16: 
+17: - 修订：新body/version与旧绑定区分，旧selection/body/dependency不授新调用，冻结在前的旧命令晚到不能污染当前结果。
+18: - 撤销：用户明确确认后先持久墓碑、停止使用。物理清理失败也不能复活或自动再调用，pending和done必须区分。
+19: - 删除正文：沿同一明确确认的撤销清单和受限purge证明本条各版本在线正文已移除；不能只因state=revoked就算物理删除。保存请求/关联正文按既有批准清理策略执行；原活动作答、不可变版本身份、最小墓碑/费用/unknown元数据和备份边界如实保留，不宣称擦除全部副本。
+20: 
+21: 同一revoke+purge业务轨迹可以为撤销效果和删除效果提供不同断言，但必须分别标证据，不能虚构两次独立操作或新的授权失效时点。原命令冻结后、撤销及清理完成才放行的真实晚到反例，可证明组合效果；不能声称单独purge对仍active的记忆产生了另一次资格转移。
+22: 
+23: 已存在且版本/对象适用的实际修订、撤销、purge done、正文行清空和晚到invalidated证据直接复用。缺的仅补目标对象的真实只读GET/SQL核对或受影响当前界面，不为凑第三次动作新建记忆、墓碑、model/Embedding发送或改旧deadline。purge失败/重试已有充分断言则继承，缺证才做原协议内有限反例。
+24: 
+25: 本更正不授新增delete action/endpoint、新表、改001—014、普通app直接DELETE、跳过影响确认或清理清单的权限，也不把源码存在/服务返回done单独当作全部物理效果证明。上述实效任何一项缺证，仍按具体缺口登记，不签X02整体通过。
+26: 
+27: ## 对R02和后续执行的影响
+28: 
+29: 撤销S05中“必须等新增独立delete持久合同”的编排前置。主控补的是验收映射，不要求新命令或新迁移。原用户保留记录作为历史保留，工程重读本补充后可核现有正文删除证据并继续原AP1。
+30: 
+31: 若没有真实新tombstone，且正常工作收口后当前(entity_kind,entity_id,effective_revision)仍全部被既有success01 plan覆盖，直接使用原sealed目标做正常正式只读切换，不再恢复。不能为删掉这一虚构前置而伪造overlay，存在实际新删除差异仍沿原产品plan_changed/新prepare和已明确条件目标规则处理。
+32: 
+33: 本补充由主控维护并随完整S稳定后的隔离集中独审核对，旧原文不改，工程不自签最终验收。
+
+DocuN/evidence/TASK-117/orchestration-s06-20261016/X02-source-basis.json
+1: {
+2:   "at": "2026-10-16T19:24:46.246679+08:00",
+3:   "correction": {
+4:     "exists": true,
+5:     "bytes": 4045,
+6:     "sha256": "338a8bd46d0e6394527bf95a2099e412ac211a4d23b247ee89363bcb06535900"
+7:   },
+8:   "files": [
+9:     {
+10:       "path": "D:\\shspic\\project_NO3_RetroLume-agent\\backend\\app\\memory\\contracts.py",
+11:       "exists": true,
+12:       "bytes": 8728,
+13:       "sha256": "4f5a50a34c73139068f1471f756f45d589e5251df83f456c62fd55a4453ed59d"
+14:     },
+15:     {
+16:       "path": "D:\\shspic\\project_NO3_RetroLume-agent\\backend\\app\\memory\\service.py",
+17:       "exists": true,
+18:       "bytes": 2295,
+19:       "sha256": "1c45f5a8c7516e98a49df959bae7e719d93471ac97191dee4bfd68ae509589b5"
+20:     },
+21:     {
+22:       "path": "D:\\shspic\\project_NO3_RetroLume-agent\\backend\\migrations\\010_learning_memory.sql",
+23:       "exists": true,
+24:       "bytes": 36546,
+25:       "sha256": "33df4bcd8c040035f360cfc21c845e8f54e426832959e41477e67496f733c83c"
+26:     },
+27:     {
+28:       "path": "D:\\shspic\\project_NO3_RetroLume-agent\\DocuN\\results\\TASK-102-result.md",
+29:       "exists": true,
+30:       "bytes": 82360,
+31:       "sha256": "f3bf109c1398b5cf1a8d112f4ebcc55db6d3c0a1f42dc2f92d7aff67377f22b3"
+32:     },
+33:     {
+34:       "path": "D:\\shspic\\project_NO3_RetroLume-agent\\DocuN\\evidence\\TASK-116\\design\\acceptance-contract.md",
+35:       "exists": true,
+36:       "bytes": 16315,
+37:       "sha256": "ed147e7e79763c454d712cf129f3d4e94634661d0385c8c3b781e1c058f66e3c"
+38:     },
+39:     {
+40:       "path": "D:\\shspic\\project_NO3_RetroLume-agent\\DocuS\\最终需求文档.MD",
+41:       "exists": true,
+42:       "bytes": 34489,
+43:       "sha256": "23ab269adebee9ef2f0e848d551105193c278a0adb498df6a18745b5d132760f"
+44:     }
+45:   ],
+46:   "facts": [
+47:     "MemoryCommandInput has save/revise/revoke/purge only",
+48:     "revoke explicitly requires purge_memory_content confirmation",
+49:     "MemoryService commits revocation then submits deterministic purge",
+50:     "purge requires original tombstone and exact immutable manifest",
+51:     "purge removes each targeted version body while retaining metadata",
+52:     "NFR005/DR002 require observable deletion, not literal independent delete action"
+53:   ],
+54:   "requires_new_adoption_package": false,
+55:   "product_physical_delete_not_accepted_from_source_alone": true
+56: }
+
+DocuN/evidence/TASK-117/orchestration-20261014/adoption-receipt.json
+1: {
+2:   "schema": "TASK117.user-adoption.v1",
+3:   "recorded_at": "2026-10-14T13:15:56.281944+08:00",
+4:   "user_statement": "一并批准",
+5:   "binding_context": "编排展示AP1新增数据/接口/权限与AP2后续仅合成DeepSeek/智谱合计80次20元、独审及核价条款后启用，用户明确同时批准",
+6:   "package_path": "DocuN/evidence/TASK-116/design/adoption-package.md",
+7:   "package_sha256": "84cb852946220a09873225f8bde7b7138aa7366e137297638bb2aab01dbc1c84",
+8:   "prior_main_decision": {
+9:     "path": "DocuN/results/TASK-116-work-decision.md",
+10:     "bytes": 6873,
+11:     "sha256": "5587bcdfbb7602ac1cbe174a7a40d850518e65dfda1f25d743102ace69ee8226"
+12:   },
+13:   "AP1": {
+14:     "adopted": true,
+15:     "migration": "014_step018_retrieval.sql",
+16:     "new_tables": [
+17:       "retrieval_spaces",
+18:       "retrieval_commands",
+19:       "retrieval_chunks"
+20:     ],
+21:     "new_activity_column": "outbound_grant_sha256 nullable",
+22:     "new_kind": "embedding",
+23:     "protocol": "v4 typed union, old v3 retained",
+24:     "profiles": [
+25:       "learning.v2",
+26:       "teaching.v3",
+27:       "interview.v2",
+28:       "data_exit.v1.r02"
+29:     ],
+30:     "R01_and_original_migrations": "001—013原字节与原包/有限验收保留",
+31:     "restore_execution": false
+32:   },
+33:   "AP2": {
+34:     "conditionally_authorized": true,
+35:     "activated": false,
+36:     "providers": [
+37:       "deepseek_chat_completions/deepseek-chat candidate",
+38:       "zhipu_embeddings/embedding-3/512 candidate"
+39:     ],
+40:     "data_class": "frozen_synthetic_necessary_fragments_only",
+41:     "max_total_requests": 80,
+42:     "max_total_cost_CNY": 20,
+43:     "cost_microunits_per_yuan": 1000000,
+44:     "reserve_per_call_microunits": 250000,
+45:     "includes_failed_timeout_unknown": true,
+46:     "implicit_retries": 0,
+47:     "activation_conditions": [
+48:       "稳定新增kind/权限/预算/数据profile完整候选独立审计可用结论",
+49:       "官方现行能力/模型别名/维度/计价/条款及必要账号条件核对",
+50:       "保守最坏单次费用含必要边界/25%裕量不超预留",
+51:       "主控Q启用回执和受信固定roster OutboundGrant"
+52:     ],
+53:     "validity_from_future_explicit_activation_hours": 72,
+54:     "real_user_data_or_databases": false,
+55:     "new_spend_or_provider_calls_now": 0,
+56:     "old_13_CNY_reused": false
+57:   },
+58:   "no_repeat_permission_for": "已批准范围内实施/合成验证/普通修复及未来满足条件的20元额度",
+59:   "not_authorized": [
+60:     "个人资料外发",
+61:     "用户库迁移/写入",
+62:     "新供应商/维度/服务",
+63:     "部署发布",
+64:     "真实付费早于条件",
+65:     "旧额度重置"
+66:   ],
+67:   "dispatch_state": "not_transferred_or_received"
+68: }

@@ -1,0 +1,23 @@
+--- pre/backend/app/activities/service.py
++++ current/backend/app/activities/service.py
+@@ -120,6 +120,10 @@
+                 return ContinuationOutcome("invalid_input")
+         except (ValueError,TypeError,AttributeError):
+             return ContinuationOutcome("invalid_input")
++        from app.interview.contracts import InterviewRefusal
++        try: await self.ledger.require_non_interview(activity_id)
++        except InterviewRefusal as exc: return ContinuationOutcome(exc.code)
++        if parent_operation_id.startswith("int10m.") or new_operation_id.startswith("int10m."):return ContinuationOutcome("interview_parent_forbidden")
+         selected=await self.ledger.read_memory_selection(activity_id)
+         if selected.get('selected') or not selected.get('eligible',True):
+             return ContinuationOutcome('memory_profile_required')
+@@ -206,6 +210,9 @@
+             validate_identity(activity_id,executor_id,operation_id,run_tag)
+         except (ValueError,TypeError,AttributeError):
+             return ToolActionOutcome("invalid_input")
++        from app.interview.contracts import InterviewRefusal
++        try: await self.ledger.require_non_interview(activity_id)
++        except InterviewRefusal as exc: return ToolActionOutcome(exc.code)
+         selected=await self.ledger.read_memory_selection(activity_id)
+         if (selected.get('selected') or not selected.get('eligible',True)) and not operation_id.startswith('teach8t.'):
+             return ToolActionOutcome('memory_profile_required')

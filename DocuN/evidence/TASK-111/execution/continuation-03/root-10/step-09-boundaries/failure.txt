@@ -1,0 +1,30 @@
+Traceback (most recent call last):
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task111\c03_step.py", line 81, in main
+    execute(resource,built,folder,action)
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task111\c03_matrix.py", line 227, in execute
+    if action=="boundaries":runner.run(boundaries(resource,built,folder))
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task111\c03_matrix.py", line 114, in boundaries
+    out=folder/"duplicate-init";out.mkdir();s=Session(h,item,out);await s.open();c=s.c
+                                                                  ^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task111\c03_matrix.py", line 28, in open
+    else:opened=await self.h.controller.open(aid,artifact["artifact_id"],command)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\preview\production_supervisor.py", line 151, in open
+    return await self._open_serial(aid,artifact_id,command)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\preview\production_supervisor.py", line 176, in _open_serial
+    row,created=await self.ledger.reserve_html_preview(aid,artifact_id,command,identity,reserve)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\preview\repository.py", line 347, in reserve_html_preview
+    return await self._transaction(transaction)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\activities\repository.py", line 343, in _transaction
+    raise AdmissionUnavailable("持久准入账本暂不可用") from None
+app.capabilities.contracts.AdmissionUnavailable: 持久准入账本暂不可用

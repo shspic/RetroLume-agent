@@ -1,0 +1,1 @@
+BEGIN IF OLD.memory_id='5036479e-7db2-49c0-a6ad-268ee9db98fd'::uuid AND OLD.version=2 THEN RAISE EXCEPTION 'task103 midway synthetic fault'; END IF; RETURN OLD; END

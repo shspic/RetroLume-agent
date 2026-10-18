@@ -1,0 +1,75 @@
+--- continuation-01/pre/upgrade_child.py (real-04 as-run before post-run fix)
++++ upgrade_child.py (current)
+@@ -136,9 +136,15 @@
+     for name, value in before["activity"].items():
+         assert after["activity"][name] == value, name
+     assert len(after["ops"]) == len(before["ops"]) == 3
++    new_op_columns = {"kind", "arguments_sha256", "tool_call_id"}
+     for old, new in zip(before["ops"], after["ops"]):
+-        assert new["kind"] == "model"
+-        assert {k: v for k, v in new.items() if k != "kind"} == old, new["operation_id"]
++        # F-U2修正：先断言行级新增集合精确为三列，并断言kind=model与两元数据NULL，
++        # 再从新行排除精确三列后与旧行原全部字段比较（不迁就测试改迁移）。
++        assert set(new) - set(old) == new_op_columns, new["operation_id"]
++        assert set(old) - set(new) == set(), new["operation_id"]
++        assert new["kind"] == "model", new["operation_id"]
++        assert new["arguments_sha256"] is None and new["tool_call_id"] is None, new["operation_id"]
++        assert {k: v for k, v in new.items() if k not in new_op_columns} == old, new["operation_id"]
+     assert after["results"] == before["results"]
+     constraints_after = conn.execute(
+         "SELECT count(*) AS n FROM pg_constraint WHERE conrelid='activity_operations'::regclass AND contype='c'"
+@@ -178,18 +184,31 @@
+                                                           payload_format=fmt, payload=text, payload_sha256=sha))
+         read = await ledger.read_committed_result(lifecycle_activity, "M1")
+         assert read.read_status.value == "committed_current" and read.kind == "model"
++        # 未配置额度拒工具：必须在租约存活期内、用工具键自身的上下文（T1），
++        # 否则会先命中lease_invalid或operation绑定校验而非tool_limit_unconfigured。
++        raw, digest = canonical_tool_arguments({"operation": "add", "left": 1, "right": 2})
++        call = ToolExecutionInput("T1", "calc.1", "finite_calculate", raw, digest)
++        tool_context = CallContext(activity_id=lifecycle_activity, operation_id="T1",
++                                   executor_id=lease.executor_id,
++                                   execution_generation=lease.execution_generation,
++                                   scope_revision=lease.scope_revision)
++        try:
++            await ledger.admit_tool_operation(ToolIntent(context=tool_context, call=call))
++        except AdmissionDenied as exc:
++            assert str(exc) == "tool_limit_unconfigured", str(exc)
++        else:
++            raise AssertionError("unconfigured tool admission unexpectedly allowed")
++        # 拒绝零副作用：键T1无操作行、额度仍0。
++        denied_ops = conn.execute(
++            "SELECT operation_id FROM activity_operations WHERE activity_id=%s AND operation_id='T1'",
++            (lifecycle_activity,)).fetchall()
++        assert denied_ops == [], denied_ops
++        assert conn.execute("SELECT tools_reserved FROM activities WHERE id=%s",
++                            (lifecycle_activity,)).fetchone()["tools_reserved"] == 0
+         await ledger.begin_window_close(lifecycle_activity, lease.executor_id, lease.execution_generation)
+         settled = await ledger.settle_execution_window(lifecycle_activity, lease.executor_id,
+                                                        lease.execution_generation, window_seconds=10, elapsed_seconds=1)
+         assert settled.name == "SETTLED"
+-        raw, digest = canonical_tool_arguments({"operation": "add", "left": 1, "right": 2})
+-        call = ToolExecutionInput("T1", "calc.1", "finite_calculate", raw, digest)
+-        try:
+-            await ledger.admit_tool_operation(ToolIntent(context=context, call=call))
+-        except AdmissionDenied as exc:
+-            assert str(exc) == "tool_limit_unconfigured", str(exc)
+-        else:
+-            raise AssertionError("unconfigured tool admission unexpectedly allowed")
+ 
+     asyncio.Runner(loop_factory=psycopg_compatible_loop_factory).run(lifecycle())
+     account = conn.execute(
+@@ -283,6 +302,14 @@
+     setup = connect("public", dict_rows=False)
+     identity = setup.execute("SELECT current_database(), current_user").fetchone()
+     assert identity == (UPGRADE_DB, ROLE), identity
++    precheck = {}
++    for key, schema in SCHEMAS.items():
++        exists = setup.execute(
++            "SELECT count(*) FROM information_schema.schemata WHERE schema_name=%s", (schema,)).fetchone()[0]
++        tables = setup.execute(
++            "SELECT count(*) FROM information_schema.tables WHERE table_schema=%s", (schema,)).fetchone()[0] if exists else 0
++        precheck[key] = {"schema": schema, "exists": bool(exists), "tables": tables}
++    emit(event="upgrade_schemas_precheck", **precheck)
+     for schema in SCHEMAS.values():
+         # 仅本卡在专用升级库内自建的合成schema：先清后建，保证跨批幂等重跑。
+         setup.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')

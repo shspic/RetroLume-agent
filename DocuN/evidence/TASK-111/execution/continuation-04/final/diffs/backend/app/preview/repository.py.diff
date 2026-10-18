@@ -1,0 +1,15 @@
+--- C04-pre/backend/app/preview/repository.py
++++ backend/app/preview/repository.py
+@@ -47,6 +47,12 @@
+         cursor = await connection.execute("""SELECT rolname,rolcanlogin,rolsuper,rolcreatedb,rolcreaterole,rolreplication,rolbypassrls
+           FROM pg_roles WHERE rolname IN ('retrolume_html_owner','retrolume_html_app') ORDER BY rolname""")
+         shape["roles"] = plain(await cursor.fetchall())
++        cursor = await connection.execute("""SELECT c.relname,a.attname,a.attacl::text AS column_acl,c.relacl::text AS table_acl
++          FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
++          JOIN pg_attribute a ON a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped
++          WHERE n.nspname='public' AND c.relname IN ('pdf_review_candidates','pdf_review_pages','pdf_extracted_pages')
++          ORDER BY c.relname,a.attnum""")
++        shape["qualification_column_acls"] = plain(await cursor.fetchall())
+         return shape
+ 
+     async def _html_assert_schema(self, connection):

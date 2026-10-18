@@ -1,0 +1,457 @@
+> **只读历史／已迁移（2026-09-13，Asia/Shanghai）**：当前唯一有效文件见 [docu/OPEN_SOURCE_RESEARCH.MD](../../docu/OPEN_SOURCE_RESEARCH.MD)。依据用户V3指令保留以下原文，不再双写；旧“当前/下一步/待批准”只属于原时点，不能作为现行动作。流程和导航已并入执行状态，全部旧编号与记录保留。
+
+# OPEN_SOURCE_RESEARCH
+
+## 1. 文档信息、结论与证据边界
+
+| 项目 | 内容 |
+| --- | --- |
+| 项目 / 版本 | 溯光教育Agent / RetroLume；v0.1 |
+| 状态 | 阶段 02 调研报告；复用建议待用户决定，非最终选型或架构基线 |
+| 调研日期 | 2026-09-03，Asia/Shanghai；版本、Issue、许可证和文档均为访问当日快照 |
+| 需求基线 | REQUIREMENTS.md v0.2，已确认的初步需求／非最终基线 |
+| 编制与验收 | Work 综合；TASK-001 产品取证，TASK-002 组件取证；最终 TASK/R 状态只在 PROJECT_FLOW.md 登记 |
+| 本轮操作 | 公开网页搜索、原始来源阅读与本地文档检查；未安装、克隆、运行第三方代码或调用模型 API，未上传资料 |
+| 阶段 03 路由 | **必须验证**：HYP-001～005 尚未取得本项目效果证据；新增 HYP-006 检验整体适配及退出是否优于模块组合 |
+
+**Work 判断：项目具有可实现的工程基础，但尚不能声称通用教学效果或首版可用性已证实。建议优先验证 DeepTutor 的整体适配程度，同时以模块组合为退出路线；不立即决定深度分叉。** 已找到学习领域实现、解析、检索引用和活动恢复机制；尚缺可核查的诊断效果、完整文字面试、全链路证据、受限 HTML 及异常恢复的组合证据。依据见第 4～10 节。
+
+标记口径：**事实**为实际读取的官方文档、源代码、许可证或发布记录；Issue 内容仍只是报告者声明。**推断**为 Work 对本项目的适配与成本分析；**建议**尚未获选型批准；**待核实**不作通过结论。源代码存在不等于运行通过；官方功能说明不等于独立效果验证。
+
+优先使用固定 tag；无法访问固定版本文件时明确写 main 快照或滚动文档，不将它们视为同一冻结版本。没有以 Star、Fork、宣传语或提交频率代替成熟度证据。本报告是公开来源调研和普通 Review，不是漏洞审计、法律结论或技术可行性实验。
+
+## 2. 需求基线与检索范围
+
+RetroLume 面向高中生、大学生，首位使用者为提出者本人；按每次资料与目标确定范围，不固定学科、课程或面试方向。主链为：
+
+**资料 → 理解与诊断 → 学习目标与路径 → 练习 → 反馈 → 交互解释 → 复测 → 更新路径。**
+
+| 基线 | 检索与评估关注点 |
+| --- | --- |
+| OBJ-001～003 | 原资料上下文、证据、完整学习闭环、首版可用的文字模拟面试 |
+| FR-001、012 的 Must 部分 | 文本、Markdown、可提取文字的 PDF、文字交互；不能将 OCR/语音依赖自动带入首版 |
+| FR-002～004、006～011 | 必要追问、知识库、正确性与冲突、目标路径、练习、诊断反馈、本地交互 HTML、复测及进度、文字面试 |
+| FR-005、INT-001 及其他 Should | 可信扩展资料与获准内容使用；图片、Office、扫描件逐项验证 |
+| NFR-001～005、DR-001～003 | 来源及版本定位、质量可检验、失败隔离、连续状态、可观察的停止及恢复 |
+| SEC-001～003 | 外传边界、工具权限、HTML 内容和执行边界；本地使用不代表数据不外传 |
+| 当前非目标 | 公开在线服务、生产发布、实时语音面试增强；不承诺所有学科效果一致可靠 |
+
+用户已允许产品采用外部模型／解析服务；具体供应商与数据条款未确定。一人配合开发 Agent，无硬截止日期；设备及现有 API 费用暂不阻塞，但一个 API 是否覆盖生成、嵌入、图片、工具调用和解析尚未核实。Python、React、TypeScript 等清单为技术输入，不是所有框架和服务均必须采用。
+
+需求问题的证据仍主要是提出者陈述，无真实效果或人群使用数据。本轮不能用候选产品存在证明用户价值。容量、时延、数据保存/删除、预算数值、商用及是否开放源码是待收敛项；不阻塞只读调研，但会影响具体采用与实施。
+
+## 3. 检索策略、候选筛选与资料来源
+
+实际检索围绕以下词组组合，随后打开官方仓库、release、源码、许可、Issue/PR、讨论及安全公告。中文用于课程资料和场景检索，英文用于组件能力与故障检索：
+
+| 方向 | 检索词组 |
+| --- | --- |
+| 产品与学习场景 | open source AI tutor / personalized learning / mastery path / learning feedback / mock interview / interactive HTML；DeepTutor、RAGFlow、Open Notebook、Dify |
+| 检索与证据 | RAG citation source_nodes provenance page metadata / hybrid retrieval BM25 / source conflict / citation offsets |
+| 状态与循环 | durable execution checkpoint interrupt resume / recursion limit / timeout retries / idempotency / partial failure |
+| 文件处理 | PDF Markdown document parsing page bbox / Docling provenance / pypdf extract text / conversion timeout |
+| 风险与退出 | repository LICENSE release security advisory issue Windows / export migration / dependency license |
+| 资料扩展 | 开放教材、课程标准、题库许可；OpenStax licensing、MIT OCW terms、教育部高中课程标准 |
+
+### 3.1 候选长名单与筛选结果
+
+深入分析五项，按完整产品与组件分开比较；相邻产品和简化替代只做定向简查，不宣称完成其全量审计。
+
+| 候选 / 原始入口 | 类型 | 纳入或暂不深入的理由 |
+| --- | --- | --- |
+| [DeepTutor](https://github.com/HKUDS/DeepTutor) | 教育产品 | 深入：与学习主链最接近，需检查真正的评分、状态与许可 |
+| [RAGFlow](https://github.com/infiniflow/ragflow) | 资料检索与 Agent 产品 | 深入：解析/引用相关，检验教育业务缺口和个人维护成本 |
+| [LlamaIndex](https://github.com/run-llama/llama_index) | 检索组件 | 深入：文档、检索与引用对象可复用，重点原文定位与版本边界 |
+| [LangGraph](https://github.com/langchain-ai/langgraph) | 活动编排组件 | 深入：连续状态、中断恢复、循环限制有直接需求映射 |
+| [Docling](https://github.com/docling-project/docling) | 文档解析组件 | 深入：结构、位置与失败处理机制适合检验证据链 |
+| [Open Notebook](https://github.com/lfnovo/open-notebook) | 资料工作台 | 简查：阅读/笔记/会话相关，已查公开资料未证明完整学习与面试流程 |
+| [Dify](https://github.com/langgenius/dify) | 通用应用平台 | 简查：编排可参考，教育业务仍需建设，品牌和多租户许可增加后续边界 |
+| [Haystack](https://docs.haystack.deepset.ai/docs/pipelines) | 检索/管线组件 | 同类备选：管线、循环和异步机制存在；未证明相对 LlamaIndex 的本项目增益，不同时引入 |
+| [pypdf](https://pypdf.readthedocs.io/en/stable/user/extract-text.html) | 简单 PDF 提取组件 | 保留为文字 PDF 的较轻比较基线；不提供 OCR，也不保证复杂版式提取正确 |
+| [Qdrant client](https://github.com/qdrant/qdrant-client) | 可选索引基础组件 | 本地内存或路径持久模式不需服务端；官方将本地模式用于开发/原型/测试，不能外推规模能力 |
+| [Redis](https://redis.io/legal/licenses/) / [Valkey](https://github.com/valkey-io/valkey/blob/unstable/COPYING) | 可选基础设施 | 用户提到 Redis，但尚无必须单独部署此类服务的需求；按确切版本核对许可，不先引入 |
+| 自有应用逻辑＋少量库 | 自主实现路线 | 保留：产品行为可控、退出较清楚，但界面、状态、恢复及评测工作由一人承担；未实现 |
+
+筛选优先级：需求覆盖与错误后果 → 许可证和安全边界 → 数据可携带 → 本地兼容 → 文档/测试及升级 → 初建与持续维护总成本。暂不扩大到语音平台、云部署、付费题库或更多同质聊天套壳，因为它们不解决当前关键决策。
+
+### 3.2 教材、课程标准与题库的单独边界
+
+代码许可与学习内容许可分别核查；开放网页不代表可无限抓取、再分发或商业使用。本轮只确认代表性入口，未导入资料，不固定首个学科。
+
+| 来源 | 核实结果 | 对 FR-005、INT-001、CON-001 的含义 |
+| --- | --- | --- |
+| OpenStax 具体教材 | 当前《Introduction to Computer Science》前言写 CC BY-NC-SA 4.0，并说明部分章末答案在教师资源内，不在学生教材中。[前言与许可](https://openstax.org/books/introduction-computer-science/pages/preface) | 可作非商业教材候选，逐书逐版本保留署名/相同方式共享要求；不能假设所有题目自带可公开获得的答案，也不概括全部历史教材许可 |
+| MIT OpenCourseWare | 当前条款为 CC BY-NC-SA 4.0，限制商业内容使用及暗示 MIT 背书；页面另有 AI 训练条款。[官方条款](https://ocw.mit.edu/pages/privacy-and-terms-of-use/) | 可作课程资料候选；检索使用、输出再分发与训练应分别判断。本项目没有训练任务，不把训练条款机械等同于 RAG 结论 |
+| 中国教育部课程标准入口 | 搜索取得官方高中课程标准通知及目录，但本轮打开原页超时，未读附件。[官方目录](https://www.moe.gov.cn/jyb_xxgk/xxgk/neirong/fenlei/kcjc/kcjc_js/kcjcjs_xkkcbz/) | 仅保留检索线索；适用地区/学段/学科/现行版本及附件使用边界待核实，不能当作已接入规范库 |
+| 用户原始题库、简历、教程 | 来源由用户提供；尚未取得样本或许可证明 | 首轮实验可用自编、脱敏或明确获准样本。题库聚合与付费内容不在本轮接入范围 |
+
+## 4. 五项代表性候选分析
+
+### 4.1 DeepTutor：优先验证整体适配，暂不决定分叉
+
+**事实：版本与结构。** 官方发布 v1.6.4，提交缩写 93df3d4；发布正文日期 2026-09-03，GitHub 显示 Sep 02 17:39，未取得完整时间戳，不混造时区。v1.6.3（6e6e56a）明确包含前后端 breaking refactor。[v1.6.4](https://github.com/HKUDS/DeepTutor/releases/tag/v1.6.4)、[v1.6.3](https://github.com/HKUDS/DeepTutor/releases/tag/v1.6.3)
+
+固定 tag 部分源码访问失败，以下实现均是 **main 快照**。前端为 Next/React/TypeScript，后端 Python/FastAPI，并使用 LlamaIndex、FAISS 等依赖；不是独立小型检索库。[前端配置](https://github.com/HKUDS/DeepTutor/blob/main/web/package.json)、[后端配置](https://github.com/HKUDS/DeepTutor/blob/main/pyproject.toml)
+
+**事实：覆盖。** 官方 Home、Knowledge Center、Mastery Path 有资料上下文、追问、知识库及掌握路径；对应 FR-001～004、006～008、010、012 的部分机制。[Home](https://docs.deeptutor.info/explore/chat-workspace/)、[知识库](https://docs.deeptutor.info/explore/knowledge/)、[Mastery Path](https://docs.deeptutor.info/explore/mastery-path/)
+
+- main 学习模型包含诊断、解释、Feynman 检查、练习、错误诊断、复习阶段，以及错误和问答事务记录。[models.py](https://github.com/HKUDS/DeepTutor/blob/main/deeptutor/learning/models.py)
+- 静态调用链为 MasteryGradeTool → grade_interaction → _apply_grade → grade_answer/classify_error，并更新记录与复习；重复题目 ID 会使用已存结果。这是调用关系证据，未运行验证。[tools.py](https://github.com/HKUDS/DeepTutor/blob/main/deeptutor/capabilities/mastery/tools.py)、[service.py](https://github.com/HKUDS/DeepTutor/blob/main/deeptutor/learning/service.py)
+- 短答有字符串相似度评分，开放答有关键词覆盖规则；初步错误分类区分空答/非空错误并留有后续 LLM 分类说明。**推断：** 等价表达、否定词、单位变化、关键词齐全但逻辑错误是必要反例，不能默认它能可靠诊断通用学习错误。[grading.py](https://github.com/HKUDS/DeepTutor/blob/main/deeptutor/learning/grading.py)
+- 掌握度基于近期答题表现及证据量；不同学习类型使用阈值或质性判断，存在显式 learner override。**这些是候选规则，不是 RetroLume 的已批准教学标准。**[mastery.py](https://github.com/HKUDS/DeepTutor/blob/main/deeptutor/learning/mastery.py)、[policy.py](https://github.com/HKUDS/DeepTutor/blob/main/deeptutor/learning/policy.py)
+- Book 支持交互 HTML 组件及 sandboxed viewer，也有暂停/恢复和 Markdown 导出。应用内 HTML 可能满足 FR-009 的一种实现；**独立、自包含 HTML 导出尚未证实，而且不是当前明确 Must，不能据此宣布需求缺口。**[Book](https://docs.deeptutor.info/explore/book/)
+
+**待核实：** 本轮在 README、能力目录和学习/会话文档中未找到完整文字面试流程；不能以普通聊天替代 FR-011 验收，也不声称全仓库绝对不存在。资料替换的旧证据有效性、逐文件隔离、全链路预算、诊断质量和恢复需 HYP-001～005。资料覆盖检查不等于每项结论都有有效引用。
+
+**维护/工程事实。** main 有 Ruff、pytest、前端检查及测试脚本；未取得目标 tag 全部 CI 通过证据。[CI](https://github.com/HKUDS/DeepTutor/blob/main/.github/workflows/tests.yml) Windows Issue #1183 于 2026-09-02 报告 v1.6.3/Python 3.12 的 fcntl 导入失败，访问时 Open；日志同时有服务器启动完成，不能扩大为整个产品不能启动；v1.6.4 是否修复待核实。[Issue #1183](https://github.com/HKUDS/DeepTutor/issues/1183)
+
+**许可事实。** 根许可 Apache-2.0，但默认依赖包含 PyMuPDF>=1.26.0，后者为 AGPL/商业双许可。第三方 notices 也不能代替完整依赖清单。[根许可](https://github.com/HKUDS/DeepTutor/blob/main/LICENSE)、[依赖](https://github.com/HKUDS/DeepTutor/blob/main/pyproject.toml)、[PyMuPDF 许可](https://pymupdf.readthedocs.io/en/latest/about.html#license)、[第三方 notices](https://raw.githubusercontent.com/HKUDS/DeepTutor/main/THIRD_PARTY_NOTICES.md)
+
+**建议与成本推断。** 优先做整体适配验证，可节省资料 UI、学习状态和会话初建；最大代价是评分/路径适配、能力权限收缩、近期重构跟进及迁移回归。若必须重写评分、证据、路径、持久状态多个内核，不建议长期深度分叉。退出需可携带的原件、引用、问答、错题、路径/复习记录；仅 Markdown 导出或 data 备份不能证明跨产品迁移。
+
+### 4.2 RAGFlow：资料检索底座备选，不作为默认教育整机
+
+**事实：** stable v0.27.1，2026-08-28，b9df87c；与 nightly 区分。本轮读取固定版本许可、Compose 和关键源码。[release](https://github.com/infiniflow/ragflow/releases/tag/v0.27.1)
+
+定位为资料处理、检索与 Agent/workflow 平台。引用格式化代码保留文档 ID、名称、位置、URL 等，适合 FR-001、003、004 的底座；组件可用不证明来源支持结论。[项目入口](https://github.com/infiniflow/ragflow)、[引用实现](https://github.com/infiniflow/ragflow/blob/v0.27.1/rag/prompts/generator.py) 文本转换组件有取消和执行超时机制，但单组件超时不等于学习任务总预算。[StringTransform](https://github.com/infiniflow/ragflow/blob/v0.27.1/agent/component/string_transform.py)
+
+公开核查未证实 FR-006～011 的完整学习/面试领域流程；通常仍需教育状态、诊断、路径、面试与教学 HTML。代码执行工具不能直接视为 FR-009。
+
+**本地结构与维护事实。** README 给出至少 4 核、16 GB RAM、50 GB 磁盘及 Docker 的要求；固定 Compose 涉及文档引擎选项、MySQL、对象存储、Valkey/Redis 等，不能理解为所有引擎都同时必需。[部署说明](https://github.com/infiniflow/ragflow)、[固定 Compose](https://github.com/infiniflow/ragflow/blob/v0.27.1/docker/docker-compose-base.yml) PR #18860 于 2026-08-27 合并，修复 chat PDF parser dispatch，10 checks passed，release 包含该修复；仅证明这项记录。[PR #18860](https://github.com/infiniflow/ragflow/pull/18860) main CI 有单测/SDK/API/CLI 测试，部分依赖 self-hosted runner 和标签，未全面运行。[CI](https://github.com/infiniflow/ragflow/blob/main/.github/workflows/tests.yml)
+
+**许可/安全。** 固定版本根许可 Apache-2.0；模型、解析器、容器和基础设施需单独盘点。[固定 LICENSE](https://github.com/infiniflow/ragflow/blob/v0.27.1/LICENSE) 历史模板注入及 MinerU ZIP 安全公告，与当前源码已有防护变化并存，详见第 6 节，不能从公告空白补丁字段直接判最新版本有漏洞。
+
+**建议与成本推断。** 保留为外部检索服务或资料管理参考。对一人首版，多服务备份、索引、升级和教育业务自建成本可能大于收益；当资料规模/解析管理需求显著增加时重评。退出保留原件及独立位置元数据，可重建索引；内部 dataset/chunk ID、workflow 定义要有映射。全量导出与切换尚未实测。
+
+### 4.3 LlamaIndex：检索与引用组件候选
+
+**事实：** v0.14.24，2026-08-19，9ba74b8。它是检索/数据接入框架，不是教育产品；核心许可 MIT，LlamaParse/LlamaCloud 的服务与数据条款另算。[release](https://github.com/run-llama/llama_index/releases/tag/v0.14.24)、[核心许可](https://raw.githubusercontent.com/run-llama/llama_index/main/LICENSE)、[官方范围](https://github.com/run-llama/llama_index)
+
+CitationQueryEngine 对检索节点再切分并返回 source_nodes，支持检索器/后处理器组合；引用要求主要通过提示词实现。PR #22537 于 2026-08-11 合并并进入该版本，修复引用子块共用 ID，但把不正确的字符偏移清为 None，**未自动重建精确原文位置**。[固定实现](https://raw.githubusercontent.com/run-llama/llama_index/v0.14.24/llama-index-core/llama_index/core/query_engine/citation_query_engine.py)、[PR #22537](https://github.com/run-llama/llama_index/pull/22537)
+
+默认 PDFReader 使用 pypdf，逐页元数据包含 page_label/文件名；整份合并模式会失去逐页文档边界，不提供 bbox。[固定 PDFReader](https://raw.githubusercontent.com/run-llama/llama_index/v0.14.24/llama-index-integrations/readers/llama-index-readers-file/llama_index/readers/file/docs/base.py) 官方已有 BM25 与混合检索示例；尚未证明中文、当前资料、重排的收益。[检索文档](https://developers.llamaindex.ai/python/framework/integrations/retrievers/bm25_retriever/)
+
+**覆盖与缺口。** FR-003/004、NFR-001 的索引/检索/引用机制可复用；FR-002、006～011 的教育语义、证据冲突处理、计算核验和用户进度不由引用组件自动提供。NFR-001 需原件版本、物理页/文本位置、解析块与引用块映射；把页标签直接等同物理页序可能误定位。
+
+**工程与风险。** main 有多 Python 版本单测；引用 PR 页面只取得 8/11 checks passed，不能报全通过。独立集成包需要单独控制版本；已有 SQL 注入公告见第 6 节。[CI](https://raw.githubusercontent.com/run-llama/llama_index/main/.github/workflows/unit_test.yml)、[安全政策](https://raw.githubusercontent.com/run-llama/llama_index/main/SECURITY.md)
+
+**建议/成本/退出。** 模块组合路线保留为检索候选，无需同时采用其 Agent 编排。比较小样本简单检索、BM25、向量/混合的实际效果，先不决定 GraphRAG、top-k 或重排。适配和升级成本中等，退出保留原文、独立证据记录，重建索引；不要让长期学习记录只能由内部 Node 对象解释。
+
+### 4.4 LangGraph：活动状态与恢复组件候选
+
+**事实：** 核心 1.2.11，2026-08-11，644815f；仓库另发 SDK 0.4.4，不能混用版本。核心 MIT，可自运行；托管部署/观测不是必选。[核心 release](https://github.com/langchain-ai/langgraph/releases/tag/1.2.11)、[固定许可](https://raw.githubusercontent.com/langchain-ai/langgraph/1.2.11/LICENSE)、[官方范围](https://github.com/langchain-ai/langgraph)
+
+checkpointer 保存 thread 执行状态，Store 处理跨 thread 应用数据；内存 saver 不耐重启，本地 SQLite 是独立包。sync/async/exit 持久化模式有不同崩溃丢失窗口，成功节点的 pending writes 可供失败恢复。[Persistence](https://docs.langchain.com/oss/python/langgraph/persistence)、[Checkpointers](https://docs.langchain.com/oss/python/langgraph/checkpointers)
+
+**关键边界：**
+
+- interrupt 恢复会从所在节点开头重新执行；重放后续步骤可能重新调用模型或工具。因此有 checkpoint 不等于所有外部副作用恰好一次。[Interrupts](https://docs.langchain.com/oss/python/langgraph/interrupts)、[Replay](https://docs.langchain.com/oss/python/langgraph/checkpointers#replay)
+- recursion_limit 是一次执行的 super-steps 上限，不是总工具数、token、费用或跨恢复预算；当前文档列默认 1000，可配置。[Graph API](https://docs.langchain.com/oss/python/langgraph/graph-api#recursion-limit)
+- 当前 >=1.2 文档支持异步节点 timeout/重试/错误处理；timeout 限一次 attempt，重试重新计时，idle_timeout 可随进度刷新。仍需总 deadline 和取消/预算组合验证。[Fault tolerance](https://docs.langchain.com/oss/python/langgraph/fault-tolerance)
+
+**覆盖与缺口。** 支持 FR-010、NFR-002/003/005 的底层机制；学习记忆含义、路径改变理由、工具权限、HTML 隔离、资料跳过与替换仍由应用规定。主链可用显式流程实现，不需要仅因用 LangGraph 就增加多个 Agent。
+
+**工程/风险。** CI 有多 Python 版本测试；2026-08-07 合并的 PR #8537 补充 checkpoint conformance 执行，但当时说明以异步 saver 为主。checkpoint/sqlite 曾有安全公告；核心 1.2.11 的依赖范围仍允许有相关公告的 checkpoint 4.1.0，需核查最终解析的依赖版本。[CI](https://raw.githubusercontent.com/langchain-ai/langgraph/main/.github/workflows/_test_langgraph.yml)、[PR #8537](https://github.com/langchain-ai/langgraph/pull/8537)、[固定依赖](https://raw.githubusercontent.com/langchain-ai/langgraph/1.2.11/libs/langgraph/pyproject.toml)
+
+**建议/成本/退出。** 复杂连续活动可能受益；同时比较简单显式状态机＋持久化。主要成本是恢复、reducer、状态演进和副作用处理。长期学习业务数据应能独立导出，不能把所有记忆等同 checkpoint；退出需替换恢复机制并迁移未完成活动。没有理由预先引入第二套编排引擎。
+
+### 4.5 Docling：结构化解析候选，需与较轻提取方案比较
+
+**事实：** v2.124.0，2026-08-31，699e20f；核心 MIT。支持 PDF、Markdown、DOCX/XLSX/PPTX 等；旧 DOC/XLS/PPT 另需 LibreOffice，不能把 Office 视作一种无附加依赖的能力。[release](https://github.com/docling-project/docling/releases/tag/v2.124.0)、[固定许可](https://raw.githubusercontent.com/docling-project/docling/v2.124.0/LICENSE)、[格式](https://docling-project.github.io/docling/usage/supported_formats/)
+
+DoclingDocument 表达文档层级、表格、图片及位置；ProvenanceItem 有 page_no/bbox/charspan。并非所有格式或后端都能提供相同位置精度。[文档模型](https://docling-project.github.io/docling/concepts/docling_document/)、[字段](https://docling-project.github.io/docling/reference/docling_document/) 维护者在 Discussion #1012（2025-02-18，已回答）说明 Markdown/HTML 中转会丢页码/bbox，JSON 可保留完整结构。[讨论](https://github.com/docling-project/docling/discussions/1012)、[序列化](https://docling-project.github.io/docling/concepts/serialization/)
+
+convert_all 可用 raises_on_error=False 收集失败结果；默认会抛错，文件/页数上限可配。document_timeout 默认 None，文档说明超时可返回 PARTIAL_SUCCESS 和 TIMEOUT，仍不能等同完整批次隔离或取消机制。[Converter](https://docling-project.github.io/docling/reference/document_converter/)、[固定配置](https://raw.githubusercontent.com/docling-project/docling/v2.124.0/docling/datamodel/pipeline_options.py)
+
+**成本与维护事实。** 当前 docling 元包依赖 docling-slim[standard]；默认模型首次使用可能下载，PDF OCR/表格及模型缓存增加成本。main CI 有普通/ML 测试，Windows/macOS smoke lane 可选，未证明当前 Windows 的完整兼容。[包配置](https://raw.githubusercontent.com/docling-project/docling/v2.124.0/packages/docling/pyproject.toml)、[高级选项](https://docling-project.github.io/docling/usage/advanced_options/)、[CI](https://raw.githubusercontent.com/docling-project/docling/main/.github/workflows/ci.yml)
+
+docling-core #710（2026-08-05，Open）报告跨页列表逐页/整体 Markdown 空白差异，报告版本 2.87.1/2.90.0；未证明最新已修，也不代表原文移到了错误页。[Issue #710](https://github.com/docling-project/docling-core/issues/710) HTML/ODF 解析安全公告详见第 6 节。模型许可单独核对：Heron 模型卡 Apache-2.0，docling-models 当前卡片列 CDLA-Permissive-2.0 和 Apache-2.0，具体权重与 revision 尚未选定。[Heron](https://huggingface.co/docling-project/docling-layout-heron)、[模型集合](https://huggingface.co/docling-project/docling-models)
+
+**建议/覆盖/退出。** 可为 FR-001/004、NFR-001 提供结构底座；不直接提供教学 HTML、知识诊断或路径。文字 PDF 先与 pypdf 比较；只有版式/表格/位置收益足够才承担模型依赖。保留原件、解析选项、JSON 和 schema 版本，Markdown 作为投影；更换解析器时可重解析并复核旧引用。
+
+## 5. 需求覆盖矩阵与同类横向比较
+
+### 5.1 功能需求覆盖
+
+状态严格使用：完整支持／部分支持／不支持／待核实／不适用。“完整支持”也只表示公开机制覆盖该条文字要求，不能替代验收；本轮没有候选被证明完整满足所有 Must。“部分支持”表示已有直接机制但仍缺行为或效果；“不适用”表示该组件本身不承担此类产品功能，而非项目不需要。矩阵证据对应第 4 节各候选。
+
+| 需求与当前范围 | DeepTutor | RAGFlow | LlamaIndex | LangGraph | Docling |
+| --- | --- | --- | --- | --- | --- |
+| FR-001 Must：文本/MD/文字 PDF、定位、逐文件失败与替换 | 部分支持 | 部分支持 | 部分支持 | 不适用 | 部分支持 |
+| FR-002 Must：意图及必要追问、可纠正理解 | 部分支持 | 部分支持 | 待核实 | 部分支持 | 不适用 |
+| FR-003 Must：个人知识库与连续资料范围 | 部分支持 | 部分支持 | 部分支持 | 部分支持 | 不适用 |
+| FR-004 Must：依据、计算、冲突、缺证据处理 | 部分支持 | 部分支持 | 部分支持 | 不适用 | 部分支持 |
+| FR-005 Should：可信资料推荐与获准内容使用 | 部分支持 | 部分支持 | 部分支持 | 不适用 | 不适用 |
+| FR-006 Must：与目标/诊断关联的个性化路径 | 部分支持 | 待核实 | 不适用 | 不适用 | 不适用 |
+| FR-007 Must：有依据的问答与练习 | 部分支持 | 部分支持 | 部分支持 | 不适用 | 不适用 |
+| FR-008 Must：错误判断/归因假设及针对反馈 | 部分支持 | 待核实 | 不适用 | 不适用 | 不适用 |
+| FR-009 Must：可交互且内容/边界可核查的本地 HTML | 部分支持 | 待核实 | 不适用 | 不适用 | 不适用 |
+| FR-010 Must：复测理由、路径更新与进度 | 部分支持 | 待核实 | 不适用 | 部分支持 | 不适用 |
+| FR-011 Must：完整文字面试与有依据反馈 | 待核实 | 待核实 | 不适用 | 不适用 | 不适用 |
+| FR-012 Must：文字与当前活动衔接 | 部分支持 | 部分支持 | 部分支持 | 部分支持 | 不适用 |
+| FR-001/012 Should：图片、Office、扫描件 | 部分支持 | 部分支持 | 部分支持 | 不适用 | 部分支持 |
+| FR-012 Could/Later：语音及实时面试增强 | 部分支持 | 部分支持 | 待核实 | 不适用 | 不适用 |
+
+机制不足的含义：LangGraph 的暂停/状态只给 FR-002/003/010/012 提供底层支持，不负责理解或评价；Docling 对 FR-004 只贡献可定位内容；LlamaIndex 问答不等于教育练习体系。任何“待核实”的 Must 在阶段 03/04 必须变成可验证缺口、可实现方案或明确阻塞，不能靠普通聊天提示词宣告满足。
+
+### 5.2 非功能、数据、安全覆盖
+
+| 需求 | DeepTutor | RAGFlow | LlamaIndex | LangGraph | Docling | 仍须验证或自主负责 |
+| --- | --- | --- | --- | --- | --- | --- |
+| NFR-001 全链路证据 | 部分支持 | 部分支持 | 部分支持 | 不适用 | 部分支持 | 从原件到判断、题目、解释和路径变更，不能仅保留检索引用 |
+| NFR-002 失败/替换/中断 | 部分支持 | 部分支持 | 待核实 | 部分支持 | 部分支持 | 成功项保留、旧结果拒收、恢复入口和逐文件独立状态 |
+| NFR-003 上限与停止 | 部分支持 | 部分支持 | 待核实 | 部分支持 | 部分支持 | 次数/时长/重试/工具/费用累计及停止后的可用结果 |
+| NFR-004 质量可检验 | 部分支持 | 部分支持 | 部分支持 | 不适用 | 部分支持 | 用户任务样例、人工依据与失败阈值 |
+| NFR-005 上下文/记忆/工具/状态 | 部分支持 | 部分支持 | 部分支持 | 部分支持 | 不适用 | 长期学习信息的含义、修正/删除、权限及不增长失控 |
+| DR-001 资料版本与证据位置 | 部分支持 | 部分支持 | 部分支持 | 不适用 | 部分支持 | 文件替换、解析变化、旧引用与新结论关系 |
+| DR-002 保存学习活动及复测 | 部分支持 | 待核实 | 不适用 | 部分支持 | 不适用 | 数据可携带、恢复后的语义一致性 |
+| DR-003 可理解的结果与部分成果 | 部分支持 | 部分支持 | 待核实 | 部分支持 | 部分支持 | 用户可见状态、失败原因与继续方式 |
+| SEC-001 访问/传输/保留/删除 | 待核实 | 待核实 | 待核实 | 待核实 | 部分支持 | 所选供应商、日志、模型缓存、真实资料保存及删除范围 |
+| SEC-002 工具与资料不能扩权 | 部分支持 | 部分支持 | 部分支持 | 部分支持 | 部分支持 | 数据与指令分离、动作许可、路径/URL/参数校验 |
+| SEC-003 HTML 正确性与执行边界 | 部分支持 | 待核实 | 不适用 | 不适用 | 不适用 | 生成内容的运行隔离与计算/交互正确性；输入解析安全另算 |
+
+INT-001 见第 3.2 节；INT-002 和 CON-002 通过按需复用评估处理，不以技术数量验收。CON-001 保留原资料范围、规范/计算与冲突原则。CON-003 已取消日期约束解释，本轮不重新分配。
+
+### 5.3 同类型比较
+
+**完整产品：**
+
+| 候选 | 相对适配优势 | 主要新增工作与持续代价 | 当前定位 |
+| --- | --- | --- | --- |
+| DeepTutor | 有直接学习领域模型、练习/复习及可视化 | 通用评分、面试、证据/恢复验证；近期重构和依赖许可 | 优先验证整体适配 |
+| RAGFlow | 资料管理、解析检索、引用较集中 | 教育业务基本仍需建立，多服务运维与安全回归 | 检索底座备选 |
+| Open Notebook | 本地资料、笔记、上下文会话 | 诊断/复测/路径和面试缺少本轮完整证据 | 体验参考 |
+| Dify | 可视化流程、模型工具和 API | 教育状态/体验另建；品牌/多租户许可边界 | 编排体验参考 |
+
+Open Notebook 当前 release v1.14.0（2026-07-21，30c7e2a），MIT；release 含 provider DNS rebinding 防护，但不说明全部安全问题均已解决。[release](https://github.com/lfnovo/open-notebook/releases/tag/v1.14.0)、[许可](https://github.com/lfnovo/open-notebook/blob/main/LICENSE) Dify 当前 release 1.17.0（2026-08-25，09a855d）；许可为附加条件的 Apache 派生许可，不能简称纯 Apache-2.0。[release](https://github.com/langgenius/dify/releases/tag/1.17.0)、[许可](https://github.com/langgenius/dify/blob/main/LICENSE)
+
+**检索及管线：**
+
+| 候选 | 何时更适合 | 最大代价 / 未验证项 |
+| --- | --- | --- |
+| LlamaIndex | 需要文档接入、检索器组合、引用对象及集成 | 包版本和隐式默认行为；精确证据映射需自建 |
+| Haystack | 需要显式检索管线、循环和异步组件 | 本项目中文检索/引用适配未测；不要与另一完整编排重复叠加 |
+| 少量库＋应用逻辑 | 输入范围窄、检索简单、希望少依赖 | 索引、检索、引用与可观测性要自行维护 |
+
+Haystack 官方有有界组件循环和异步管线；一个组件报错会取消并等待在途兄弟任务，不能自动满足逐文件失败隔离。[管线文档](https://docs.haystack.deepset.ai/docs/pipelines) 根许可 Apache-2.0。[许可](https://github.com/deepset-ai/haystack/blob/main/LICENSE)
+
+**解析与状态分别比较：**
+
+| 职责 | 较完整方案 | 较轻比较基线 | 选择依据 |
+| --- | --- | --- | --- |
+| 文字 PDF | Docling 结构化结果 | pypdf 逐页提取；文本/MD 直接处理 | 保留位置/表格的实测收益是否超过模型与依赖成本 |
+| 连续活动 | LangGraph 持久化与恢复 | 应用显式状态机及持久化 | 中断/恢复/分支复杂度是否足以抵消框架学习与升级成本 |
+
+pypdf 为 BSD-3-Clause，需保留相应声明且不得暗示作者背书；不具备 OCR。[许可](https://github.com/py-pdf/pypdf/blob/main/LICENSE)、[提取限制](https://pypdf.readthedocs.io/en/stable/user/extract-text.html) 上表自主路线只是比较方案，未选型或实现。
+
+## 6. 已暴露风险、许可证与安全记录
+
+### 6.1 许可边界
+
+以下是技术复用决策支持。高影响的分发/网络服务/组合许可问题在实际采用前按具体组合确认，必要时专业复核；本轮不替用户决定开源方式，也不购买商业许可。
+
+| 对象 | 已核实许可与主要义务 | 本地与未来边界 / 当前处置 |
+| --- | --- | --- |
+| DeepTutor、RAGFlow 根项目；Haystack；Qdrant client | Apache-2.0：允许修改和商业使用，分发保留许可证、适用声明/NOTICE并标记修改；无商标授权，根许可不要求因网络服务公开自有代码 | 只适用于相应代码；模型、容器、默认依赖另核对。Qdrant client 许可见[原文](https://github.com/qdrant/qdrant-client/blob/master/LICENSE) |
+| LlamaIndex、LangGraph、Docling 核心；Open Notebook | MIT：允许使用/修改/分发，复制或实质部分保留版权与许可文本；核心许可无网络开源义务 | 不覆盖外部模型权重、托管服务数据条款及所有插件 |
+| pypdf；Valkey | BSD-3-Clause：保留版权/许可/免责条款，不得未经允许借作者名义背书 | 是备选，不构成引入批准 |
+| DeepTutor 默认 PyMuPDF | AGPL / 商业双许可 | 私人本地使用与未来分发/向他人提供修改程序的网络交互分别分析；不能从根 Apache 推出所有依赖宽松，也不能简单断言整个 RetroLume 必须 AGPL |
+| Dify | 附加条件的 Apache 派生许可：多租户环境须书面授权；使用其前端时不能移除/修改 LOGO 或版权信息 | 当前单人本地不直接等同多租户，但未来品牌和公开服务有额外成本；暂不默认采用 |
+| Redis | 官方按版本区分：<=7.2 BSD；7.4～7.8 RSALv2/SSPL；8+ 提供 RSALv2/SSPLv1/AGPLv3 选项 | 不以“Redis 是开源”概括全部版本；RSAL/SSPL 不是 OSI 认可开源许可；当前无必须引入的证据 |
+| Docling 模型、OCR、嵌入/重排模型 | 依具体模型卡及 revision 核查，不能继承代码 MIT | 选定组合前保留待核实；下载和实际使用未执行 |
+| 教材、题库、网站内容 | 与软件许可独立；第 3.2 节存在非商业/署名/相同方式共享及答案访问限制 | 不把网上可读作为全量抓取、商业使用、上传第三方或再分发许可 |
+
+通用条款依据：[Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0)、[MIT](https://opensource.org/license/mit)、[AGPL-3.0 文本](https://spdx.org/licenses/AGPL-3.0-only.html)、[Redis 官方许可](https://redis.io/legal/licenses/)。其中 AGPL 的网络条款针对修改版本与远程交互等具体条件；结合、分发及商用方案须按事实判断，不把实验运行当作法律验证。
+
+### 6.2 相关安全与缺陷证据抽查
+
+日期/状态是当日公开快照。这些记录用来决定防护和验证范围，不是完整漏洞清单；未执行漏洞复现或扫描。
+
+| 对象与原始证据 | 时间、受影响/修复与当前证据 | 对 RetroLume 的影响与规避/验证 |
+| --- | --- | --- |
+| DeepTutor [#1183](https://github.com/HKUDS/DeepTutor/issues/1183) | 2026-09-02，Open；用户报告 v1.6.3/Windows 的 cron fcntl 错误；v1.6.4 影响未确认 | 若测试整体路线，必须固定版本检查 Windows 启停/后台状态；不能宣称全部启动失败 |
+| LlamaIndex [#22537](https://github.com/run-llama/llama_index/pull/22537) | 2026-08-11 merged，0.14.24 包含；引用块 ID 修复，精确字符偏移未重建 | HYP-001/002 检查页和原文片段；不得按引用编号验收证据 |
+| LlamaIndex [GHSA-v3c8-3pr6-gr7p](https://github.com/advisories/GHSA-v3c8-3pr6-gr7p) | 2025-06-05 发布、2026-07-21 更新；公告列 <0.12.28 受影响，0.12.28 修复，涉及向量库集成 | 当前核心版本高于公告修复版本，但最终集成包组合未定；逐包核查并限制输入 |
+| LangGraph [GHSA-fjqc-hq36-qh5p](https://github.com/langchain-ai/langgraph/security/advisories/GHSA-fjqc-hq36-qh5p) | 2026-05-22；checkpoint <=4.1.0，4.1.1 修复；前提是未授权方能篡改存储字节 | 核心 1.2.11 的范围仍允许旧 checkpoint；核查实际依赖与存储完整性。不是一般用户发消息即可触发 |
+| LangGraph [GHSA-9rwj-6rc7-p77c](https://github.com/langchain-ai/langgraph/security/advisories/GHSA-9rwj-6rc7-p77c) | 2025-12-09；checkpoint-sqlite <3.0.1，3.0.1 修复；不可信 metadata filter 键 | 不直传模型/用户构造的存储过滤结构；锁定实际安全版本组合 |
+| Docling [GHSA-q29v-xc37-wh5m](https://github.com/docling-project/docling/security/advisories/GHSA-q29v-xc37-wh5m) | 2026-06-02；HTML URI/路径处理，<2.94.0，完整修复 2.94.0 | 当前候选高于修复版；限制资源解析边界。输入 HTML 解析与生成 HTML 执行需分别检查 |
+| Docling [GHSA-4xhp-xg4w-8ppm](https://github.com/docling-project/docling/security/advisories/GHSA-4xhp-xg4w-8ppm) | 2026-08-24；ODF 文件读取；公告受影响写 >=2.107.0，补丁写 2.120.3，前者未给上界 | 保留原字段差异，不推断最新仍受影响；ODF 非 Must，不为形式开启无关解析后端 |
+| Docling-core [#710](https://github.com/docling-project/docling-core/issues/710) | 2026-08-05，Open；逐页/整体 Markdown 空白差异，最新修复未证实 | 原文定位依赖结构化证据；HYP-001 测试跨页和重导出 |
+| RAGFlow [GHSA-wpg4-h5g2-jxm6](https://github.com/infiniflow/ragflow/security/advisories/GHSA-wpg4-h5g2-jxm6) | 2026-05-09；Prompt Generator 模板注入；公告 <=0.24.0，Patched=None；v0.27.1 的 generator.py 已有 SandboxedEnvironment | 已见防护变化，最早修复版本未确认；不据空白补丁字段断言当前仍有漏洞 |
+| RAGFlow [GHSA-vvwj-fvwh-4whx](https://github.com/infiniflow/ragflow/security/advisories/GHSA-vvwj-fvwh-4whx) | 2026-04-01；Text Processing/Message 模板注入；公告 v0.24.0，Patched=None；固定 StringTransform 已用沙箱，Message 固定源码未取得 | 当前完整影响待核实，静态局部证据不能宣布整体安全 |
+| RAGFlow [GHSA-v7cf-w7gj-pgf4](https://github.com/infiniflow/ragflow/security/advisories/GHSA-v7cf-w7gj-pgf4) | 2026-01-27；MinerU ZIP 路径越界；公告 0.23.1，Patched=None；固定版本拒绝越界路径等 | 不自动启用外部解析器；如采用，核查实际输入与解包边界 |
+
+RAGFlow 当前防护的固定版本证据：[generator.py](https://github.com/infiniflow/ragflow/blob/v0.27.1/rag/prompts/generator.py)、[string_transform.py](https://github.com/infiniflow/ragflow/blob/v0.27.1/agent/component/string_transform.py)、[mineru_parser.py](https://github.com/infiniflow/ragflow/blob/v0.27.1/deepdoc/parser/mineru_parser.py)。无法确定当前是否仍存在的问题，保持“待核实”，不登记为 RetroLume 已复现 DEF。
+
+### 6.3 与本项目直接相关的综合风险
+
+| 风险 | 依据与当前状态 | 最低成本处理 |
+| --- | --- | --- |
+| 看似覆盖主链但诊断错误 | DeepTutor 评分规则与全学科验收不同；尚未运行 | HYP-003 用反例和人工依据验证，避免把错因假设当确定结论 |
+| 引用可点击却不支持结论 | LlamaIndex 引用生成/偏移边界，Docling 序列化损失 | HYP-001/002 分开检查位置、支持性、缺证据与冲突 |
+| 多框架/服务让个人维护失控 | 各组件有重叠机制；RAGFlow 多服务、Docling 模型成本 | HYP-006 按适配/升级/退出评估；不同时采用全部候选 |
+| 恢复导致重复计费或学习记录污染 | LangGraph interrupt/replay 行为；上限单位不同 | HYP-004 检查重复提交、取消后结果、跨恢复累计和可用成果 |
+| HTML 可运行但不安全或教学错误 | 内嵌沙箱只限制部分浏览器能力，不能证明内容 | HYP-005 同时核对计算和执行边界；不把任意生成代码当可信工具 |
+| 一个 API 无法覆盖所有能力 | DeepTutor 将 LLM/embedding/search/voice 分开配置，嵌入更换会重建库 | 在实验任务中核实已持有 API 的模型和能力，不要求在聊天提供密钥。[Provider 文档](https://docs.deeptutor.info/get-started/providers/) |
+| 个人效果被推广为通用可靠 | 当前没有用户使用数据，只有提出者需求 | 小样本覆盖多任务类型；形成能力边界，不能据一次通过承诺全学科 |
+| 未来公开服务触发额外许可与数据问题 | PyMuPDF、Dify、内容来源及供应商边界 | 当前保持本地范围；分发/上线前按独立任务复核，不自动授权发布 |
+
+## 7. 复用、自主实现与退出决策建议
+
+本节全部为建议，尚未批准最终基础或技术栈。
+
+| 能力 / 候选 | 方式 | 预期节省与主要代价 | 退出或重新评估条件 |
+| --- | --- | --- | --- |
+| DeepTutor 的资料/学习/可视化产品骨架 | **待验证：整体采用候选** | 省初建界面和状态；增加业务规则适配、权限审查、许可和升级回归 | HYP-001～006 过关且缺口能有限扩展才采用；多个内核需重写或数据不能迁出则停止整体路线 |
+| RAGFlow 资料检索服务 | 模块复用备选；当前不整体采用 | 省解析/检索管理；增加服务运维且教育业务仍需建设 | 资料规模与管理收益明确后重评；原件/元数据独立保留，可换索引后端 |
+| LlamaIndex 检索/引用对象 | 待验证后模块复用 | 省连接器与检索组合；需控制版本与引用映射 | 与简单检索比无收益则不用；学习状态不绑定其内部对象 |
+| LangGraph checkpoint/interrupt | 待验证后模块复用 | 省复杂恢复基础工作；增加图状态和重放语义成本 | 简单状态机已足够则不用；业务记录可独立导出，框架恢复态可替换 |
+| Docling 结构化解析 | 待验证后模块复用 | 可能改善版式/表格/位置；需模型、依赖与回归 | 普通提取满足文字 PDF 时采用较轻路径；保留原件与结构版本以便重解析 |
+| pypdf / 直接文本处理 | 待验证的较轻基线 | 初建和运维低；复杂版式与定位可能不足 | 不满足 HYP-001 时升级解析方案，不能以性能换取静默缺字 |
+| Open Notebook、Dify | 体验参考 | 参考资料组织与编排体验；不继承教育有效性 | 无代码合入；若复制代码/资产，须重新处理相应许可 |
+| 教育评价、错因不确定性、路径理由、面试协议 | 自主定义；适配或必要部分自主实现 | 保持通用目标和验收一致；评价样本与业务规则维护不可省略 | 合适产品经实验真正满足时复用；不照搬候选评分阈值为用户需求 |
+| 原件/证据/学习记录的可携带约定 | 自主负责，与选型解耦 | 增加少量一致性工作，减少未来退出和审计成本 | 具体格式在阶段 05 决定，本阶段不建数据模型 |
+| Qdrant client / Redis / Valkey / 额外 Worker 等 | 按需，当前不决定 | 原型可不承担全部服务运维；后续规模增加可能要迁移 | 以容量、异步隔离和恢复证据触发，不按技术清单逐个安装 |
+
+总成本不编造人天、费用或性能数字：
+
+| 路线 | 初建 | 业务适配/评测 | 运维与升级 | 退出 | 当前判断 |
+| --- | --- | --- | --- | --- | --- |
+| DeepTutor 整体适配 | 相对较低 | 不确定性高，尤其评分/面试/证据 | 近期重构带来持续回归 | 中到高，取决于导出与耦合 | 优先做有界验证，尚未推荐深度分叉 |
+| 自有应用＋少量组件 | 较高 | 产品行为更可控，但全部集成责任自担 | 可选择较少依赖；仍要维护恢复与兼容 | 可控制，取决于应用边界 | 可靠退出路线，可因用户希望完全自主而优先 |
+| RAGFlow＋自有教育应用 | 中到高 | 教育业务仍需完整建设 | 多服务成本较高 | 索引/文档服务迁移中等 | 当前没有足够理由优于前两条 |
+
+以上是相对推断，不代表“组件越少越好”或“完整产品一定更快”。HYP-006 用实际缺口和迁出证据取代这种印象。
+
+## 8. 对 REQUIREMENTS.md 的影响建议
+
+**REQUIREMENTS.md v0.2 保持有效，本节不改写需求。**
+
+| 处置 | 关联项 | 建议、依据、代价与重评条件 |
+| --- | --- | --- |
+| 保留 | OBJ-001～003；全部 Must | 通用定位、学习闭环、文字面试、HTML、证据与失败恢复不削减；现成组件证明可构建的机制存在，但效果要验证 |
+| 补充验收约束建议 | FR-004、NFR-001、DR-001 | 将“原文定位正确”“引用支持结论”“来源冲突”“资料替换后的旧证据”分别验收；依据引用偏移与序列化问题。代价是维护位置映射及样例 |
+| 细化建议 | FR-008、010、NFR-004 | 错误判断、错因假设、学习掌握判断分别给理由，允许追问/暂不判断；加入等价表达和逻辑错误反例。避免继承候选固定阈值 |
+| 细化建议 | NFR-002/003、DR-003 | 明确总时限、单次超时、重试、工具数/成本及跨恢复累计；检查取消后结果是否进入学习记录。增加生命周期验证成本 |
+| 澄清建议 | FR-009、SEC-003 | 约定本地浏览器内运行边界和外部资源规则；独立单文件导出未被确认为 Must，不自动新增或将应用内 HTML 判不合格 |
+| 保留分层 | FR-001/005/012、INT-001 | 图片/Office/扫描件、资料扩展仍 Should；语音仍 Could/Later。Docling 旧 Office 的额外依赖不自动提高优先级 |
+| 补充退出约束建议 | DR-001/002、NFR-005 | 在整体采用前验证原件、证据和关键学习记录可迁出；备份不等于可迁移。具体导出格式留待后续 |
+| 延后 | 公开服务、品牌商业化及实时语音 | 与已确认范围一致；但当前选型保留依赖许可记录，避免未来不可逆耦合 |
+| 降级/删除 | 无 | 本轮没有足够依据请求删除任何 Must；验证失败后才提出具体影响说明和选择 |
+
+生态未自动覆盖的差异是：基于证据的通用错误归因、跨活动的证据链、可靠的文字面试评价、根据复测调整路径的合理性、统一预算/恢复后的学习一致性。这些工作不能靠“上多 Agent”省略。
+
+## 9. 关键技术假设与最小验证建议
+
+HYP-001～005 沿用 PROJECT_FLOW.md 的原 ID，均仍为未验证；本轮新增 HYP-006，下一候选 HYP-007 尚未占用。编号不重用。本节细化证据，原始登记及阶段状态仍由 Work 维护。没有建立或执行 SPIKE，以下建议不是实验结果。
+
+所有实验建议先固定候选/tag、实际依赖与模型能力，约定非敏感样本、预期结果、停止条件、修改/访问边界和最小命令。具体阈值在实验合同中确认，不假造性能数值；通过小样本只能支持对应能力边界。
+
+### HYP-001：支持资料能保持来源位置并隔离单文件失败
+
+- **来源/关联：** 原始 FR-001/004、NFR-001/002、DR-001/003；DeepTutor、Docling、LlamaIndex/pypdf。
+- **当前证据及缺口：** 第 4.1/4.3/4.5 节有解析/位置/失败机制，但字段存在不证明真实文件定位准确；引用再切分及 Markdown 中转会影响位置。
+- **最低成功标准建议：** 文本、Markdown、普通文字 PDF 和一个复杂版式文字 PDF 可回查原文；混入坏文件后成功项仍可用，失败可替换/跳过；替换后能识别旧证据所属版本。
+- **失败标准：** 静默缺失关键内容、错误页/片段、一个失败阻塞全部可用资料、替换后把旧证据当新资料。
+- **最小验证：** 使用自编或明确获准小样本，标注目标片段；普通逐页提取与候选解析对比，记录成功/失败及定位结果。扫描件/Office 作为 Should 后续单独扩展，不阻塞当前文字 Must 的结论。
+- **失败影响：** 更换解析路径/映射方式，或形成明确格式影响说明；未经用户批准不削减 Must。
+
+### HYP-002：检索与引用能支撑结论，并处理缺证据和冲突
+
+- **来源/关联：** FR-003/004/007、NFR-001/004、CON-001；DeepTutor、RAGFlow、LlamaIndex。
+- **当前证据及缺口：** 现有机制提供检索与引用；LlamaIndex 提示词和 source_nodes 不能证明引用支持性，也不能决定可信来源冲突。
+- **最低成功标准建议：** 对有答案、无答案、易混同名概念和冲突资料的问题，答案引用可定位且确实支持关键判断；无依据时追问/暂不判断；冲突不隐去，计算案例有可核查过程。
+- **失败标准：** 编造来源、关键断言与引用不符、把无证据回答或冲突裁决写成确定事实。
+- **最小验证：** 同一份小语料与人工依据，比较简单检索基线和候选检索；仅在有具体失败时增加 BM25、向量/混合或重排对比，记录召回片段和最终引用，不同时实验所有策略。
+- **失败影响：** 调整检索/证据验证或更换组件；不能仅提高检索条数就宣告解决。
+
+### HYP-003：诊断、复测和面试反馈能支持合理的活动调整
+
+- **来源/关联：** FR-002、006～008、010、011；NFR-004；DeepTutor 与应用自有业务规则。
+- **当前证据及缺口：** 已有学习状态和评分代码，但字符串相似度/关键词规则不证明通用评分；未确认现成完整文字面试流程；无本项目效果样本。
+- **最低成功标准建议：** 样例至少覆盖可核算问题、程序/操作推理、概念解释和开放文字面试；依据支持的错误与归因假设分开；复测能说明继续/重复/调整理由；面试完成提问、回答、必要追问与有依据反馈。
+- **失败标准：** 等价正确答案被错误定性、关键词齐全但逻辑错误被判正确、凭空归因、练习反馈未影响后续活动、普通闲聊被当作面试完成。
+- **最小验证：** 小组人工编写的正反例，加入否定词、单位、等价表达与资料不足；记录评分依据、修正入口、复测和路径理由。开放题用明确评价维度，不虚构唯一标准答案。
+- **失败影响：** 重做相关评价/活动规则；若需要替换多个学习内核，转 HYP-006 重评整体采用。样例不限制产品学科，也不证明长期学习收益。
+
+### HYP-004：任务可以有界停止、恢复，并保持学习与资料状态一致
+
+- **来源/关联：** NFR-002/003/005、DR-002/003、SEC-002；DeepTutor、LangGraph 或应用状态机。
+- **当前证据及缺口：** 有恢复机制和局部上限；interrupt 重跑、单 attempt 超时、跨恢复预算和外部调用副作用需组合验证；Windows Issue 增加兼容取证理由。
+- **最低成功标准建议：** 预先约定次数/时限/重试/工具与成本限额并可观察；达到上限有实际停止证据；取消/重启后保留成功成果；同一作答不重复计分，取消后旧结果不污染当前活动。
+- **失败标准：** 无限重试、预算重置后继续失控、停止只显示在 UI 而调用持续、重复计分/写入、成功资料丢失或没有下一入口。
+- **最小验证：** Windows 目标环境中受控模拟文件失败、模型超时、API 返回后保存前中断、重复提交、取消/重启和预算耗尽；优先模拟 API，实际调用只在获准实验边界内。
+- **失败影响：** 调整生命周期/持久化方案或放弃候选；不靠“有 checkpoint”“有 recursion_limit”关闭风险。单纯检索框架测试不能替代这一假设。
+
+### HYP-005：本地交互 HTML 在约定边界内正确且可用
+
+- **来源/关联：** FR-009、SEC-003、NFR-004；DeepTutor visualizer 或自主生成/展示方案。
+- **当前证据及缺口：** 有 HTML 生成与 sandboxed viewer；浏览器沙箱配置及交互内容仍需核查。MDN 提示同源页面同时允许 scripts 与 same-origin 可能削弱隔离。[iframe 文档](https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/iframe)
+- **最低成功标准建议：** 选取可独立核算的概念，在目标本地浏览器完成交互，边界输入的结果与依据一致；网络/文件/父页面访问符合预先约定；活动能关联使用的资料与解释。
+- **失败标准：** 交互数值或概念错误、依赖失效导致核心交互不可用、能访问未授权内容或发出未授权请求、无法关联依据。
+- **最小验证：** 一个小型教学交互及一组有明确预期的无害权限探针，实际观察浏览器行为；范围先明确为本地应用内或其他获批形式。独立单文件导出若用户以后要求，再单独验收。
+- **失败影响：** 修改展示/生成边界或候选选择；安全失败先停止相关执行，不将不可交互静态文本默认为 FR-009 通过。
+
+### HYP-006：DeepTutor 的整体适配与退出成本低于另建模块组合
+
+- **新增原因/关联：** 本轮发现接近主链的现成实现，整体采用会改变核心复用方案；仅凭 README 无法判断适配工作量。关联 OBJ-001～003、FR-006～011、DR-001/002；关联 TASK-001 的调研证据，不倒改其原合同。
+- **当前证据及缺口：** UI、学习状态和 HTML 有实现，但评分、面试、完整证据/导出、Windows 和许可依赖存在缺口；DeepTutor main 与 tag 的对应尚未完全取得。
+- **最低成功标准建议：** 固定版本下 HYP-001～005 的核心行为可以达标，缺口能在预先列明的有限扩展边界内解决；原件、证据和代表性学习记录可迁出并在不运行候选时解读；所选依赖/许可路线可接受。
+- **失败标准：** 必须同时替换评分、路径、证据或持久状态等多个关键内核才能满足 Must；关键学习数据无法携带；目标环境或可接受许可路线不可成立。
+- **最小验证：** 先做固定源码/依赖与数据出口核查，再跑一条学习链和一条文字面试验证流程；形成缺口→修改边界→回归范围清单及一份代表性迁出结果。初轮不并行搭建两套完整应用，不展开深度分叉。
+- **失败影响：** 转入“自有应用＋最少必要组件”；HYP-001～005 的样本与证据继续复用。许可证义务通过原文和具体方案确认，不能用运行实验代替法律判断。
+- **启用条件：** 用户选择优先验证整体路线。若用户直接决定自主应用路线，本编号保留并标记不再执行，记录原因，不能分配给其他假设。
+
+## 10. 阶段 03 路由与顺序
+
+**结论：必须验证。** HYP-001～005 涉及项目成立条件或核心 Must，公开资料只有机制证据，没有针对本项目的效果和异常路径证据。DeepTutor 能否成为整体基础另由 HYP-006 决定；不能因已有框架或活跃仓库而跳过。
+
+建议阶段 03 按一个连续的验证簇组织：固定候选与实际依赖 → 资料/证据 → 学习与文字面试 → 中断/预算 → HTML → 适配缺口与退出。先用便宜的只读核查排除明显许可、版本、环境问题，再执行需要授权的最小实验。具体 SPIKE/TASK 要在阶段 03 合同确定后登记；本轮没有提前占用 TASK-003 或 SPIKE ID。
+
+停止与路由规则：
+
+- 关键假设失败先记录原始证据和影响，修正候选或提交需求影响说明；不继续堆功能掩盖。
+- 同一核心问题两轮未解决，按 AGENTS.md 汇总并升级/重规划，不机械重试。
+- 必需能力没有结论时不进入正式需求基线；如用户选择移出范围，必须有显式需求变更批准。
+- 阶段 03 有结论且关键复用决定处理后进入阶段 04；不直接进入编码、架构定稿或发布。
+- 本轮研究的安全证据是抽查。后续若验证触及实际高风险执行或需要独立安全审计，按新任务和隔离 Session 处理，不把这次普通 Review 充作独立审计。
+
+## 11. 用户关键决定及确认状态
+
+| 决定 | 可选方向 | Work 推荐、依据与最大风险 | 对后续需求的影响 / 当前状态 |
+| --- | --- | --- | --- |
+| 下一步优先验证的基础 | DeepTutor 整体适配；或直接自有应用＋组件 | 推荐先有界验证 DeepTutor，利用已有主链证据避免重复建设；最大风险是适配升级成本被低估 | 不改变当前 Must；决定 HYP-006 是否执行；**待用户决定** |
+| 许可取舍 | 保持未来分发选择灵活；或接受具体 copyleft/商业许可边界 | 推荐先核查并尽可能选择可接受依赖组合，不现在购买许可或承诺开放源码；替换解析器可能增加适配成本 | 私人实验与未来发布分开；选定依赖/分发模式前处理，**尚未决定** |
+| 数据可携带 | 把原件、证据和关键学习状态迁出纳入候选验证；或接受更强产品绑定 | 推荐验证迁出；增加前期工作，但可检验退出是否真实可行 | 属第 8 节新增约束建议，**待确认纳入实验标准** |
+| HTML 最低交付形态 | 延续当前本地交互要求；如有需要另加独立导出 | 推荐先按本地应用内可交互验证，不增设独立导出 Must；最大限制是不能据此承诺离开应用单文件可用 | 未修改 FR-009，独立导出未获批准；具体执行边界在实验前确定 |
+| 具体 API 与资料样本 | 使用已持有 API 的适用能力；有缺口时另行比较服务 | 推荐先核实供应商/模型名及 embedding/tool 能力，用自编或明确获准非敏感样本；可能暴露一个 API 不足 | 仅需非敏感配置事实，**阶段 03 待核实**；不重复询问已允许外传的决定 |
+
+当前不要求用户提前选择所有库、数据库或 Agent 数量。供应商确认不是要求在聊天粘贴密钥；依赖安装、真实凭据、付费调用与外部写入按具体实验任务及 AGENTS.md 的权限门处理。这里的方向决定不等于授权执行尚未列明的安装或服务调用。
+
+## 12. 交接摘要、验收依据与调研限制
+
+### 12.1 下一阶段必须携带的输入
+
+1. REQUIREMENTS.md v0.2 的全部优先级与非目标；本报告第 5 节 Must 覆盖矩阵。
+2. 第 4/6 节的版本、main/tag 区别、关键缺陷与依赖许可证据；实际执行前冻结可核查版本和依赖组合。
+3. HYP-001～006、用户关键决定及具体实验边界；先登记 TASK/SPIKE 再分发。
+4. 自编/获准样本、预期答案或评价维度、停止条件及迁出要求；样本验证不限定产品学科。
+5. AGENTS.md、用户提供的 Work 规则、PROJECT_FLOW.md 当前关卡和 CHANGE.md；WORK.md 仍未落盘。
+
+### 12.2 本轮实际取证与 Work Review
+
+- TASK-001 返回产品定位、版本、代码、许可、工程与安全记录，以及覆盖/退出建议；TASK-002 返回三组件机制、版本、源码、许可、相关缺陷和恢复语义。两者只回传消息，Work 将可复核证据固化在本报告，未让 Agent 写最终共享状态。
+- Work 交叉打开关键 release/许可、DeepTutor 学习/HTML/provider 文档与依赖、LlamaIndex 引用修复、LangGraph 超时和 checkpoint 公告、Docling 许可/安全记录，并补充较轻替代和资料许可入口。没有仅照收 Agent 的结论。
+- Work 校正了潜在范围偏差：没有将独立 HTML 导出当作 Must；没有把 DeepTutor main 当成 v1.6.4 源码；没有把旧安全公告 Patched=None 当成当前漏洞证明；没有把多个不同类别组件统一排名。
+- 任务验收、文档结构与哈希核查证据见 PROJECT_FLOW.md 的本轮记录；本报告不建立第二份活动状态表。没有业务代码或可运行测试入口，功能/AI 效果/性能/安全实验均未运行。
+- 编号检索初次使用 rg 默认不支持的 lookbehind 而失败；改用 rg -P 后正常读取现有编号。该失败未被当作通过证据，也未形成需要错误库记录的业务问题。
+- 项目在上层 Obsidian Git 仓库内，有非本 Agent 发起的 vault backup 提交活动；使用限定项目的基线差异、实际内容和哈希核查。没有自行提交、推送或改动其他项目。
+
+### 12.3 访问与结论限制
+
+- 部分 GitHub 固定 tag/raw/API 页面返回 Cache miss/加载失败；DeepTutor 实现及部分工程配置采用 main 快照。不能据此保证 tag 的每项行为，实验前须补齐版本一致性。
+- GitHub 动态 checks 有页面不完整；CI 文件只证明存在检查配置，不证明全量通过。Open Notebook、Dify、Haystack、pypdf、Qdrant/Valkey 属简查，不具有五项深入候选的核查深度。
+- GNU 许可证页面访问失败，使用可访问的 SPDX AGPL 原文；OpenStax 帮助页直开出现 CSS 错误，实际许可结论来自可读的具体教材前言；教育部原页/目录超时，仅保存线索，未确认附件和现行适用标准。
+- 没有克隆、运行、漏洞复现、依赖安装、性能基准、模型调用或真实资料处理；没有完整依赖/镜像/权重许可证审计。候选“公开可运行说明”不等于本机已运行。
+- 未核实项包括真实诊断/检索质量、完整面试适配、运行预算、目标设备资源、完整数据出口、供应商条款与后续分发模式。它们已映射到 HYP 或关键决定，未藏在“已完成”声明中。
+- 调研证据足够形成复用建议及“必须验证”路由；不足以批准最终架构、正式需求或开发。不存在已创建的 LATER_REQUIREMENTS.md、TECHNICAL_FEASIBILITY.md 或 PROJECT_EXECUTE_STATE.md。

@@ -1,0 +1,5 @@
+# 第二次功能检查的不同失败点
+
+互斥busy与实际kernel path核对已通过，随后在child in_job与os.getpid等于启动PID的组合断言退出1。该输出此前未先落盘，不能补造是哪一项False。已区分Windows虚拟环境launcher主PID与实际Python后代PID，并改为子进程直接查询本次精确named Job归属；先保存原输出再断言，不凭launcher PID相等判断完整树。
+
+这是新发现的夹具身份断言问题的一次有据修正，不修改HostJob权限或Job限额，不启动PG或renderer。原失败、原目录与两个已计离线批保持。

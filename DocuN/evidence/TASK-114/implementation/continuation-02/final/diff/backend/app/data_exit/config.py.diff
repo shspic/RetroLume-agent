@@ -1,0 +1,33 @@
+--- pre/backend/app/data_exit/config.py
++++ final/backend/app/data_exit/config.py
+@@ -105,9 +105,9 @@
+         if state["fence"] is not None and state["fence"].get("state") == "frozen": mode = "frozen"
+         return DataContext(self.hub.control_id, 0, self.source_state["dataset_id"], self.source_state["instance_id"], mode)
+ 
+-    def validate_source(self,context):
++    def validate_source(self,context,operation=None):
+         if self.source is None:raise DataError('mode_unknown',503)
+-        current=self.source.state()
++        current=self.source.state(operation)
+         if (current['dataset_id'],current['instance_id'],current['mode'])!=(context.dataset_id,context.instance_id,'normal'):
+             raise DataError('mode_unknown',503)
+ 
+@@ -144,12 +144,14 @@
+                 if registry.get("activity_id") not in ids: return "not_owned"
+                 await controller.stop(registry["activity_id"], registry["preview_id"], registry["generation"])
+                 return "unconfirmed" if controller.has_unconfirmed() else "confirmed_by_original_supervisor"
+-            self.deletions = SourceDeletionService(self.hub, self.source, self.references, self.gate, stop_affected=affected)
++            self.deletions = SourceDeletionService(self.hub, self.source, self.references, self.gate, stop_affected=affected, limits=self.limits)
+ 
+-    def observe_job(self,receipt):
++    def observe_job(self,receipt,operation=None):
+         try:
+-            with self.gate.acquire():self.source.observe_job(receipt)
+-        except DataError:pass
++            if operation is not None:operation.check()
++            with self.gate.acquire(operation=operation):self.source.observe_job(receipt,operation)
++        except DataError:
++            if operation is not None:operation.check()
+ 
+     async def observe_memory(self,memory_id):
+         import asyncio

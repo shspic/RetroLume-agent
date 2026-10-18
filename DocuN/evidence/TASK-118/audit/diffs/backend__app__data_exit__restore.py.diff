@@ -1,0 +1,232 @@
+--- first-pre/backend/app/data_exit/restore.py
++++ current/backend/app/data_exit/restore.py
+@@ -42,6 +42,7 @@
+     instance_id: str
+     root_id: str
+     data_root: Path
++    schema_profile: str = PROFILE
+ 
+ 
+ def docker_call(arguments, *, environment=None, timeout=30):
+@@ -86,24 +87,28 @@
+             or not isinstance(profile.get("slots"), list) or not 1 <= len(profile["slots"]) <= 8):
+             raise DataError("restore_executor_missing", 503)
+         for slot in profile["slots"]:
+-            if (set(slot) != {"id", "name", "volume", "port", "database"} or not re.fullmatch(r"[a-z0-9-]{1,100}", slot["name"])
++            if (set(slot)-{'schema_profile'} != {"id", "name", "volume", "port", "database"} or not re.fullmatch(r"[a-z0-9-]{1,100}", slot["name"])
+                 or slot["volume"] != slot["name"] + "-data" or type(slot["port"]) is not int or not 1024 <= slot["port"] <= 65535):
+                 raise DataError("restore_executor_missing", 503)
++            from .schema_profiles import get_profile
++            get_profile(slot.get('schema_profile',PROFILE))
+         self._ephemeral = {}
+ 
+     def _hook(self, name, *args):
+         if self.hooks is not None: getattr(self.hooks, name)(*args)
+ 
+-    def allocate(self, job_id, accepted_profile_id, operation=None):
++    def allocate(self, job_id, accepted_profile_id, operation=None, *, codec_profile=PROFILE):
+         checked(operation)
+         if accepted_profile_id != self.profile["id"]: raise DataError("restore_executor_missing", 503)
+         state = self.hub.state()
+         used = {v["slot_id"] for v in state["targets"].values()}
+-        slot = next((v for v in self.profile["slots"] if v["id"] not in used), None)
++        from .schema_profiles import get_profile
++        get_profile(codec_profile)
++        slot = next((v for v in self.profile["slots"] if v["id"] not in used and v.get('schema_profile',PROFILE)==codec_profile), None)
+         if slot is None: raise DataError("capacity_exceeded", 413)
+         target_id, dataset_id, instance_id, root_id = (str(uuid4()) for _ in range(4))
+         intent = {"target_id": target_id, "job_id": uuid(job_id), "slot_id": slot["id"], "profile_id": accepted_profile_id,
+-                  "state": "allocating", "dataset_id": dataset_id, "instance_id": instance_id, "root_id": root_id}
++                  "state": "allocating", "dataset_id": dataset_id, "instance_id": instance_id, "root_id": root_id,'schema_profile':codec_profile}
+         # 名字、卷、端口碰撞停止此 slot，不改名或清理旧对象绕过。
+         def call(arguments, **kwargs):
+             checked(operation)
+@@ -140,7 +145,7 @@
+                            timeout=operation.remaining(30) if operation else 30)
+         if re.fullmatch(r"[0-9a-f]{64}", cid) is None: raise DataError("target_identity_unknown", 503)
+         data_root = self.root / job_id
+-        target = TargetRef(target_id, job_id, accepted_profile_id, cid, slot["name"], slot["volume"], slot["port"], dataset_id, instance_id, root_id, data_root)
++        target = TargetRef(target_id, job_id, accepted_profile_id, cid, slot["name"], slot["volume"], slot["port"], dataset_id, instance_id, root_id, data_root,codec_profile)
+         identity = inspect_target(target, self.profile["image_id"])
+         self._hook("created", target, identity)
+         self.hub.commit("target.register", {**intent, "state": "allocated", "cid": cid, "name": target.name,
+@@ -229,14 +234,16 @@
+             if connection.execute("SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='r'").fetchone()[0] != 0:
+                 raise DataError("target_not_empty", 503)
+             directory = Path(__file__).resolve().parents[2] / "migrations"
++            from .schema_profiles import get_profile
++            schema=get_profile(target.schema_profile)
+             chain = {}
+             for path in sorted(directory.glob("*.sql")):
+-                if not 1 <= int(path.name[:3]) <= 13: continue
++                if path.name not in schema.migration_chain: continue
+                 sha = digest(path.read_bytes()); chain[path.name] = sha
+                 from .schema import MIGRATION_013
+-                if sha != (MIGRATION_013 if int(path.name[:3])==13 else MIGRATIONS.get(path.name)): raise DataError("trusted_schema_changed", 503)
++                if sha != schema.migration_chain[path.name]: raise DataError("trusted_schema_changed", 503)
+                 connection.execute(path.read_text(encoding="utf-8-sig"))
+-            if len(chain) != 13: raise DataError("trusted_schema_changed", 503)
++            if chain!=schema.migration_chain: raise DataError("trusted_schema_changed", 503)
+             version = int(connection.execute("SHOW server_version_num").fetchone()[0])
+             if version // 10000 != self.profile.get("pg_major", 17): raise DataError("schema_profile_mismatch", 503)
+             for name in ("loader", "readonly", "snapshot"):
+@@ -246,10 +253,10 @@
+                 connection.execute(sql.SQL("GRANT {} TO {}").format(sql.Identifier(role), sql.Identifier(username)))
+                 credentials[name + "_dsn"] = make_conninfo(host="127.0.0.1", port=target.port, dbname=slot["database"], user=username, password=credentials[name + "_password"])
+             connection.execute("INSERT INTO public.data_control(dataset_id,instance_id,schema_profile,mode,source_snapshot_id,originals_root_id,loader_session_user,maintenance_key_sha256) VALUES(%s,%s,%s,'loading',%s,%s,%s,%s)",
+-                               (target.dataset_id, target.instance_id, PROFILE, target.job_id, target.root_id, prefix + "loader", digest(credentials["maintenance_key"])))
++                               (target.dataset_id, target.instance_id, target.schema_profile, target.job_id, target.root_id, prefix + "loader", digest(credentials["maintenance_key"])))
+             from psycopg.rows import dict_row
+             from .schema_checks import assert_data_schema_sync
+-            with connection.cursor(row_factory=dict_row) as cursor:assert_data_schema_sync(cursor)
++            with connection.cursor(row_factory=dict_row) as cursor:assert_data_schema_sync(cursor,target.schema_profile)
+             identity = {"server_version_num": version, "migration_chain": chain, "target_id": target.target_id, "mode": "loading"}
+             self.hub.commit("target.register", {"target_id": target.target_id, "schema_identity": identity})
+ 
+@@ -263,7 +270,8 @@
+         prefix = self.profile["login_prefix"]
+         try:
+             with connect(credentials["admin_dsn"], operation) as connection:
+-                for table in TABLES:
++                from .schema_profiles import get_profile
++                for table in get_profile(target.schema_profile).tables:
+                     # 目标内只存在失去执行权的归档占位，普通读取需要旧仓储的固定形状。
+                     connection.execute(sql.SQL("GRANT SELECT ON public.{} TO retrolume_data_snapshot").format(sql.Identifier(table)))
+                 connection.execute("UPDATE public.data_control SET mode='restored_readonly',loader_session_user=NULL,source_root_sha256=%s,restore_manifest_sha256=%s WHERE dataset_id=%s AND instance_id=%s AND mode='loading'",
+@@ -277,7 +285,7 @@
+             with RootLease(target.data_root/'originals').acquire(True, timeout=operation.remaining(30) if operation else 30):
+                 checked(operation)
+                 with binding.open('xb') as stream:
+-                    stream.write(canonical({'profile':PROFILE,'dataset_id':target.dataset_id,'instance_id':target.instance_id,
++                    stream.write(canonical({'profile':target.schema_profile,'dataset_id':target.dataset_id,'instance_id':target.instance_id,
+                                             'root_id':target.root_id,'mode':'restored_readonly'}).encode('utf-8'))
+                     stream.flush();os.fsync(stream.fileno())
+             checked(operation)
+@@ -299,7 +307,11 @@
+             state = connection.execute("SELECT dataset_id,source_instance_observed,mode_observed FROM public.data_export_control_v1").fetchone()
+             if tuple(map(str, state)) != (target.dataset_id, target.instance_id, "restored_readonly"):
+                 raise DataError("target_seal_unconfirmed", 503)
+-            for table in TABLES: connection.execute("SELECT count(*) FROM public." + table).fetchone()
++            from .schema_profiles import get_profile
++            tables=get_profile(target.schema_profile).tables
++            profile_row=connection.execute('SELECT schema_profile FROM public.data_export_control_v1').fetchone()
++            if profile_row is None or profile_row[0]!=target.schema_profile:raise DataError('target_seal_unconfirmed',503)
++            for table in tables: connection.execute("SELECT count(*) FROM public." + table).fetchone()
+             for view in ("data_export_control_v1", "data_export_job_history_v1", "data_export_tombstones_v1"):
+                 connection.execute("SELECT count(*) FROM public." + view).fetchone()
+         rejected = []
+@@ -312,13 +324,13 @@
+                 rejected.append(error.sqlstate)
+             else: raise DataError("target_seal_unconfirmed", 503)
+         checked(operation)
+-        return {"reads": 31, "writes_rejected": rejected}
++        return {"reads": len(tables)+3, "writes_rejected": rejected,'schema_profile':target.schema_profile}
+ 
+     def target(self, target_id):
+         value = self.hub.state()["targets"].get(uuid(target_id))
+         if value is None or value.get("state") != "sealed": raise DataError("target_not_verified")
+         return TargetRef(value["target_id"], value["job_id"], value["profile_id"], value["cid"], value["name"], value["volume"],
+-                         value["port"], value["dataset_id"], value["instance_id"], value["root_id"], self.root / value["job_id"])
++                         value["port"], value["dataset_id"], value["instance_id"], value["root_id"], self.root / value["job_id"],value.get('schema_profile',PROFILE))
+ 
+     def readonly_credentials(self, target_id):
+         value = self.hub.state()["targets"][uuid(target_id)]
+@@ -349,7 +361,7 @@
+             overlay = snapshot_tombs + latest["tombstones"] + observed if deletion_policy == "respect_current_deletions" else snapshot_tombs
+             plan_id = str(uuid4())
+             plan = {"plan_id": plan_id, "upload_id": upload_id, "package_sha256": package_sha, "package_root_sha256": reader.manifest["root_sha256"],
+-                    "codec_profile": PROFILE, "scope": reader.manifest["scope"], "deletion_policy": deletion_policy,
++                    "codec_profile": reader.manifest['codec_profile'], "scope": reader.manifest["scope"], "deletion_policy": deletion_policy,
+                     "overlay": overlay, "latest_status": latest["status"], "origin": origin_context.public(),
+                     "resource_profile_id": self.factory.profile["id"] if self.factory is not None else None,
+                     "permanent_readonly": True, "bytes": str(count)}
+@@ -378,7 +390,7 @@
+         with self.hub.operation_lock.acquire(True, timeout=1):
+             try:
+                 operation = Operation(self.hub, job_id, self.limits.operation_seconds, 'allocating', plan_id=plan['plan_id'], latest_status=plan['latest_status'])
+-                target = self.factory.allocate(job_id, plan["resource_profile_id"], operation)
++                target = self.factory.allocate(job_id, plan["resource_profile_id"], operation,codec_profile=plan['codec_profile'])
+                 operation.stage('loading', target_id=target.target_id)
+                 path = self.incoming / (plan["upload_id"] + ".rldata")
+                 if hash_file(path, self.limits.package_bytes, operation.check)[0] != plan["package_sha256"]: raise DataError("integrity_failed", 422)
+@@ -429,9 +441,24 @@
+         lease = RootLease(store.root)
+         from .spool import PackageRows
+         bounded = operation.check
++        from .schema_profiles import get_profile
++        profile=get_profile(plan['codec_profile']);TABLES=profile.tables;COLUMNS=profile.columns
++        if target.schema_profile!=profile.name or reader.schema_profile.name!=profile.name:raise DataError('schema_profile_mismatch',422)
+         rowset = {table:PackageRows(reader,table,bounded) for table in TABLES}
+         deleted_sources = {r["entity_id"] for r in plan["overlay"] if r["entity_kind"] == "source"}
+         deleted_memories = {r["entity_id"] for r in plan["overlay"] if r["entity_kind"] == "memory"}
++        if 'retrieval_commands' in rowset:
++            from .spool import FilteredRows
++            affected={(r['activity_id'],r['business_key']) for r in rowset['retrieval_commands'] if any(x['source_id'] in deleted_sources for x in r['source_refs'])}
++            removed={(r['activity_id'],r['operation_id']) for r in rowset['activity_operations'] if r['kind']=='embedding' and (r['activity_id'],r['operation_id'].split('.')[1]) in affected}
++            rowset['retrieval_chunks']=FilteredRows(rowset['retrieval_chunks'],lambda r:(r['committed_activity_id'],r['committed_operation_id']) not in removed and r['source_id'] not in deleted_sources)
++            rowset['activity_operation_results']=FilteredRows(rowset['activity_operation_results'],lambda r:(r['activity_id'],r['operation_id']) not in removed)
++            class OverlayCommands:
++                def __init__(self,base):self.base=base
++                def __len__(self):return len(self.base)
++                def __iter__(self):
++                    for row in self.base:yield {**row,'request_body':None} if (row['activity_id'],row['business_key']) in affected else row
++            rowset['retrieval_commands']=OverlayCommands(rowset['retrieval_commands'])
+         for head in rowset["learning_memories"]:
+             if head["state"] == "revoked": deleted_memories.add(head["memory_id"])
+         eligible_hashes = {r["sha256"] for r in rowset["material_versions"] if r["source_id"] not in deleted_sources}
+@@ -459,7 +486,7 @@
+                         for row in values:
+                             bounded()
+                             if table == "learning_memory_bodies" and row["memory_id"] in deleted_memories: continue
+-                            decoded = decode_row(table, row)
++                            decoded = decode_row(table, row,profile.name)
+                             if table == "material_sources":
+                                 pointers.append((row["id"], row["current_version"]))
+                                 decoded["current_version"] = None
+@@ -487,22 +514,22 @@
+             # 每个正文/额度列按 codec 回读逐字节核对，只有声明的指针和控制占位不同。
+             from psycopg.rows import dict_row
+             from .codec import encode_row
+-            from .schema import COLUMNS
+             for table, values in rowset.items():
+                 columns = ",".join(COLUMNS[table])
+                 with connection.cursor(row_factory=dict_row) as cursor:
+                     cursor.execute("SELECT " + columns + " FROM public." + table)
+-                    restored = [encode_row(table, row) for row in cursor.fetchall()]
++                    restored = [encode_row(table, row,profile.name) for row in cursor.fetchall()]
+                 expected = [dict(row) for row in values if not (table == "learning_memory_bodies" and row["memory_id"] in deleted_memories)]
+                 if table == "material_sources":
+                     for row in expected:
+                         if row["id"] in deleted_sources: row["current_version"] = None
+                 if sorted(map(canonical, restored)) != sorted(map(canonical, expected)): raise DataError("restore_content_mismatch", 422)
+         bounded()
+-        return {"profile": PROFILE, "target_id": target.target_id, "package_root_sha256": plan["package_root_sha256"],
++        return {"profile": profile.name, "target_id": target.target_id, "package_root_sha256": plan["package_root_sha256"],
+                 "counts": counts, "actual_rows": actual, "deletion_policy": plan["deletion_policy"], "latest_status": plan["latest_status"],
+                 "deleted_sources": sorted(deleted_sources), "deleted_memories": sorted(deleted_memories),
+-                "transformations": {**TRANSFORMS, "material_sources.current_version": "删除覆盖命中时 NULL；快照原值仍在包内"},
++                "transformations": {**TRANSFORMS, "material_sources.current_version": "删除覆盖命中时 NULL；快照原值仍在包内",
++                    **({'retrieval_deletion_overlay':'仅移除命中删除来源命令的Embedding正文及派生向量、清除命令输入正文；原操作、预留及hash元数据保留'} if 'retrieval_commands' in rowset else {})},
+                 "clock_origin": "archive_placeholder", "execution_authority": False}
+ 
+     def _bound_component(self, component, check):
+@@ -518,6 +545,7 @@
+     @staticmethod
+     def _components(rows):
+         from .spool import FilteredRows
++        if 'retrieval_spaces' in rows:yield {'retrieval_spaces':rows['retrieval_spaces']}
+         # 资料组件先提交；活动和记忆以真实依赖连通分量保持完整事务闭包。
+         for source in rows["material_sources"]:
+             sid = source["id"]
+@@ -546,9 +574,9 @@
+         for keys in groups.values():
+             component = {}
+             for table, values in rows.items():
+-                if table in material_tables: continue
++                if table in material_tables or table=='retrieval_spaces': continue
+                 if not table.startswith('learning_memory') and table!='learning_memories':
+-                    component[table]=FilteredRows(values,lambda r,t=table:('a:'+(r['id'] if t=='activities' else r['activity_id'])) in keys)
++                    component[table]=FilteredRows(values,lambda r,t=table:('a:'+(r['id'] if t=='activities' else r['committed_activity_id'] if t=='retrieval_chunks' else r['activity_id'])) in keys)
+                 else:component[table]=FilteredRows(values,lambda r:('m:'+r['memory_id']) in keys)
+             yield component
+ 

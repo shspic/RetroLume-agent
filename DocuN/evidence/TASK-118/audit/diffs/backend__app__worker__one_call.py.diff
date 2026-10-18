@@ -1,0 +1,175 @@
+--- first-pre/backend/app/worker/one_call.py
++++ current/backend/app/worker/one_call.py
+@@ -56,10 +56,23 @@
+     request: ModelCallRequest = field(repr=False)
+     service: ModelServiceConfig = field(repr=False)
+ 
++    @property
++    def protocol(self):
++        from app.capabilities.embedding import EmbeddingRequest
++        return 4 if type(self.request) is EmbeddingRequest or self.request.retrieval_ref is not None or self.service.outbound_grant is not None else 3
++
++    @property
++    def capability_kind(self):
++        from app.capabilities.embedding import EmbeddingRequest
++        return 'embedding' if type(self.request) is EmbeddingRequest else 'model'
++
+     def to_wire(self):
+         if type(self.operation_id) is not str or _ID.fullmatch(self.operation_id) is None:
+             raise ValueError("invalid operation identity")
+-        if type(self.request) is not ModelCallRequest or type(self.service) is not ModelServiceConfig:
++        from app.capabilities.embedding import EmbeddingRequest, EmbeddingServiceConfig
++        embedding = type(self.request) is EmbeddingRequest
++        if not ((embedding and type(self.service) is EmbeddingServiceConfig)
++                or (type(self.request) is ModelCallRequest and type(self.service) is ModelServiceConfig)):
+             raise TypeError("typed request and service required")
+         if max(self.service.max_request_bytes, self.service.max_response_bytes) > MAX_BODY_BYTES:
+             raise ValueError("internal one_call supports at most 65536 configured body bytes")
+@@ -67,26 +80,43 @@
+             raise ValueError("credential exceeds internal limit")
+         if self.request.input_result is not None and self.request.input_result.operation_id == self.operation_id:
+             raise ValueError("invalid_input")
+-        bounded(self.request.model_dump(mode="json",exclude_none=True), MAX_BODY_BYTES)
+-        service = self.service.model_dump(mode="json")
++        request_wire=self.request.model_dump(mode="json",exclude_none=self.protocol!=4)
++        bounded(request_wire, MAX_BODY_BYTES)
++        # 原v3服务字段及字节保持；仅新v4承载新增受信grant。
++        service = self.service.model_dump(mode="json", exclude={name for name in ('outbound_grant','outbound_source_manifest') if getattr(self.service,name,None) is None})
+         service["api_key"] = self.service.api_key.get_secret_value()
+-        value = bounded({"operation_id": self.operation_id,
+-                         "request": self.request.model_dump(mode="json", exclude_none=True), "service": service})
++        value = {"operation_id": self.operation_id,
++                 "request": request_wire, "service": service}
++        if self.protocol == 4:
++            value = {'protocol': 4, 'capability_kind': self.capability_kind, **value}
++        value = bounded(value)
+         # 重新校验，避免 model_construct/model_copy 绕过冻结模型的正常验证。
+         try:
+-            ModelServiceConfig.model_validate(service)
+-            ModelCallRequest.model_validate(value["request"])
++            if embedding:
++                EmbeddingServiceConfig.model_validate_json(json.dumps(service))
++                EmbeddingRequest.model_validate_json(json.dumps(value['request']))
++            else:
++                ModelServiceConfig.model_validate(service)
++                ModelCallRequest.model_validate(value["request"])
+         except Exception:
+             raise ValueError("invalid one_call configuration/request") from None
+         return value
+ 
+     @classmethod
+     def from_wire(cls, value):
+-        exact(value, ("operation_id", "request", "service"))
++        v4 = type(value) is dict and type(value.get('protocol')) is int and value.get('protocol') == 4
++        exact(value, ("protocol", "capability_kind", "operation_id", "request", "service") if v4 else ("operation_id", "request", "service"))
+         bounded(value)
+         try:
+-            result = cls(value["operation_id"], ModelCallRequest.model_validate(value["request"]),
+-                         ModelServiceConfig.model_validate(value["service"]))
++            if v4 and value['capability_kind'] == 'embedding':
++                from app.capabilities.embedding import EmbeddingRequest, EmbeddingServiceConfig
++                result = cls(value['operation_id'], EmbeddingRequest.model_validate_json(json.dumps(value['request'])),
++                             EmbeddingServiceConfig.model_validate_json(json.dumps(value['service'])))
++            else:
++                if v4 and value['capability_kind'] != 'model': raise ValueError('capability_kind_invalid')
++                result = cls(value["operation_id"], ModelCallRequest.model_validate(value["request"]),
++                             ModelServiceConfig.model_validate(value["service"]))
++            if v4 and result.protocol != 4: raise ValueError('capability_protocol_binding_invalid')
+             result.to_wire()
+             return result
+         except Exception:
+@@ -99,16 +129,17 @@
+     context = CallContext(activity_id=lease.activity_id, executor_id=lease.executor_id,
+                           operation_id=call.operation_id, execution_generation=lease.execution_generation,
+                           scope_revision=lease.scope_revision)
+-    return {"protocol": 3, "call": call.to_wire(), "ledger": ledger_data,
++    return {"protocol": call.protocol, "call": call.to_wire(), "ledger": ledger_data,
+             "context": context.model_dump(), "run_tag": run_tag,
+             "stop_ns": stop_ns, "call_seconds": call_seconds}
+ 
+ 
+ def decode_worker_request(value):
+     exact(value, ("protocol", "call", "ledger", "context", "run_tag", "stop_ns", "call_seconds"))
+-    if type(value["protocol"]) is not int or value["protocol"] != 3:
++    if type(value["protocol"]) is not int or value["protocol"] not in (3, 4):
+         raise ValueError("worker protocol mismatch")
+     call = OneCallInput.from_wire(value["call"])
++    if call.protocol != value['protocol']: raise ValueError('capability_protocol_binding_invalid')
+     context = CallContext.model_validate(value["context"], strict=True)
+     validate_identity(context.activity_id, context.executor_id, call.operation_id, value["run_tag"])
+     if call.request.input_result is not None and call.request.input_result.activity_id != context.activity_id:
+@@ -127,7 +158,7 @@
+     return call, context
+ 
+ 
+-def receipt(result, context, run_tag):
++def receipt(result, context, run_tag, *, capability_kind=None):
+     """协议3 回执：状态/身份/hash，result 去正文副本（text/json_object 恒 None）。
+ 
+     business_commit 推导：succeeded→committed（缺合法 hash 属内部错误即拒）；
+@@ -144,14 +175,49 @@
+         commit = "not_committed"
+     if result.error_code in ("record_denied", "record_unconfirmed") and status != "unknown":
+         raise ValueError("record uncertainty requires unknown status")
++    from app.capabilities.embedding import EmbeddingCallResult
++    embedding = type(result) is EmbeddingCallResult
+     data = asdict(result)
+-    data["text"] = None
+-    data["json_object"] = None
+-    return bounded({"protocol": 3, "context": context.model_dump(), "run_tag": run_tag,
+-                    "business_commit": commit, "result": data})
++    if not embedding:
++        data["text"] = None
++        data["json_object"] = None
++    value = {"protocol": 4 if embedding or capability_kind is not None else 3,
++             "context": context.model_dump(), "run_tag": run_tag, "business_commit": commit, "result": data}
++    if value['protocol'] == 4: value['capability_kind'] = 'embedding' if embedding else 'model'
++    return bounded(value)
+ 
+ 
+ def decode_receipt(value, context, run_tag):
++    if type(value) is dict and value.get('protocol') == 4:
++        exact(value, ('protocol','context','run_tag','business_commit','capability_kind','result'))
++        if value['capability_kind'] == 'model':
++            legacy = dict(value); legacy.pop('capability_kind'); legacy['protocol'] = 3
++            return decode_receipt(legacy, context, run_tag)
++        if value['capability_kind'] != 'embedding' or value['context'] != context.model_dump() or value['run_tag'] != run_tag:
++            raise ValueError('embedding_receipt_binding_invalid')
++        from app.capabilities.embedding import EmbeddingCallResult
++        from app.capabilities.contracts import CallStatus, Usage
++        bounded(value)
++        data = dict(value['result']); exact(data, (f.name for f in fields(EmbeddingCallResult)))
++        if data['operation_id'] != context.operation_id or data['provider'] != 'zhipu_embeddings' or data['configured_model'] != 'embedding-3':
++            raise ValueError('embedding_receipt_identity_invalid')
++        data['status'] = CallStatus(data['status'])
++        for name in ('returned_model','error_code','remote_request_id'):
++            item=data[name]
++            if item is not None and (type(item) is not str or _ID.fullmatch(item) is None):raise ValueError('embedding_receipt_invalid')
++        usage=data['usage']
++        if usage is not None:
++            exact(usage, ('prompt_tokens','completion_tokens','total_tokens'))
++            if any(type(x) is not int or x<0 for x in usage.values()) or usage['completion_tokens']!=0 or usage['total_tokens']!=usage['prompt_tokens']:
++                raise ValueError('embedding_receipt_usage_invalid')
++            data['usage']=Usage(**usage)
++        succeeded=data['status'] is CallStatus.SUCCEEDED
++        if succeeded:
++            if type(data['payload_sha256']) is not str or _HEX64.fullmatch(data['payload_sha256']) is None or value['business_commit']!='committed':
++                raise ValueError('embedding_receipt_commit_invalid')
++        elif data['payload_sha256'] is not None or value['business_commit'] not in ('unconfirmed','not_committed'):
++            raise ValueError('embedding_receipt_commit_invalid')
++        return EmbeddingCallResult(**data)
+     exact(value, ("protocol", "context", "run_tag", "business_commit", "result"))
+     bounded(value)
+     try:
+@@ -235,3 +301,11 @@
+         raise ValueError("model timeout exceeds supervised call budget")
+     return run_supervised_window(ledger, config, activity_id, executor_id, WorkerCommand("one_call"),
+                                  run_tag=run_tag, one_call=call)
++
++
++def run_one_embedding(ledger, config, activity_id, executor_id, operation_id, request, service, *, run_tag):
++    """独立typed能力复用原SUP封套；不改停止、退款或RootLease主权。"""
++    from app.capabilities.embedding import EmbeddingRequest, EmbeddingServiceConfig
++    if type(request) is not EmbeddingRequest or type(service) is not EmbeddingServiceConfig:
++        raise TypeError('typed_embedding_input_required')
++    return run_one_call(ledger,config,activity_id,executor_id,operation_id,request,service,run_tag=run_tag)

@@ -1,0 +1,215 @@
+--- pre/frontend/tests/task100-repair-browser.cjs
++++ post/frontend/tests/task100-repair-browser.cjs
+@@ -0,0 +1,212 @@
++// Audit repair03: final dist, actual local HTTP, bounded labelled read-only timing/PDF injections.
++const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto'),cp=require('node:child_process');
++const assert=require('node:assert/strict');const {chromium}=require('playwright');
++const batch=process.env.RETROLUME_TASK100_BATCH_DIR,base='http://127.0.0.1:18100';
++const input=JSON.parse(fs.readFileSync(path.join(batch,'repair-browser-input.json'),'utf8'));
++const output=path.join(batch,'repair-browser');fs.mkdirSync(output,{recursive:true});
++const timeline=[],checks=[],assets=[],pendingAssets=[];let browser,context,page;
++const write=(name,value)=>fs.writeFileSync(path.join(output,name),JSON.stringify(value,null,2));
++const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
++async function capture(name){await page.screenshot({path:path.join(output,name+'.png'),fullPage:true});}
++async function api(url,body,expected=200){
++ const token=(await (await context.request.get(base+'/api/session')).json()).token;
++ const response=body?await context.request.post(base+url,{headers:{'X-RetroLume-Session':token},data:body}):
++  await context.request.get(base+url,{headers:{'X-RetroLume-Session':token}});
++ const value=await response.json();assert.equal(response.status(),expected,JSON.stringify(value));
++ timeline.push({kind:'actual_api',url,method:body?'POST':'GET',body,status:response.status(),value});return value;
++}
++const workspace=aid=>api(`/api/activities/${aid}/teaching/workspace`);
++async function openActivity(target,where=page){
++ if(!where.url().startsWith(base)){await where.goto(base,{waitUntil:'domcontentloaded'});await where.getByRole('button',{name:/学习活动/}).click();}
++ const button=where.locator('button.material').filter({hasText:target.title});
++ await button.first().waitFor();await button.first().click();
++ await where.locator('.ws-teaching #teaching-goal').waitFor();
++ await where.waitForFunction(()=>document.querySelector('.ws-teaching .section-title')?.textContent?.includes('修订'));
++ await where.waitForFunction(()=>!!document.querySelector('#teaching-goal')&&!document.querySelector('#teaching-goal').disabled);
++}
++async function localAction(label,aid,where=page){
++ const button=where.locator('.ws-teaching').getByRole('button',{name:label,exact:true});
++ await button.waitFor();await button.scrollIntoViewIfNeeded();
++ const waiting=where.waitForResponse(r=>r.request().method()==='POST'&&r.url()===`${base}/api/activities/${aid}/teaching/commands`);
++ await button.click();const response=await waiting,value=await response.json();
++ assert.equal(response.status(),200,JSON.stringify(value));assert.equal(value.status,'committed',JSON.stringify(value));
++ timeline.push({kind:'actual_ui_local_command',label,aid,body:response.request().postDataJSON(),receipt:value});
++ await where.waitForFunction(()=>[...document.querySelectorAll('.ws-teaching textarea')].every(e=>!e.disabled));return value;
++}
++const postCount=()=>timeline.filter(x=>x.kind==='request'&&x.method==='POST'&&x.url.includes('/teaching/commands')).length;
++function pdfBytes(){
++ // Two-page ASCII PDF, only for the explicitly labelled display fixture.
++ const stream=text=>`<< /Length ${Buffer.byteLength(text)} >>\nstream\n${text}endstream`;
++ const objects=[
++ '<< /Type /Catalog /Pages 2 0 R >>',
++ '<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>',
++ '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 320 160] /Resources << /Font << /F1 5 0 R >> >> /Contents 6 0 R >>',
++ '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 320 160] /Resources << /Font << /F1 5 0 R >> >> /Contents 7 0 R >>',
++ '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
++ stream('BT /F1 18 Tf 20 80 Td (Physical page 1) Tj ET\n'),
++ stream('BT /F1 18 Tf 20 80 Td (Physical page 2) Tj ET\n')];
++ let text='%PDF-1.4\n',offsets=[0];objects.forEach((o,i)=>{offsets.push(Buffer.byteLength(text));text+=`${i+1} 0 obj\n${o}\nendobj\n`;});
++ const at=Buffer.byteLength(text);text+=`xref\n0 8\n0000000000 65535 f \n`;
++ for(const n of offsets.slice(1))text+=String(n).padStart(10,'0')+' 00000 n \n';
++ text+=`trailer\n<< /Size 8 /Root 1 0 R >>\nstartxref\n${at}\n%%EOF\n`;return Buffer.from(text);
++}
++async function seedEntry(){
++ const aid=input.seed.activity_id;await openActivity({title:input.seed.source.title});const before=await workspace(aid),posts=postCount();
++ await page.locator('.ws-op').filter({hasText:input.seed.operation_id}).click();
++ await page.getByRole('button',{name:'沿用此目标',exact:true}).waitFor();
++ await page.getByRole('button',{name:'沿用此目标',exact:true}).click();
++ await page.waitForFunction(goal=>document.querySelector('#teaching-goal')?.value===goal,input.seed.goal);
++ assert.equal(postCount(),posts,'seed selection must not auto POST');await capture('01-explicit-seed');
++ const receipt=await localAction('保存目标（不调用模型）',aid);const after=await workspace(aid);
++ assert.equal(after.goal.seed_operation_id,input.seed.operation_id);
++ assert.equal(after.goal.seed_payload_sha256,input.seed.payload_sha256);
++ assert.equal(after.budgets.requests_reserved,before.budgets.requests_reserved);assert.equal(after.head.phase,'needs_plan');
++ checks.push({name:'explicit_g7_seed_read_then_goal_save_without_first_or_observation',status:'pass',grade:'actual_http_ui',receipt,before,after});
++}
++async function citations(){
++ const aid=input.ui.activity_id;await openActivity(input.ui);const before=await workspace(aid),posts=postCount();
++ const labels=['路径 n1','参考 p1','正确部分 1'];
++ for(const label of labels){
++  const area=page.getByLabel(label+'依据',{exact:true});await area.getByRole('button').first().click();
++  const text=area.getByLabel('教学引用原文',{exact:true});await text.waitFor();
++  assert.match(await text.innerText(),/原文行 1/);assert.match(await text.innerText(),/平均速度/);
++ }
++ await capture('02-path-reference-feedback-citations');
++ assert.equal(postCount(),posts);checks.push({name:'own_record_path_reference_feedback_citations',status:'pass',grade:'actual_http_ui'});
++ // Read-only display injection: native PDF canvas page number and extraction order differ.
++ const area=page.getByLabel('参考 p1依据',{exact:true});
++ const url=`**/api/activities/${aid}/teaching/records/${before.head.exercise_record_id}/citations/*`;
++ let entry;
++ await page.route(url,async route=>{
++  const actual=await route.fetch();const value=await actual.json();entry=value.citation;
++  await route.fulfill({response:actual,json:{...value,citation:{...entry,format:'pdf',physical_page:2,
++   title:'只读PDF显示夹具：抽取序列1，物理页2'}}});
++ });
++ const original='**/api/materials/*/original?*';
++ await page.route(original,route=>route.fulfill({status:200,contentType:'application/pdf',body:pdfBytes()}));
++ await area.getByRole('button').first().click();await area.getByLabel('PDF物理页 2').waitFor();
++ await page.waitForFunction(()=>{const c=document.querySelector('[aria-label="PDF物理页 2"]');return c&&c.width>0&&c.height>0;});
++ assert.match(await area.innerText(),/抽取序列1，物理页2/);await capture('03-pdf-physical-page');
++ checks.push({name:'pdf_page2_extraction_order1',status:'pass',grade:'labelled_read_only_display_injection',source_pg_qualification_proved:false});
++ await page.unroute(url);await page.unroute(original);
++ // Forward a live actual invalid-source HTTP response to this display control.
++ const invalid=input.source_invalid_read;assert.ok(invalid,'actual invalid-source fixture missing');
++ await page.route(url,async route=>{
++  const token=(await (await context.request.get(base+'/api/session')).json()).token;
++  const actual=await context.request.get(base+invalid.path,{headers:{'X-RetroLume-Session':token}});
++  assert.equal(actual.status(),409);await route.fulfill({status:409,contentType:'application/json',body:await actual.text()});
++ });
++ await area.getByRole('button').first().click();await area.getByRole('alert').waitFor();
++ assert.match(await area.getByRole('alert').innerText(),/引用|资料|失效|核对/);
++ assert.equal(await area.getByLabel('教学引用原文',{exact:true}).count(),0);
++ checks.push({name:'source_invalid_citation_clears_old_display',status:'pass',grade:'actual_negative_http_response_display_forward',actual_path:invalid.path});
++ await page.unroute(url);await area.getByRole('button').first().click();await area.getByLabel('教学引用原文',{exact:true}).waitFor();
++ const after=await workspace(aid);assert.deepEqual(after.budgets,before.budgets);assert.equal(postCount(),posts);
++}
++async function history(){
++ const aid=input.ui.activity_id,view=await workspace(aid);assert.equal(view.history.length,20);assert.ok(view.next_cursor);
++ const historyUrl=`**/api/activities/${aid}/teaching/history?*`;
++ await page.route(historyUrl,async route=>{
++  const actual=await route.fetch({url:base+`/api/activities/${aid}/teaching/history?cursor=bad_cursor`});
++  assert.equal(actual.status(),400);await route.fulfill({response:actual});
++ });
++ await page.getByRole('button',{name:'查看更早历史（只读）',exact:true}).click();
++ await page.getByText('历史游标非法',{exact:false}).waitFor();await page.unroute(historyUrl);
++ await page.getByRole('button',{name:'查看更早历史（只读）',exact:true}).click();
++ await page.waitForFunction(()=>document.querySelectorAll('.ws-history li').length>20);await capture('04-history-over20');
++ checks.push({name:'actual_cursor_over20_and_actual_400_display',status:'pass',grade:'actual_http_ui_cursor_rewrite_for_negative'});
++ const r1=input.records.find(r=>r.kind==='path_accept'),r2=input.records.find(r=>r.kind==='feedback');assert.ok(r1&&r2);
++ let release,startedResolve;const started=new Promise(resolve=>startedResolve=resolve),gate=new Promise(resolve=>release=resolve);
++ const target=`**/api/activities/${aid}/teaching/records/${r1.record_id}`;
++ await page.route(target,async route=>{try{const actual=await route.fetch();startedResolve();await gate;await route.fulfill({response:actual});}catch(error){timeline.push({kind:'cancelled_delayed_route',message:String(error)});}});
++ await page.getByRole('button',{name:`查看记录 · ${r1.seq}`,exact:true}).click();await started;
++ await page.getByRole('button',{name:`查看记录 · ${r2.seq}`,exact:true}).click();
++ const detail=page.getByLabel('历史记录正文',{exact:true});await detail.waitFor();
++ assert.equal(await detail.getAttribute('data-record-id'),r2.record_id);release();await pause(650);
++ assert.equal(await detail.getAttribute('data-record-id'),r2.record_id);await page.unroute(target);
++ await page.locator('#teaching-correction').fill('R2明确选择后的零费纠错，迟到R1不能覆盖目标');
++ const receipt=await localAction('提交纠错（零费）',aid);
++ const action=timeline.filter(x=>x.kind==='actual_ui_local_command').at(-1);
++ assert.equal(action.body.body.target_record_id,r2.record_id);await capture('05-late-r1-r2');
++ checks.push({name:'same_context_late_R1_cannot_override_R2_detail_or_correction',status:'pass',grade:'actual_http_bounded_delay',R1:r1,R2:r2,receipt});
++ return {r1,r2};
++}
++async function draftsAndSwitch(selection){
++ const aid=input.ui.activity_id;await page.getByRole('button',{name:'刷新教学工作区（只读）',exact:true}).click();
++ const old=await workspace(aid),oldAnswer=old.head.answer_record_id,posts=postCount();
++ const draft='未保存的 A1 草稿 · 中文与原身份';await page.locator('#teaching-answer').fill(draft);
++ const readDrafts=()=>page.evaluate(()=>new Promise((resolve,reject)=>{
++  const request=indexedDB.open('retrolume-teaching',1);request.onerror=()=>reject(request.error);
++  request.onsuccess=()=>{const db=request.result;const r=db.transaction('drafts').objectStore('drafts').getAll();r.onsuccess=()=>{db.close();resolve(r.result);};r.onerror=()=>reject(r.error);};
++ }));
++ let saved=[];for(let i=0;i<20;i++){saved=await readDrafts();if(saved.some(d=>d.content===draft))break;await pause(50);}
++ const originalDraft=saved.find(d=>d.content===draft);assert.ok(originalDraft);
++ assert.equal(originalDraft.answer_record_id,oldAnswer);assert.equal(originalDraft.head_revision,old.head.revision);
++ const second=await context.newPage();second.setDefaultTimeout(20000);await openActivity(input.ui,second);
++ await second.locator('#teaching-answer').fill('并行标签页 A2 新答案，零费保存');
++ const receipt=await localAction('提交修正版（零费）',aid,second);const current=await workspace(aid);
++ assert.notEqual(current.head.answer_record_id,oldAnswer);
++ await page.getByRole('button',{name:'刷新教学工作区（只读）',exact:true}).click();
++ await page.getByLabel('作答身份变化',{exact:true}).waitFor();
++ assert.equal(await page.locator('#teaching-answer').inputValue(),draft);
++ assert.equal(await page.getByRole('button',{name:'保存作答（零费，不调用模型）',exact:true}).isDisabled(),true);
++ assert.equal(await page.getByRole('button',{name:'提交修正版（零费）',exact:true}).isDisabled(),true);
++ assert.equal(postCount(),posts+1);saved=await readDrafts();assert.ok(saved.some(d=>d.draft_id===originalDraft.draft_id&&d.answer_record_id===oldAnswer));
++ await capture('06-two-tabs-original-draft-retained');
++ checks.push({name:'two_tabs_A1_A2_unsaved_full_identity_preserved',status:'pass',grade:'actual_ui_http_idb',old_head:old.head,new_head:current.head,originalDraft,receipt});
++ const historyUrl=`**/api/activities/${aid}/teaching/history?*`;
++ await page.route(historyUrl,async route=>{const actual=await route.fetch({url:base+`/api/activities/${aid}/teaching/history?cursor=${encodeURIComponent(old.next_cursor)}`});
++  assert.equal(actual.status(),409);await route.fulfill({response:actual});});
++ await page.getByRole('button',{name:'查看更早历史（只读）',exact:true}).click();
++ await page.getByText('历史版本已变化，请刷新工作区后重新翻页',{exact:true}).waitFor();await page.unroute(historyUrl);
++ checks.push({name:'actual_stale_cursor409_keeps_draft',status:'pass',grade:'actual_http_ui_cursor_rewrite'});
++ await page.getByRole('button',{name:'载入当前作答（保留旧草稿）',exact:true}).click();
++ assert.equal(await page.locator('#teaching-answer').inputValue(),'并行标签页 A2 新答案，零费保存');
++ assert.ok((await readDrafts()).some(d=>d.draft_id===originalDraft.draft_id&&d.content===draft));
++ const target=`**/api/activities/${aid}/teaching/records/${selection.r1.record_id}`;
++ let release,startedResolve;const started=new Promise(resolve=>startedResolve=resolve),gate=new Promise(resolve=>release=resolve);
++ await page.route(target,async route=>{try{const response=await route.fetch();startedResolve();await gate;await route.fulfill({response});}catch(error){timeline.push({kind:'cancelled_switch_route',message:String(error)});}});
++ await page.getByRole('button',{name:'查看更早历史（只读）',exact:true}).click();
++ await page.getByRole('button',{name:`查看记录 · ${selection.r1.seq}`,exact:true}).waitFor();
++ await page.getByRole('button',{name:`查看记录 · ${selection.r1.seq}`,exact:true}).click();await started;
++ await openActivity({title:input.seed.source.title});release();await pause(650);
++ assert.equal(await page.locator('[data-record-id="'+selection.r1.record_id+'"]').count(),0);
++ assert.equal(await page.locator('#teaching-goal').inputValue(),input.seed.goal);
++ await page.unroute(target);await second.close();await capture('07-switch-aborts-old-record');
++ checks.push({name:'switch_unmount_old_history_response_cannot_pollute',status:'pass',grade:'actual_http_bounded_delay'});
++ const final=await workspace(aid);for(const key of ['requests_reserved','cost_reserved_microunits','tools_reserved','running_settled_seconds'])assert.equal(old.budgets[key],final.budgets[key]);
++ write('drafts.json',saved);
++}
++(async()=>{
++ let result={status:'fail'};
++ try{
++  assert.equal(process.env.RETROLUME_TASK100_FIXTURE,'TASK-100-audit-repair-03-20261005');
++  assert.ok(fs.existsSync(chromium.executablePath()));
++  const python=path.resolve(__dirname,'../../backend/.venv/Scripts/python.exe');
++  const counter=cp.spawnSync(python,['-B','-m','tests.fixtures.task100.browser_budget'],{cwd:path.resolve(__dirname,'../../backend'),env:process.env,encoding:'utf8',timeout:10000});
++  assert.equal(counter.status,0,counter.stderr);
++  browser=await chromium.launch({headless:true,args:['--disable-background-networking','--disable-component-update','--disable-sync','--no-first-run','--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1']});
++  context=await browser.newContext({viewport:{width:1366,height:950}});page=await context.newPage();page.setDefaultTimeout(20000);
++  await context.route('**/*',route=>{const url=new URL(route.request().url());return url.hostname==='127.0.0.1'||url.protocol==='data:'?route.continue():route.abort();});
++  context.on('request',r=>{if(r.url().startsWith(base))timeline.push({kind:'request',method:r.method(),url:r.url(),at:Date.now(),body:r.method()==='POST'?r.postDataJSON():null});});
++  context.on('page',p=>p.on('pageerror',e=>timeline.push({kind:'pageerror',message:e.message})));
++  page.on('pageerror',e=>timeline.push({kind:'pageerror',message:e.message}));
++  context.on('response',r=>{if(r.url().includes('/assets/')&&r.status()===200)pendingAssets.push((async()=>{
++   const bytes=await r.body();assets.push({url:r.url(),sha256:crypto.createHash('sha256').update(bytes).digest('hex'),bytes:bytes.length});
++  })().catch(e=>timeline.push({kind:'asset_capture_error',message:String(e)})));});
++  await seedEntry();await citations();const selection=await history();await draftsAndSwitch(selection);
++  assert.equal(timeline.filter(x=>x.kind==='pageerror').length,0);
++  const posts=timeline.filter(x=>x.kind==='request'&&x.method==='POST'&&x.url.endsWith('/teaching/commands'));
++  assert.ok(posts.length>=3);assert.ok(posts.every(x=>['goal','answer','correct'].includes(x.body.action)),posts);
++  await Promise.all(pendingAssets);
++  for(const asset of assets){const local=path.join(__dirname,'../dist',new URL(asset.url).pathname);assert.equal(crypto.createHash('sha256').update(fs.readFileSync(local)).digest('hex'),asset.sha256);}
++  assert.ok(assets.some(a=>a.url.endsWith('.js')),'actual served bundle not captured');
++  result={status:'pass',checks,actual_model_actions:0,actual_tool_actions:0,served_assets:assets,real_pg_read_write:true,read_only_injections_labelled:true};
++ }catch(error){result={status:'fail',error:error.stack,checks};console.error(error.stack);
++  if(page&&!page.isClosed()){try{fs.writeFileSync(path.join(output,'failure-dom.html'),await page.content());await capture('failure');}catch(captureError){result.capture_error=String(captureError);}}
++ }finally{
++  try{if(context)await context.close();}finally{if(browser)await browser.close();}
++  write('timeline.json',timeline);write('facts.json',result);write('served-assets.json',assets);console.log(JSON.stringify(result));
++ }
++ process.exitCode=result.status==='pass'?0:1;
++})();

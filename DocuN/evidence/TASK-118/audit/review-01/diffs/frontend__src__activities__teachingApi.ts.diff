@@ -1,0 +1,13 @@
+--- first-audit/frontend/src/activities/teachingApi.ts
++++ current/frontend/src/activities/teachingApi.ts
+@@ -118,8 +118,9 @@
+ }
+ 
+ export async function postTeachingCommand(
+-  activityId: string, command: TeachingCommandInput, token: string,
++  activityId: string, command: TeachingCommandInput, token: string, guard=()=>true,
+ ): Promise<TeachingReceipt> {
++  if(!guard())throw new TeachingApiError(0,"view_changed","原页面身份已变化，草稿与原键保留，未提交");
+   const data = await request(`/api/activities/${activityId}/teaching/commands`, token, {
+     method: "POST",
+     headers: { "Content-Type": "application/json" },

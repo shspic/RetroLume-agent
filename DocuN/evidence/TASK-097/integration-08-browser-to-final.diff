@@ -1,0 +1,84 @@
+--- integration-08-browser/frontend/src/activities/ActivityWorkspace.tsx
++++ final/frontend/src/activities/ActivityWorkspace.tsx
+@@ -1,6 +1,7 @@
+ import { useCallback, useEffect, useRef, useState } from "react";
+ import "./activity-workspace.css";
+ import { isLearningDocument, LearningResult } from "./LearningResult";
++import { compareLearningIntent } from "./learningIntentMatch";
+ import {
+   appendIntent, clearIntents, loadIntents, newActivityId, newOperationKey,
+   normalizeSourceIds, removeIntent, updateIntent, type PendingIntent,
+@@ -520,6 +521,8 @@
+   }
+ 
+   async function reconcileLearning(intent: PendingIntent) {
++    const initialActivity = selectedRef.current;
++    const initialView = ++openSeq.current;
+     setBusy(`reconcile-${intent.intent_id}`);
+     try {
+       const action = intent.kind === "learning_first" ? "first" : "followup";
+@@ -529,12 +532,20 @@
+         setNotice("尚无持久操作记录，原请求可能仍在途；可由你显式重试同一意图，不会自动重发。");
+         return;
+       }
+-      if (row.read_status !== "unresolved") removeIntent(intent.intent_id);
+-      else updateIntent(intent.intent_id, { state: "unconfirmed", operation_id: row.operation_id });
++      const match = compareLearningIntent(intent, row.payload?.value);
++      if (match === "matching" && row.read_status !== "unresolved") removeIntent(intent.intent_id);
++      else updateIntent(intent.intent_id, { state: match === "conflict" ? "refused" : "unconfirmed", operation_id: row.operation_id,
++        ...(match === "conflict" ? { last_code: "learning_input_conflict", last_message: "持久槽位已绑定不同目标或问题，未将旧成果视为本次成功" } : {}) });
+       reloadIntents();
+-      await selectActivity(intent.activity_id);
++      if (!mountedRef.current || initialView !== openSeq.current || initialActivity !== selectedRef.current) return;
++      const selecting = selectActivity(intent.activity_id);
++      const selectedView = openSeq.current;
++      await selecting;
++      if (!mountedRef.current || selectedRef.current !== intent.activity_id || selectedView !== openSeq.current) return;
+       setOpenOperation(row);
+-      setNotice("已只读核对学习动作。未知结果保留提示，可能已执行；同键重试只返回已存在的持久事实。");
++      setNotice(match === "conflict" ? "已只读核对学习动作：发现不同输入，保留本机意图；请审阅旧成果后显式续问或新建活动。"
++        : match === "matching" ? "已只读核对学习动作并匹配持久输入；当前资格以下方事实为准。"
++        : "已只读核对学习动作，输入尚不可确认，可能已执行；保留恢复提示，同键重试只返回已存在事实。");
+     } catch (reason) {
+       setError(reason instanceof Error ? reason.message : "核对未完成");
+     } finally { setBusy(""); }
+--- integration-08-browser/frontend/tests/task097-browser.mjs
++++ final/frontend/tests/task097-browser.mjs
+@@ -8,7 +8,7 @@
+ const OUT=process.env.RETROLUME_TASK097_OUT;
+ const APP="http://127.0.0.1:18097";
+ const KEY="retrolume.pending-intents.v1";
+-const report={ok:false,checks:[],blocked:[],assets:[],page_errors:[],posts:[],contexts:[]};
++const report={ok:false,checks:[],blocked:[],assets:[],asset_interruptions:[],asset_errors:[],page_errors:[],posts:[],contexts:[]};
+ const contexts=[],pendingAssets=[];
+ if(process.env.RETROLUME_TASK097_PREFLIGHT==="1"){
+   assert.equal(typeof chromium.launch,"function");assert.equal(pendingAssets.length,0);
+@@ -30,12 +30,18 @@
+   context.on("response",response=>{
+     const url=new URL(response.url());
+     if(url.origin===APP&&(url.pathname==="/"||/\.(js|css|mjs)$/.test(url.pathname))&&response.status()===200){
+-      pendingAssets.push(response.body().then(body=>{
++      const observer=response.body().then(body=>{
+         const relative=url.pathname==="/"?"index.html":url.pathname.slice(1);
+         const served=createHash("sha256").update(body).digest("hex");
+         const local=createHash("sha256").update(fs.readFileSync(path.resolve("frontend/dist",relative))).digest("hex");
+         assert.equal(served,local);report.assets.push({context:name,path:relative,served_sha256:served,dist_sha256:local});
+-      }));
++      }).catch(error=>{
++        const entry={context:name,path:url.pathname,error:String(error)};
++        if(/Target page, context or browser has been closed/.test(String(error)))report.asset_interruptions.push(entry);
++        else report.asset_errors.push(entry);
++        save();
++      });
++      pendingAssets.push(observer);
+     }
+   });
+   return context;
+@@ -287,6 +293,7 @@
+   check("polling_no_overlap_hidden_pause_resume_unmount",{held_reads:1,visible_reads:1,hidden_and_unmounted_reads:0},"ui_controlled_clock_visibility");
+   await Promise.all(pendingAssets);
+   assert.equal(report.page_errors.length,0);
++  assert.equal(report.asset_errors.length,0);
+   assert.ok(report.assets.some(a=>a.path.endsWith(".js"))&&report.assets.some(a=>a.path.endsWith(".css"))&&report.assets.some(a=>a.path.endsWith(".mjs")));
+   report.ok=true;save();
+ }catch(error){

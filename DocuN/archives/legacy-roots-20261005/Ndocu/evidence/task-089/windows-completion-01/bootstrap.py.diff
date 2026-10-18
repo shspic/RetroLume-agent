@@ -1,0 +1,42 @@
+--- pre/bootstrap.py
++++ current/bootstrap.py
+@@ -14,6 +14,19 @@
+ 
+ if __name__=="__main__":
+     mode=sys.argv.pop(1)
++    evidence=Path(sys.argv.pop(1)).resolve()
++    assert evidence.is_relative_to(BACKEND.parent / "Ndocu/evidence/task-089/windows-completion-01")
++    import importlib.machinery
++    loaded_bytes={}
++    original_get_code=importlib.machinery.SourceFileLoader.get_code
++    def capture_code(self, fullname):
++        if fullname == "app" or fullname.startswith("app."):
++            path=Path(self.get_filename(fullname)).resolve()
++            raw=self.get_data(str(path))
++            loaded_bytes[path.relative_to(BACKEND.parent).as_posix()]=hashlib.sha256(raw).hexdigest()
++            return self.source_to_code(raw,str(path))
++        return original_get_code(self,fullname)
++    importlib.machinery.SourceFileLoader.get_code=capture_code
+     root = BACKEND.parent
+     files = sorted((BACKEND / "app").rglob("*.py"))
+     before = {p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest() for p in files}
+@@ -22,7 +35,7 @@
+         original=WorkerCommand.argv
+         def test_argv(self,mapping_name=None):
+             if self.task=="one_call":
+-                return [str(_INTERPRETER),"-B",str(Path(__file__).resolve()),"worker","one_call",mapping_name]
++                return [str(_INTERPRETER),"-B",str(Path(__file__).resolve()),"worker",str(evidence),"one_call",mapping_name]
+             return original(self,mapping_name)
+         WorkerCommand.argv=test_argv
+         from app.worker.supervisor_main import main
+@@ -62,8 +75,8 @@
+                 if path.is_relative_to(root) and path.suffix == ".py":
+                     loaded[path.relative_to(root).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+         after = {p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest() for p in files}
+-        target = root / "Ndocu/evidence/task-089/real-01" / f"bootstrap-{mode}-{os.getpid()}.json"
++        target = evidence / f"bootstrap-{mode}-{os.getpid()}.json"
+         target.write_text(json.dumps({"mode": mode, "pid": os.getpid(), "before": before,
+-                          "loaded_modules": loaded, "source_unchanged": before == after,
++                          "loaded_modules": loaded, "loaded_source_bytes": loaded_bytes, "source_unchanged": before == after,
+                           "transport_sends": globals().get("sends")}, indent=2), encoding="utf-8")
+     raise SystemExit(code)

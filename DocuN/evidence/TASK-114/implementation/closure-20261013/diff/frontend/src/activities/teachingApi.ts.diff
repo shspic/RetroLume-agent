@@ -1,0 +1,16 @@
+--- before/frontend/src/activities/teachingApi.ts
++++ final/frontend/src/activities/teachingApi.ts
+@@ -1,3 +1,4 @@
++import {dataFetch} from "../data/context";
+ // 教学命令 API 客户端：本地先存意图再 POST；核对/恢复只 GET。
+ // 不含密钥、DSN、provider 或任何授权字段。
+ 
+@@ -97,7 +98,7 @@
+ async function request(path: string, token: string, init: RequestInit = {}): Promise<Record<string, unknown>> {
+   let response: Response;
+   try {
+-    response = await fetch(path, { ...init, headers: { ...init.headers, "X-RetroLume-Session": token } });
++    response = await dataFetch(path, { ...init, headers: { ...init.headers, "X-RetroLume-Session": token } });
+   } catch {
+     throw new TeachingApiError(0, "network", "连接中断，结果未确认；刷新只重读，不会自动重发");
+   }

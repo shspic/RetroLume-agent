@@ -1,0 +1,237 @@
+"""TASK-083 D3 bounded PG and Windows recovery sample; runner supplies only synthetic DSN."""
+from __future__ import annotations
+
+import asyncio
+from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
+import json
+import os
+from pathlib import Path
+import sys
+import time
+from uuid import uuid4
+
+BACKEND = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(BACKEND))
+import psycopg
+from psycopg import sql
+from psycopg.conninfo import make_conninfo
+from psycopg.rows import dict_row
+
+from app.activities import ActivityLedgerConflict, ActivitySpec, PostgresAdmissionLedger, SourceSnapshot
+from app.runtime import psycopg_compatible_loop_factory
+from app.worker.command import WorkerCommand
+from app.worker.launcher import run_supervised_window
+from app.worker.session import SessionConfig
+from app.worker.windows_job import (
+    ERROR_FILE_NOT_FOUND, JobOpenError, NamedJob, current_process_session_id, job_name,
+)
+
+BASE_DSN = os.environ.pop("RETROLUME_TASK_083_D3_DATABASE_URL")
+MIGRATIONS = [BACKEND / "migrations" / name for name in (
+    "001_materials.sql", "002_activities.sql", "003_pdf_review.sql",
+    "004_activities_time_budget.sql", "005_activities_dispatch_closed.sql",
+    "006_activities_running_owner_session.sql",
+)]
+FIXTURE = Path(__file__).with_name("fixture.py")
+
+
+def emit(record):
+    print(json.dumps(record, ensure_ascii=False, default=str), flush=True)
+
+
+def make_schema(label, *, migrate=True):
+    name = "task083_d3_" + label + "_" + uuid4().hex[:8]
+    with psycopg.connect(BASE_DSN, autocommit=True) as admin:
+        admin.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(name)))
+    scoped = make_conninfo(BASE_DSN, options=f"-c search_path={name}")
+    with psycopg.connect(scoped, autocommit=True) as conn:
+        for path in MIGRATIONS[:6 if migrate else 5]:
+            conn.execute(path.read_text(encoding="utf-8"))
+    emit({"phase":"schema", "label":label, "schema":name, "migrated":migrate})
+    return name, scoped
+
+
+def row(scoped, query, params=()):
+    with psycopg.connect(scoped, row_factory=dict_row) as conn:
+        return conn.execute(query, params).fetchone()
+
+
+def run_async(coro):
+    return asyncio.run(coro, loop_factory=psycopg_compatible_loop_factory)
+
+
+async def build(scoped, *, maximum):
+    activity, source, version = (str(uuid4()) for _ in range(3))
+    async with await psycopg.AsyncConnection.connect(scoped) as conn:
+        async with conn.transaction():
+            await conn.execute("INSERT INTO material_sources(id,title,revision) VALUES (%s,'d3',0)", (source,))
+            await conn.execute(
+                "INSERT INTO material_versions(id,source_id,filename,format,sha256,size) VALUES (%s,%s,'d3.txt','txt',%s,1)",
+                (version,source,"d"*64),
+            )
+            await conn.execute("UPDATE material_sources SET current_version=%s,revision=1 WHERE id=%s",
+                               (version,source))
+    ledger = PostgresAdmissionLedger(scoped)
+    spec = ActivitySpec(
+        activity_id=activity, sources=(SourceSnapshot(source,version,1),),
+        deadline_at=datetime.now(timezone.utc)+timedelta(minutes=20),
+        max_requests=8,max_cost_microunits=800,reserve_cost_microunits=100,
+        max_request_bytes=4096,max_output_tokens=256,max_running_seconds=maximum,
+        allowed_models=(("deepseek_chat_completions","synthetic-model"),),
+    )
+    await ledger.create_activity(spec)
+    return ledger, activity
+
+
+def expire(scoped, activity):
+    with psycopg.connect(scoped, autocommit=True) as conn:
+        conn.execute("UPDATE activities SET lease_expires_at=CURRENT_TIMESTAMP - interval '1 minute' WHERE id=%s",
+                     (activity,))
+
+
+def migration_cases():
+    name, scoped = make_schema("empty", migrate=False)
+    with psycopg.connect(scoped, autocommit=True) as conn:
+        before={r[0] for r in conn.execute("SELECT column_name FROM information_schema.columns WHERE table_schema=%s AND table_name='activities'",(name,))}
+        conn.execute(MIGRATIONS[5].read_text(encoding="utf-8"))
+        added={r[0] for r in conn.execute("SELECT column_name FROM information_schema.columns WHERE table_schema=%s AND table_name='activities'",(name,))}-before
+        assert added=={"running_owner_session_id"}, added
+        activity=str(uuid4())
+        conn.execute("""INSERT INTO activities(id,status,scope_revision,deadline_at,max_requests,
+            max_cost_microunits,reserve_cost_microunits,max_request_bytes,max_output_tokens,
+            max_running_seconds) VALUES (%s,'pending',1,CURRENT_TIMESTAMP + interval '1 hour',1,1,1,1,1,6)""",(activity,))
+        assert conn.execute("SELECT running_owner_session_id FROM activities WHERE id=%s",(activity,)).fetchone()[0] is None
+        for valid in (0,4294967295):
+            conn.execute("UPDATE activities SET running_owner_session_id=%s WHERE id=%s",(valid,activity))
+            assert conn.execute("SELECT running_owner_session_id FROM activities WHERE id=%s",(activity,)).fetchone()[0]==valid
+        for invalid in (-1,4294967296):
+            try:
+                conn.execute("UPDATE activities SET running_owner_session_id=%s WHERE id=%s",(invalid,activity))
+            except psycopg.CheckViolation:
+                pass
+            else: raise AssertionError(f"accepted invalid session {invalid}")
+        assert conn.execute("SELECT running_owner_session_id FROM activities WHERE id=%s",(activity,)).fetchone()[0]==4294967295
+    emit({"phase":"migration_empty","schema":name,"added":sorted(added),"valid":[0,4294967295],"invalid":[-1,4294967296]})
+
+    name, scoped = make_schema("old", migrate=False)
+    activity=str(uuid4())
+    with psycopg.connect(scoped, autocommit=True) as conn:
+        conn.execute("""INSERT INTO activities(id,status,scope_revision,executor_id,lease_expires_at,
+            deadline_at,max_requests,max_cost_microunits,reserve_cost_microunits,
+            max_request_bytes,max_output_tokens,max_running_seconds,running_reserved_seconds)
+            VALUES (%s,'running',1,'legacy',CURRENT_TIMESTAMP - interval '1 minute',
+            CURRENT_TIMESTAMP + interval '1 hour',1,1,1,1,1,6,6)""",(activity,))
+        conn.execute(MIGRATIONS[5].read_text(encoding="utf-8"))
+        old=conn.execute("SELECT status,running_reserved_seconds,running_owner_session_id FROM activities WHERE id=%s",(activity,)).fetchone()
+        assert old==("running",6,None),old
+    emit({"phase":"migration_old","schema":name,"activity":activity,"row":old})
+
+    name, scoped = make_schema("rollback", migrate=False)
+    migration=MIGRATIONS[5].read_text(encoding="utf-8")
+    broken=migration.replace("COMMIT;", "ALTER TABLE activities ADD CONSTRAINT deliberate_failure CHECK (missing_column = 1);\nCOMMIT;")
+    assert broken!=migration
+    with psycopg.connect(scoped, autocommit=True) as conn:
+        try: conn.execute(broken)
+        except psycopg.Error: conn.execute("ROLLBACK")
+        else: raise AssertionError("failure injection did not fail")
+        count=conn.execute("SELECT count(*) FROM information_schema.columns WHERE table_schema=%s AND table_name='activities' AND column_name='running_owner_session_id'",(name,)).fetchone()[0]
+        assert count==0,count
+    emit({"phase":"migration_rollback","schema":name,"column_count":count})
+
+
+def ledger_cases():
+    name, scoped=make_schema("ledger")
+    ledger,activity=run_async(build(scoped,maximum=12))
+    for invalid in (True,-1,4294967296,1.5,"1"):
+        try: run_async(ledger.claim_lease(activity,"bad",lease_seconds=6,window_seconds=6,running_owner_session_id=invalid))
+        except ValueError: pass
+        else: raise AssertionError(f"accepted {invalid!r}")
+    first=run_async(ledger.claim_lease(activity,"old",lease_seconds=6,window_seconds=6,running_owner_session_id=0))
+    assert first and first.running_owner_session_id==0
+    before=row(scoped,"SELECT status,execution_generation,running_reserved_seconds,running_settled_seconds,running_owner_session_id FROM activities WHERE id=%s",(activity,))
+    assert before["running_owner_session_id"]==0 and before["running_reserved_seconds"]==6
+    assert run_async(ledger.inspect_window(activity)).running_owner_session_id==0
+    expire(scoped,activity)
+    second=run_async(ledger.claim_lease(activity,"new",lease_seconds=6,window_seconds=6,running_owner_session_id=4294967295,expected_previous_generation=first.execution_generation))
+    assert second and second.execution_generation==first.execution_generation+1
+    after=row(scoped,"SELECT status,execution_generation,running_reserved_seconds,running_settled_seconds,running_owner_session_id FROM activities WHERE id=%s",(activity,))
+    assert (after["running_reserved_seconds"],after["running_settled_seconds"],after["running_owner_session_id"])==(6,6,4294967295),after
+    for attempt in (
+        lambda: run_async(ledger.claim_lease(activity,"late",lease_seconds=6,window_seconds=6,running_owner_session_id=0,expected_previous_generation=first.execution_generation)),
+        lambda: run_async(ledger.begin_window_close(activity,"old",first.execution_generation)),
+    ):
+        try: attempt()
+        except ActivityLedgerConflict: pass
+        else: raise AssertionError("old generation was accepted")
+    assert row(scoped,"SELECT running_owner_session_id,running_reserved_seconds,running_settled_seconds FROM activities WHERE id=%s",(activity,))=={
+        k:after[k] for k in ("running_owner_session_id","running_reserved_seconds","running_settled_seconds")}
+    emit({"phase":"ledger_new_g","schema":name,"activity":activity,"old":before,"new":after})
+
+    name, scoped=make_schema("exhaust")
+    ledger,activity=run_async(build(scoped,maximum=6))
+    first=run_async(ledger.claim_lease(activity,"old",lease_seconds=6,window_seconds=6,running_owner_session_id=7))
+    expire(scoped,activity)
+    exhausted=run_async(ledger.claim_lease(activity,"new",lease_seconds=6,window_seconds=6,running_owner_session_id=7,expected_previous_generation=first.execution_generation))
+    after=row(scoped,"SELECT status,execution_generation,running_reserved_seconds,running_settled_seconds,running_owner_session_id,dispatch_closed FROM activities WHERE id=%s",(activity,))
+    assert exhausted is None and (after["status"],after["running_reserved_seconds"],after["running_settled_seconds"],after["running_owner_session_id"],after["dispatch_closed"])==("pending",0,6,None,True),after
+    emit({"phase":"ledger_exhausted","schema":name,"activity":activity,"after":after})
+
+
+def windows_case():
+    name, scoped=make_schema("windows")
+    ledger,activity=run_async(build(scoped,maximum=12))
+    session=current_process_session_id()
+    first=run_async(ledger.claim_lease(activity,"old",lease_seconds=6,window_seconds=6,running_owner_session_id=session))
+    old=NamedJob.create(activity,first.execution_generation,max_processes=1)
+    old_record={"generation":first.execution_generation,"session":session,"name":old.name}
+    try:
+        old_record["pid"]=old.spawn_suspended([sys._base_executable,"-B",str(FIXTURE),"fast"],cwd=str(BACKEND))
+        old_record["created_100ns"]=old.process_creation_time_100ns()
+        assert old.active_processes()==1
+        old.resume()
+        assert old.wait_empty_until(time.monotonic_ns()+3_000_000_000)
+        old_record["tree_zero"]=old.active_processes()
+    finally:
+        old.close()
+    try:
+        NamedJob.open_existing(activity,first.execution_generation)
+    except JobOpenError as exc:
+        old_record["open_error_code"]=exc.code
+        assert exc.code==ERROR_FILE_NOT_FOUND
+    else: raise AssertionError("old Job still exists")
+    pre=row(scoped,"SELECT status,execution_generation,running_reserved_seconds,running_settled_seconds,running_owner_session_id FROM activities WHERE id=%s",(activity,))
+    expire(scoped,activity)
+    config=SessionConfig(window_seconds=6,request_timeout_seconds=.5,stop_grace_seconds=1,
+                         startup_limit_seconds=2,manager_db_timeout_seconds=1.5,
+                         cleanup_seconds=2,mutex_wait_seconds=1,manager_overhead_seconds=10,
+                         single_host_single_session_recovery=True)
+    start=time.monotonic()
+    outcome=run_supervised_window(ledger,config,activity,"new",WorkerCommand(),run_tag="d3-"+uuid4().hex[:8])
+    elapsed=time.monotonic()-start
+    final=row(scoped,"SELECT status,execution_generation,running_reserved_seconds,running_settled_seconds,running_owner_session_id,last_settled_generation,last_settled_seconds FROM activities WHERE id=%s",(activity,))
+    assert outcome.state=="settled",asdict(outcome)
+    assert outcome.running_owner_session_id==session and outcome.generation==first.execution_generation+1
+    assert outcome.job_name==job_name(activity,outcome.generation)
+    assert outcome.pid and outcome.worker_created_100ns and outcome.manager_pid and outcome.manager_created_100ns
+    assert final["status"]=="pending" and final["running_reserved_seconds"]==0
+    assert final["running_settled_seconds"]==6+outcome.settled_seconds
+    assert final["last_settled_generation"]==outcome.generation and final["running_owner_session_id"] is None
+    assert elapsed<=30,elapsed
+    emit({"phase":"windows_recovery","schema":name,"activity":activity,"old":old_record,
+          "pre":pre,"new_outcome":asdict(outcome),"final":final,"elapsed_seconds":elapsed,
+          "transaction_committed":True,"mutex_release":"SUP outcome returned after DB settlement"})
+
+
+def main():
+    parts=set(os.environ.get("D3_PARTS","migration,ledger,windows").split(","))
+    if not parts or not parts <= {"migration","ledger","windows"}:
+        raise ValueError("invalid D3 part selection")
+    if "migration" in parts: migration_cases()
+    if "ledger" in parts: ledger_cases()
+    if "windows" in parts: windows_case()
+    emit({"phase":"complete","all_pass":True,"parts":sorted(parts)})
+
+
+if __name__=="__main__":
+    main()

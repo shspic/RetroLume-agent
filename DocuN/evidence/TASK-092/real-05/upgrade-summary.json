@@ -1,0 +1,62 @@
+{
+  "database": "retrolume_task092_upgrade",
+  "role": "retrolume_task092_synth",
+  "schemas": {
+    "s1": "task092_upgrade_happy",
+    "s2": "task092_upgrade_rollback",
+    "s3": "task092_upgrade_missing"
+  },
+  "selected": [
+    "s1",
+    "s2",
+    "s3"
+  ],
+  "results": {
+    "s1": {
+      "status": "passed",
+      "activity": "1f80d7ce-3a1a-4e72-b1a3-af0902e9051e",
+      "lifecycle_activity": "dad8427b-74ce-4074-9bed-bc7c0d752269",
+      "repeat_008": {
+        "type": "RaiseException",
+        "sqlstate": "P0001",
+        "constraint": null,
+        "message_head": "检测到 008 已有痕迹：重复执行不支持，本事务整体回滚"
+      },
+      "operations": 3,
+      "payload_sha256": "4377a73ed2da9af7cb7abcc31f72676f2bdc0497e525b5693f4ae5af3b41ae3c"
+    },
+    "s2": {
+      "status": "passed",
+      "activity": "a1e6ecf5-4784-4879-9c59-18951f881d26",
+      "reject": {
+        "type": "RaiseException",
+        "sqlstate": "P0001",
+        "constraint": null,
+        "message_head": "原成本正值约束未能唯一识别（匹配 0 条），迁移整体回滚"
+      },
+      "constraints": 84
+    },
+    "s3": {
+      "status": "passed",
+      "reject": {
+        "type": "RaiseException",
+        "sqlstate": "P0001",
+        "constraint": null,
+        "message_head": "008 前置不存在：需要 001—007 已建基线"
+      },
+      "objects": {
+        "tables": 0,
+        "columns": 0,
+        "constraints": 0,
+        "sequences": 0
+      }
+    }
+  },
+  "passed": [
+    "s1",
+    "s2",
+    "s3"
+  ],
+  "failed": [],
+  "not_run": []
+}

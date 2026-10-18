@@ -1,0 +1,2624 @@
+--- pre/backend/app/worker/command.py
++++ backend/app/worker/command.py
+@@ -1,28 +1,31 @@
+-"""单窗内部 worker 的纯数据命令；SUP 不接受任意构造回调。"""
++"""Fixed internal worker invocation. No executable or argv is caller supplied."""
+ 
+ from __future__ import annotations
+ 
+ from dataclasses import dataclass
+-import os
++from pathlib import Path
++
++
++
++_BACKEND = Path(__file__).resolve().parents[2]
++_INTERPRETER = _BACKEND / ".venv" / "Scripts" / "python.exe"
+ 
+ 
+ @dataclass(frozen=True)
+ class WorkerCommand:
+-    executable: str
+-    arguments: tuple[str, ...]
+-    cwd: str
++    """Only the benign internal task is wired; product gateway injection is separate."""
++
++    task: str = "idle"
+ 
+     def __post_init__(self) -> None:
+-        if type(self.executable) is not str or self.executable.startswith("\\") or not os.path.isabs(self.executable) or not os.path.isfile(self.executable):
+-            raise ValueError("worker须为既有绝对可执行文件")
+-        if type(self.cwd) is not str or self.cwd.startswith("\\") or not os.path.isabs(self.cwd) or not os.path.isdir(self.cwd):
+-            raise ValueError("worker工作目录须为既有绝对目录")
+-        if type(self.arguments) is not tuple or len(self.arguments) > 64:
+-            raise ValueError("worker参数须为有界不可变数据")
+-        if any(type(arg) is not str or "\x00" in arg or len(arg) > 4096 for arg in self.arguments):
+-            raise ValueError("worker参数非法")
+-        if sum(len(arg) for arg in self.arguments) + len(self.executable) > 16_384:
+-            raise ValueError("worker命令过长")
++        if type(self.task) is not str or self.task not in ("idle", "one_call"):
++            raise ValueError("unsupported internal worker task")
++
++    @property
++    def cwd(self) -> str:
++        return str(_BACKEND)
+ 
+     def argv(self) -> list[str]:
+-        return [self.executable, *self.arguments]
++        return [str(_INTERPRETER), "-B", "-m", "app.worker.worker_main", self.task]
++
++
+--- pre/backend/app/worker/worker_main.py
++++ backend/app/worker/worker_main.py
+@@ -1,12 +1,10 @@
+-"""供未来业务worker入口注入任务函数的内部单窗运行骨架。
+-
+-本卡没有产品任务/供应商接线；唯一可交给任务函数的是受门控的gateway包装器。
+-任务正常返回后先排空，才允许进程以成功码退出；异常或排空超时向外失败。
+-"""
++"""Fixed internal worker entry. Product supplier routing remains unwired."""
+ 
+ from __future__ import annotations
+ 
++import asyncio
+ from collections.abc import Awaitable, Callable
++import sys
+ from typing import Any
+ 
+ from .gate import ClosingCallGate
+@@ -24,3 +22,34 @@
+         await work(gate)
+     finally:
+         await gate.close(timeout_seconds=drain_timeout_seconds)
++
++
++async def run_internal_task(gateway: Any, task: str) -> None:
++    """The injected gateway is only handed to work through ClosingCallGate."""
++    if task not in ("idle", "one_call"):
++        raise ValueError("unsupported internal worker task")
++
++    async def idle(_gate: ClosingCallGate) -> None:
++        return None
++
++    async def one_call(gate: ClosingCallGate) -> None:
++        await gate.call(None, None)
++
++    await run_controlled_worker(gateway, one_call if task == "one_call" else idle, drain_timeout_seconds=1.0)
++
++
++class _UnwiredGateway:
++    async def call(self, _context: Any, _request: Any) -> None:
++        raise RuntimeError("product gateway is not connected")
++
++
++def main() -> int:
++    if len(sys.argv) != 2 or sys.argv[1] not in ("idle", "one_call"):
++        return 2
++    asyncio.run(run_internal_task(_UnwiredGateway(), sys.argv[1]))
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
++
+--- pre/backend/app/worker/launcher.py
++++ backend/app/worker/launcher.py
+@@ -1,8 +1,14 @@
+-"""内部启动器：在专用 Windows 进程运行阻塞 SUP，并持整体管理截止。"""
++"""Internal Windows SUP launcher with one monotonic management deadline.
++
++The CPython Process.start and Connection.recv calls do not expose a cancellable
++operation handle. This module fails closed on every unconfirmed exit; D1's
++pre-return start/partial-creation bound remains a run gate.
++"""
+ 
+ from __future__ import annotations
+ 
+ import asyncio
++from dataclasses import replace
+ import multiprocessing
+ import os
+ import time
+@@ -21,9 +27,20 @@
+                 activity_id, executor_id, command,
+                 run_tag=run_tag, manager_deadline_ns=deadline_ns,
+             ))
+-        pipe.send(outcome)  # 有界小对象；发送失败时父进程按未知失败关闭。
++        pipe.send(outcome)
+     finally:
+         pipe.close()
++
++
++def _remaining(deadline_ns: int) -> float:
++    return max(0.0, (deadline_ns - time.monotonic_ns()) / 1e9)
++
++
++def _alive(process) -> bool | None:
++    try:
++        return process.is_alive()
++    except BaseException:
++        return None
+ 
+ 
+ def run_supervised_window(
+@@ -35,74 +52,106 @@
+     *,
+     run_tag: str,
+ ) -> SessionOutcome:
+-    """阻塞内部入口，不允许在应用事件循环调用；绝不返回业务执行资格。"""
++    """Blocking internal entry; its result never grants new work."""
+     if os.name != "nt":
+-        raise RuntimeError("本内部监督切片仅在Windows可运行")
++        raise RuntimeError("Windows only")
+     try:
+         asyncio.get_running_loop()
+     except RuntimeError:
+         pass
+     else:
+-        raise RuntimeError("启动器不能在应用事件循环运行")
++        raise RuntimeError("launcher cannot run in application event loop")
+     if type(ledger) is not PostgresAdmissionLedger or type(config) is not SessionConfig or type(command) is not WorkerCommand:
+-        raise TypeError("生产入口只接受固定账本、配置与不可执行命令数据")
++        raise TypeError("fixed ledger, config and command required")
+     if not run_tag or len(run_tag) > 64 or not run_tag.isascii() or not run_tag.replace("-", "").replace("_", "").isalnum():
+-        raise ValueError("run_tag非法")
++        raise ValueError("invalid run_tag")
+ 
+-    started_ns = time.monotonic_ns()
+-    deadline_ns = started_ns + int(config.manager_total_seconds * 1e9)
++    deadline_ns = time.monotonic_ns() + int(config.manager_total_seconds * 1e9)
++    run_deadline_ns = deadline_ns - int(config.cleanup_seconds * 1e9)
+     context = multiprocessing.get_context("spawn")
+-    receive, send = context.Pipe(duplex=False)
+-    process = context.Process(
+-        target=_supervisor_target,
+-        args=(send, ledger, config, activity_id, executor_id, command, run_tag, deadline_ns),
+-        name=f"RetroLumeSUP-{run_tag}",
+-    )
+-    started = False
++    receive = send = process = None
++    launched = False
++    outcome = None
++    failure = None
++    status = "launcher_failed_unconfirmed"
++    errors: list[str] = []
+     try:
+-        process.start()
+-        started = True
+-        send.close()
+-        remaining = max(0.0, (deadline_ns - time.monotonic_ns()) / 1e9)
+-        process.join(remaining)
+-        if process.is_alive():
+-            # 精确Process对象；不能凭名称/PID扫描。SUP句柄退出后Job由OS关闭，
+-            # 但父进程无法由此证明旧树已空，后续恢复必须失败关闭。
+-            process.terminate()
+-            process.join(config.cleanup_seconds)
+-            if process.is_alive():
+-                process.kill()
+-                process.join(config.cleanup_seconds)
+-            return SessionOutcome(
+-                run_tag, "manager_timeout_unconfirmed", activity_id,
+-                settled_seconds=None, reserved_seconds=None, pending_fold_seconds=None,
+-                cleanup_incomplete=process.is_alive(), error_type="ManagerDeadline",
+-            )
+-        if process.exitcode == 0 and receive.poll(0):
+-            outcome = receive.recv()
+-            if type(outcome) is SessionOutcome:
+-                return outcome
+-        return SessionOutcome(
+-            run_tag, "supervisor_lost_unconfirmed", activity_id,
+-            settled_seconds=None, reserved_seconds=None, pending_fold_seconds=None,
+-            error_type=f"SupervisorExit{process.exitcode}",
++        receive, send = context.Pipe(duplex=False)
++        process = context.Process(
++            target=_supervisor_target,
++            args=(send, ledger, config, activity_id, executor_id, command, run_tag, deadline_ns),
++            name=f"RetroLumeSUP-{run_tag}",
+         )
++        if _remaining(run_deadline_ns) == 0:
++            status = "manager_timeout_unconfirmed"
++        else:
++            process.start()
++            launched = True
++            send.close()
++            send = None
++            process.join(_remaining(run_deadline_ns))
++            if _alive(process) is True:
++                status = "manager_timeout_unconfirmed"
++            elif _alive(process) is False and process.exitcode == 0 and receive.poll(0):
++                received = receive.recv()
++                if type(received) is SessionOutcome:
++                    outcome = received
++                else:
++                    status = "supervisor_lost_unconfirmed"
++            else:
++                status = "supervisor_lost_unconfirmed"
+     except BaseException as exc:
+-        if started and process.is_alive():
+-            process.terminate()
+-            process.join(config.cleanup_seconds)
+-            if process.is_alive():
+-                process.kill()
+-                process.join(config.cleanup_seconds)
+-        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+-            raise
+-        return SessionOutcome(
+-            run_tag, "launcher_failed_unconfirmed", activity_id,
+-            settled_seconds=None, reserved_seconds=None, pending_fold_seconds=None,
+-            cleanup_incomplete=started and process.is_alive(), error_type=type(exc).__name__,
+-        )
++        failure = exc
++        errors.append(f"launcher:{type(exc).__name__}")
+     finally:
+-        receive.close()
+-        send.close()
+-        if started and not process.is_alive():
+-            process.close()
++        if process is not None:
++            # A start exception may occur after OS creation. Probe the exact
++            # Process object; no PID/name scan or optimistic cleanup claim.
++            alive = _alive(process)
++            if alive is not False and (launched or getattr(process, "pid", None) is not None):
++                try:
++                    process.terminate()
++                except BaseException as exc:
++                    errors.append(f"terminate:{type(exc).__name__}")
++                try:
++                    process.join(_remaining(deadline_ns))
++                except BaseException as exc:
++                    errors.append(f"terminate_join:{type(exc).__name__}")
++                if _alive(process) is not False:
++                    try:
++                        process.kill()
++                    except BaseException as exc:
++                        errors.append(f"kill:{type(exc).__name__}")
++                    try:
++                        process.join(_remaining(deadline_ns))
++                    except BaseException as exc:
++                        errors.append(f"kill_join:{type(exc).__name__}")
++            if _alive(process) is False:
++                try:
++                    process.close()
++                except BaseException as exc:
++                    errors.append(f"process_close:{type(exc).__name__}")
++            elif launched or getattr(process, "pid", None) is not None:
++                errors.append("supervisor_exit_unknown")
++        for label, pipe in (("receive", receive), ("send", send)):
++            if pipe is not None:
++                try:
++                    pipe.close()
++                except BaseException as exc:
++                    errors.append(f"{label}_close:{type(exc).__name__}")
++
++    if isinstance(failure, (KeyboardInterrupt, SystemExit)):
++        failure.add_note("launcher cleanup: " + ",".join(errors))
++        raise failure
++    if outcome is not None:
++        if errors:
++            return replace(outcome, state="settled_cleanup_error" if outcome.state == "settled" else outcome.state, cleanup_incomplete=True, cleanup_errors=outcome.cleanup_errors + tuple(errors))
++        return outcome
++    return SessionOutcome(
++        run_tag, status, activity_id,
++        settled_seconds=None, reserved_seconds=None, pending_fold_seconds=None,
++        cleanup_incomplete=True,
++        error_type=type(failure).__name__ if failure is not None else status,
++        cleanup_errors=tuple(errors),
++    )
++
+--- pre/backend/tests/test_worker_session.py
++++ backend/tests/test_worker_session.py
+@@ -1,200 +1,147 @@
+-"""TASK-083 受门控调用与本机合成Job；无网络、PG、模型或产品入口。"""
+-
+-from __future__ import annotations
+-
+-import asyncio
+-import ctypes
+-import json
+-from ctypes import wintypes
+-from datetime import datetime, timedelta, timezone
+-import math
+-import os
+-from pathlib import Path
+-import sys
+-import time
+-import unittest
+-from unittest.mock import patch
+-from uuid import uuid4
+-
+-BACKEND = Path(__file__).resolve().parents[1]
+-sys.path.insert(0, str(BACKEND))
+-
+-from app.activities import ActivityLease, CloseResult, SettleResult, WindowSnapshot
+-from app.worker.command import WorkerCommand
+-from app.worker.gate import ClosingCallGate, GateClosed
+-from app.worker.session import SessionConfig, SingleWindowSupervisor
+-from app.worker.windows_job import JobUnknown, NamedJob
+-
+-
+-FIXTURE = BACKEND / "tests" / "fixtures" / "task083" / "fixture.py"
+-
+-
+-class FakeLedger:
+-    def __init__(self, *, window: int = 6, claim_error: bool = False, old_running: bool = False):
+-        self.window = window
+-        self.claim_error = claim_error
+-        self.old_running = old_running
+-        self.events: list[str] = []
+-        self.generation = 0
+-
+-    async def inspect_window(self, activity_id):
+-        self.events.append("inspect")
+-        return WindowSnapshot("running" if self.old_running else "pending", 1 if self.old_running else 0, 6 if self.old_running else 0, False)
+-
+-    async def claim_lease(self, activity_id, executor_id, *, lease_seconds, window_seconds):
+-        self.events.append("claim")
+-        if self.claim_error:
+-            raise RuntimeError("synthetic commit response lost")
+-        self.generation += 1
+-        return ActivityLease(
+-            activity_id, executor_id, self.generation, 1,
+-            datetime.now(timezone.utc) + timedelta(seconds=window_seconds), self.window,
+-        )
+-
+-    async def begin_window_close(self, activity_id, executor_id, execution_generation):
+-        self.events.append("close_db")
+-        return CloseResult.CLOSED
+-
+-    async def settle_execution_window(self, activity_id, executor_id, execution_generation, *, window_seconds, elapsed_seconds):
+-        self.events.append("settle")
+-        if not 1 <= math.ceil(elapsed_seconds) <= window_seconds:
+-            raise AssertionError("SUP submitted invalid elapsed")
+-        return SettleResult.SETTLED
+-
+-
+-class _Gateway:
+-    def __init__(self):
+-        self.marked = asyncio.Event()
+-        self.release = asyncio.Event()
+-        self.events: list[str] = []
+-
+-    async def call(self, context, request):
+-        self.events.extend(("admit", "mark"))
+-        self.marked.set()
+-        await self.release.wait()
+-        self.events.append("send")
+-        return "done"
+-
+-
+-class GateTests(unittest.IsolatedAsyncioTestCase):
+-    async def test_gate_closure_waits_for_marked_before_send_and_never_reopens(self):
+-        gateway = _Gateway()
+-        gate = ClosingCallGate(gateway)
+-        await gate.arm()
+-        first = asyncio.create_task(gate.call(None, None))
+-        await gateway.marked.wait()
+-        closing = asyncio.create_task(gate.close(timeout_seconds=2))
+-        await asyncio.sleep(0)
+-        with self.assertRaises(GateClosed):
+-            await gate.call(None, None)
+-        self.assertFalse(closing.done())
+-        gateway.release.set()
+-        self.assertEqual(await first, "done")
+-        await closing
+-        self.assertEqual(gateway.events, ["admit", "mark", "send"])
+-        with self.assertRaises(GateClosed):
+-            await gate.arm()
+-
+-    async def test_gate_close_timeout_keeps_closed(self):
+-        gateway = _Gateway()
+-        gate = ClosingCallGate(gateway)
+-        await gate.arm()
+-        first = asyncio.create_task(gate.call(None, None))
+-        await gateway.marked.wait()
+-        with self.assertRaises(TimeoutError):
+-            await gate.close(timeout_seconds=0.01)
+-        with self.assertRaises(GateClosed):
+-            await gate.call(None, None)
+-        gateway.release.set()
+-        await first
+-
+-
+-class ProtocolUnitTests(unittest.IsolatedAsyncioTestCase):
+-    def config(self):
+-        return SessionConfig(window_seconds=6, request_timeout_seconds=0.5, stop_grace_seconds=1, startup_limit_seconds=2)
+-
+-    def command(self):
+-        return WorkerCommand(sys._base_executable, ("-B", str(FIXTURE), "fast"), str(BACKEND))
+-
+-    async def test_claim_response_lost_and_partial_window_never_spawn(self):
+-        class Owner:
+-            def __init__(self, *args, **kwargs): pass
+-            def close(self): pass
+-
+-        for ledger, expected in ((FakeLedger(claim_error=True), "failed_closed"), (FakeLedger(window=2), "partial_window_too_small")):
+-            supervisor = SingleWindowSupervisor(ledger, self.config())
+-            with patch("app.worker.session.ActivityMutex", Owner), patch("app.worker.session.NamedJob.create", side_effect=AssertionError("unexpected spawn")):
+-                outcome = await supervisor.run_once(str(uuid4()), "worker-1", self.command(), run_tag="unit-no-spawn", manager_deadline_ns=time.monotonic_ns() + 20_000_000_000)
+-            self.assertEqual(outcome.state, expected)
+-            self.assertEqual(ledger.events, ["inspect", "claim"])
+-
+-    async def test_unknown_old_job_fails_before_claim(self):
+-        class Owner:
+-            def __init__(self, *args, **kwargs): pass
+-            def close(self): pass
+-        ledger = FakeLedger(old_running=True)
+-        with patch("app.worker.session.ActivityMutex", Owner), patch("app.worker.session.NamedJob.open_existing", side_effect=JobUnknown("unknown")):
+-            outcome = await SingleWindowSupervisor(ledger, self.config()).run_once(str(uuid4()), "worker-1", self.command(), run_tag="unit-old-unknown", manager_deadline_ns=time.monotonic_ns() + 20_000_000_000)
+-        self.assertEqual(outcome.state, "failed_closed")
+-        self.assertEqual(ledger.events, ["inspect"])
+-
+-
+-@unittest.skipUnless(os.name == "nt", "真实Job场景仅在Windows本机运行")
+-class WindowsJobTests(unittest.IsolatedAsyncioTestCase):
+-    def config(self):
+-        return SessionConfig(window_seconds=6, request_timeout_seconds=0.5, stop_grace_seconds=1, startup_limit_seconds=2, cleanup_seconds=2)
+-
+-    def command(self, mode):
+-        return WorkerCommand(sys._base_executable, ("-B", str(FIXTURE), mode), str(BACKEND))
+-
+-    async def test_01_normal_job_empty_precedes_close_and_refund(self):
+-        ledger = FakeLedger()
+-        outcome = await SingleWindowSupervisor(ledger, self.config()).run_once(
+-            str(uuid4()), "worker-1", WorkerCommand(sys.executable, ("-B", str(FIXTURE), "controlled_fast"), str(BACKEND)), run_tag="job-normal", manager_deadline_ns=time.monotonic_ns() + 20_000_000_000
+-        )
+-        self.assertEqual(outcome.state, "settled", outcome)
+-        self.assertEqual(outcome.active_processes_at_end, 0)
+-        self.assertGreaterEqual(outcome.settled_seconds, 1)
+-        self.assertEqual(ledger.events, ["inspect", "claim", "close_db", "settle"])
+-        print(json.dumps(outcome.__dict__))
+-
+-    async def test_02_hung_job_is_killed_and_not_refunded(self):
+-        ledger = FakeLedger()
+-        outcome = await SingleWindowSupervisor(ledger, self.config()).run_once(
+-            str(uuid4()), "worker-1", self.command("hang"), run_tag="job-hang", manager_deadline_ns=time.monotonic_ns() + 20_000_000_000
+-        )
+-        self.assertEqual(outcome.state, "stopped_at_deadline", outcome)
+-        self.assertEqual(outcome.active_processes_at_end, 0)
+-        self.assertEqual(outcome.reserved_seconds, 6)
+-        self.assertEqual(outcome.pending_fold_seconds, 6)
+-        self.assertEqual(outcome.settled_seconds, 0)
+-        self.assertNotIn("settle", ledger.events)
+-        print(json.dumps(outcome.__dict__))
+-
+-    async def test_03_main_exits_before_descendant(self):
+-        activity_id = str(uuid4())
+-        with NamedJob.create(activity_id, 1) as job:
+-            job.spawn_suspended(self.command("parent").argv(), cwd=str(BACKEND))
+-            job.resume()
+-            self.assertEqual(job.api.WaitForSingleObject(job.process.hProcess, 4000), 0)
+-            self.assertGreater(job.active_processes(), 0, "主进程退出不能冒充整树退出")
+-            self.assertTrue(job.wait_empty_until(time.monotonic_ns() + 5_000_000_000))
+-            self.assertEqual(job.active_processes(), 0)
+-            print(json.dumps({"run_tag": "job-descendant", "activity_id": activity_id, "generation": 1, "job_name": job.name, "pid": job.pid, "created_100ns": job.process_creation_time_100ns(), "active_processes_at_end": 0}))
+-
+-    async def test_04_supervisor_death_closes_last_job_handle(self):
+-        from fixtures.task083.job_control import verify_last_handle
+-        result = await verify_last_handle(FIXTURE, BACKEND)
+-        print(json.dumps(result))
+-
+-    async def test_05_same_name_collision_fails_closed(self):
+-        activity_id = str(uuid4())
+-        with NamedJob.create(activity_id, 1) as job:
+-            with self.assertRaises(JobUnknown):
+-                NamedJob.create(activity_id, 1)
+-            self.assertEqual(job.active_processes(), 0)
+-            print(json.dumps({"run_tag": "job-collision", "activity_id": activity_id, "generation": 1, "job_name": job.name, "active_processes_at_end": 0}))
+-
+-
+-if __name__ == "__main__":
+-    unittest.main(verbosity=2)
++"""TASK-083 受门控调用与本机合成Job；无网络、PG、模型或产品入口。"""
++
++from __future__ import annotations
++
++import asyncio
++import ctypes
++import json
++from ctypes import wintypes
++from datetime import datetime, timedelta, timezone
++import math
++import os
++from pathlib import Path
++import sys
++import time
++import unittest
++from unittest.mock import patch
++from uuid import uuid4
++
++BACKEND = Path(__file__).resolve().parents[1]
++sys.path.insert(0, str(BACKEND))
++
++from app.activities import ActivityLease, CloseResult, SettleResult, WindowSnapshot
++from app.worker.command import WorkerCommand
++from app.worker.gate import ClosingCallGate, GateClosed
++from app.worker.session import SessionConfig, SingleWindowSupervisor
++from app.worker.windows_job import JobUnknown, NamedJob
++
++
++FIXTURE = BACKEND / "tests" / "fixtures" / "task083" / "fixture.py"
++
++
++class FakeLedger:
++    def __init__(self, *, window: int = 6, claim_error: bool = False, old_running: bool = False):
++        self.window = window
++        self.claim_error = claim_error
++        self.old_running = old_running
++        self.events: list[str] = []
++        self.generation = 0
++
++    async def inspect_window(self, activity_id):
++        self.events.append("inspect")
++        return WindowSnapshot("running" if self.old_running else "pending", 1 if self.old_running else 0, 6 if self.old_running else 0, False)
++
++    async def claim_lease(self, activity_id, executor_id, *, lease_seconds, window_seconds):
++        self.events.append("claim")
++        if self.claim_error:
++            raise RuntimeError("synthetic commit response lost")
++        self.generation += 1
++        return ActivityLease(
++            activity_id, executor_id, self.generation, 1,
++            datetime.now(timezone.utc) + timedelta(seconds=window_seconds), self.window,
++        )
++
++    async def begin_window_close(self, activity_id, executor_id, execution_generation):
++        self.events.append("close_db")
++        return CloseResult.CLOSED
++
++    async def settle_execution_window(self, activity_id, executor_id, execution_generation, *, window_seconds, elapsed_seconds):
++        self.events.append("settle")
++        if not 1 <= math.ceil(elapsed_seconds) <= window_seconds:
++            raise AssertionError("SUP submitted invalid elapsed")
++        return SettleResult.SETTLED
++
++
++class _Gateway:
++    def __init__(self):
++        self.marked = asyncio.Event()
++        self.release = asyncio.Event()
++        self.events: list[str] = []
++
++    async def call(self, context, request):
++        self.events.extend(("admit", "mark"))
++        self.marked.set()
++        await self.release.wait()
++        self.events.append("send")
++        return "done"
++
++
++class GateTests(unittest.IsolatedAsyncioTestCase):
++    async def test_gate_closure_waits_for_marked_before_send_and_never_reopens(self):
++        gateway = _Gateway()
++        gate = ClosingCallGate(gateway)
++        await gate.arm()
++        first = asyncio.create_task(gate.call(None, None))
++        await gateway.marked.wait()
++        closing = asyncio.create_task(gate.close(timeout_seconds=2))
++        await asyncio.sleep(0)
++        with self.assertRaises(GateClosed):
++            await gate.call(None, None)
++        self.assertFalse(closing.done())
++        gateway.release.set()
++        self.assertEqual(await first, "done")
++        await closing
++        self.assertEqual(gateway.events, ["admit", "mark", "send"])
++        with self.assertRaises(GateClosed):
++            await gate.arm()
++
++    async def test_gate_close_timeout_keeps_closed(self):
++        gateway = _Gateway()
++        gate = ClosingCallGate(gateway)
++        await gate.arm()
++        first = asyncio.create_task(gate.call(None, None))
++        await gateway.marked.wait()
++        with self.assertRaises(TimeoutError):
++            await gate.close(timeout_seconds=0.01)
++        with self.assertRaises(GateClosed):
++            await gate.call(None, None)
++        gateway.release.set()
++        await first
++
++
++class ProtocolUnitTests(unittest.IsolatedAsyncioTestCase):
++    def config(self):
++        return SessionConfig(window_seconds=6, request_timeout_seconds=0.5, stop_grace_seconds=1, startup_limit_seconds=2)
++
++    def command(self):
++        return WorkerCommand()
++
++    async def test_claim_response_lost_and_partial_window_never_spawn(self):
++        class Owner:
++            def __init__(self, *args, **kwargs): pass
++            def close(self): pass
++
++        for ledger, expected in ((FakeLedger(claim_error=True), "failed_closed"), (FakeLedger(window=2), "partial_window_too_small")):
++            supervisor = SingleWindowSupervisor(ledger, self.config())
++            with patch("app.worker.session.ActivityMutex", Owner), patch("app.worker.session.NamedJob.create", side_effect=AssertionError("unexpected spawn")):
++                outcome = await supervisor.run_once(str(uuid4()), "worker-1", self.command(), run_tag="unit-no-spawn", manager_deadline_ns=time.monotonic_ns() + 20_000_000_000)
++            self.assertEqual(outcome.state, expected)
++            self.assertEqual(ledger.events, ["inspect", "claim"])
++
++    async def test_unknown_old_job_fails_before_claim(self):
++        class Owner:
++            def __init__(self, *args, **kwargs): pass
++            def close(self): pass
++        ledger = FakeLedger(old_running=True)
++        with patch("app.worker.session.ActivityMutex", Owner), patch("app.worker.session.NamedJob.open_existing", side_effect=JobUnknown("unknown")):
++            outcome = await SingleWindowSupervisor(ledger, self.config()).run_once(str(uuid4()), "worker-1", self.command(), run_tag="unit-old-unknown", manager_deadline_ns=time.monotonic_ns() + 20_000_000_000)
++        self.assertEqual(outcome.state, "failed_closed")
++        self.assertEqual(ledger.events, ["inspect"])
++
++
++# Real Job scenarios 01-05 require fixtures.task083.job_batch and a new run card.
++
++
++if __name__ == "__main__":
++    unittest.main(verbosity=2)
++
+--- pre/backend/tests/fixtures/task083/fixture.py
++++ backend/tests/fixtures/task083/fixture.py
+@@ -0,0 +1,111 @@
++"""TASK-083 synthetic Job fixture; offline repair prepares bounded control, never auto-runs."""
++
++from __future__ import annotations
++
++import ctypes
++from ctypes import wintypes
++import json
++import os
++from pathlib import Path
++import subprocess
++import sys
++import time
++
++
++HERE = Path(__file__).resolve()
++WAIT_OBJECT_0 = 0
++ERROR_ALREADY_EXISTS = 183
++
++
++def _controller(activity_id: str, generation: int, run_tag: str, start_name: str) -> int:
++    sys.path.insert(0, str(HERE.parents[3]))
++    from app.worker.windows_job import NamedJob, job_name
++
++    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
++    kernel.CreateEventW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR]
++    kernel.CreateEventW.restype = wintypes.HANDLE
++    kernel.OpenEventW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
++    kernel.OpenEventW.restype = wintypes.HANDLE
++    kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
++    kernel.WaitForSingleObject.restype = wintypes.DWORD
++    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
++    kernel.CloseHandle.restype = wintypes.BOOL
++    base = f"Local\\RetroLume.Task083.{activity_id}.G{generation}.{run_tag}"
++    start = kernel.OpenEventW(0x00100000, False, start_name)
++    if not start:
++        return 10
++    try:
++        if kernel.WaitForSingleObject(start, 5000) != WAIT_OBJECT_0:
++            return 10
++    finally:
++        kernel.CloseHandle(start)
++    events = []
++    job = None
++    try:
++        for suffix in ("Arm", "Exit"):
++            ctypes.set_last_error(0)
++            handle = kernel.CreateEventW(None, True, False, f"{base}.{suffix}")
++            if not handle or ctypes.get_last_error() == ERROR_ALREADY_EXISTS:
++                if handle:
++                    kernel.CloseHandle(handle)
++                raise RuntimeError(f"event collision/error: {suffix}")
++            events.append(handle)
++        job = NamedJob.create(activity_id, generation, max_processes=1)
++        worker = job.spawn_suspended([sys._base_executable, "-B", str(HERE), "hang"], cwd=str(HERE.parents[3]))
++        print(json.dumps({
++            "phase": "suspended", "run_tag": run_tag, "activity_id": activity_id,
++            "generation": generation, "job_name": job_name(activity_id, generation),
++            "pid": worker, "created_100ns": job.process_creation_time_100ns(),
++            "active_processes": job.active_processes(),
++        }), flush=True)
++        if kernel.WaitForSingleObject(events[0], 5000) != WAIT_OBJECT_0:
++            return 11
++        job.resume()
++        print(json.dumps({"phase": "resumed", "run_tag": run_tag, "pid": worker}), flush=True)
++        if kernel.WaitForSingleObject(events[1], 5000) != WAIT_OBJECT_0:
++            return 12
++        # OS 关闭该 SUP 的最后 Job 句柄；父测试此时已关闭自己的 Job 句柄。
++        os._exit(0)
++    finally:
++        if job is not None:
++            try:
++                job.terminate()
++            finally:
++                job.close()
++        for handle in events:
++            kernel.CloseHandle(handle)
++
++
++def main() -> int:
++    mode = sys.argv[1]
++    if mode == "fast":
++        time.sleep(0.15)
++        return 0
++    if mode == "controlled_fast":
++        import asyncio
++        sys.path.insert(0, str(HERE.parents[3]))
++        from app.worker.worker_main import run_controlled_worker
++
++        class SyntheticGateway:
++            async def call(self, context, request):
++                await asyncio.sleep(0.05)
++                return "synthetic-received"
++
++        async def work(gate):
++            assert await gate.call(None, None) == "synthetic-received"
++
++        asyncio.run(run_controlled_worker(SyntheticGateway(), work, drain_timeout_seconds=1.0))
++        return 0
++    if mode in ("hang", "child"):
++        time.sleep(20 if mode == "hang" else 1.5)
++        return 0
++    if mode == "parent":
++        subprocess.Popen([sys._base_executable, "-B", str(HERE), "child"], close_fds=True)
++        return 0
++    if mode == "controller":
++        return _controller(sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5])
++    raise ValueError(f"unknown fixture mode: {mode}")
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+--- pre/backend/tests/fixtures/task083/job_control.py
++++ backend/tests/fixtures/task083/job_control.py
+@@ -1,135 +1,321 @@
+-"""TASK-083 场景04控制者：只备代码，Job复检冻结期间不得调用。"""
+-
+-from __future__ import annotations
+-
+-import asyncio
+-import ctypes
+-from ctypes import wintypes
+-import json
+-import os
+-from pathlib import Path
+-import sys
+-import time
+-from uuid import uuid4
+-
+-from app.worker.windows_job import NamedJob, _FILETIME, job_name
+-
+-
+-async def verify_last_handle(fixture: Path, backend: Path) -> dict:
+-    activity_id = str(uuid4())
+-    run_tag = "job-death-" + uuid4().hex[:8]
+-    generation = 7
+-    deadline_ns = time.monotonic_ns() + 20_000_000_000
+-
+-    def remaining(cap: float = 5.0) -> float:
+-        value = min(cap, (deadline_ns - time.monotonic_ns()) / 1e9)
+-        if value <= 0:
+-            raise TimeoutError("场景控制者总期限已耗尽")
+-        return value
+-
+-    # Python 3.12 Windows spawn同法绕过venv转发器，同时保留venv依赖路径。
+-    child_env = os.environ.copy()
+-    child_env["__PYVENV_LAUNCHER__"] = sys.executable
+-    proc = await asyncio.wait_for(asyncio.create_subprocess_exec(
+-        sys._base_executable, "-B", str(fixture), "controller", activity_id, str(generation), run_tag,
+-        cwd=str(backend), env=child_env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+-    ), timeout=remaining())
+-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+-    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+-    kernel.OpenProcess.restype = wintypes.HANDLE
+-    kernel.GetProcessTimes.argtypes = [wintypes.HANDLE, *([ctypes.POINTER(_FILETIME)] * 4)]
+-    kernel.GetProcessTimes.restype = wintypes.BOOL
+-    kernel.OpenEventW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
+-    kernel.OpenEventW.restype = wintypes.HANDLE
+-    kernel.SetEvent.argtypes = [wintypes.HANDLE]
+-    kernel.SetEvent.restype = wintypes.BOOL
+-    kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+-    kernel.WaitForSingleObject.restype = wintypes.DWORD
+-    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+-    kernel.CloseHandle.restype = wintypes.BOOL
+-    kernel.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+-    kernel.TerminateProcess.restype = wintypes.BOOL
+-
+-    worker_handle = None
+-    parent_job = None
+-    events = []
+-    verified = False
+-    try:
+-        line = await asyncio.wait_for(proc.stdout.readline(), timeout=remaining())
+-        if not line:
+-            raise AssertionError("SUP未在有限时间提供悬停worker身份")
+-        created = json.loads(line)
+-        expected = ("suspended", activity_id, generation, run_tag, job_name(activity_id, generation))
+-        actual = tuple(created[key] for key in ("phase", "activity_id", "generation", "run_tag", "job_name"))
+-        if actual != expected:
+-            raise AssertionError("Job/G/runTag身份不匹配")
+-        worker_handle = kernel.OpenProcess(0x00100000 | 0x1000, False, created["pid"])
+-        if not worker_handle:
+-            raise AssertionError("无法取得真实受控进程的精确句柄")
+-        times = [_FILETIME() for _ in range(4)]
+-        if not kernel.GetProcessTimes(worker_handle, *(ctypes.byref(x) for x in times)):
+-            raise AssertionError("无法核对受控进程创建时间")
+-        stamp = (int(times[0].dwHighDateTime) << 32) | int(times[0].dwLowDateTime)
+-        if stamp != created["created_100ns"]:
+-            raise AssertionError("PID创建时间不匹配")
+-        verified = True
+-        parent_job = NamedJob.open_existing(activity_id, generation)
+-        active_before = parent_job.active_processes()
+-        if active_before <= 0:
+-            raise AssertionError("Resume前Job中没有悬停worker")
+-        base = f"Local\\RetroLume.Task083.{activity_id}.G{generation}.{run_tag}"
+-        for suffix in ("Arm", "Exit"):
+-            event = kernel.OpenEventW(0x0002, False, f"{base}.{suffix}")
+-            if not event:
+-                raise AssertionError("控制事件归属不明")
+-            events.append(event)
+-        # 独立截止、精确Job和worker句柄均已取得，才允许Resume。
+-        if not kernel.SetEvent(events[0]):
+-            raise AssertionError("Arm事件设置失败")
+-        resumed_line = await asyncio.wait_for(proc.stdout.readline(), timeout=remaining())
+-        if not resumed_line:
+-            raise AssertionError("SUP未确认Resume")
+-        resumed = json.loads(resumed_line)
+-        if (resumed["phase"], resumed["pid"]) != ("resumed", created["pid"]):
+-            raise AssertionError("Resume回执身份不匹配")
+-        parent_job.close()
+-        parent_job = None  # 此后SUP独占Job最后句柄。
+-        if not kernel.SetEvent(events[1]):
+-            raise AssertionError("退出事件设置失败")
+-        await asyncio.wait_for(proc.wait(), timeout=remaining())
+-        if proc.returncode != 0:
+-            raise AssertionError(f"SUP退出码={proc.returncode}")
+-        if kernel.WaitForSingleObject(worker_handle, int(remaining(4) * 1000)) != 0:
+-            raise AssertionError("最后Job句柄关闭后worker未退出")
+-        return {**created, "active_processes_before_supervisor_exit": active_before,
+-                "worker_signaled_after_last_job_handle_closed": True}
+-    finally:
+-        primary = sys.exc_info()[1]
+-        failures = []
+-        if parent_job is not None:
+-            try:
+-                parent_job.close()
+-            except BaseException as exc:
+-                failures.append(f"parent_job_close:{type(exc).__name__}")
+-        if proc.returncode is None:
+-            try:
+-                proc.kill()  # 精确控制者对象，不按名称或裸PID终止。
+-                wait = max(0.1, min(4.0, (deadline_ns - time.monotonic_ns()) / 1e9))
+-                await asyncio.wait_for(proc.wait(), timeout=wait)
+-            except BaseException as exc:
+-                failures.append(f"controller_stop:{type(exc).__name__}")
+-        if worker_handle:
+-            if verified and kernel.WaitForSingleObject(worker_handle, 0) != 0:
+-                if not kernel.TerminateProcess(worker_handle, 1) or kernel.WaitForSingleObject(worker_handle, 4000) != 0:
+-                    failures.append("exact_worker_stop_unconfirmed")
+-            if not kernel.CloseHandle(worker_handle):
+-                failures.append("worker_handle_close")
+-        for event in events:
+-            if not kernel.CloseHandle(event):
+-                failures.append("event_close")
+-        if failures:
+-            detail = "cleanup_incomplete:" + ",".join(failures)
+-            if primary is not None:
+-                primary.add_note(detail)
+-            else:
+-                raise AssertionError(detail)
++"""TASK-083 场景04控制者：只备代码，Job复检冻结期间不得调用。"""
++
++from __future__ import annotations
++
++import asyncio
++import ctypes
++from ctypes import wintypes
++import json
++import os
++from pathlib import Path
++import sys
++import time
++from uuid import uuid4
++
++from app.worker.windows_job import NamedJob, _FILETIME, job_name
++
++
++async def verify_last_handle(fixture: Path, backend: Path) -> dict:
++    activity_id = str(uuid4())
++    run_tag = "job-death-" + uuid4().hex[:8]
++    generation = 7
++    deadline_ns = time.monotonic_ns() + 20_000_000_000
++
++    def remaining(cap: float = 5.0) -> float:
++        value = min(cap, (deadline_ns - time.monotonic_ns()) / 1e9)
++        if value <= 0:
++            raise TimeoutError("场景控制者总期限已耗尽")
++        return value
++
++    # Python 3.12 Windows spawn同法绕过venv转发器，同时保留venv依赖路径。
++    child_env = os.environ.copy()
++    child_env["__PYVENV_LAUNCHER__"] = sys.executable
++    starter = ctypes.WinDLL("kernel32", use_last_error=True)
++    starter.CreateEventW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR]
++    starter.CreateEventW.restype = wintypes.HANDLE
++    starter.SetEvent.argtypes = [wintypes.HANDLE]
++    starter.SetEvent.restype = wintypes.BOOL
++    starter.CloseHandle.argtypes = [wintypes.HANDLE]
++    starter.CloseHandle.restype = wintypes.BOOL
++    start_name = f"Local\\RetroLume.Task083.{activity_id}.G{generation}.{run_tag}.Start"
++    start_event = starter.CreateEventW(None, True, False, start_name)
++    if not start_event:
++        raise AssertionError("无法建立独立Start截止控制事件")
++    proc = None
++    try:
++        proc = await asyncio.wait_for(asyncio.create_subprocess_exec(
++            sys._base_executable, "-B", str(fixture), "controller", activity_id, str(generation), run_tag, start_name,
++            cwd=str(backend), env=child_env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
++        ), timeout=remaining())
++        if not starter.SetEvent(start_event):
++            raise AssertionError("无法放行已持句柄的场景04控制进程")
++    except BaseException:
++        if proc is not None and proc.returncode is None:
++            proc.kill()
++            await asyncio.wait_for(proc.wait(), timeout=remaining())
++        raise
++    finally:
++        starter.CloseHandle(start_event)
++    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
++    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
++    kernel.OpenProcess.restype = wintypes.HANDLE
++    kernel.GetProcessTimes.argtypes = [wintypes.HANDLE, *([ctypes.POINTER(_FILETIME)] * 4)]
++    kernel.GetProcessTimes.restype = wintypes.BOOL
++    kernel.OpenEventW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
++    kernel.OpenEventW.restype = wintypes.HANDLE
++    kernel.SetEvent.argtypes = [wintypes.HANDLE]
++    kernel.SetEvent.restype = wintypes.BOOL
++    kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
++    kernel.WaitForSingleObject.restype = wintypes.DWORD
++    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
++    kernel.CloseHandle.restype = wintypes.BOOL
++    kernel.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
++    kernel.TerminateProcess.restype = wintypes.BOOL
++
++    worker_handle = None
++    parent_job = None
++    events = []
++    verified = False
++    try:
++        line = await asyncio.wait_for(proc.stdout.readline(), timeout=remaining())
++        if not line:
++            raise AssertionError("SUP未在有限时间提供悬停worker身份")
++        created = json.loads(line)
++        expected = ("suspended", activity_id, generation, run_tag, job_name(activity_id, generation))
++        actual = tuple(created[key] for key in ("phase", "activity_id", "generation", "run_tag", "job_name"))
++        if actual != expected:
++            raise AssertionError("Job/G/runTag身份不匹配")
++        worker_handle = kernel.OpenProcess(0x00100000 | 0x1000, False, created["pid"])
++        if not worker_handle:
++            raise AssertionError("无法取得真实受控进程的精确句柄")
++        times = [_FILETIME() for _ in range(4)]
++        if not kernel.GetProcessTimes(worker_handle, *(ctypes.byref(x) for x in times)):
++            raise AssertionError("无法核对受控进程创建时间")
++        stamp = (int(times[0].dwHighDateTime) << 32) | int(times[0].dwLowDateTime)
++        if stamp != created["created_100ns"]:
++            raise AssertionError("PID创建时间不匹配")
++        verified = True
++        parent_job = NamedJob.open_existing(activity_id, generation)
++        active_before = parent_job.active_processes()
++        if active_before <= 0:
++            raise AssertionError("Resume前Job中没有悬停worker")
++        base = f"Local\\RetroLume.Task083.{activity_id}.G{generation}.{run_tag}"
++        for suffix in ("Arm", "Exit"):
++            event = kernel.OpenEventW(0x0002, False, f"{base}.{suffix}")
++            if not event:
++                raise AssertionError("控制事件归属不明")
++            events.append(event)
++        # 独立截止、精确Job和worker句柄均已取得，才允许Resume。
++        if not kernel.SetEvent(events[0]):
++            raise AssertionError("Arm事件设置失败")
++        resumed_line = await asyncio.wait_for(proc.stdout.readline(), timeout=remaining())
++        if not resumed_line:
++            raise AssertionError("SUP未确认Resume")
++        resumed = json.loads(resumed_line)
++        if (resumed["phase"], resumed["pid"]) != ("resumed", created["pid"]):
++            raise AssertionError("Resume回执身份不匹配")
++        parent_job.close()
++        parent_job = None  # 此后SUP独占Job最后句柄。
++        if not kernel.SetEvent(events[1]):
++            raise AssertionError("退出事件设置失败")
++        await asyncio.wait_for(proc.wait(), timeout=remaining())
++        if proc.returncode != 0:
++            raise AssertionError(f"SUP退出码={proc.returncode}")
++        if kernel.WaitForSingleObject(worker_handle, int(remaining(4) * 1000)) != 0:
++            raise AssertionError("最后Job句柄关闭后worker未退出")
++        return {**created, "active_processes_before_supervisor_exit": active_before,
++                "active_processes_at_end": None,
++                "worker_signaled_after_last_job_handle_closed": True,
++                "tree_evidence": "single-process Job limit plus exact worker signaled; post-close Job query unavailable"}
++    finally:
++        primary = sys.exc_info()[1]
++        failures = []
++        if parent_job is not None:
++            try:
++                parent_job.close()
++            except BaseException as exc:
++                failures.append(f"parent_job_close:{type(exc).__name__}")
++        if proc.returncode is None:
++            try:
++                proc.kill()  # 精确控制者对象，不按名称或裸PID终止。
++                wait = max(0.1, min(4.0, (deadline_ns - time.monotonic_ns()) / 1e9))
++                await asyncio.wait_for(proc.wait(), timeout=wait)
++            except BaseException as exc:
++                failures.append(f"controller_stop:{type(exc).__name__}")
++        if worker_handle:
++            if verified and kernel.WaitForSingleObject(worker_handle, 0) != 0:
++                if not kernel.TerminateProcess(worker_handle, 1) or kernel.WaitForSingleObject(worker_handle, 4000) != 0:
++                    failures.append("exact_worker_stop_unconfirmed")
++            if not kernel.CloseHandle(worker_handle):
++                failures.append("worker_handle_close")
++        for event in events:
++            if not kernel.CloseHandle(event):
++                failures.append("event_close")
++        if failures:
++            detail = "cleanup_incomplete:" + ",".join(failures)
++            if primary is not None:
++                primary.add_note(detail)
++            else:
++                raise AssertionError(detail)
++
++class JobScenarioUnsafe(AssertionError):
++    """A later Job batch must stop when identity or cleanup is unconfirmed."""
++
++
++async def verify_scenario(mode: str, backend: Path) -> dict:
++    """Future-only outer controller for 01/02/03/05; no call in offline tests."""
++    if mode not in ("01", "02", "03", "05"):
++        raise ValueError("unsupported controlled scenario")
++    activity_id = str(uuid4())
++    generation = 1
++    run_tag = f"job-{mode}-" + uuid4().hex[:8]
++    base = f"Local\\RetroLume.Task083.{activity_id}.G{generation}.{run_tag}"
++    deadline_ns = time.monotonic_ns() + 25_000_000_000
++    run_deadline_ns = deadline_ns - 5_000_000_000
++
++    def remaining(*, cleanup=False, cap=5.0):
++        limit = deadline_ns if cleanup else run_deadline_ns
++        value = min(cap, (limit - time.monotonic_ns()) / 1e9)
++        if value <= 0:
++            raise TimeoutError("scenario deadline exhausted")
++        return value
++
++    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
++    kernel.CreateEventW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR]
++    kernel.CreateEventW.restype = wintypes.HANDLE
++    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
++    kernel.OpenProcess.restype = wintypes.HANDLE
++    kernel.GetProcessTimes.argtypes = [wintypes.HANDLE, *([ctypes.POINTER(_FILETIME)] * 4)]
++    kernel.GetProcessTimes.restype = wintypes.BOOL
++    kernel.SetEvent.argtypes = [wintypes.HANDLE]
++    kernel.SetEvent.restype = wintypes.BOOL
++    kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
++    kernel.WaitForSingleObject.restype = wintypes.DWORD
++    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
++    kernel.CloseHandle.restype = wintypes.BOOL
++    kernel.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
++    kernel.TerminateProcess.restype = wintypes.BOOL
++
++    events = []
++    proc = None
++    worker_handle = None
++    job = None
++    active_before = None
++    active_end = None
++    result = None
++    failures = []
++    primary = None
++    try:
++        for suffix in ("Start", "Arm"):
++            name = f"{base}.{suffix}"
++            ctypes.set_last_error(0)
++            event = kernel.CreateEventW(None, True, False, name)
++            if not event or ctypes.get_last_error() == 183:
++                if event:
++                    kernel.CloseHandle(event)
++                raise JobScenarioUnsafe(f"event collision: {suffix}")
++            events.append(event)
++        child = Path(__file__).with_name("scenario_child.py")
++        child_env = os.environ.copy()
++        child_env["__PYVENV_LAUNCHER__"] = sys.executable
++        proc = await asyncio.wait_for(asyncio.create_subprocess_exec(
++            sys._base_executable, "-B", str(child), mode, activity_id,
++            str(generation), run_tag, f"{base}.Start", f"{base}.Arm",
++            cwd=str(backend), env=child_env,
++            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
++        ), timeout=remaining())
++        # The child cannot create a Job before this existing controller arms Start.
++        if not kernel.SetEvent(events[0]):
++            raise JobScenarioUnsafe("start event failed")
++        line = await asyncio.wait_for(proc.stdout.readline(), timeout=remaining())
++        if not line:
++            raise JobScenarioUnsafe("no suspended identity")
++        created = json.loads(line)
++        expected = ("suspended", activity_id, generation, run_tag, job_name(activity_id, generation))
++        actual = tuple(created.get(key) for key in ("phase", "activity_id", "generation", "run_tag", "job_name"))
++        if actual != expected:
++            raise JobScenarioUnsafe("activity/G/runTag/Job mismatch")
++        worker_handle = kernel.OpenProcess(0x00101001, False, created["pid"])
++        if not worker_handle:
++            raise JobScenarioUnsafe("exact worker handle unavailable")
++        times = [_FILETIME() for _ in range(4)]
++        if not kernel.GetProcessTimes(worker_handle, *(ctypes.byref(x) for x in times)):
++            raise JobScenarioUnsafe("worker creation time unavailable")
++        stamp = (int(times[0].dwHighDateTime) << 32) | int(times[0].dwLowDateTime)
++        if stamp != created.get("created_100ns"):
++            raise JobScenarioUnsafe("worker PID creation time changed")
++        job = NamedJob.open_existing(activity_id, generation)
++        active_before = job.active_processes()
++        if active_before != 1 or created.get("active_processes") != 1:
++            raise JobScenarioUnsafe("suspended Job did not contain exactly one worker")
++        # Exact Job and process objects, creation time and deadline precede Resume.
++        if not kernel.SetEvent(events[1]):
++            raise JobScenarioUnsafe("arm event failed")
++        line = await asyncio.wait_for(proc.stdout.readline(), timeout=remaining(cap=20.0))
++        if not line:
++            raise JobScenarioUnsafe("no scenario result")
++        result = json.loads(line)
++        await asyncio.wait_for(proc.wait(), timeout=remaining())
++        if proc.returncode != 0 or result.get("phase") != "result":
++            raise JobScenarioUnsafe("scenario process failed")
++        active_end = job.active_processes()
++        if active_end != 0:
++            raise JobScenarioUnsafe("exact Job tree not empty")
++        if mode == "01":
++            outcome = result["outcome"]
++            if outcome["state"] != "settled" or outcome["active_processes_at_end"] != 0 or result["events"] != ["inspect", "claim", "close_db", "settle"]:
++                raise JobScenarioUnsafe("normal settlement order incorrect")
++        elif mode == "02":
++            outcome = result["outcome"]
++            if outcome["state"] != "stopped_at_deadline" or outcome["reserved_seconds"] != 6 or outcome["settled_seconds"] != 0 or "settle" in result["events"]:
++                raise JobScenarioUnsafe("hung worker refund discipline incorrect")
++        elif mode == "03" and not result.get("descendants_after_primary", 0) > 0:
++            raise JobScenarioUnsafe("primary exit hid descendant")
++        elif mode == "05" and not result.get("collision_rejected"):
++            raise JobScenarioUnsafe("same-name collision not rejected")
++    except BaseException as exc:
++        primary = exc
++    finally:
++        if job is not None:
++            try:
++                if job.active_processes() != 0:
++                    job.terminate()
++                if not job.wait_empty_until(deadline_ns):
++                    failures.append("exact_job_empty_unconfirmed")
++            except BaseException as exc:
++                failures.append(f"exact_job_cleanup:{type(exc).__name__}")
++            try:
++                job.close()
++            except BaseException as exc:
++                failures.append(f"job_close:{type(exc).__name__}")
++        if worker_handle:
++            try:
++                if kernel.WaitForSingleObject(worker_handle, 0) != 0:
++                    if not kernel.TerminateProcess(worker_handle, 1):
++                        failures.append("worker_terminate_failed")
++                    elif kernel.WaitForSingleObject(worker_handle, int(remaining(cleanup=True) * 1000)) != 0:
++                        failures.append("worker_exit_unconfirmed")
++            except BaseException as exc:
++                failures.append(f"worker_cleanup:{type(exc).__name__}")
++            if not kernel.CloseHandle(worker_handle):
++                failures.append("worker_handle_close")
++        if proc is not None and proc.returncode is None:
++            try:
++                proc.kill()
++                await asyncio.wait_for(proc.wait(), timeout=remaining(cleanup=True))
++            except BaseException as exc:
++                failures.append(f"controller_cleanup:{type(exc).__name__}")
++        for event in events:
++            if not kernel.CloseHandle(event):
++                failures.append("event_close")
++    if primary is not None or failures:
++        message = (f"scenario {mode} runTag={run_tag} activity={activity_id} G={generation} "
++                   f"job={job_name(activity_id, generation)} active_before={active_before} "
++                   f"active_end={active_end} cleanup_incomplete={bool(failures) or active_end != 0} "
++                   f"failure={type(primary).__name__ if primary else 'none'} cleanup={','.join(failures)}")
++        raise JobScenarioUnsafe(message) from primary
++    return {**result, "run_tag": run_tag, "activity_id": activity_id,
++            "generation": generation, "job_name": job_name(activity_id, generation),
++            "active_processes_before_resume": active_before,
++            "active_processes_at_end": active_end, "cleanup_incomplete": False}
++
+--- pre/backend/tests/fixtures/task083/scenario_child.py
++++ backend/tests/fixtures/task083/scenario_child.py
+@@ -0,0 +1,127 @@
++"""Future controlled Job scenarios 01/02/03/05. Never import from product code."""
++
++from __future__ import annotations
++
++import asyncio
++from dataclasses import asdict
++import ctypes
++from ctypes import wintypes
++import json
++from pathlib import Path
++import sys
++import time
++from unittest.mock import patch
++
++BACKEND = Path(__file__).resolve().parents[3]
++sys.path.insert(0, str(BACKEND))
++sys.path.insert(0, str(BACKEND / "tests"))
++
++from app.worker.command import WorkerCommand
++from app.worker.session import SessionConfig, SingleWindowSupervisor
++from app.worker.windows_job import JobUnknown, NamedJob
++from test_worker_session import FakeLedger
++
++
++def _wait_event(name: str) -> None:
++    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
++    kernel.OpenEventW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
++    kernel.OpenEventW.restype = wintypes.HANDLE
++    kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
++    kernel.WaitForSingleObject.restype = wintypes.DWORD
++    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
++    kernel.CloseHandle.restype = wintypes.BOOL
++    handle = kernel.OpenEventW(0x00100000, False, name)
++    if not handle:
++        raise RuntimeError("controller event absent; no Job may be created")
++    try:
++        if kernel.WaitForSingleObject(handle, 5000) != 0:
++            raise TimeoutError("controller event not armed")
++    finally:
++        kernel.CloseHandle(handle)
++
++
++def _identity(job: NamedJob, activity_id: str, generation: int, run_tag: str) -> None:
++    print(json.dumps({
++        "phase": "suspended", "activity_id": activity_id, "generation": generation,
++        "run_tag": run_tag, "job_name": job.name, "pid": job.pid,
++        "created_100ns": job.process_creation_time_100ns(),
++        "active_processes": job.active_processes(),
++    }), flush=True)
++
++
++def _run_supervised(mode: str, activity_id: str, generation: int, run_tag: str, arm_name: str) -> dict:
++    ledger = FakeLedger()
++    config = SessionConfig(window_seconds=6, request_timeout_seconds=0.5,
++                           stop_grace_seconds=1, startup_limit_seconds=2,
++                           cleanup_seconds=2)
++    original_resume = NamedJob.resume
++
++    def held_resume(job: NamedJob) -> None:
++        _identity(job, activity_id, generation, run_tag)
++        _wait_event(arm_name)
++        original_resume(job)
++
++    command = WorkerCommand()
++    with patch.object(NamedJob, "resume", held_resume):
++        if mode == "02":
++            fixture = Path(__file__).with_name("fixture.py")
++            with patch.object(WorkerCommand, "argv", lambda self: [sys._base_executable, "-B", str(fixture), "hang"]):
++                outcome = asyncio.run(SingleWindowSupervisor(ledger, config).run_once(
++                    activity_id, "worker-1", command, run_tag=run_tag,
++                    manager_deadline_ns=time.monotonic_ns() + 20_000_000_000,
++                ))
++        else:
++            outcome = asyncio.run(SingleWindowSupervisor(ledger, config).run_once(
++                activity_id, "worker-1", command, run_tag=run_tag,
++                manager_deadline_ns=time.monotonic_ns() + 20_000_000_000,
++            ))
++    return {"phase": "result", "outcome": asdict(outcome), "events": ledger.events}
++
++
++def _run_direct(mode: str, activity_id: str, generation: int, run_tag: str, arm_name: str) -> dict:
++    fixture = Path(__file__).with_name("fixture.py")
++    worker_mode = "parent" if mode == "03" else "fast"
++    with NamedJob.create(activity_id, generation) as job:
++        job.spawn_suspended([sys._base_executable, "-B", str(fixture), worker_mode], cwd=str(BACKEND))
++        _identity(job, activity_id, generation, run_tag)
++        _wait_event(arm_name)
++        collision = False
++        if mode == "05":
++            try:
++                NamedJob.create(activity_id, generation)
++            except JobUnknown:
++                collision = True
++            if not collision:
++                raise AssertionError("same-name Job collision was accepted")
++        job.resume()
++        descendants_after_primary = None
++        if mode == "03":
++            if job.api.WaitForSingleObject(job.process.hProcess, 4000) != 0:
++                raise TimeoutError("primary did not exit")
++            descendants_after_primary = job.active_processes()
++            if descendants_after_primary <= 0:
++                raise AssertionError("primary exit hid descendant")
++        if not job.wait_empty_until(time.monotonic_ns() + 5_000_000_000):
++            raise TimeoutError("exact Job did not empty")
++        return {"phase": "result", "active_processes_at_end": job.active_processes(),
++                "descendants_after_primary": descendants_after_primary, "collision_rejected": collision}
++
++
++def main() -> int:
++    if len(sys.argv) != 7:
++        return 2
++    mode, activity_id, generation_s, run_tag, start_name, arm_name = sys.argv[1:]
++    if mode not in ("01", "02", "03", "05"):
++        return 2
++    generation = int(generation_s)
++    _wait_event(start_name)  # Late process creation cannot create a Job.
++    result = (_run_supervised if mode in ("01", "02") else _run_direct)(
++        mode, activity_id, generation, run_tag, arm_name,
++    )
++    print(json.dumps(result), flush=True)
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
++
+--- pre/backend/tests/fixtures/task083/job_batch.py
++++ backend/tests/fixtures/task083/job_batch.py
+@@ -0,0 +1,48 @@
++"""Frozen future Job batch entry: all scenarios use an outer identity controller.
++
++Do not invoke until an independent audit and a new run budget authorize it.
++"""
++
++from __future__ import annotations
++
++import asyncio
++import json
++from pathlib import Path
++import sys
++import time
++
++BACKEND = Path(__file__).resolve().parents[3]
++sys.path.insert(0, str(BACKEND))
++
++from fixtures.task083.job_control import verify_last_handle, verify_scenario
++
++
++async def main() -> int:
++    batch_deadline_ns = time.monotonic_ns() + 55_000_000_000
++    fixture = Path(__file__).with_name("fixture.py")
++    # 04 is last because its last-handle observation has no post-close Job query.
++    for mode in ("01", "02", "03", "05", "04"):
++        remaining = (batch_deadline_ns - time.monotonic_ns()) / 1e9
++        if remaining <= 5:
++            print(json.dumps({"mode": mode, "status": "batch_deadline", "cleanup_incomplete": True}), flush=True)
++            return 2
++        try:
++            if mode == "04":
++                result = await asyncio.wait_for(verify_last_handle(fixture, BACKEND), timeout=min(28, remaining - 5))
++                if not result["worker_signaled_after_last_job_handle_closed"] or result["active_processes_before_supervisor_exit"] != 1:
++                    raise AssertionError("last-handle fixture did not establish its bounded one-process observation")
++            else:
++                result = await asyncio.wait_for(verify_scenario(mode, BACKEND), timeout=min(28, remaining - 5))
++                if result["cleanup_incomplete"] or result["active_processes_at_end"] != 0:
++                    raise AssertionError("exact Job tree not confirmed empty")
++            print(json.dumps({"mode": mode, "status": "observed", **result}), flush=True)
++        except BaseException as exc:
++            print(json.dumps({"mode": mode, "status": "stop_batch", "cleanup_incomplete": True,
++                              "error_type": type(exc).__name__, "detail": str(exc)}), flush=True)
++            return 2
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(asyncio.run(main()))
++
+--- pre/backend/tests/fixtures/task083/offline_unit.py
++++ backend/tests/fixtures/task083/offline_unit.py
+@@ -1,260 +1,366 @@
+-"""TASK-083 补足轮01纯单元；只用内存替身，不创建OS进程/Job或连接DB。"""
+-
+-from __future__ import annotations
+-
+-import asyncio
+-from datetime import datetime, timedelta, timezone
+-from pathlib import Path
+-import sys
+-import time
+-import unittest
+-from unittest.mock import patch
+-from uuid import uuid4
+-
+-
+-BACKEND = Path(__file__).resolve().parents[3]
+-sys.path.insert(0, str(BACKEND))
+-
+-from app.activities import ActivityLease, CloseResult, PostgresAdmissionLedger, SettleResult, WindowSnapshot
+-from app.worker.launcher import run_supervised_window
+-from app.worker.command import WorkerCommand
+-from app.worker.gate import GateClosed
+-from app.worker.session import SessionConfig, SingleWindowSupervisor, ManagerDeadline
+-from app.worker.worker_main import run_controlled_worker
+-
+-
+-class Ledger:
+-    def __init__(self, *, window=6, claim_error=None, cancelled=False, settle_lost_once=False):
+-        self.window = window
+-        self.claim_error = claim_error
+-        self.cancelled = cancelled
+-        self.settle_lost_once = settle_lost_once
+-        self.events = []
+-
+-    async def inspect_window(self, activity_id):
+-        self.events.append("inspect")
+-        return WindowSnapshot("cancelled" if self.cancelled else "pending", 0, 0, True)
+-
+-    async def claim_lease(self, activity_id, executor_id, *, lease_seconds, window_seconds):
+-        self.events.append("claim")
+-        if self.claim_error:
+-            raise self.claim_error
+-        return ActivityLease(activity_id, executor_id, 1, 1, datetime.now(timezone.utc) + timedelta(seconds=6), self.window)
+-
+-    async def begin_window_close(self, activity_id, executor_id, execution_generation):
+-        self.events.append("close_db")
+-        return CloseResult.CLOSED
+-
+-    async def settle_execution_window(self, activity_id, executor_id, execution_generation, *, window_seconds, elapsed_seconds):
+-        self.events.append("settle")
+-        if self.settle_lost_once:
+-            self.settle_lost_once = False
+-            raise TimeoutError("committed response lost")
+-        return SettleResult.ALREADY_SETTLED if self.events.count("settle") > 1 else SettleResult.SETTLED
+-
+-
+-class Owner:
+-    fail_close = False
+-
+-    def __init__(self, *args, **kwargs):
+-        pass
+-
+-    def close(self):
+-        if self.fail_close:
+-            raise RuntimeError("owner close failed")
+-
+-
+-class FakeJob:
+-    def __init__(self, *, hang=False, terminate_error=False, close_error=False, external_events=None):
+-        self.name = "Local\\SyntheticJob"
+-        self.hang = hang
+-        self.terminated = False
+-        self.terminate_error = terminate_error
+-        self.close_error = close_error
+-        self.external_events = external_events
+-        self.events = []
+-
+-    def spawn_suspended(self, command, *, cwd):
+-        self.events.append("spawn_suspended")
+-        return 123
+-
+-    def resume(self):
+-        self.events.append("resume")
+-
+-    def wait_empty_until(self, deadline):
+-        self.events.append("query")
+-        if not self.hang and not self.terminated:
+-            time.sleep(0.002)  # 纯替身模拟正耗时；真实C0仍拒绝部分退款。
+-        return not self.hang or self.terminated
+-
+-    def terminate(self):
+-        self.events.append("terminate")
+-        if self.terminate_error:
+-            raise RuntimeError("terminate failed")
+-        self.terminated = True
+-
+-    def primary_exit_code(self):
+-        return 0
+-
+-    def close(self):
+-        self.events.append("close_job")
+-        if self.external_events is not None:
+-            self.external_events.append("job_closed")
+-        if self.close_error:
+-            raise RuntimeError("job close failed")
+-
+-
+-class OfflineRepairTests(unittest.IsolatedAsyncioTestCase):
+-    def config(self):
+-        return SessionConfig(window_seconds=6, request_timeout_seconds=0.5, stop_grace_seconds=1,
+-                             startup_limit_seconds=2, manager_db_timeout_seconds=0.5,
+-                             cleanup_seconds=1, mutex_wait_seconds=0.5, manager_overhead_seconds=8)
+-
+-    def command(self):
+-        return WorkerCommand(sys._base_executable, ("-B", "-c", "pass"), str(BACKEND))
+-
+-    async def run_fake(self, ledger, job=None, *, owner=Owner, deadline_offset=20):
+-        with patch("app.worker.session.ActivityMutex", owner), patch(
+-            "app.worker.session.NamedJob.create", side_effect=([job] if job is not None else AssertionError("must not spawn"))
+-        ):
+-            return await SingleWindowSupervisor(ledger, self.config()).run_once(
+-                str(uuid4()), "worker-1", self.command(), run_tag="offline-unit",
+-                manager_deadline_ns=time.monotonic_ns() + int(deadline_offset * 1e9),
+-            )
+-
+-    async def test_01_command_data_rejects_callable_and_expired_manager_never_spawns(self):
+-        ledger = Ledger()
+-        supervisor = SingleWindowSupervisor(ledger, self.config())
+-        with self.assertRaises(TypeError):
+-            await supervisor.run_once(str(uuid4()), "worker-1", lambda _: [sys.executable],
+-                                      run_tag="offline-unit", manager_deadline_ns=time.monotonic_ns() + 1_000_000_000)
+-        with self.assertRaises(ManagerDeadline):
+-            await supervisor.run_once(str(uuid4()), "worker-1", self.command(),
+-                                      run_tag="offline-unit", manager_deadline_ns=time.monotonic_ns() - 1)
+-        self.assertEqual(ledger.events, [])
+-
+-    async def test_02_partial_window_early_exit_reports_cleanup_failure_and_full_reservation(self):
+-        class BadOwner(Owner):
+-            fail_close = True
+-        result = await self.run_fake(Ledger(window=2), owner=BadOwner)
+-        self.assertEqual(result.state, "failed_closed")
+-        self.assertEqual((result.settled_seconds, result.reserved_seconds, result.pending_fold_seconds), (0, 2, 2))
+-        self.assertTrue(result.cleanup_incomplete)
+-        self.assertIn("owner_close:RuntimeError", result.cleanup_errors)
+-
+-    async def test_03_cancellation_preserves_diagnostic_and_cleans_owner(self):
+-        ledger = Ledger(claim_error=asyncio.CancelledError())
+-        with self.assertRaises(asyncio.CancelledError) as caught:
+-            await self.run_fake(ledger)
+-        result = caught.exception.session_outcome
+-        self.assertEqual(result.state, "cancelled_by_caller")
+-        self.assertEqual((result.reserved_seconds, result.settled_seconds), (0, 0))
+-        self.assertFalse(result.cleanup_incomplete)
+-
+-    async def test_04_claim_response_lost_has_no_job_and_no_false_charge(self):
+-        result = await self.run_fake(Ledger(claim_error=RuntimeError("response lost")))
+-        self.assertEqual(result.state, "failed_closed")
+-        self.assertEqual((result.reserved_seconds, result.settled_seconds, result.pending_fold_seconds), (None, None, None))
+-        self.assertIsNone(result.job_name)
+-
+-    async def test_05_early_success_uses_tree_zero_close_then_same_g_settle_retry(self):
+-        ledger = Ledger(settle_lost_once=True)
+-        job = FakeJob(external_events=ledger.events)
+-        result = await self.run_fake(ledger, job)
+-        self.assertEqual(result.state, "settled")
+-        self.assertEqual((result.settled_seconds, result.reserved_seconds, result.pending_fold_seconds), (1, 0, 0))
+-        self.assertEqual(result.active_processes_at_end, 0)
+-        self.assertIn("close_job", job.events)
+-        self.assertEqual(ledger.events, ["inspect", "claim", "job_closed", "close_db", "settle", "settle"])
+-
+-    async def test_06_timeout_or_cleanup_failure_never_refunds(self):
+-        result = await self.run_fake(Ledger(), FakeJob(hang=True))
+-        self.assertEqual(result.state, "stopped_at_deadline")
+-        self.assertEqual((result.settled_seconds, result.reserved_seconds, result.pending_fold_seconds), (0, 6, 6))
+-        broken = await self.run_fake(Ledger(), FakeJob(hang=True, terminate_error=True, close_error=True))
+-        self.assertEqual(broken.state, "failed_closed")
+-        self.assertTrue(broken.cleanup_incomplete)
+-        self.assertEqual((broken.settled_seconds, broken.reserved_seconds), (0, 6))
+-        self.assertIn("job_close:RuntimeError", broken.cleanup_errors)
+-
+-    async def test_07_controlled_worker_gateway_chain_drains_marked_call(self):
+-        class Gateway:
+-            def __init__(self):
+-                self.marked = asyncio.Event()
+-                self.release = asyncio.Event()
+-                self.events = []
+-
+-            async def call(self, context, request):
+-                self.events.extend(("admit", "mark"))
+-                self.marked.set()
+-                await self.release.wait()
+-                self.events.extend(("send", "record"))
+-                return "done"
+-
+-        gateway = Gateway()
+-        captured = []
+-
+-        async def work(gate):
+-            captured.append(gate)
+-            asyncio.create_task(gate.call(None, None))
+-            await gateway.marked.wait()
+-
+-        runner = asyncio.create_task(run_controlled_worker(gateway, work, drain_timeout_seconds=1))
+-        await gateway.marked.wait()
+-        for _ in range(10):
+-            if captured[0].closed:
+-                break
+-            await asyncio.sleep(0)
+-        self.assertTrue(captured[0].closed)
+-        self.assertFalse(runner.done())
+-        self.assertEqual(gateway.events, ["admit", "mark"])
+-        with self.assertRaises(GateClosed):
+-            await captured[0].call(None, None)
+-        gateway.release.set()
+-        await runner
+-        self.assertEqual(gateway.events, ["admit", "mark", "send", "record"])
+-        with self.assertRaises(GateClosed):
+-            await captured[0].call(None, None)
+-
+-
+-class LauncherUnitTests(unittest.TestCase):
+-    def test_08_fake_process_timeout_terminates_exact_owner_without_charge_claim(self):
+-        class Pipe:
+-            def close(self): pass
+-            def poll(self, timeout): return False
+-
+-        class Process:
+-            def __init__(self):
+-                self.alive = True
+-                self.calls = []
+-                self.exitcode = None
+-
+-            def start(self): self.calls.append("start")
+-            def join(self, timeout): self.calls.append("join")
+-            def is_alive(self): return self.alive
+-            def terminate(self): self.calls.append("terminate"); self.alive = False
+-            def kill(self): self.calls.append("kill"); self.alive = False
+-            def close(self): self.calls.append("close")
+-
+-        class Context:
+-            def __init__(self): self.process = Process()
+-            def Pipe(self, duplex): return Pipe(), Pipe()
+-            def Process(self, **kwargs): return self.process
+-
+-        context = Context()
+-        with patch("app.worker.launcher.multiprocessing.get_context", return_value=context):
+-            result = run_supervised_window(
+-                PostgresAdmissionLedger("synthetic-not-connected"),
+-                SessionConfig(), str(uuid4()), "worker-1",
+-                WorkerCommand(sys._base_executable, ("-B", "-c", "pass"), str(BACKEND)),
+-                run_tag="offline-launcher",
+-            )
+-        self.assertEqual(result.state, "manager_timeout_unconfirmed")
+-        self.assertIsNone(result.reserved_seconds)
+-        self.assertIn("terminate", context.process.calls)
+-        self.assertNotIn("kill", context.process.calls)
+-
+-
+-
+-if __name__ == "__main__":
+-    unittest.main(verbosity=2)
++"""TASK-083 补足轮01纯单元；只用内存替身，不创建OS进程/Job或连接DB。"""
++
++from __future__ import annotations
++
++import asyncio
++from datetime import datetime, timedelta, timezone
++from pathlib import Path
++import sys
++import time
++import unittest
++from unittest.mock import patch
++from uuid import uuid4
++
++
++BACKEND = Path(__file__).resolve().parents[3]
++sys.path.insert(0, str(BACKEND))
++
++from app.activities import ActivityLease, CloseResult, PostgresAdmissionLedger, SettleResult, WindowSnapshot
++from app.worker.launcher import run_supervised_window
++from app.worker.command import WorkerCommand
++from app.worker.gate import GateClosed
++from app.worker.session import SessionConfig, SingleWindowSupervisor, ManagerDeadline
++from app.worker.worker_main import run_controlled_worker, run_internal_task
++
++
++class Ledger:
++    def __init__(self, *, window=6, claim_error=None, cancelled=False, settle_lost_once=False):
++        self.window = window
++        self.claim_error = claim_error
++        self.cancelled = cancelled
++        self.settle_lost_once = settle_lost_once
++        self.events = []
++
++    async def inspect_window(self, activity_id):
++        self.events.append("inspect")
++        return WindowSnapshot("cancelled" if self.cancelled else "pending", 0, 0, True)
++
++    async def claim_lease(self, activity_id, executor_id, *, lease_seconds, window_seconds):
++        self.events.append("claim")
++        if self.claim_error:
++            raise self.claim_error
++        return ActivityLease(activity_id, executor_id, 1, 1, datetime.now(timezone.utc) + timedelta(seconds=6), self.window)
++
++    async def begin_window_close(self, activity_id, executor_id, execution_generation):
++        self.events.append("close_db")
++        return CloseResult.CLOSED
++
++    async def settle_execution_window(self, activity_id, executor_id, execution_generation, *, window_seconds, elapsed_seconds):
++        self.events.append("settle")
++        if self.settle_lost_once:
++            self.settle_lost_once = False
++            raise TimeoutError("committed response lost")
++        return SettleResult.ALREADY_SETTLED if self.events.count("settle") > 1 else SettleResult.SETTLED
++
++
++class Owner:
++    fail_close = False
++
++    def __init__(self, *args, **kwargs):
++        pass
++
++    def close(self):
++        if self.fail_close:
++            raise RuntimeError("owner close failed")
++
++
++class FakeJob:
++    def __init__(self, *, hang=False, terminate_error=False, close_error=False, external_events=None):
++        self.name = "Local\\SyntheticJob"
++        self.hang = hang
++        self.terminated = False
++        self.terminate_error = terminate_error
++        self.close_error = close_error
++        self.external_events = external_events
++        self.events = []
++
++    def spawn_suspended(self, command, *, cwd):
++        self.events.append("spawn_suspended")
++        return 123
++
++    def resume(self):
++        self.events.append("resume")
++
++    def wait_empty_until(self, deadline):
++        self.events.append("query")
++        if not self.hang and not self.terminated:
++            time.sleep(0.002)  # 纯替身模拟正耗时；真实C0仍拒绝部分退款。
++        return not self.hang or self.terminated
++
++    def terminate(self):
++        self.events.append("terminate")
++        if self.terminate_error:
++            raise RuntimeError("terminate failed")
++        self.terminated = True
++
++    def primary_exit_code(self):
++        return 0
++
++    def close(self):
++        self.events.append("close_job")
++        if self.external_events is not None:
++            self.external_events.append("job_closed")
++        if self.close_error:
++            raise RuntimeError("job close failed")
++
++
++class OfflineRepairTests(unittest.IsolatedAsyncioTestCase):
++    def config(self):
++        return SessionConfig(window_seconds=6, request_timeout_seconds=0.5, stop_grace_seconds=1,
++                             startup_limit_seconds=2, manager_db_timeout_seconds=0.5,
++                             cleanup_seconds=1, mutex_wait_seconds=0.5, manager_overhead_seconds=8)
++
++    def command(self):
++        return WorkerCommand()
++
++    async def run_fake(self, ledger, job=None, *, owner=Owner, deadline_offset=20):
++        with patch("app.worker.session.ActivityMutex", owner), patch(
++            "app.worker.session.NamedJob.create", side_effect=([job] if job is not None else AssertionError("must not spawn"))
++        ):
++            return await SingleWindowSupervisor(ledger, self.config()).run_once(
++                str(uuid4()), "worker-1", self.command(), run_tag="offline-unit",
++                manager_deadline_ns=time.monotonic_ns() + int(deadline_offset * 1e9),
++            )
++
++    async def test_01_command_data_rejects_callable_and_expired_manager_never_spawns(self):
++        ledger = Ledger()
++        supervisor = SingleWindowSupervisor(ledger, self.config())
++        with self.assertRaises(TypeError):
++            await supervisor.run_once(str(uuid4()), "worker-1", lambda _: [sys.executable],
++                                      run_tag="offline-unit", manager_deadline_ns=time.monotonic_ns() + 1_000_000_000)
++        with self.assertRaises(ManagerDeadline):
++            await supervisor.run_once(str(uuid4()), "worker-1", self.command(),
++                                      run_tag="offline-unit", manager_deadline_ns=time.monotonic_ns() - 1)
++        self.assertEqual(ledger.events, [])
++
++    async def test_02_partial_window_early_exit_reports_cleanup_failure_and_full_reservation(self):
++        class BadOwner(Owner):
++            fail_close = True
++        result = await self.run_fake(Ledger(window=2), owner=BadOwner)
++        self.assertEqual(result.state, "failed_closed")
++        self.assertEqual((result.settled_seconds, result.reserved_seconds, result.pending_fold_seconds), (0, 2, 2))
++        self.assertTrue(result.cleanup_incomplete)
++        self.assertIn("owner_close:RuntimeError", result.cleanup_errors)
++
++    async def test_03_cancellation_preserves_diagnostic_and_cleans_owner(self):
++        ledger = Ledger(claim_error=asyncio.CancelledError())
++        with self.assertRaises(asyncio.CancelledError) as caught:
++            await self.run_fake(ledger)
++        result = caught.exception.session_outcome
++        self.assertEqual(result.state, "cancelled_by_caller")
++        self.assertEqual((result.reserved_seconds, result.settled_seconds), (None, None))
++        self.assertFalse(result.cleanup_incomplete)
++
++    async def test_04_claim_response_lost_has_no_job_and_no_false_charge(self):
++        result = await self.run_fake(Ledger(claim_error=RuntimeError("response lost")))
++        self.assertEqual(result.state, "failed_closed")
++        self.assertEqual((result.reserved_seconds, result.settled_seconds, result.pending_fold_seconds), (None, None, None))
++        self.assertIsNone(result.job_name)
++
++    async def test_05_early_success_uses_tree_zero_close_then_same_g_settle_retry(self):
++        ledger = Ledger(settle_lost_once=True)
++        job = FakeJob(external_events=ledger.events)
++        result = await self.run_fake(ledger, job)
++        self.assertEqual(result.state, "settled")
++        self.assertEqual((result.settled_seconds, result.reserved_seconds, result.pending_fold_seconds), (1, 0, 0))
++        self.assertEqual(result.active_processes_at_end, 0)
++        self.assertIn("close_job", job.events)
++        self.assertEqual(ledger.events, ["inspect", "claim", "job_closed", "close_db", "settle", "settle"])
++
++    async def test_06_timeout_or_cleanup_failure_never_refunds(self):
++        result = await self.run_fake(Ledger(), FakeJob(hang=True))
++        self.assertEqual(result.state, "stopped_at_deadline")
++        self.assertEqual((result.settled_seconds, result.reserved_seconds, result.pending_fold_seconds), (0, 6, 6))
++        broken = await self.run_fake(Ledger(), FakeJob(hang=True, terminate_error=True, close_error=True))
++        self.assertEqual(broken.state, "failed_closed")
++        self.assertTrue(broken.cleanup_incomplete)
++        self.assertEqual((broken.settled_seconds, broken.reserved_seconds), (0, 6))
++        self.assertIn("job_close:RuntimeError", broken.cleanup_errors)
++
++    async def test_07_controlled_worker_gateway_chain_drains_marked_call(self):
++        class Gateway:
++            def __init__(self):
++                self.marked = asyncio.Event()
++                self.release = asyncio.Event()
++                self.events = []
++
++            async def call(self, context, request):
++                self.events.extend(("admit", "mark"))
++                self.marked.set()
++                await self.release.wait()
++                self.events.extend(("send", "record"))
++                return "done"
++
++        gateway = Gateway()
++        captured = []
++
++        async def work(gate):
++            captured.append(gate)
++            asyncio.create_task(gate.call(None, None))
++            await gateway.marked.wait()
++
++        runner = asyncio.create_task(run_controlled_worker(gateway, work, drain_timeout_seconds=1))
++        await gateway.marked.wait()
++        for _ in range(10):
++            if captured[0].closed:
++                break
++            await asyncio.sleep(0)
++        self.assertTrue(captured[0].closed)
++        self.assertFalse(runner.done())
++        self.assertEqual(gateway.events, ["admit", "mark"])
++        with self.assertRaises(GateClosed):
++            await captured[0].call(None, None)
++        gateway.release.set()
++        await runner
++        self.assertEqual(gateway.events, ["admit", "mark", "send", "record"])
++        with self.assertRaises(GateClosed):
++            await captured[0].call(None, None)
++
++
++class LauncherUnitTests(unittest.TestCase):
++    def test_08_fake_process_timeout_terminates_exact_owner_without_charge_claim(self):
++        class Pipe:
++            def close(self): pass
++            def poll(self, timeout): return False
++
++        class Process:
++            def __init__(self):
++                self.alive = True
++                self.calls = []
++                self.exitcode = None
++
++            def start(self): self.calls.append("start")
++            def join(self, timeout): self.calls.append("join")
++            def is_alive(self): return self.alive
++            def terminate(self): self.calls.append("terminate"); self.alive = False
++            def kill(self): self.calls.append("kill"); self.alive = False
++            def close(self): self.calls.append("close")
++
++        class Context:
++            def __init__(self): self.process = Process()
++            def Pipe(self, duplex): return Pipe(), Pipe()
++            def Process(self, **kwargs): return self.process
++
++        context = Context()
++        with patch("app.worker.launcher.multiprocessing.get_context", return_value=context):
++            result = run_supervised_window(
++                PostgresAdmissionLedger("synthetic-not-connected"),
++                SessionConfig(), str(uuid4()), "worker-1",
++                WorkerCommand(),
++                run_tag="offline-launcher",
++            )
++        self.assertEqual(result.state, "manager_timeout_unconfirmed")
++        self.assertIsNone(result.reserved_seconds)
++        self.assertIn("terminate", context.process.calls)
++        self.assertNotIn("kill", context.process.calls)
++        self.assertTrue(result.cleanup_incomplete)
++        self.assertEqual((result.settled_seconds, result.reserved_seconds, result.pending_fold_seconds), (None, None, None))
++
++    def test_09_partial_process_start_failure_stops_exact_owner(self):
++        class Pipe:
++            def close(self): pass
++        class Process:
++            pid = 123
++            exitcode = None
++            def __init__(self): self.alive = True; self.calls = []
++            def start(self): self.calls.append("start"); raise OSError("partial start")
++            def is_alive(self): return self.alive
++            def terminate(self): self.calls.append("terminate"); self.alive = False
++            def join(self, timeout): self.calls.append(("join", timeout))
++            def close(self): self.calls.append("close")
++        class Context:
++            def __init__(self): self.process = Process()
++            def Pipe(self, duplex): return Pipe(), Pipe()
++            def Process(self, **kwargs): return self.process
++        context = Context()
++        with patch("app.worker.launcher.multiprocessing.get_context", return_value=context):
++            result = run_supervised_window(
++                PostgresAdmissionLedger("synthetic-not-connected"), SessionConfig(),
++                str(uuid4()), "worker-1", WorkerCommand(), run_tag="partial-start",
++            )
++        self.assertEqual(result.state, "launcher_failed_unconfirmed")
++        self.assertTrue(result.cleanup_incomplete)
++        self.assertIn("terminate", context.process.calls)
++        self.assertEqual(result.reserved_seconds, None)
++
++    def test_10_recv_failure_is_unconfirmed_and_closes_both_pipes(self):
++        class Pipe:
++            def __init__(self): self.closed = False
++            def close(self): self.closed = True
++            def poll(self, timeout): return True
++            def recv(self): raise EOFError("partial frame")
++        class Process:
++            pid = 123
++            exitcode = 0
++            def start(self): pass
++            def join(self, timeout): pass
++            def is_alive(self): return False
++            def close(self): pass
++        class Context:
++            def __init__(self): self.pipes = (Pipe(), Pipe())
++            def Pipe(self, duplex): return self.pipes
++            def Process(self, **kwargs): return Process()
++        context = Context()
++        with patch("app.worker.launcher.multiprocessing.get_context", return_value=context):
++            result = run_supervised_window(
++                PostgresAdmissionLedger("synthetic-not-connected"), SessionConfig(),
++                str(uuid4()), "worker-1", WorkerCommand(), run_tag="recv-fail",
++            )
++        self.assertTrue(result.cleanup_incomplete)
++        self.assertIsNone(result.settled_seconds)
++        self.assertTrue(all(pipe.closed for pipe in context.pipes))
++
++    def test_11_all_parent_joins_share_deadline(self):
++        class Pipe:
++            def close(self): pass
++        class Process:
++            pid = 123
++            exitcode = None
++            def __init__(self): self.alive = True; self.joins = []
++            def start(self): pass
++            def join(self, timeout): self.joins.append(timeout)
++            def is_alive(self): return self.alive
++            def terminate(self): pass
++            def kill(self): self.alive = False
++            def close(self): pass
++        class Context:
++            def __init__(self): self.process = Process()
++            def Pipe(self, duplex): return Pipe(), Pipe()
++            def Process(self, **kwargs): return self.process
++        context = Context()
++        config = SessionConfig()
++        with patch("app.worker.launcher.multiprocessing.get_context", return_value=context):
++            result = run_supervised_window(
++                PostgresAdmissionLedger("synthetic-not-connected"), config,
++                str(uuid4()), "worker-1", WorkerCommand(), run_tag="bounded-joins",
++            )
++        self.assertTrue(result.cleanup_incomplete)
++        self.assertEqual(len(context.process.joins), 3)
++        self.assertLessEqual(context.process.joins[0], config.manager_total_seconds - config.cleanup_seconds)
++        self.assertTrue(all(0 <= value <= config.manager_total_seconds for value in context.process.joins))
++
++
++class FixedEntryTests(unittest.IsolatedAsyncioTestCase):
++    async def test_12_fixed_command_and_injected_gateway_pass_through_gate(self):
++        with self.assertRaises(TypeError):
++            WorkerCommand(sys._base_executable, ("-c", "pass"), str(BACKEND))
++        with self.assertRaises(ValueError):
++            WorkerCommand("arbitrary")
++        self.assertEqual(WorkerCommand("one_call").argv()[0], str(BACKEND / ".venv" / "Scripts" / "python.exe"))
++        self.assertEqual(WorkerCommand("one_call").argv()[2:4], ["-m", "app.worker.worker_main"])
++
++        class Gateway:
++            def __init__(self): self.calls = 0
++            async def call(self, context, request):
++                self.calls += 1
++                return "synthetic"
++        gateway = Gateway()
++        await run_internal_task(gateway, "one_call")
++        self.assertEqual(gateway.calls, 1)
++
++
++
++if __name__ == "__main__":
++    unittest.main(verbosity=2)
++
++
+--- pre/backend/tests/fixtures/task083/pg_close.py
++++ backend/tests/fixtures/task083/pg_close.py
+@@ -1,164 +1,199 @@
+-"""TASK-083 专用真实PG用例准备；本轮严格 not_run。"""
+-
+-from __future__ import annotations
+-
+-import asyncio
+-from datetime import datetime, timedelta, timezone
+-import os
+-from pathlib import Path
+-import sys
+-import unittest
+-from uuid import uuid4
+-
+-BACKEND = Path(__file__).resolve().parents[3]
+-sys.path.insert(0, str(BACKEND))
+-
+-import psycopg
+-from psycopg.rows import dict_row
+-
+-from app.activities import ActivityLedgerConflict, ActivitySpec, CloseResult, PostgresAdmissionLedger, SettleResult, SourceSnapshot
+-from app.capabilities import AdmissionDenied, AdmissionIntent, CallContext, LedgerDisposition, LedgerOutcome, Provider
+-from app.runtime import psycopg_compatible_loop_factory
+-
+-
+-DSN = os.environ.get("RETROLUME_TASK_083_DATABASE_URL", "")
+-
+-
+-class _PsycopgCase(unittest.IsolatedAsyncioTestCase):
+-    def _setupAsyncioRunner(self) -> None:
+-        assert self._asyncioRunner is None
+-        self._asyncioRunner = asyncio.Runner(debug=True, loop_factory=psycopg_compatible_loop_factory)
+-
+-
+-@unittest.skipUnless(DSN, "仅在TASK-083专用合成PG运行；不回退应用/用户DSN")
+-class PGCloseTests(_PsycopgCase):
+-    async def asyncSetUp(self):
+-        self.ledger = PostgresAdmissionLedger(DSN)
+-        self.activity_id = str(uuid4())
+-        self.source_id = str(uuid4())
+-        self.version_id = str(uuid4())
+-
+-    async def asyncTearDown(self):
+-        # 只按本例合成ID、FK顺序清理；任何失败显式传播。
+-        async with await psycopg.AsyncConnection.connect(DSN) as conn:
+-            async with conn.transaction():
+-                for table in ("activity_operations", "activity_allowed_models", "activity_scope_sources", "activities"):
+-                    await conn.execute(f"DELETE FROM {table} WHERE {'id' if table == 'activities' else 'activity_id'} = %s", (self.activity_id,))
+-                await conn.execute("UPDATE material_sources SET current_version = NULL WHERE id = %s", (self.source_id,))
+-                await conn.execute("DELETE FROM material_versions WHERE id = %s", (self.version_id,))
+-                await conn.execute("DELETE FROM material_sources WHERE id = %s", (self.source_id,))
+-
+-    async def row(self, sql, params=()):
+-        async with await psycopg.AsyncConnection.connect(DSN, row_factory=dict_row) as conn:
+-            return await (await conn.execute(sql, params)).fetchone()
+-
+-    async def build(self):
+-        async with await psycopg.AsyncConnection.connect(DSN) as conn:
+-            async with conn.transaction():
+-                await conn.execute("INSERT INTO material_sources(id,title,revision) VALUES (%s,'task083',0)", (self.source_id,))
+-                await conn.execute(
+-                    "INSERT INTO material_versions(id,source_id,filename,format,sha256,size) VALUES (%s,%s,'task083.txt','txt',%s,1)",
+-                    (self.version_id, self.source_id, "d" * 64),
+-                )
+-                await conn.execute("UPDATE material_sources SET current_version=%s,revision=1 WHERE id=%s", (self.version_id, self.source_id))
+-        spec = ActivitySpec(
+-            activity_id=self.activity_id,
+-            sources=(SourceSnapshot(self.source_id, self.version_id, 1),),
+-            deadline_at=datetime.now(timezone.utc) + timedelta(minutes=20),
+-            max_requests=8, max_cost_microunits=800, reserve_cost_microunits=100,
+-            max_request_bytes=4096, max_output_tokens=256, max_running_seconds=180,
+-            allowed_models=((Provider.DEEPSEEK_CHAT_COMPLETIONS.value, "synthetic-model"),),
+-            allowed_tools=(), scope_revision=1,
+-        )
+-        await self.ledger.create_activity(spec)
+-        lease = await self.ledger.claim_lease(self.activity_id, "worker-1", lease_seconds=90, window_seconds=90)
+-        assert lease is not None
+-        return lease
+-
+-    def intent(self, lease, operation_id):
+-        return AdmissionIntent(
+-            CallContext(activity_id=self.activity_id, operation_id=operation_id,
+-                        executor_id=lease.executor_id, execution_generation=lease.execution_generation,
+-                        scope_revision=lease.scope_revision),
+-            Provider.DEEPSEEK_CHAT_COMPLETIONS, "synthetic-model", 512, 64, (),
+-        )
+-
+-    async def test_pg01_close_settle_and_old_gc_does_not_touch_new_window(self):
+-        lease = await self.build()
+-        before = await self.row("SELECT dispatch_closed,running_reserved_seconds FROM activities WHERE id=%s", (self.activity_id,))
+-        self.assertEqual(before, {"dispatch_closed": False, "running_reserved_seconds": 90})
+-        with self.assertRaises(ActivityLedgerConflict):
+-            await self.ledger.settle_execution_window(self.activity_id, "worker-1", lease.execution_generation,
+-                                                       window_seconds=90, elapsed_seconds=2)
+-        self.assertEqual(await self.ledger.begin_window_close(self.activity_id, "worker-1", lease.execution_generation), CloseResult.CLOSED)
+-        self.assertEqual(await self.ledger.begin_window_close(self.activity_id, "worker-1", lease.execution_generation), CloseResult.ALREADY_CLOSED)
+-        self.assertEqual(await self.ledger.settle_execution_window(self.activity_id, "worker-1", lease.execution_generation,
+-                                                                    window_seconds=90, elapsed_seconds=2), SettleResult.SETTLED)
+-        next_lease = await self.ledger.claim_lease(self.activity_id, "worker-2", lease_seconds=90, window_seconds=90)
+-        self.assertIsNotNone(next_lease)
+-        opened = await self.row("SELECT status,execution_generation,dispatch_closed,running_reserved_seconds,running_settled_seconds FROM activities WHERE id=%s", (self.activity_id,))
+-        self.assertEqual(await self.ledger.settle_execution_window(self.activity_id, "worker-1", lease.execution_generation,
+-                                                                    window_seconds=90, elapsed_seconds=2), SettleResult.ALREADY_SETTLED)
+-        self.assertEqual(await self.row("SELECT status,execution_generation,dispatch_closed,running_reserved_seconds,running_settled_seconds FROM activities WHERE id=%s", (self.activity_id,)), opened)
+-        with self.assertRaises(ActivityLedgerConflict):
+-            await self.ledger.begin_window_close(self.activity_id, "worker-1", lease.execution_generation)
+-
+-    async def test_pg02_closed_gate_rejects_admit_mark_but_records_outcomes(self):
+-        lease = await self.build()
+-        reserved = await self.ledger.admit(self.intent(lease, "reserved-op"))
+-        dispatched = await self.ledger.admit(self.intent(lease, "dispatched-op"))
+-        received = await self.ledger.admit(self.intent(lease, "received-op"))
+-        await self.ledger.mark_dispatch_started(dispatched)
+-        await self.ledger.mark_dispatch_started(received)
+-        await self.ledger.begin_window_close(self.activity_id, "worker-1", lease.execution_generation)
+-        with self.assertRaises(AdmissionDenied):
+-            await self.ledger.admit(self.intent(lease, "new-op"))
+-        with self.assertRaises(AdmissionDenied):
+-            await self.ledger.mark_dispatch_started(reserved)
+-        await self.ledger.record_outcome(reserved, LedgerOutcome(LedgerDisposition.NOT_SENT))
+-        await self.ledger.record_outcome(dispatched, LedgerOutcome(LedgerDisposition.UNKNOWN, error_code="synthetic_unknown"))
+-        await self.ledger.record_outcome(received, LedgerOutcome(LedgerDisposition.RECEIVED, remote_request_id="synthetic-id", returned_model="synthetic-model", finish_reason="stop", prompt_tokens=1, completion_tokens=1, response_bytes=12))
+-        rows = await self.row("SELECT count(*) FILTER (WHERE state='not_sent') AS not_sent,count(*) FILTER (WHERE state='unknown') AS unknown,count(*) FILTER (WHERE state='received') AS received FROM activity_operations WHERE activity_id=%s", (self.activity_id,))
+-        self.assertEqual(rows, {"not_sent": 1, "unknown": 1, "received": 1})
+-
+-    async def test_pg03_close_commits_before_concurrent_admit_and_mark(self):
+-        lease = await self.build()
+-        permit = await self.ledger.admit(self.intent(lease, "reserved-before-close"))
+-        entered = asyncio.Event()
+-        release = asyncio.Event()
+-        close_ledger = PostgresAdmissionLedger(DSN)
+-        original_lock = close_ledger._lock_sources
+-
+-        async def held_lock(connection, snapshots):
+-            valid = await original_lock(connection, snapshots)
+-            entered.set()  # 已持真实来源行锁，尚未取得活动锁。
+-            await release.wait()
+-            return valid
+-
+-        close_ledger._lock_sources = held_lock
+-        close_task = asyncio.create_task(close_ledger.begin_window_close(self.activity_id, "worker-1", lease.execution_generation))
+-        await asyncio.wait_for(entered.wait(), timeout=5)
+-        admit_task = asyncio.create_task(self.ledger.admit(self.intent(lease, "after-close")))
+-        mark_task = asyncio.create_task(self.ledger.mark_dispatch_started(permit))
+-        await asyncio.sleep(0)  # 让两连接进入同一来源行的锁队列。
+-        release.set()
+-        self.assertEqual(await asyncio.wait_for(close_task, timeout=5), CloseResult.CLOSED)
+-        for task in (admit_task, mark_task):
+-            with self.assertRaises(AdmissionDenied):
+-                await asyncio.wait_for(task, timeout=5)
+-
+-
+-    async def test_pg04_cancel_closes_gate_and_old_dispatched_unknown_converges(self):
+-        lease = await self.build()
+-        permit = await self.ledger.admit(self.intent(lease, "before-cancel"))
+-        await self.ledger.mark_dispatch_started(permit)
+-        cancelled_generation = await self.ledger.cancel_activity(self.activity_id)
+-        self.assertEqual(cancelled_generation, lease.execution_generation + 1)
+-        row = await self.row("SELECT status,dispatch_closed,running_reserved_seconds,running_settled_seconds FROM activities WHERE id=%s", (self.activity_id,))
+-        self.assertEqual(row, {"status": "cancelled", "dispatch_closed": True, "running_reserved_seconds": 0, "running_settled_seconds": 90})
+-        await self.ledger.record_outcome(permit, LedgerOutcome(LedgerDisposition.UNKNOWN, error_code="cancelled"))
+-        self.assertEqual(await self.row("SELECT state FROM activity_operations WHERE admission_id=%s", (permit.admission_id,)), {"state": "unknown"})
+-
+-
+-if __name__ == "__main__":
+-    unittest.main(verbosity=2)
++"""TASK-083 专用真实PG用例准备；本轮严格 not_run。"""
++
++from __future__ import annotations
++
++import asyncio
++from datetime import datetime, timedelta, timezone
++import os
++from pathlib import Path
++import sys
++import unittest
++from uuid import uuid4
++
++BACKEND = Path(__file__).resolve().parents[3]
++sys.path.insert(0, str(BACKEND))
++
++import psycopg
++from psycopg import sql
++from psycopg.conninfo import make_conninfo
++from psycopg.rows import dict_row
++
++from app.activities import ActivityLedgerConflict, ActivitySpec, CloseResult, PostgresAdmissionLedger, SettleResult, SourceSnapshot
++from app.capabilities import AdmissionDenied, AdmissionIntent, CallContext, LedgerDisposition, LedgerOutcome, Provider
++from app.runtime import psycopg_compatible_loop_factory
++
++
++DSN = os.environ.get("RETROLUME_TASK_083_DATABASE_URL", "")
++MIGRATIONS = [BACKEND / "migrations" / name for name in ("001_materials.sql", "002_activities.sql", "003_pdf_review.sql", "004_activities_time_budget.sql", "005_activities_dispatch_closed.sql")]
++
++
++class _PsycopgCase(unittest.IsolatedAsyncioTestCase):
++    def _setupAsyncioRunner(self) -> None:
++        assert self._asyncioRunner is None
++        self._asyncioRunner = asyncio.Runner(debug=True, loop_factory=psycopg_compatible_loop_factory)
++
++
++@unittest.skipUnless(DSN, "仅在TASK-083专用合成PG运行；不回退应用/用户DSN")
++class PGCloseTests(_PsycopgCase):
++    async def asyncSetUp(self):
++        self.schema = "task083_close_" + uuid4().hex
++        self.activity_id = str(uuid4())
++        self.source_id = str(uuid4())
++        self.version_id = str(uuid4())
++        # The schema is intentionally retained. A later authorized PG run card
++        # owns schema removal, including failed cases.
++        async with await psycopg.AsyncConnection.connect(DSN, autocommit=True) as admin:
++            await admin.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(self.schema)))
++        self.scoped_dsn = make_conninfo(DSN, options=f"-c search_path={self.schema}")
++        print(f"task083 PG case schema={self.schema} activity={self.activity_id} source={self.source_id} version={self.version_id}")
++        async with await psycopg.AsyncConnection.connect(self.scoped_dsn, autocommit=True) as conn:
++            for path in MIGRATIONS:
++                await conn.execute(path.read_text(encoding="utf-8"))
++        self.ledger = PostgresAdmissionLedger(self.scoped_dsn)
++
++    async def asyncTearDown(self):
++        # Failed assertions keep their UUID/FK rows and schema for targeted review.
++        if not self._outcome.success:
++            print(f"task083 PG failure retained schema={self.schema} activity={self.activity_id}")
++            return
++        async with await psycopg.AsyncConnection.connect(self.scoped_dsn) as conn:
++            async with conn.transaction():
++                for table in ("activity_operations", "activity_allowed_models", "activity_scope_sources", "activities"):
++                    await conn.execute(f"DELETE FROM {table} WHERE {'id' if table == 'activities' else 'activity_id'} = %s", (self.activity_id,))
++                await conn.execute("UPDATE material_sources SET current_version = NULL WHERE id = %s", (self.source_id,))
++                await conn.execute("DELETE FROM material_versions WHERE id = %s", (self.version_id,))
++                await conn.execute("DELETE FROM material_sources WHERE id = %s", (self.source_id,))
++
++    async def row(self, sql, params=()):
++        async with await psycopg.AsyncConnection.connect(self.scoped_dsn, row_factory=dict_row) as conn:
++            return await (await conn.execute(sql, params)).fetchone()
++
++    async def build(self):
++        async with await psycopg.AsyncConnection.connect(self.scoped_dsn) as conn:
++            async with conn.transaction():
++                await conn.execute("INSERT INTO material_sources(id,title,revision) VALUES (%s,'task083',0)", (self.source_id,))
++                await conn.execute(
++                    "INSERT INTO material_versions(id,source_id,filename,format,sha256,size) VALUES (%s,%s,'task083.txt','txt',%s,1)",
++                    (self.version_id, self.source_id, "d" * 64),
++                )
++                await conn.execute("UPDATE material_sources SET current_version=%s,revision=1 WHERE id=%s", (self.version_id, self.source_id))
++        spec = ActivitySpec(
++            activity_id=self.activity_id,
++            sources=(SourceSnapshot(self.source_id, self.version_id, 1),),
++            deadline_at=datetime.now(timezone.utc) + timedelta(minutes=20),
++            max_requests=8, max_cost_microunits=800, reserve_cost_microunits=100,
++            max_request_bytes=4096, max_output_tokens=256, max_running_seconds=180,
++            allowed_models=((Provider.DEEPSEEK_CHAT_COMPLETIONS.value, "synthetic-model"),),
++            allowed_tools=(), scope_revision=1,
++        )
++        await self.ledger.create_activity(spec)
++        lease = await self.ledger.claim_lease(self.activity_id, "worker-1", lease_seconds=90, window_seconds=90)
++        assert lease is not None
++        return lease
++
++    def intent(self, lease, operation_id):
++        return AdmissionIntent(
++            CallContext(activity_id=self.activity_id, operation_id=operation_id,
++                        executor_id=lease.executor_id, execution_generation=lease.execution_generation,
++                        scope_revision=lease.scope_revision),
++            Provider.DEEPSEEK_CHAT_COMPLETIONS, "synthetic-model", 512, 64, (),
++        )
++
++    async def test_pg01_close_settle_and_old_gc_does_not_touch_new_window(self):
++        lease = await self.build()
++        before = await self.row("SELECT dispatch_closed,running_reserved_seconds FROM activities WHERE id=%s", (self.activity_id,))
++        self.assertEqual(before, {"dispatch_closed": False, "running_reserved_seconds": 90})
++        with self.assertRaises(ActivityLedgerConflict):
++            await self.ledger.settle_execution_window(self.activity_id, "worker-1", lease.execution_generation,
++                                                       window_seconds=90, elapsed_seconds=2)
++        self.assertEqual(await self.ledger.begin_window_close(self.activity_id, "worker-1", lease.execution_generation), CloseResult.CLOSED)
++        self.assertEqual(await self.ledger.begin_window_close(self.activity_id, "worker-1", lease.execution_generation), CloseResult.ALREADY_CLOSED)
++        self.assertEqual(await self.ledger.settle_execution_window(self.activity_id, "worker-1", lease.execution_generation,
++                                                                    window_seconds=90, elapsed_seconds=2), SettleResult.SETTLED)
++        next_lease = await self.ledger.claim_lease(self.activity_id, "worker-2", lease_seconds=90, window_seconds=90)
++        self.assertIsNotNone(next_lease)
++        opened = await self.row("SELECT status,execution_generation,dispatch_closed,running_reserved_seconds,running_settled_seconds FROM activities WHERE id=%s", (self.activity_id,))
++        self.assertEqual(await self.ledger.settle_execution_window(self.activity_id, "worker-1", lease.execution_generation,
++                                                                    window_seconds=90, elapsed_seconds=2), SettleResult.ALREADY_SETTLED)
++        self.assertEqual(await self.row("SELECT status,execution_generation,dispatch_closed,running_reserved_seconds,running_settled_seconds FROM activities WHERE id=%s", (self.activity_id,)), opened)
++        with self.assertRaises(ActivityLedgerConflict):
++            await self.ledger.begin_window_close(self.activity_id, "worker-1", lease.execution_generation)
++
++    async def test_pg02_closed_gate_rejects_admit_mark_but_records_outcomes(self):
++        lease = await self.build()
++        reserved = await self.ledger.admit(self.intent(lease, "reserved-op"))
++        dispatched = await self.ledger.admit(self.intent(lease, "dispatched-op"))
++        received = await self.ledger.admit(self.intent(lease, "received-op"))
++        await self.ledger.mark_dispatch_started(dispatched)
++        await self.ledger.mark_dispatch_started(received)
++        await self.ledger.begin_window_close(self.activity_id, "worker-1", lease.execution_generation)
++        with self.assertRaises(AdmissionDenied):
++            await self.ledger.admit(self.intent(lease, "new-op"))
++        with self.assertRaises(AdmissionDenied):
++            await self.ledger.mark_dispatch_started(reserved)
++        await self.ledger.record_outcome(reserved, LedgerOutcome(LedgerDisposition.UNKNOWN, error_code="synthetic_reserved_unknown"))
++        await self.ledger.record_outcome(dispatched, LedgerOutcome(LedgerDisposition.UNKNOWN, error_code="synthetic_unknown"))
++        await self.ledger.record_outcome(received, LedgerOutcome(LedgerDisposition.RECEIVED, remote_request_id="synthetic-id", returned_model="synthetic-model", finish_reason="stop", prompt_tokens=1, completion_tokens=1, response_bytes=12))
++        rows = await self.row("SELECT count(*) FILTER (WHERE state='not_sent') AS not_sent,count(*) FILTER (WHERE state='unknown') AS unknown,count(*) FILTER (WHERE state='received') AS received FROM activity_operations WHERE activity_id=%s", (self.activity_id,))
++        self.assertEqual(rows, {"not_sent": 0, "unknown": 2, "received": 1})
++
++    async def test_pg03_close_commits_before_concurrent_admit_and_mark(self):
++        lease = await self.build()
++        permit = await self.ledger.admit(self.intent(lease, "reserved-before-close"))
++        # Positive order: a legal mark has committed before close.
++        prior = await self.ledger.admit(self.intent(lease, "marked-before-close"))
++        await self.ledger.mark_dispatch_started(prior)
++
++        entered_close = asyncio.Event()
++        release_close = asyncio.Event()
++        close_ledger = PostgresAdmissionLedger(self.scoped_dsn)
++        original_close_lock = close_ledger._lock_sources
++
++        async def held_lock(connection, snapshots):
++            valid = await original_close_lock(connection, snapshots)
++            entered_close.set()  # close owns the real source row locks.
++            await release_close.wait()
++            return valid
++
++        close_ledger._lock_sources = held_lock
++        close_task = asyncio.create_task(close_ledger.begin_window_close(
++            self.activity_id, "worker-1", lease.execution_generation,
++        ))
++        try:
++            await asyncio.wait_for(entered_close.wait(), timeout=5)
++            waiting = [asyncio.Event(), asyncio.Event()]
++            admit_ledger = PostgresAdmissionLedger(self.scoped_dsn)
++            mark_ledger = PostgresAdmissionLedger(self.scoped_dsn)
++            for ledger, ready in ((admit_ledger, waiting[0]), (mark_ledger, waiting[1])):
++                original = ledger._lock_sources
++                async def observed(connection, snapshots, *, original=original, ready=ready):
++                    ready.set()  # this transaction is about to request the held source lock.
++                    return await original(connection, snapshots)
++                ledger._lock_sources = observed
++            admit_task = asyncio.create_task(admit_ledger.admit(self.intent(lease, "after-close")))
++            mark_task = asyncio.create_task(mark_ledger.mark_dispatch_started(permit))
++            for ready in waiting:
++                await asyncio.wait_for(ready.wait(), timeout=5)
++        finally:
++            release_close.set()
++        self.assertEqual(await asyncio.wait_for(close_task, timeout=5), CloseResult.CLOSED)
++        for task in (admit_task, mark_task):
++            with self.assertRaises(AdmissionDenied):
++                await asyncio.wait_for(task, timeout=5)
++        await self.ledger.record_outcome(prior, LedgerOutcome(LedgerDisposition.UNKNOWN, error_code="preclose_marked"))
++
++    async def test_pg04_cancel_closes_gate_and_old_dispatched_unknown_converges(self):
++        lease = await self.build()
++        permit = await self.ledger.admit(self.intent(lease, "before-cancel"))
++        await self.ledger.mark_dispatch_started(permit)
++        cancelled_generation = await self.ledger.cancel_activity(self.activity_id)
++        self.assertEqual(cancelled_generation, lease.execution_generation + 1)
++        row = await self.row("SELECT status,dispatch_closed,running_reserved_seconds,running_settled_seconds FROM activities WHERE id=%s", (self.activity_id,))
++        self.assertEqual(row, {"status": "cancelled", "dispatch_closed": True, "running_reserved_seconds": 0, "running_settled_seconds": 90})
++        await self.ledger.record_outcome(permit, LedgerOutcome(LedgerDisposition.UNKNOWN, error_code="cancelled"))
++        self.assertEqual(await self.row("SELECT state FROM activity_operations WHERE admission_id=%s", (permit.admission_id,)), {"state": "unknown"})
++
++
++if __name__ == "__main__":
++    unittest.main(verbosity=2)
++
+--- pre/backend/tests/fixtures/task083/pg_migration.py
++++ backend/tests/fixtures/task083/pg_migration.py
+@@ -1,74 +1,78 @@
+-"""005 空/非空事务回滚的专用PG脚本准备；本轮 not_run。"""
+-
+-from __future__ import annotations
+-
+-import os
+-from pathlib import Path
+-import unittest
+-from uuid import uuid4
+-
+-import psycopg
+-from psycopg import sql
+-
+-
+-BACKEND = Path(__file__).resolve().parents[3]
+-DSN = os.environ.get("RETROLUME_TASK_083_DATABASE_URL", "")
+-MIGRATIONS = [
+-    BACKEND / "migrations" / name for name in (
+-        "001_materials.sql", "002_activities.sql", "003_pdf_review.sql",
+-        "004_activities_time_budget.sql", "005_activities_dispatch_closed.sql",
+-    )
+-]
+-
+-
+-@unittest.skipUnless(DSN, "仅在TASK-083专用合成PG运行；不回退应用/用户DSN")
+-class PGMigrationTests(unittest.TestCase):
+-    def isolated_schema(self, action):
+-        schema = "task083_" + uuid4().hex
+-        with psycopg.connect(DSN, autocommit=True) as conn:
+-            conn.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
+-            try:
+-                conn.execute(sql.SQL("SET search_path TO {}").format(sql.Identifier(schema)))
+-                for path in MIGRATIONS[:4]:
+-                    conn.execute(path.read_text(encoding="utf-8"))
+-                action(conn, schema)
+-            finally:
+-                conn.execute("ROLLBACK")  # 非空005异常后清除失败事务；空闲时无副作用。
+-                conn.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
+-
+-    def test_pg_migration_01_empty_table_adds_only_closed_column(self):
+-        def check(conn, schema):
+-            before = {row[0] for row in conn.execute(
+-                "SELECT column_name FROM information_schema.columns WHERE table_schema=%s AND table_name='activities'", (schema,)
+-            )}
+-            conn.execute(MIGRATIONS[4].read_text(encoding="utf-8"))
+-            after = list(conn.execute(
+-                "SELECT column_name,data_type,is_nullable,column_default FROM information_schema.columns WHERE table_schema=%s AND table_name='activities'",
+-                (schema,),
+-            ))
+-            added = [row for row in after if row[0] not in before]
+-            self.assertEqual(added, [("dispatch_closed", "boolean", "NO", "false")])
+-        self.isolated_schema(check)
+-
+-    def test_pg_migration_02_nonempty_table_rolls_back_whole_005(self):
+-        def check(conn, schema):
+-            activity_id = str(uuid4())
+-            conn.execute(
+-                """INSERT INTO activities(id,status,scope_revision,deadline_at,max_requests,
+-                   max_cost_microunits,reserve_cost_microunits,max_request_bytes,max_output_tokens,
+-                   max_running_seconds) VALUES (%s,'pending',1,CURRENT_TIMESTAMP + interval '1 hour',1,1,1,1,1,1)""",
+-                (activity_id,),
+-            )
+-            with self.assertRaises(psycopg.Error):
+-                conn.execute(MIGRATIONS[4].read_text(encoding="utf-8"))
+-            conn.execute("ROLLBACK")
+-            self.assertEqual(conn.execute("SELECT count(*) FROM activities WHERE id=%s", (activity_id,)).fetchone()[0], 1)
+-            self.assertEqual(conn.execute(
+-                "SELECT count(*) FROM information_schema.columns WHERE table_schema=%s AND table_name='activities' AND column_name='dispatch_closed'",
+-                (schema,),
+-            ).fetchone()[0], 0)
+-        self.isolated_schema(check)
+-
+-
+-if __name__ == "__main__":
+-    unittest.main(verbosity=2)
++"""005 空/非空事务回滚的专用PG脚本准备；本轮 not_run。"""
++
++from __future__ import annotations
++
++import os
++from pathlib import Path
++import unittest
++from uuid import uuid4
++
++import psycopg
++from psycopg import sql
++
++
++BACKEND = Path(__file__).resolve().parents[3]
++DSN = os.environ.get("RETROLUME_TASK_083_DATABASE_URL", "")
++MIGRATIONS = [
++    BACKEND / "migrations" / name for name in (
++        "001_materials.sql", "002_activities.sql", "003_pdf_review.sql",
++        "004_activities_time_budget.sql", "005_activities_dispatch_closed.sql",
++    )
++]
++
++
++@unittest.skipUnless(DSN, "仅在TASK-083专用合成PG运行；不回退应用/用户DSN")
++class PGMigrationTests(unittest.TestCase):
++    def isolated_schema(self, action):
++        schema = "task083_migration_" + uuid4().hex
++        with psycopg.connect(DSN, autocommit=True) as admin:
++            admin.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
++        print(f"task083 migration case schema={schema}")
++        try:
++            with psycopg.connect(DSN, autocommit=True) as conn:
++                conn.execute(sql.SQL("SET search_path TO {}").format(sql.Identifier(schema)))
++                for path in MIGRATIONS[:4]:
++                    conn.execute(path.read_text(encoding="utf-8"))
++                action(conn, schema)
++        except BaseException as exc:
++            exc.add_note(f"retained task083 migration schema={schema}")
++            raise
++        # This card never drops schemas; later PG card owns their removal.
++
++    def test_pg_migration_01_empty_table_adds_only_closed_column(self):
++        def check(conn, schema):
++            before = {row[0] for row in conn.execute(
++                "SELECT column_name FROM information_schema.columns WHERE table_schema=%s AND table_name='activities'", (schema,)
++            )}
++            conn.execute(MIGRATIONS[4].read_text(encoding="utf-8"))
++            after = list(conn.execute(
++                "SELECT column_name,data_type,is_nullable,column_default FROM information_schema.columns WHERE table_schema=%s AND table_name='activities'",
++                (schema,),
++            ))
++            added = [row for row in after if row[0] not in before]
++            self.assertEqual(added, [("dispatch_closed", "boolean", "NO", "false")])
++        self.isolated_schema(check)
++
++    def test_pg_migration_02_nonempty_table_rolls_back_whole_005(self):
++        def check(conn, schema):
++            activity_id = str(uuid4())
++            conn.execute(
++                """INSERT INTO activities(id,status,scope_revision,deadline_at,max_requests,
++                   max_cost_microunits,reserve_cost_microunits,max_request_bytes,max_output_tokens,
++                   max_running_seconds) VALUES (%s,'pending',1,CURRENT_TIMESTAMP + interval '1 hour',1,1,1,1,1,1)""",
++                (activity_id,),
++            )
++            with self.assertRaises(psycopg.Error):
++                conn.execute(MIGRATIONS[4].read_text(encoding="utf-8"))
++            conn.execute("ROLLBACK")
++            self.assertEqual(conn.execute("SELECT count(*) FROM activities WHERE id=%s", (activity_id,)).fetchone()[0], 1)
++            self.assertEqual(conn.execute(
++                "SELECT count(*) FROM information_schema.columns WHERE table_schema=%s AND table_name='activities' AND column_name='dispatch_closed'",
++                (schema,),
++            ).fetchone()[0], 0)
++            conn.execute("DELETE FROM activities WHERE id=%s", (activity_id,))
++        self.isolated_schema(check)
++
++
++if __name__ == "__main__":
++    unittest.main(verbosity=2)
+--- pre/backend/tests/fixtures/task083/run_audit_fix_02.py
++++ backend/tests/fixtures/task083/run_audit_fix_02.py
+@@ -0,0 +1,34 @@
++"""TASK-083 audit-fix-02 exact pure-unit batch; no OS process or database."""
++
++from __future__ import annotations
++
++from pathlib import Path
++import sys
++import unittest
++
++BACKEND = Path(__file__).resolve().parents[3]
++sys.path.insert(0, str(BACKEND))
++sys.path.insert(0, str(BACKEND / "tests"))
++
++IDS = (
++    "fixtures.task083.offline_unit.OfflineRepairTests.test_01_command_data_rejects_callable_and_expired_manager_never_spawns",
++    "fixtures.task083.offline_unit.OfflineRepairTests.test_02_partial_window_early_exit_reports_cleanup_failure_and_full_reservation",
++    "fixtures.task083.offline_unit.OfflineRepairTests.test_03_cancellation_preserves_diagnostic_and_cleans_owner",
++    "fixtures.task083.offline_unit.OfflineRepairTests.test_04_claim_response_lost_has_no_job_and_no_false_charge",
++    "fixtures.task083.offline_unit.OfflineRepairTests.test_05_early_success_uses_tree_zero_close_then_same_g_settle_retry",
++    "fixtures.task083.offline_unit.OfflineRepairTests.test_06_timeout_or_cleanup_failure_never_refunds",
++    "fixtures.task083.offline_unit.OfflineRepairTests.test_07_controlled_worker_gateway_chain_drains_marked_call",
++    "fixtures.task083.offline_unit.LauncherUnitTests.test_08_fake_process_timeout_terminates_exact_owner_without_charge_claim",
++    "fixtures.task083.offline_unit.LauncherUnitTests.test_09_partial_process_start_failure_stops_exact_owner",
++    "fixtures.task083.offline_unit.LauncherUnitTests.test_10_recv_failure_is_unconfirmed_and_closes_both_pipes",
++    "fixtures.task083.offline_unit.LauncherUnitTests.test_11_all_parent_joins_share_deadline",
++    "fixtures.task083.offline_unit.FixedEntryTests.test_12_fixed_command_and_injected_gateway_pass_through_gate",
++    "test_worker_session.ProtocolUnitTests.test_claim_response_lost_and_partial_window_never_spawn",
++    "test_worker_session.ProtocolUnitTests.test_unknown_old_job_fails_before_claim",
++)
++
++if __name__ == "__main__":
++    suite = unittest.TestLoader().loadTestsFromNames(IDS)
++    result = unittest.TextTestRunner(verbosity=2).run(suite)
++    raise SystemExit(0 if result.wasSuccessful() else 1)
++
+--- pre/backend/tests/fixtures/task083/run_audit_fix_02_recheck.py
++++ backend/tests/fixtures/task083/run_audit_fix_02_recheck.py
+@@ -0,0 +1,23 @@
++"""TASK-083 audit-fix-02 only tests affected by fixed interpreter path correction."""
++
++from __future__ import annotations
++
++from pathlib import Path
++import sys
++import unittest
++
++BACKEND = Path(__file__).resolve().parents[3]
++sys.path.insert(0, str(BACKEND))
++sys.path.insert(0, str(BACKEND / "tests"))
++
++IDS = (
++    "fixtures.task083.offline_unit.OfflineRepairTests.test_05_early_success_uses_tree_zero_close_then_same_g_settle_retry",
++    "fixtures.task083.offline_unit.OfflineRepairTests.test_06_timeout_or_cleanup_failure_never_refunds",
++    "fixtures.task083.offline_unit.FixedEntryTests.test_12_fixed_command_and_injected_gateway_pass_through_gate",
++)
++
++if __name__ == "__main__":
++    suite = unittest.TestLoader().loadTestsFromNames(IDS)
++    result = unittest.TextTestRunner(verbosity=2).run(suite)
++    raise SystemExit(0 if result.wasSuccessful() else 1)
++

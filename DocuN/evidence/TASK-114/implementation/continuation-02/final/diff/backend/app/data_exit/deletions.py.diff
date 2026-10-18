@@ -1,0 +1,104 @@
+--- pre/backend/app/data_exit/deletions.py
++++ final/backend/app/data_exit/deletions.py
+@@ -1,13 +1,15 @@
+ """准确资料墓碑与清理；原记忆撤销和 M3 清理继续由既有实现负责。"""
+ import asyncio
+ from .codec import plain
+-from .contracts import DataError, DataJobCommand, canonical, digest, uuid
++from .contracts import DataError, DataJobCommand, Limits, canonical, digest, uuid
++from .operations import Operation, acknowledge_unstarted, joined_thread
+ 
+ 
+ class SourceDeletionService:
+-    def __init__(self, hub, repository, references, gate, *, stop_affected=None):
++    def __init__(self, hub, repository, references, gate, *, stop_affected=None, limits=None):
+         self.hub, self.repository, self.references, self.gate = hub, repository, references, gate
+         self.stop_affected = stop_affected
++        self.limits = limits or Limits()
+ 
+     @staticmethod
+     def _activities(connection,source_id):
+@@ -75,13 +77,15 @@
+         source_id = uuid(source_id)
+         command = DataJobCommand("source_delete", business_key, {"source_id": source_id, "expected_revision": expected_revision, "impact_sha256": impact_sha})
+         job = self.hub.create_or_get_job(command, self.gate.context())
++        if job['state'] == 'cancel_requested': return acknowledge_unstarted(self.hub, job['job_id'])
+         if job['state'] not in ('prepared','deleted_pending','deletion_unconfirmed'):return self.hub.reconcile(job['job_id'])
+         retry=job['state']!='prepared'
++        operation = None
+         def tombstone():
+             from psycopg.types.json import Jsonb
+-            with self.gate.acquire():
+-                with self.references.lease.acquire(True):
+-                    with self.repository.connection() as connection:
++            with self.gate.acquire(operation=operation):
++                with self.references.lease.acquire(True, timeout=operation.remaining(30)):
++                    with self.repository.connection(operation=operation) as connection:
+                         connection.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,113))", (self.references.root_id,))
+                         if retry:
+                             tomb=connection.execute("SELECT * FROM public.data_export_tombstones_v1 WHERE entity_kind='source' AND entity_id=%s AND business_id_observed=%s AND manifest_sha256=%s",
+@@ -95,46 +99,51 @@
+                             ([r['memory_id'] for r in impact['memories']],)).fetchall()
+                         connection.execute('SELECT id FROM public.activities WHERE id=ANY(%s::uuid[]) ORDER BY id FOR UPDATE',
+                             ([r['activity_id'] for r in impact['activities']],)).fetchall()
++                        operation.admit('source_tombstone_commit')
+                         value = connection.execute("SELECT public.data_source_delete(%s,%s,%s,%s,%s,%s) AS value",
+                             (source_id, expected_revision, business_key, impact_sha, Jsonb(impact["hash_size_targets"]), self.references.maintenance_key)).fetchone()["value"]
+                     # 这里只表示墓碑 COMMIT 已确认，物理结果和预览停止各自记录。
+                     return impact, value
+         tombstone_confirmed=False
+         try:
+-            impact, tomb = await asyncio.to_thread(tombstone)
++            operation = Operation.resume_cleanup(self.hub, job['job_id']) if retry else Operation(self.hub, job['job_id'], self.limits.operation_seconds, 'checking_deletion')
++            impact, tomb = await joined_thread(tombstone)
+             tombstone_confirmed=True
+             self.hub.commit("deletion.observe", plain(tomb))
+-            self.hub.update_job(job["job_id"], job["revision"], state="deleted_pending", stage="cleanup_pending")
++            operation.check()
+             stop_state = "not_owned"
+             if self.stop_affected is not None:
+-                stop_state = await self.stop_affected([r["activity_id"] for r in impact["activities"]])
+-            outcomes = await asyncio.to_thread(self.references.exclusive_cleanup, impact["hash_size_targets"])
++                stop_state = await asyncio.wait_for(self.stop_affected([r["activity_id"] for r in impact["activities"]]), operation.remaining())
++            operation.check()
++            outcomes = await joined_thread(self.references.exclusive_cleanup, impact["hash_size_targets"], operation=operation)
+             def observe():
+                 from psycopg.types.json import Jsonb
+-                with self.gate.acquire():
+-                    with self.repository.connection() as connection:
++                with self.gate.acquire(operation=operation):
++                    with self.repository.connection(operation=operation) as connection:
+                         connection.execute('SELECT public.data_cleanup_observe(%s,%s,%s,%s)',
+                             (tomb['tombstone_id'],impact_sha,Jsonb(outcomes),self.references.maintenance_key))
+-            try:await asyncio.to_thread(observe)
++            try:await joined_thread(observe)
+             except DataError:pass
+             uncertain = any(r["state"] == "physical_result_unknown" for r in outcomes) or stop_state=='unconfirmed'
+             receipt = {"source_id": source_id, "tombstone_id": tomb["tombstone_id"], "effective_revision": tomb["effective_revision"],
+                        "cleanup": outcomes, "preview_stop": stop_state, "history_and_old_backups_retained": True}
+             from uuid import uuid4
+             receipt_id=str(uuid4())
+-            receipt_sha=self.hub.save_artifact("receipts", receipt_id, canonical(receipt).encode("utf-8"))
+-            current = self.hub.get(job["job_id"])
+-            return self.hub.update_job(job["job_id"], current["revision"], state="deleted_pending" if uncertain else "deleted",
++            receipt_sha=self.hub.save_artifact("receipts", receipt_id, canonical(receipt).encode("utf-8"), operation.check)
++            return operation.finish('deleted_pending' if uncertain else 'deleted',
+                                       stage="cleanup_unconfirmed" if uncertain else "deleted",
+                                       receipt_id=receipt_id,receipt_sha256=receipt_sha,
+                                       counts={"originals": len(outcomes), "unconfirmed": sum(r["state"] == "physical_result_unknown" for r in outcomes)})
+         except BaseException as error:
+             try:
+-                current = self.hub.get(job["job_id"])
+                 rejected=(not tombstone_confirmed and isinstance(error,DataError)
+                           and error.code in ('snapshot_changed','request_conflict','not_found','source_deleted'))
+                 state='failed' if rejected else 'deletion_unconfirmed'
+-                self.hub.update_job(job["job_id"], current["revision"], state=state, stage=state,
+-                                    error_code=error.code if isinstance(error, DataError) else "storage_unavailable")
++                if operation is not None:
++                    operation.fail(error, cleanup_complete=operation.admission is None, state=state)
++                elif isinstance(error, DataError) and error.code == 'operation_cancelled':
++                    acknowledge_unstarted(self.hub, job['job_id'])
+             except (DataError, OSError): pass
++            if isinstance(error, Exception) and not isinstance(error, DataError):
++                raise DataError('storage_unavailable', 503) from None
+             raise

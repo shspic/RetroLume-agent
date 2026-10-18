@@ -1,0 +1,32 @@
+{
+  "utc": "2026-09-28",
+  "timeline": [
+    {"item": "offline-01", "utc": "2026-09-28T00:06:12Z", "exit": 0, "seconds": 2.78, "note": "全量三模块unittest，v1源码；其后6文件被精化"},
+    {"item": "offline-02", "utc": "2026-09-28T00:11:05Z", "exit": 0, "seconds": 0.77, "note": "4个定向测试；as_run与真实批as_run完全一致"},
+    {"item": "real batch 20260928T001119Z-77ba1b", "utc": "00:11:19-00:11:55Z", "exit": 0, "seconds": 35.53, "note": "12场景全过；批内source_unchanged=true；除3个测试/夹具文件外，批运行源码与最终post逐字节一致"},
+    {"item": "offline-03", "utc": "00:13:54Z", "exit": 1, "seconds": 0.66, "note": "test_public_rejection失败：tuple/list在asdict直接比较不等（纯测试缺陷；原始stderr保留在offline-03-stderr.log）"},
+    {"item": "offline-04", "utc": "00:14:20Z", "exit": 0, "seconds": 0.64, "note": "修复为JSON归一化后全值比较（不弱化实质内容/身份断言）；test_worker_one_call.py与run_offline.py变化"},
+    {"item": "offline-05", "utc": "00:15:47Z", "exit": 0, "seconds": 0.62, "note": "test_fixed_worker入口断言在最终测试版本通过"}
+  ],
+  "hash_chain": {
+    "offline01_asrun->offline02_asrun": ["backend/app/worker/one_call.py", "backend/app/worker/supervisor_ipc.py", "backend/tests/fixtures/task085/bootstrap.py", "backend/tests/fixtures/task085/real_cases.py", "backend/tests/fixtures/task085/runner.py", "backend/tests/test_worker_one_call.py"],
+    "offline02_asrun->real_batch_asrun": "NONE（真实批运行的就是精化后产品源码）",
+    "real_batch_asrun->final_post": ["backend/tests/test_worker_one_call.py", "backend/tests/fixtures/task085/run_offline.py", "backend/tests/fixtures/task085/finalize_evidence.py(新增)"],
+    "real_batch_post->real_batch_asrun": "NONE（批运行前后源码零漂移）",
+    "conclusion": "真实批动态证据绑定最终产品源码（全部产品文件批=最终）；批次后变化仅测试文件与测试控制夹具，均不进入产品链"
+  },
+  "final_test_file_execution_grading": {
+    "executed_at_final_test_version": ["test_fixed_worker_idle_and_missing_configuration_fail_closed（offline-05）"],
+    "executed_at_batch_test_version_product_final": ["test_new_sources_compile_without_pyc", "test_mapping_owned_lifetime_and_malformed_json", "test_receipt_wrong_identity_generation_missing_unknown_and_overlimit", "test_real_gateway_single_send_claim_context_and_redaction（offline-02；产品源码=最终）"],
+    "executed_at_04_test_version": ["test_public_rejection_before_launcher_and_bounded_result_roundtrip（offline-04通过；04->05测试delta是否触及该用例不可由hash还原）"],
+    "last_executed_at_offline01_pre_refinement": ["test_unknown_timeout_failure_denial_and_no_operation_retry", "test_tool_plan_never_executes", "test_missing_data_idle_and_actual_short_window", "test_frame_limits_tamper_and_schema", "test_input_bounds_and_fixed_argv", "test_sup_protocol_roundtrip_and_missing_configuration"],
+    "substitute_analysis": "上述六用例的目标行为中：unknown/timeout语义、TOOL_PLAN不执行、短窗拒绝、schema/身份/协议拒绝路径均有12真实场景在最终产品源码上的独立动态覆盖；gateway/transport/tools/worker_main自offline-01起未变（hash链证实），其断言绑定源码即最终源码；仅两点只有静态审查支撑：(a) OneCallInput.to_wire对配置>64KiB的显式拒绝（one_call.py:57-58，精化后无动态执行）；(b) pack_frame槽边界（SLOT_SIZE-44/43）在最终常量上的边界测试（supervisor_ipc.py精化后仅新增重复键/非有限数拒绝，offline-02在最终源码上已动态覆盖重复键与NaN）",
+    "optional_minimal_makeup": "一次离线完整跑最终tests.test_worker_one_call全套（约3秒，离线预算内）即可闭合此分级缺口；不构成阻断，不要求重跑12场景或D3"
+  },
+  "account_layering_facts": {
+    "sup_processes": "12个不同manager_pid：10836/27728/29436/1092/29900/7908/37788/14024/35752/36392/35416/6788",
+    "actual_workers": "7个实际worker进程（各有worker_created_100ns）：production_rejected(30736)/success(11924)/json(31260)/tool(38772)/unknown(27568)/unknown_repeat(2528)/hard(38240)；no_balance/cancelled/source_invalid/lease_conflict/short五个场景零spawn（worker_created_100ns=null）",
+    "outbound_facts": "12场景不等于12次成功出站：完整替身发送4次（success/json/tool/unknown），hard为发送开始后被硬截止杀死（op停在dispatched、disposition=null），production_rejected为真实生产链拒绝出站（ops空、requests_reserved=0）",
+    "lease_conflict": "cleanup_incomplete=true源于旧running账目下SUP在恢复检查前失败关闭（未声明单机前提→JobUnknown），old_tree未核查故如实报未知；夹具仅以DB预置有效旧租约、未创建旧进程树，故该unknown非真实遗留进程证据，不据此清除亦不误判为真实遗留"
+  }
+}

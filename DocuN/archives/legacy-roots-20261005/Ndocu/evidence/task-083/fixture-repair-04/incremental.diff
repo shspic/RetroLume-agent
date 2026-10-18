@@ -1,0 +1,397 @@
+--- a/backend/tests/fixtures/task083/job_control.py
++++ b/backend/tests/fixtures/task083/job_control.py
+@@ -54,21 +54,6 @@
+     starter.CloseHandle.restype = wintypes.BOOL
+     start_name = f"Local\\RetroLume.Task083.{activity_id}.G{generation}.{run_tag}.Start"
+     start_event = _new_event_or_reject(starter, start_name)
+-    proc = None
+-    try:
+-        proc = await asyncio.wait_for(asyncio.create_subprocess_exec(
+-            sys._base_executable, "-B", str(fixture), "controller", activity_id, str(generation), run_tag, start_name,
+-            cwd=str(backend), env=child_env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+-        ), timeout=remaining())
+-        if not starter.SetEvent(start_event):
+-            raise AssertionError("无法放行已持句柄的场景04控制进程")
+-    except BaseException:
+-        if proc is not None and proc.returncode is None:
+-            proc.kill()
+-            await asyncio.wait_for(proc.wait(), timeout=remaining())
+-        raise
+-    finally:
+-        starter.CloseHandle(start_event)
+     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+     kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+     kernel.OpenProcess.restype = wintypes.HANDLE
+@@ -85,11 +70,26 @@
+     kernel.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+     kernel.TerminateProcess.restype = wintypes.BOOL
+ 
++    proc = None
+     worker_handle = None
+     parent_job = None
+     events = []
+     verified = False
++    start_released = False
++    failures = []
+     try:
++        try:
++            proc = await asyncio.wait_for(asyncio.create_subprocess_exec(
++                sys._base_executable, "-B", str(fixture), "controller", activity_id, str(generation), run_tag, start_name,
++                cwd=str(backend), env=child_env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
++            ), timeout=remaining())
++            if not starter.SetEvent(start_event):
++                raise AssertionError("无法放行已持句柄的场景04控制进程")
++        except BaseException:
++            if proc is not None and proc.returncode is None:
++                proc.kill()
++                await asyncio.wait_for(proc.wait(), timeout=remaining())
++            raise
+         line = await asyncio.wait_for(proc.stdout.readline(), timeout=remaining())
+         if not line:
+             raise AssertionError("SUP未在有限时间提供悬停worker身份")
+@@ -98,6 +98,11 @@
+         actual = tuple(created[key] for key in ("phase", "activity_id", "generation", "run_tag", "job_name"))
+         if actual != expected:
+             raise AssertionError("Job/G/runTag身份不匹配")
++        # 子端已Open消费Start并回执可验证悬停身份；父此刻才释放唯一句柄。
++        # 回执前关闭会让尚未OpenEventW的子端拿到已销毁对象（Open失败→错误10）。
++        start_released = True
++        if not starter.CloseHandle(start_event):
++            raise AssertionError("Start事件父句柄关闭失败")
+         worker_handle = kernel.OpenProcess(0x00100000 | 0x1000, False, created["pid"])
+         if not worker_handle:
+             raise AssertionError("无法取得真实受控进程的精确句柄")
+@@ -142,13 +147,17 @@
+                 "tree_evidence": "single-process Job limit plus exact worker signaled; post-close Job query unavailable"}
+     finally:
+         primary = sys.exc_info()[1]
+-        failures = []
++        # 失败出口统一在此恰好释放一次父Start句柄；成功回执后已由主流程释放。
++        if not start_released:
++            start_released = True
++            if not starter.CloseHandle(start_event):
++                failures.append("start_event_close")
+         if parent_job is not None:
+             try:
+                 parent_job.close()
+             except BaseException as exc:
+                 failures.append(f"parent_job_close:{type(exc).__name__}")
+-        if proc.returncode is None:
++        if proc is not None and proc.returncode is None:
+             try:
+                 proc.kill()  # 精确控制者对象，不按名称或裸PID终止。
+                 wait = max(0.1, min(4.0, (deadline_ns - time.monotonic_ns()) / 1e9))
+--- a/backend/tests/fixtures/task083/focused_unit.py
++++ b/backend/tests/fixtures/task083/focused_unit.py
+@@ -4,6 +4,7 @@
+ 
+ import asyncio
+ from dataclasses import asdict
++import json
+ from pathlib import Path
+ import sys
+ import time
+@@ -20,7 +21,8 @@
+ from app.worker.session import SessionConfig, SessionOutcome
+ from app.worker.supervisor_ipc import IpcUnknown, SLOT_SIZE, pack_frame, unpack_frame
+ from app.worker.supervisor_main import _validated_request
+-from job_control import JobScenarioUnsafe, _new_event_or_reject
++from app.worker.windows_job import job_name
++from job_control import JobScenarioUnsafe, _new_event_or_reject, verify_last_handle
+ 
+ 
+ class EventControlTests(unittest.TestCase):
+@@ -51,6 +53,176 @@
+         self.assertEqual(fresh.closed, [])
+ 
+ 
++class StartLifecycleTests(unittest.TestCase):
++    """场景04 Start句柄生命周期：调用真实verify_last_handle，OS接口全替身。
++
++    替身覆盖job_control内全部真实OS启动接口：ctypes.WinDLL（kernel32两处）、
++    asyncio.create_subprocess_exec（无真实子进程）、NamedJob.open_existing
++    （无真实Job对象）；job_name为纯字符串构造，time.monotonic_ns只读，
++    os.environ.copy为纯复制。无任何真实事件/进程/Job。
++    """
++
++    def _identity_lines(self):
++        activity = "11111111-1111-1111-1111-111111111111"
++        created = {"phase": "suspended", "activity_id": activity, "generation": 7,
++                   "run_tag": "lifecycle-unit", "job_name": job_name(activity, 7),
++                   "pid": 123, "created_100ns": 0, "active_processes": 1}
++        resumed = {"phase": "resumed", "pid": 123}
++        return activity, [
++            (json.dumps(created) + "\n").encode(),
++            (json.dumps(resumed) + "\n").encode(),
++        ]
++
++    def _run(self, *, lines, spawn_error=None):
++        """替身化OS边界后调用真实verify_last_handle；返回(次序log, kernels, result, 异常)。"""
++        log = []
++        kernels = []
++
++        class Kernel:
++            def __init__(self):
++                self.start_handle = None
++                self._next = 100
++
++            def CreateEventW(self, *_):
++                self.start_handle = self._next
++                self._next += 1
++                log.append(("create_event", self.start_handle))
++                return self.start_handle
++
++            def SetEvent(self, handle):
++                log.append(("set_event", handle))
++                return True
++
++            def CloseHandle(self, handle):
++                log.append(("close_handle", handle))
++                return True
++
++            def OpenProcess(self, *_):
++                handle = self._next
++                self._next += 1
++                log.append(("open_process",))
++                return handle
++
++            def GetProcessTimes(self, handle, *_):
++                # byref的_FILETIME保持全0；回执created_100ns=0与之匹配。
++                log.append(("process_times",))
++                return True
++
++            def OpenEventW(self, *_):
++                handle = self._next
++                self._next += 1
++                log.append(("open_event",))
++                return handle
++
++            def WaitForSingleObject(self, *_):
++                log.append(("wait_object",))
++                return 0
++
++            def TerminateProcess(self, *_):
++                log.append(("terminate_process",))
++                return True
++
++        class FakeStdout:
++            def __init__(self):
++                self._lines = list(lines)
++
++            async def readline(self):
++                log.append(("readline",))
++                return self._lines.pop(0) if self._lines else b""
++
++        class FakeProc:
++            def __init__(self):
++                self.stdout = FakeStdout()
++                self.returncode = None
++
++            def kill(self):
++                log.append(("kill",))
++                self.returncode = -9
++
++            async def wait(self):
++                log.append(("proc_wait",))
++                if self.returncode is None:
++                    self.returncode = 0
++                return self.returncode
++
++        async def fake_spawn(*_args, **_kwargs):
++            if spawn_error is not None:
++                log.append(("spawn_error",))
++                raise spawn_error
++            log.append(("spawn",))
++            return FakeProc()
++
++        class FakeOpened:
++            def active_processes(self):
++                log.append(("active_processes",))
++                return 1
++
++            def close(self):
++                log.append(("job_close",))
++
++        class FakeNamedJob:
++            @classmethod
++            def open_existing(cls, activity_id, generation):
++                log.append(("open_existing", activity_id, generation))
++                return FakeOpened()
++
++        def fake_windll(*_args, **_kwargs):
++            kernel = Kernel()
++            kernels.append(kernel)
++            return kernel
++
++        with patch("job_control.ctypes.WinDLL", fake_windll), patch(
++            "job_control.asyncio.create_subprocess_exec", fake_spawn
++        ), patch("job_control.NamedJob", FakeNamedJob):
++            try:
++                result = asyncio.run(verify_last_handle(Path("fixture.py"), Path("backend")))
++                exc = None
++            except BaseException as raised:  # 替身边界内异常原样返回给断言。
++                result, exc = None, raised
++        return log, kernels, result, exc
++
++    def test_04_start_handle_closes_after_identity_receipt(self):
++        activity, lines = self._identity_lines()
++        log, kernels, result, exc = self._run(lines=lines)
++        self.assertIsNone(exc)
++        self.assertEqual(result["phase"], "suspended")
++        self.assertEqual(result["pid"], 123)
++        self.assertEqual(result["active_processes_before_supervisor_exit"], 1)
++        self.assertTrue(result["worker_signaled_after_last_job_handle_closed"])
++        start_handle = kernels[0].start_handle
++        # 父Start句柄恰好SetEvent一次、CloseHandle一次。
++        self.assertEqual(log.count(("set_event", start_handle)), 1)
++        self.assertEqual(log.count(("close_handle", start_handle)), 1)
++        # 释放次序：子回执悬停身份（第一次readline）之后才关闭父Start句柄。
++        self.assertLess(log.index(("readline",)), log.index(("close_handle", start_handle)))
++        # 句柄释放后才取得精确worker句柄与观察Job（最后句柄死亡测试次序不变）。
++        self.assertLess(log.index(("close_handle", start_handle)), log.index(("open_process",)))
++        self.assertLess(log.index(("close_handle", start_handle)), log.index(("open_existing", activity, 7)))
++
++    def test_04_start_handle_release_exactly_once_on_failure(self):
++        # 分支A：提前异常（控制进程创建失败）——Start句柄仍在收尾中恰好关闭一次。
++        activity, lines = self._identity_lines()
++        log, kernels, result, exc = self._run(lines=lines, spawn_error=RuntimeError("spawn refused"))
++        self.assertIsInstance(exc, RuntimeError)
++        self.assertIsNone(result)
++        start_handle = kernels[0].start_handle
++        self.assertEqual(log.count(("close_handle", start_handle)), 1)
++        self.assertNotIn(("readline",), log)
++        self.assertNotIn(("open_process",), log)
++        self.assertNotIn(("kill",), log)  # proc为None，不误杀。
++        # 分支B：身份回执失败（SUP无输出）——同样恰好一次，且不进入身份后续。
++        activity, lines = self._identity_lines()
++        log, kernels, result, exc = self._run(lines=[b""])
++        self.assertIsInstance(exc, AssertionError)
++        self.assertIsNone(result)
++        start_handle = kernels[0].start_handle
++        self.assertEqual(log.count(("close_handle", start_handle)), 1)
++        self.assertIn(("kill",), log)  # 精确收尾终止已启动的控制进程。
++        self.assertNotIn(("open_process",), log)
++        self.assertNotIn(("open_existing", activity, 7), log)
++        self.assertLess(log.index(("readline",)), log.index(("close_handle", start_handle)))
++
++
+ class FrameTests(unittest.TestCase):
+     def test_d1_bounded_frame_and_half_frame_rejection(self):
+         packed = pack_frame({"protocol": 1, "data": "ok"})
+@@ -213,12 +385,21 @@
+         self.assertIn("terminate", Process.current.events)
+ 
+     def test_d1_deadline_before_resume_terminates_exact_owner(self):
++        # 前两次运行窗检查仍有余额（5s）；第三次（取得精确SUP身份后、Resume前）
++        # 返回0，触发Resume前截止。finally清理另行保有5s预算。SUP从未resume，
++        # claim只可能在SUP子进程内发生，故结构上未claim；账字段保持未知。
+         Process.wait_values = (False, True)
+-        values = iter((5.0, 5.0, 5.0, 0.0, 0.0))
++        values = iter((5.0, 5.0, 0.0, 5.0, 5.0))
+         outcome = self.invoke(remaining=lambda _: next(values, 0.0))
+         self.assertEqual(outcome.state, "manager_startup_deadline_unconfirmed")
++        self.assertEqual(Process.current.events,
++                         ["create_suspended", "identity", ("wait", 0), "terminate", ("wait", 5.0), "process_close"])
+         self.assertNotIn("resume", Process.current.events)
+         self.assertIn("terminate", Process.current.events)
++        self.assertTrue(outcome.cleanup_incomplete)
++        self.assertEqual((outcome.settled_seconds, outcome.reserved_seconds, outcome.pending_fold_seconds),
++                         (None, None, None))
++        self.assertNotIn("read_result", Mapping.current.events)
+ 
+     def test_d1_timeout_or_half_frame_keeps_all_charges_unknown(self):
+         Process.wait_values = (False, False, False)
+--- a/backend/tests/fixtures/task083/offline_unit.py
++++ b/backend/tests/fixtures/task083/offline_unit.py
+@@ -55,6 +55,23 @@
+         return SettleResult.ALREADY_SETTLED if self.events.count("settle") > 1 else SettleResult.SETTLED
+ 
+ 
++class _TestClock:
++    """test_05专用的测试局部单调时钟：读取返回固定值，仅显式advance推进。
++
++    经patch替换session与本测试模块引用的time，with结束即恢复；
++    不触碰asyncio内建时钟或其他测试的全局时间。
++    """
++
++    def __init__(self, start_ns=1_000_000_000_000):
++        self.now_ns = start_ns
++
++    def monotonic_ns(self):
++        return self.now_ns
++
++    def advance(self, ns):
++        self.now_ns += ns
++
++
+ class Owner:
+     fail_close = False
+ 
+@@ -67,13 +84,14 @@
+ 
+ 
+ class FakeJob:
+-    def __init__(self, *, hang=False, terminate_error=False, close_error=False, external_events=None):
++    def __init__(self, *, hang=False, terminate_error=False, close_error=False, external_events=None, clock=None):
+         self.name = "Local\\SyntheticJob"
+         self.hang = hang
+         self.terminated = False
+         self.terminate_error = terminate_error
+         self.close_error = close_error
+         self.external_events = external_events
++        self.clock = clock  # 注入测试局部可控时钟时，用确定性推进代替2ms真实睡眠。
+         self.events = []
+         self.sleep_before_ns = None
+         self.sleep_after_ns = None
+@@ -88,9 +106,16 @@
+     def wait_empty_until(self, deadline):
+         self.events.append("query")
+         if not self.hang and not self.terminated:
+-            self.sleep_before_ns = time.monotonic_ns()
+-            time.sleep(0.002)  # 纯替身模拟正耗时；真实C0仍拒绝部分退款。
+-            self.sleep_after_ns = time.monotonic_ns()
++            if self.clock is not None:
++                # 确定性正耗时：可控时钟显式推进0.4s（ceil(Δ)=1秒），消除对
++                # 2ms真实睡眠跨时钟刻度的依赖；只影响注入本钟的用例。
++                self.sleep_before_ns = self.clock.monotonic_ns()
++                self.clock.advance(400_000_000)
++                self.sleep_after_ns = self.clock.monotonic_ns()
++            else:
++                self.sleep_before_ns = time.monotonic_ns()
++                time.sleep(0.002)  # 纯替身模拟正耗时；真实C0仍拒绝部分退款。
++                self.sleep_after_ns = time.monotonic_ns()
+         return not self.hang or self.terminated
+ 
+     def terminate(self):
+@@ -164,9 +189,12 @@
+         self.assertIsNone(result.job_name)
+ 
+     async def test_05_early_success_uses_tree_zero_close_then_same_g_settle_retry(self):
++        clock = _TestClock()
+         ledger = Ledger(settle_lost_once=True)
+-        job = FakeJob(external_events=ledger.events)
+-        result = await self.run_fake(ledger, job)
++        job = FakeJob(external_events=ledger.events, clock=clock)
++        module_name = sys.modules[__name__].__name__  # 脚本直跑时为__main__。
++        with patch("app.worker.session.time", clock), patch(f"{module_name}.time", clock):
++            result = await self.run_fake(ledger, job)
+         session_module = sys.modules["app.worker.session"]
+         locations = {}
+         for label, source in (("session", Path(session_module.__file__)), ("test", Path(__file__))):
+@@ -183,9 +211,16 @@
+             "elapsed_seconds": result.elapsed_seconds,
+         }, sort_keys=True), flush=True)
+         self.assertEqual(result.state, "settled")
++        t0_ns, t1_ns, delta_ns, observed, window = result.timing_diagnostic
++        self.assertGreater(t1_ns, t0_ns)  # 确定性时钟下t1>t0恒成立。
++        self.assertEqual(delta_ns, 400_000_000)
++        self.assertEqual(observed, 1)  # ceil(Δ)=1
++        self.assertEqual(window, 6)  # W=6
+         self.assertEqual((result.settled_seconds, result.reserved_seconds, result.pending_fold_seconds), (1, 0, 0))
+         self.assertEqual(result.active_processes_at_end, 0)
+         self.assertIn("close_job", job.events)
++        # 先树0再关门：job_closed先于close_db；同G结算重试：settle两次。
++        self.assertLess(ledger.events.index("job_closed"), ledger.events.index("close_db"))
+         self.assertEqual(ledger.events, ["inspect", "claim", "job_closed", "close_db", "settle", "settle"])
+ 
+     async def test_06_timeout_or_cleanup_failure_never_refunds(self):

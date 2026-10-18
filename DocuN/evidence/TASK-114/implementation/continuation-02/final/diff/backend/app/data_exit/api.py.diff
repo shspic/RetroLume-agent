@@ -1,0 +1,223 @@
+--- pre/backend/app/data_exit/api.py
++++ final/backend/app/data_exit/api.py
+@@ -6,14 +6,28 @@
+ from fastapi import APIRouter, HTTPException, Request
+ from fastapi.responses import FileResponse
+ from fastapi.concurrency import run_in_threadpool
++from fastapi.routing import APIRoute
++from fastapi.exceptions import RequestValidationError
+ from pydantic import BaseModel, ConfigDict, Field
+ from app.local_session import local_session
+-from .contracts import DataError, DataJobCommand, PROFILE, uuid
+-from .packages import PackageReader
++from .contracts import DataError, DataJobCommand, PROFILE, uuid, canonical
++from .packages import PackageReader, hash_file
+ from .files import publish,safe_root
+ from .snapshot import validate_scope
+-
+-router = APIRouter(prefix="/api/data")
++from .operations import Operation, request_cancel, acknowledge_unstarted, joined_thread
++
++class SafeDataRoute(APIRoute):
++    def get_route_handler(self):
++        handler = super().get_route_handler()
++        async def safe(request):
++            try: return await handler(request)
++            except RequestValidationError:
++                # 不把原始输入/秘密或私有路径放进422的input字段。
++                raise DataError('invalid_input', 422) from None
++        return safe
++
++
++router = APIRouter(prefix="/api/data", route_class=SafeDataRoute)
+ 
+ 
+ class Input(BaseModel):
+@@ -66,6 +80,23 @@
+     value = getattr(request.app.state, "data_exit", None)
+     if value is None: raise DataError("storage_unavailable", 503)
+     return value
++
++
++def current_job(value, identity):
++    job=value.hub.get(identity)
++    if job['kind'] in ('portable_export','restore_checkpoint') and value.packages is not None:
++        return value.packages.reconcile(identity)
++    receipt=value.hub.reconcile(identity)
++    if job['kind']=='upload':
++        scope=value.hub.state()['jobs'][identity]['scope'];upload_id=uuid(scope['upload_id'])
++        path=value.incoming/(upload_id+'.rldata');receipt['upload_id']=upload_id
++        if path.exists():
++            with PackageReader(path,value.limits):pass
++            checksum,length=hash_file(path,value.limits.package_bytes)
++            if (checksum,str(length))!=(scope['sha256'],scope['bytes']):raise DataError('integrity_failed',422)
++            # 核文件事实，不把旧未知时钟或cancelled改成received许可。
++            receipt.update(file_publication='confirmed',counts={'bytes':str(length)})
++    return receipt
+ 
+ 
+ def schedule(value, identity, function, *args):
+@@ -76,8 +107,10 @@
+             # 获取操作锁之前的失败也须有收据，不能无限留 prepared。
+             try:
+                 receipt=value.hub.get(identity)
+-                if receipt['state'] in ('prepared','running'):
+-                    value.hub.update_job(identity,receipt['revision'],state='failed',stage='failed',
++                if receipt['state'] == 'cancel_requested' and value.hub.state()['jobs'][identity].get('execution') is None:
++                    acknowledge_unstarted(value.hub, identity)
++                elif receipt['state'] == 'prepared':
++                    value.hub.update_job(identity,receipt['revision'],expected_states=('prepared',),state='failed',stage='failed',
+                         error_code=error.code if isinstance(error,DataError) else 'storage_unavailable')
+             except (DataError,OSError):pass
+         finally: value.tasks.pop(identity, None)
+@@ -119,26 +152,31 @@
+ @router.get("/jobs/by-key/{business_key}")
+ def by_key(business_key: str, request: Request):
+     value=runtime(request);job=value.hub.get_by_key(business_key)
+-    return value.packages.reconcile(job['job_id']) if value.packages is not None and job['kind'] in ('portable_export','restore_checkpoint') else job
++    return current_job(value,job['job_id'])
+ 
+ 
+ @router.get("/jobs/{job_id}")
+ def get_job(job_id: str, request: Request):
+     value = runtime(request)
+-    job = value.hub.get(job_id)
+-    return value.packages.reconcile(job_id) if job["kind"] in ("portable_export", "restore_checkpoint") and value.packages else value.hub.reconcile(job_id)
++    return current_job(value,uuid(job_id))
+ 
+ 
+ @router.get("/packages")
+ def packages(request: Request):
+     value = runtime(request)
+-    return {"items": [value.hub.receipt(j) for j in value.hub.state()["jobs"].values()
++    state=value.hub.state()
++    return {"items": [value.hub.current_receipt(state,j) for j in state["jobs"].values()
+                       if j["kind"] in ("portable_export", "restore_checkpoint") and j["state"] in ("published", "published_unconfirmed")]}
+ 
+ 
+ @router.get('/saved-records')
+ async def saved_records(request:Request,category:str='activities',offset:int=0):
+     value=runtime(request)
++    context = value.context()
++    observed = request.headers.get('x-retrolume-data-context')
++    if observed is not None and observed != canonical(context.public()): raise DataError('selection_changed')
++    ledger = request.app.state.activities_ledger
++    if ledger is None: raise DataError('storage_unavailable', 503)
+     if offset<0:raise DataError('invalid_input',400)
+     mapping={'activities':'activities','learning':'activity_operation_results','teaching':'teaching_records',
+              'interview':'interview_records','memories':'learning_memory_revisions','preview_history':'html_preview_sessions','versions':'material_versions'}
+@@ -148,11 +186,13 @@
+         from .repository import DataRepository
+         from .schema import COLUMNS
+         from .codec import encode_row
+-        ledger=request.app.state.activities_ledger
+-        if ledger is None:raise DataError('storage_unavailable',503)
++        from .readability import memory_projection, history_qualification
+         repository=DataRepository(ledger._dsn)
+         columns=','.join(COLUMNS[table])
+         with repository.connection(readonly=True,repeatable=True) as connection:
++            identity=connection.execute('SELECT dataset_id,source_instance_observed FROM public.data_export_control_v1').fetchone()
++            if identity is None or (str(identity['dataset_id']),str(identity['source_instance_observed'])) != (context.dataset_id,context.instance_id):
++                raise DataError('selection_changed')
+             rows=connection.execute('SELECT '+columns+' FROM public.'+table+' ORDER BY '+','.join(list(COLUMNS[table])[:2])+' LIMIT 20 OFFSET %s',(offset,)).fetchall()
+             items=[]
+             for row in rows:
+@@ -166,14 +206,15 @@
+                         for name in ('body','payload','local_body','source_refs','state_after'):
+                             if name in item:item[name]=None
+                 if table=='learning_memory_revisions':
+-                    head=connection.execute('SELECT state FROM public.learning_memories WHERE memory_id=%s',(row['memory_id'],)).fetchone()
+-                    body=connection.execute('SELECT body FROM public.learning_memory_bodies WHERE memory_id=%s AND version=%s',(row['memory_id'],row['version'])).fetchone()
+-                    revoked=connection.execute("SELECT EXISTS(SELECT 1 FROM public.data_tombstones WHERE entity_kind='memory' AND entity_id=%s) AS revoked",(row['memory_id'],)).fetchone()['revoked']
+-                    item['body']=body['body'] if body is not None and head['state']=='active' and not revoked else None
+-                    availability='revoked' if head['state']=='revoked' or revoked else 'present' if body else 'unavailable'
++                    item['body'], availability = memory_projection(connection, row['memory_id'], row['version'])
++                elif table in ('activity_operation_results', 'teaching_records', 'interview_records') and availability == 'present':
++                    availability = history_qualification(connection, table, row)
++                    if availability != 'present':
++                        for name in ('body', 'payload', 'local_body', 'source_refs', 'state_after'):
++                            if name in item: item[name] = None
+                 items.append({'record':item,'availability':availability})
+         return {'items':items,'next_offset':offset+len(items) if len(items)==20 else None,
+-                'accounting_point':'snapshot_observation','execution_frozen':value.context().mode!='normal'}
++                'accounting_point':'snapshot_observation','execution_frozen':context.mode!='normal','data_context':context.public()}
+     return await run_in_threadpool(read)
+ 
+ 
+@@ -198,36 +239,49 @@
+         existing=None
+     receipt=value.hub.create_or_get_job(command,value.context())
+     if existing is not None:
+-        return {**value.hub.reconcile(receipt['job_id']),'upload_id':identity}
++        return current_job(value,receipt['job_id'])
+     temporary, destination = value.incoming / (identity + ".pending"), value.incoming / (identity + ".rldata")
+     safe_root(value.incoming)
+-    count, start = 0, time.monotonic()
++    count = 0
++    operation = None
+     h=hashlib.sha256()
+     try:
++        operation = Operation(value.hub, receipt['job_id'], value.limits.operation_seconds, 'receiving')
+         with temporary.open("xb") as stream:
+-            async with asyncio.timeout(value.limits.upload_seconds):
++            async with asyncio.timeout(operation.remaining(value.limits.upload_seconds)):
+                 async for raw in request.stream():
++                    operation.check()
+                     count += len(raw)
+                     if count > value.limits.package_bytes: raise DataError("capacity_exceeded", 413)
+                     h.update(raw)
+                     stream.write(raw)
+-                stream.flush(); os.fsync(stream.fileno())
++                operation.check(); stream.flush(); os.fsync(stream.fileno())
++        operation.check()
+         if count!=expected_bytes or h.hexdigest()!=expected_sha256:raise DataError('integrity_failed',422)
+         def check_and_publish():
+-            with PackageReader(temporary, value.limits): pass
+-            publish(temporary, destination)
+-        await run_in_threadpool(check_and_publish)
+-        current=value.hub.get(receipt['job_id'])
+-        value.hub.update_job(receipt['job_id'],current['revision'],state='received',stage='received',counts={'bytes':str(count)})
++            # EOF与总执行截止均被检查；取消先胜不能进入验证/发布。
++            operation.check()
++            operation.stage('verifying')
++            with PackageReader(temporary, value.limits, operation.check): pass
++            operation.admit('upload_publish')
++            publish(temporary, destination, check=operation.check)
++        await joined_thread(check_and_publish)
++        operation.finish('received', counts={'bytes':str(count)})
+         return {"upload_id": identity, "job_id":receipt['job_id'],"business_key":business_key,"bytes": str(count), "state": "received"}
+-    except TimeoutError:
+-        current=value.hub.get(receipt['job_id'])
+-        value.hub.update_job(receipt['job_id'],current['revision'],state='upload_unconfirmed',stage='upload_unconfirmed',error_code='operation_timeout')
+-        raise DataError("operation_timeout", 504) from None
+     except BaseException as error:
+-        current=value.hub.get(receipt['job_id'])
+-        value.hub.update_job(receipt['job_id'],current['revision'],state='upload_unconfirmed',stage='upload_unconfirmed',
+-                             error_code=error.code if isinstance(error,DataError) else 'storage_unavailable')
++        actual = destination.exists()
++        cleaned = False
++        try:
++            if temporary.exists() and not actual: temporary.unlink()
++            cleaned = not temporary.exists() and not actual
++        except OSError: pass
++        if isinstance(error, TimeoutError): error = DataError('operation_timeout', 504)
++        if operation is not None:
++            operation.fail(error, cleanup_complete=cleaned, state='upload_unconfirmed' if actual or not cleaned else 'failed')
++        elif isinstance(error, DataError) and error.code == 'operation_cancelled':
++            acknowledge_unstarted(value.hub, receipt['job_id'])
++        if isinstance(error, DataError): raise error
++        if isinstance(error, Exception): raise DataError('storage_unavailable', 503) from None
+         raise
+ 
+ 
+@@ -273,9 +327,7 @@
+ @router.post("/jobs/{job_id}/cancel")
+ def cancel(job_id: str, request: Request):
+     value = runtime(request)
+-    job = value.hub.get(job_id)
+-    if job["state"] not in ("prepared", "running"): raise DataError("operation_already_published")
+-    return value.hub.update_job(job_id, job["revision"], state="cancelled", stage="cancel_requested")
++    return request_cancel(value.hub, job_id)
+ 
+ 
+ class RetryInput(Input):

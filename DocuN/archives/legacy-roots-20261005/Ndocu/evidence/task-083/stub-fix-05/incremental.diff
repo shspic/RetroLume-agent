@@ -1,0 +1,40 @@
+--- focused_unit.py@pre(1e58eb03…8ce08)
++++ focused_unit.py@stub-fix-05(new)
+@@ -4,6 +4,7 @@
+ 
+ import asyncio
+ from dataclasses import asdict
++from functools import partial
+ import json
+ from pathlib import Path
+ import sys
+@@ -59,7 +60,9 @@
+     替身覆盖job_control内全部真实OS启动接口：ctypes.WinDLL（kernel32两处）、
+     asyncio.create_subprocess_exec（无真实子进程）、NamedJob.open_existing
+     （无真实Job对象）；job_name为纯字符串构造，time.monotonic_ns只读，
+-    os.environ.copy为纯复制。无任何真实事件/进程/Job。
++    os.environ.copy为纯复制。无任何真实事件/进程/Job。Kernel各API经
++    functools.partial包装为可设属性的实例闭包，使verify_last_handle对API的
++    argtypes/restype赋值合法（修正04实证：普通绑定方法不可设属性）。
+     """
+ 
+     def _identity_lines(self):
+@@ -82,6 +85,18 @@
+             def __init__(self):
+                 self.start_handle = None
+                 self._next = 100
++                # verify_last_handle会向每个kernel API赋argtypes/restype
++                # （job_control.py 49-71行）；普通绑定方法不可设属性
++                # （AttributeError），故用partial包装的实例闭包占位：
++                # partial实例支持任意属性赋值，调用语义与原绑定方法完全一致。
++                self.CreateEventW = partial(self.CreateEventW)
++                self.SetEvent = partial(self.SetEvent)
++                self.CloseHandle = partial(self.CloseHandle)
++                self.OpenProcess = partial(self.OpenProcess)
++                self.GetProcessTimes = partial(self.GetProcessTimes)
++                self.OpenEventW = partial(self.OpenEventW)
++                self.WaitForSingleObject = partial(self.WaitForSingleObject)
++                self.TerminateProcess = partial(self.TerminateProcess)
+ 
+             def CreateEventW(self, *_):
+                 self.start_handle = self._next

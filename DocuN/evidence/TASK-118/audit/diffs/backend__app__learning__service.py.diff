@@ -1,0 +1,47 @@
+--- first-pre/backend/app/learning/service.py
++++ current/backend/app/learning/service.py
+@@ -11,7 +11,7 @@
+ from app.capabilities.gateway import ControlledModelGateway
+ from app.worker.one_call import OneCallInput, run_one_call
+ from app.worker.session import SessionConfig
+-from .contracts import FIRST_PREFIX, NEXT_PREFIX, LearningProfile, canonical, normalize_input, read_document, request_fingerprint
++from .contracts import FIRST_PREFIX, NEXT_PREFIX, LearningProfile,LearningHybridProfile, canonical, normalize_input, read_document, request_fingerprint
+ from .evidence import LearningRefusal, assemble_catalog, load_units, query_check, validate_snapshot
+ from .prompt import messages_for
+ from app.data_exit.maintenance import owned_service
+@@ -29,7 +29,7 @@
+         return None if operation_id is None else await self.ledger.read_operation(activity_id, operation_id)
+ 
+     @owned_service
+-    async def execute(self, activity_id, business_key, text, config, *, parent_operation_id=None, run_tag):
++    async def execute(self, activity_id, business_key, text, config, *, parent_operation_id=None, run_tag, retrieval_ref=None):
+         from app.interview.contracts import InterviewRefusal
+         try: await self.ledger.require_non_interview(activity_id)
+         except InterviewRefusal as exc: raise LearningRefusal(exc.code,'此活动属于面试域或其资格不可核对') from None
+@@ -72,6 +72,7 @@
+         identity = dict(action=action, activity_id=activity_id, goal=goal, question=question,
+             scope_revision=snapshot["scope_revision"], sources=[s.model_dump() for s in sources],
+             parent_operation_id=parent_operation_id, parent_payload_sha256=parent_sha, max_output_tokens=tokens)
++        if retrieval_ref is not None:identity['retrieval_ref']=retrieval_ref
+         fingerprint = request_fingerprint(**identity)
+         prefix = FIRST_PREFIX if action == "first" else NEXT_PREFIX + business_key + "."
+         operation_id = prefix + fingerprint
+@@ -93,10 +94,15 @@
+         if self.materials is None:
+             raise LearningRefusal("unavailable", "资料存储尚未配置")
+         units = await asyncio.to_thread(load_units, snapshot, self.materials, self.originals)
+-        catalog = assemble_catalog(query, units, fingerprint)
+-        profile = LearningProfile(**identity, request_sha256=fingerprint, catalog=catalog, history=history)
++        if retrieval_ref is not None:
++            from app.retrieval.service import RetrievalService
++            from app.retrieval.contracts import RetrievalRefusal
++            try:catalog=await RetrievalService(self.ledger,self.materials,self.originals).catalog(activity_id,retrieval_ref,fingerprint)
++            except RetrievalRefusal as exc:raise LearningRefusal(exc.code,'本轮检索不可用，请核对原操作') from None
++        else:catalog = assemble_catalog(query, units, fingerprint)
++        profile = (LearningHybridProfile if retrieval_ref is not None else LearningProfile)(**identity, request_sha256=fingerprint, catalog=catalog, history=history)
+         request = ModelCallRequest(messages=messages_for(profile), max_output_tokens=tokens,
+-            allowed_tools=frozenset(), input_result=ref, learning_profile=profile)
++            allowed_tools=frozenset(), input_result=ref, learning_profile=profile,retrieval_ref=retrieval_ref)
+         service = config.model_service
+         encoded = json.dumps(ControlledModelGateway(service)._build_payload(request),
+             ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")

@@ -1,0 +1,9 @@
+{
+  "kind": "sql",
+  "pid": 28032,
+  "value": {
+    "tag": "memory-list",
+    "sql": "WITH q AS(\n             SELECT h.memory_id,h.revision,h.current_version AS version,h.state,h.purge_state,h.updated_at,\n              r.claim_kind,r.uncertainty,public.memory_revision_readable(h.memory_id,h.current_version) AS readable\n             FROM public.learning_memories h JOIN public.learning_memory_revisions r\n              ON r.memory_id=h.memory_id AND r.version=h.current_version),\n             page AS(SELECT q.*,CASE WHEN q.readable THEN left(b.body::jsonb->>'title',80) ELSE NULL END AS title\n              FROM q LEFT JOIN public.learning_memory_bodies b ON b.memory_id=q.memory_id AND b.version=q.version\n              WHERE(%s::uuid IS NULL OR q.memory_id>%s::uuid) ORDER BY q.memory_id LIMIT %s)\n             SELECT COALESCE((SELECT jsonb_agg(to_jsonb(p) ORDER BY p.memory_id) FROM page p),'[]'::jsonb) AS items,\n             (SELECT encode(sha256(convert_to(COALESCE(string_agg(concat_ws('|',memory_id,revision,version,readable),\n             E'\n' ORDER BY memory_id),''),'UTF8')),'hex') FROM q) AS view_token,CURRENT_TIMESTAMP AS read_at",
+    "arguments_saved": false
+  }
+}

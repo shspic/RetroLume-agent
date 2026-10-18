@@ -1,0 +1,15 @@
+--- pre/backend/app/data_exit/maintenance.py
++++ final/backend/app/data_exit/maintenance.py
+@@ -64,11 +64,11 @@
+         if (current.control_id, current.generation, current.dataset_id, current.instance_id) != (
+             self.context.control_id, self.context.generation, self.context.dataset_id, self.context.instance_id):
+             raise DataError("selection_changed")
++        if current.mode != "normal": raise DataError("data_readonly")
+         if state["fence"] is not None:
+             owner = state["owned"].get(CLOSE_LANE.get())
+             if outgoing or owner is None or owner.get("state") != "registered" or owner.get("origin") != self.context.public():
+                 raise DataError("maintenance_unconfirmed", 503)
+-        if current.mode != "normal": raise DataError("data_readonly")
+         validate=getattr(self.gate,'validate_source',None)
+         if validate is not None:validate(self.context)
+ 

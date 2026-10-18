@@ -1,0 +1,84 @@
+--- first-pre/backend/app/data_exit/control.py
++++ current/backend/app/data_exit/control.py
+@@ -1,5 +1,6 @@
+ """私有日志为长期操作和选择器的唯一权威；GET 不执行动作。"""
+ import ctypes
++import io
+ import json
+ import os
+ from pathlib import Path
+@@ -35,12 +36,12 @@
+                 raise DataError("control_unavailable", 503)
+             self.control_id = events[0]["payload"]["control_id"]
+ 
+-    def _read(self):
++    def _read(self, snapshot=None):
+         regular(self.path)
+         if self.path.stat().st_size > MAX_JOURNAL:
+             raise DataError("capacity_exceeded", 413)
+         events, previous = [], "0" * 64
+-        with self.path.open("rb") as stream:
++        with (self.path.open("rb") if snapshot is None else io.BytesIO(snapshot)) as stream:
+             while True:
+                 header = stream.read(4)
+                 if not header:
+@@ -106,10 +107,43 @@
+             elif kind=='source.register':state['source']=p
+         return state
+ 
++    def _current_snapshot(self, job_id=None, *, writable=False):
++        with self.lock.acquire():
++            # 每次仍在真实锁内读取当前完整字节；仅复用同一文件对象和摘要的已验投影。
++            info = regular(self.path)
++            with self.path.open('rb') as stream:
++                opened = os.fstat(stream.fileno())
++                if (info.st_dev, info.st_ino) != (opened.st_dev, opened.st_ino):
++                    raise DataError('control_corrupt', 503)
++                if opened.st_size > MAX_JOURNAL:
++                    raise DataError('capacity_exceeded', 413)
++                raw = stream.read(opened.st_size + 1)
++                after = os.fstat(stream.fileno())
++            current = regular(self.path)
++            if len(raw) > MAX_JOURNAL:
++                raise DataError('capacity_exceeded', 413)
++            if (opened.st_dev, opened.st_ino, opened.st_size) != (after.st_dev, after.st_ino, len(raw)) or (current.st_dev, current.st_ino, current.st_size) != (opened.st_dev, opened.st_ino, len(raw)):
++                raise DataError('control_corrupt', 503)
++            identity = (opened.st_dev, opened.st_ino, digest(raw))
++            cached = getattr(self, '_state_cache', None)
++            if cached is None or cached[0] != identity:
++                events, tail = self._read(raw)
++                if not events or events[0]['kind']!='hub.init' or events[0]['payload'].get('control_id')!=self.control_id:
++                    raise DataError('control_corrupt',503)
++                state = self.replay(events)
++                cached = (identity, canonical(state), {key: canonical(job) for key, job in state['jobs'].items()}, tail)
++                self._state_cache = cached
++            if writable and cached[3]:
++                raise DataError('control_tail_unconfirmed', 503)
++            # 不把可变的日志payload或缓存对象交给调用者。
++            return json.loads(cached[1] if job_id is None else cached[2][job_id])
++
+     def state(self):
+-        with self.lock.acquire():
+-            events, _ = self._read()
+-            return self.replay(events)
++        return self._current_snapshot()
++
++    def execution_job(self, job_id):
++        """同一完整字节校验，只复制当前操作，避免逐行解码无关计划。"""
++        return self._current_snapshot(job_id)
+ 
+     def commit(self, kind, payload, *, validate=None):
+         with self.lock.acquire(True, timeout=1):
+@@ -122,11 +156,7 @@
+             return self._append(events, kind, payload)
+ 
+     def assert_writable(self):
+-        with self.lock.acquire():
+-            events, tail = self._read()
+-            if tail:
+-                raise DataError("control_tail_unconfirmed", 503)
+-            return self.replay(events)
++        return self._current_snapshot(writable=True)
+ 
+     @staticmethod
+     def receipt(job):

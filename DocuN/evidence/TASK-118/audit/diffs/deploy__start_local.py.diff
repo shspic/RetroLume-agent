@@ -1,0 +1,123 @@
+--- first-pre/deploy/start_local.py
++++ current/deploy/start_local.py
+@@ -6,6 +6,8 @@
+ import subprocess
+ import time
+ import sys
++import argparse
++import threading
+ 
+ ROOT=Path(__file__).resolve().parents[1]
+ NAME="retrolume-local-pg"
+@@ -16,7 +18,28 @@
+     if result.returncode:raise RuntimeError("Docker操作未完成，请检查Docker Desktop是否已启动")
+     return result.stdout.strip()
+ 
++def serve_owned(port):
++    """本机启动器的精确stdin生命周期；仍由正常app/lifespan收尾。"""
++    sys.path.insert(0,str(ROOT/'backend'))
++    import asyncio,uvicorn
++    from app.main import create_app
++    from app.runtime import psycopg_compatible_loop_factory
++    server=uvicorn.Server(uvicorn.Config(create_app(),host='127.0.0.1',port=port,timeout_graceful_shutdown=150))
++    def close_on_owner_end():
++        sys.stdin.readline()
++        server.should_exit=True
++    threading.Thread(target=close_on_owner_end,name='local-launcher-owned-input',daemon=True).start()
++    with asyncio.Runner(loop_factory=psycopg_compatible_loop_factory) as runner:runner.run(server.serve())
++
+ def main():
++    parser=argparse.ArgumentParser()
++    parser.add_argument('--port',type=int,default=8000)
++    parser.add_argument('--container',default=NAME)
++    parser.add_argument('--shutdown-stdin',action='store_true',help='由当前启动句柄的stdin一行或EOF触发正常关闭')
++    parser.add_argument('--serve-owned',action='store_true',help=argparse.SUPPRESS)
++    args=parser.parse_args()
++    if not 1024<=args.port<=65535:raise RuntimeError('端口无效')
++    if args.serve_owned:return serve_owned(args.port)
+     config=ROOT/"config/database.local.json"
+     data_dir=os.environ.get("RETROLUME_DATA_DIR")
+     backup_dir=os.environ.get("RETROLUME_BACKUP_DIR")
+@@ -43,7 +66,7 @@
+         if not config.is_file():raise RuntimeError("缺少本地数据库配置；请设置RETROLUME_DATABASE_URL或创建受忽略的私有配置，切勿把密码发送到对话")
+         dsn=json.loads(config.read_text(encoding="utf-8"))["url"]
+     # 不启动同名但来源不一致的容器。
+-    selected_name=selected_target.name if selected_target is not None else NAME
++    selected_name=selected_target.name if selected_target is not None else args.container
+     selected_image=factory.profile['image_id'] if factory is not None else IMAGE
+     if docker("inspect","--format","{{.Image}}",selected_name)!=selected_image:
+         raise RuntimeError("数据库容器与已配置镜像不一致，请先检查")
+@@ -62,45 +85,57 @@
+             if factory is not None:
+                 factory._wait_pg(dsn)
+                 break
+-            status=subprocess.run(["docker","exec",own_cid,"pg_isready","-U","retrolume","-d","retrolume"],capture_output=True,timeout=3)
+-            if status.returncode==0:break
++            import psycopg
++            try:
++                with psycopg.connect(dsn,connect_timeout=3):pass
++                break
++            except psycopg.Error:pass
+             if time.monotonic()>=deadline:raise RuntimeError("数据库启动超时；保留数据，不自动重建")
+             time.sleep(.3)
++        # 按实际数据库/登录就绪核对，不假定retrolume用户名；重开不迁移、不更换正常库。
++        sys.path.insert(0,str(ROOT/'backend'))
++        from app.data_exit.schema_checks import assert_data_schema_sync
++        from psycopg.rows import dict_row
++        with psycopg.connect(dsn,row_factory=dict_row) as application:
++            assert_data_schema_sync(application)
++            if application.execute('SELECT rolsuper FROM pg_roles WHERE rolname=current_user').fetchone()['rolsuper']:
++                raise RuntimeError('业务进程不能使用superuser连接')
+         env=os.environ.copy()
+         env.update(RETROLUME_DATA_DIR=data_dir,RETROLUME_BACKUP_DIR=backup_dir)
+         # 目标连接仅用于其就绪检查；源旁证连接保留原身份，不冒目标为源。
+         application_dsn=original_dsn if selected_target is not None else dsn
+         if application_dsn:env['RETROLUME_DATABASE_URL']=application_dsn
+         else:env.pop('RETROLUME_DATABASE_URL',None)
+-        print("Open http://127.0.0.1:8000 - Ctrl+C to stop.",flush=True)
++        print(f"Open http://127.0.0.1:{args.port} - Ctrl+C to stop.",flush=True)
+         process=subprocess.Popen(
+             [
+                 str(ROOT/"backend/.venv/Scripts/python.exe"),
+-                "-m",
+-                "uvicorn",
+-                "app.main:create_app",
+-                "--factory",
+-                "--loop",
+-                "app.runtime:psycopg_compatible_loop_factory",
+-                "--host",
+-                "127.0.0.1",
++                str(Path(__file__).resolve()),
++                "--serve-owned",
+                 "--port",
+-                "8000",
++                str(args.port),
+             ],
+             cwd=ROOT/"backend",
+             env=env,
++            stdin=subprocess.PIPE,
+             creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP|subprocess.CREATE_NO_WINDOW) if os.name=="nt" else 0,
+         )
++        if args.shutdown_stdin:
++            def close_from_owner():
++                sys.stdin.readline()
++                if process.poll() is None:
++                    try:process.stdin.write(b'stop\n');process.stdin.flush()
++                    except (OSError,ValueError):pass
++            threading.Thread(target=close_from_owner,name='local-launcher-owner',daemon=True).start()
+         process.wait()
+     except KeyboardInterrupt:
+         pass
+     finally:
+         if process is not None and process.poll() is None:
+             try:
+-                # 先让uvicorn执行lifespan，关闭预览监督链；只向本次创建的进程组发送。
+-                if os.name=="nt":process.send_signal(signal.CTRL_BREAK_EVENT)
+-                else:process.terminate()
+-                process.wait(timeout=20)
++                # 独占匿名输入管道优先请求正常lifespan；无控制HTTP或全局进程操作。
++                process.stdin.write(b'stop\n');process.stdin.flush()
++                process.wait(timeout=170)
+             except (OSError,subprocess.TimeoutExpired):
+                 process.terminate()
+                 try:process.wait(timeout=5)

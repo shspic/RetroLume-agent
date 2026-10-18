@@ -1,0 +1,44 @@
+--- pre/backend/app/capabilities/contracts.py
++++ current/backend/app/capabilities/contracts.py
+@@ -13,6 +13,7 @@
+ 
+ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
+ from app.learning.contracts import LearningProfile
++from app.interview.contracts import InterviewProfile, InterviewCallBinding
+ from app.learning.teaching_contracts import TeachingCallBinding, TeachingProfile, TeachingMemoryCallBinding, TeachingMemoryProfile
+ 
+ 
+@@ -130,6 +131,7 @@
+     input_result: ResultConsumptionRef | None = Field(default=None, repr=False)
+     learning_profile: LearningProfile | None = Field(default=None, repr=False)
+     teaching_profile: TeachingProfile | TeachingMemoryProfile | None = Field(default=None, repr=False)
++    interview_profile: InterviewProfile | None = Field(default=None, repr=False)
+     messages: tuple[Message, ...] = Field(min_length=1, max_length=128)
+     max_output_tokens: int = Field(ge=1)
+     response_mode: ResponseMode = ResponseMode.JSON_OBJECT
+@@ -138,7 +140,7 @@
+     @model_validator(mode="after")
+     def profile_exclusive(self) -> "ModelCallRequest":
+         # teaching.v1 与 learning.v1 互斥；teaching 必须 JSON_OBJECT 且无工具。
+-        if self.learning_profile is not None and self.teaching_profile is not None:
++        if sum(p is not None for p in (self.learning_profile,self.teaching_profile,self.interview_profile)) > 1:
+             raise ValueError("mixed_profile_rejected")
+         if self.teaching_profile is not None and (
+             self.response_mode.value != "json_object" or self.allowed_tools
+@@ -146,6 +148,8 @@
+             raise ValueError("invalid_teaching_profile")
+         if self.teaching_profile is not None and self.messages and len(self.messages) > 3:
+             raise ValueError("invalid_teaching_profile")
++        if self.interview_profile is not None and (self.response_mode.value != "json_object" or self.allowed_tools or self.input_result is not None or len(self.messages) != 2):
++            raise ValueError("interview_binding_invalid")
+         return self
+ 
+     @field_validator("allowed_tools")
+@@ -194,6 +198,7 @@
+     input_result: ResultConsumptionRef | None = None
+     # G8：受信教学调用绑定；由 gateway 从 teaching_profile 构造，公开 API 不可直接构造。
+     teaching_binding: TeachingCallBinding | TeachingMemoryCallBinding | None = None
++    interview_binding: InterviewCallBinding | None = None
+ 
+ 
+ @dataclass(frozen=True)

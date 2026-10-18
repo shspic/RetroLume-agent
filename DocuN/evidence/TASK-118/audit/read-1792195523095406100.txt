@@ -1,0 +1,154 @@
+
+DocuN/evidence/TASK-116/design/integration-contract.md
+1: # STEP018 唯一最小集成实施合同（TASK-116 / R-110）
+2: 
+3: 本合同完成设计，尚未实施、运行或验收STEP018。采用当前PG权威库、领域命令/记录、007原子正文和Windows原生监督链；把现有入口串成两条完整流程，增量补受控Embedding、精确向量与词项融合、同库重开连续性及本机交付。没有重建通用Agent、计分或记忆平台。规范性样本见[验收合同](D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-116/design/acceptance-contract.md)，前向实施范围见[实施卡草案](D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-116/design/implementation-card-draft.md)，实际采用决定见[采用包](D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-116/design/adoption-package.md)。同一规定不另存平行副本。
+4: 
+5: ## A. 当前调用链与缺口归属
+6: 
+7: “存在”以下仅指本次源码静态核对；“继承”指原任务已裁定的有限证据，不是TASK116重跑。证据层分别为S源码、P协议/合成、T真实本机事务或监督、U真实浏览器/公开入口、Q真实服务的语义验收。原115终审只关闭有限STEP017，G11只关闭已采用安全宿主的有限切片；Q和完整重开链仍须新证。
+8: 
+9: | 地图行/唯一增量归属 | 现在的真实入口及函数 | 当前承载/事实 | 证据及剩余工作 |
+10: |---|---|---|---|
+11: | M01 导入到范围 | `frontend/src/main.tsx:App.upload/activateMaterial`、`PdfReviewPanel` → `materials.api.upload/read_material`、`pdf_review.api.confirm_candidate` →资料/版本/逐页核对表 | TXT/MD逐文件导入；PDF原页与提取预览、确认/跳过、用户补充；活动只能选当前ready版本 | S，旧资料/PDF有限P/T/U继承。缺明确“用此资料开始学习/面试”交接；只把已核ID/版本传到范围草稿，再由服务器重新核当前版本。失败项留在导入页，其他成功项继续。 |
+12: | M02 创建与范围 | `ActivityWorkspace.createActivity` → `activities.api.create_activity` → `ActivityService.list_scope_source_versions`、`PostgresAdmissionLedger.create_activity/revise_scope` | 服务器冻结source/version/revision、预算和允许模型；已有显式记忆选择及防重复创建意图 | S及旧活动有限证据继承。新增版本期望检查、检索能力/外发摘要；不能只由前端选中状态授权执行。范围变化沿原修订，不另建活动状态机。 |
+13: | M03 意图/目标/澄清 | `ActivityWorkspace`首轮/追问 → `LearningService.execute` → `assemble_catalog` → `ModelCallRequest.learning_profile` → `run_one_call`；`getTeachingSeed/onUseGoal` → `TeachingWorkspace.submit('goal')` | 首轮已有answer/clarification/no_evidence/conflict与持久正文；teaching目标零费用保存；G7不接受选记忆活动 | S及旧G7有限P/T/U继承。主入口显式选择学习/面试；学习无记忆可复用已持久G7目标seed，选记忆直接保存teaching目标并由plan作必要澄清。澄清答复修订目标，不从缺信息自动推能力。 |
+14: | M04 检索 | `learning.evidence.load_units/assemble_catalog`、`teaching_evidence.assemble_teaching_catalog`、`interview.evidence` → `retrieval.evidence.build_fragments/rank_term_candidates/verify_fragment` | 已有原件回查、lossless片段、词项排序及范围过滤；不是完全没有RAG。当前`terms.v1`，没有Embedding适配器、向量记录或pgvector查询接线 | S；旧词项与定位证据继承。唯一新增归属R：受控显式索引/查询Embedding和`hybrid.v1`。沿架构已定pgvector精确cosine+词项融合，不把词项局部成功签为向量或语义通过。 |
+15: | M05 路径/题/回答/反馈 | `TeachingWorkspace.submit` → `teaching_api.submit_teaching_command/read_teaching_workspace/read_teaching_command` → `TeachingService._submit_model/_freeze_model_context/_load_teaching_entities` → `accept_teaching_command/claim_teaching_launch` →Native；`apply_teaching_local`保存目标/接受路径/作答 | teaching_commands/records/heads已有goal、plan、accept_path、exercise、answer、evaluate、correction等；freeze绑定真实父记录及hash、CAS；模型007正文与领域投影同事务 | S及旧教学有限P/T/U继承。改检索提供器与完整流程导航，补有据开放反馈/针对练习真实语义；不重新实现上述实体。模型输出schema成立不等于参考答案正确。 |
+16: | M06 复测/理由 | `TeachingWorkspace`初题、retest、continuation、反馈/理由展示 → `teaching_policy.derive_support_checks/derive_progress`、teaching_progress/仓储事务 | 现有有限Decimal检查、单位换算、不执行程序题；两份不同且未暴露答案的独立合格作答才达到`evidence_sufficient`；保存progress理由/节点变化，重复答不重复计分 | S及旧有限P/T证据继承。补完整用户链传播与语义反例。现有单位自动核算限m/s、m/min、m、s、min；其余单位保留unchecked，不能自称通用计算或长期掌握。 |
+17: | M07 解释/工具 | `_submit_tool` →受限`finite_calculate`工具账；`openHtml` →`HtmlExplanationPanel` →`HtmlGenerationService.generate` →Native描述生成/编译 →`PreviewController` →外部SUP/Docker attach | `interactive_description.v1`由固定程序生成真正交互HTML；命令父记录/hash与宿主身份、预览3次/180s及每窗≤60s已有控制；未知清场不新开 | S，G11有限T/U及独审继承。仅验证本次题/反馈到解释的关联和计算，不改runtime/自由HTMLJS/权限。缺签票或不可用时显示原因、保留题/答案，不称FR009已通过。 |
+18: | M08 学习记忆 | `MemoryWorkspace`及teaching捕获预览 →`memory.api` →`MemoryLedgerMethods`；`memory.context.make_recipe/materialize_recipe/check_capacity` →teaching.v2 | 记忆原文、版本、依赖、用户修正/撤销及显式选取已存；≤4条/4096bytes背景低信任；撤销抑制失效正文，不改证据 | S及原记忆有限P/T/U继承。补同库重开后的资格与失效传播。对面试的现有明确禁止在M09收口，不能声称已贯穿。 |
+19: | M09 文字面试/记忆 | `ActivityWorkspace` interview变体 →`InterviewWorkspace` →`interview.api.submit` →`InterviewService.submit_command/_frozen/read_citation` →`InterviewLedgerMethods.accept_interview_command/claim_interview_launch/_write_interview_outcome` | 当前真实start/goal/ask/answer/correct_answer/review/bind_scope/finish及有限probe、认可/缺口、历史回查均存在。当前`interview.v1`明确拒选记忆，start还要求fresh unselected activity | S及原面试有限P/T/U继承。新增`interview.v2`可选低信任学习记忆背景，保留v1禁记忆；主链完整语义及必要追问新证，禁止把自报当履历或收益事实。不是重新造面试模块。 |
+20: | M10 预算/监督/未知 | `capabilities.ControlledModelGateway` →`ledger.admit/mark_dispatched/record_outcome` →`OneCallInput/run_one_call` →`launcher.run_supervised_window`、外部SUP/worker →007 | 真实httpx transport已实现；默认无SDK重试；一次窗口90s、请求10s、总管理120s；收到事实与当前资格分开；旧未知不退款或自动重发 | S，旧RootLease/Windows Job/StopProof/UNKNOWN的有限T继承。仅为新embedding kind及新profile扩类型绑定与同一四账，新故障传播补证。真实provider当前配置/能力/语义未核。 |
+21: | M11 同库重开 | 活动列表/GET历史/各意图台账 →持久领域heads/records、operation结果；`SessionConfig.single_host_single_session_recovery` | 已能重新读取持久活动；意图正文在IndexedDB、owner/view/CAS防晚到；自动恢复声明默认False。读历史、重启容器都不足以证明完整继续 | S及旧恢复边界继承。新增正常库owner准入/显式继续步骤及跨服务重启主链测试；不复制旧lease/generation，不自动重放费用调用。 |
+22: | M12 退出/隔离恢复传播 | `data_exit.config.DataRuntime`装配、DataWorkspace →`data_exit.api.jobs/plans/restore_jobs/activate/deletion` →snapshot/包/删除/恢复；`LocalRestoreFactory._initialize/seal_readonly`、`ReferenceRootCoordinator` | 001—013/R01、28业务表+3控制导出视图的精确profile；十三版loader白名单/角色/原件fence/恢复永久只读均已有限验收 | S，原114/115有限T/U及独审继承。新持久检索与新profile需R02增量快照/删除/恢复传播；不重开已关闭原验收，不将恢复副本开放写入。 |
+23: | M13 本机交付 | `create_app`路由/Selector loop、`deploy/start_local.py`、`start-backend.ps1`、`compose.local.yml` | FastAPI/React已装配；Compose已有缓存PG/pgvector服务及renderer-build入口；本地脚本已有PG启动、hidden uvicorn、停止自己启动的PG/子进程 | S及旧组件运行事实继承。缺正常库迁移/精确profile就绪/端口全状态与owner接续收口；补示例teaching配置和README过时文案。不是“未用Docker”。 |
+24: 
+25: ### Must对照（缺口只归一处）
+26: 
+27: 差异分类：M01/02/03/05/06/07/08/10/11/13的跨模块主链/运行不足为既有Must实现不足；M04的向量能力是已采用检索方向尚未实现的承载，不是从零选型；M12为新表导致的必需前向传播。M09已有FR011主模块，完整语义是Must未证；面试可选学习记忆v2是本合同新建议（原FR011未单独规定），采用包中明确增量。provider/账户/价目/真实语义及当前Docker缓存/扩展版本是未知，在相应采用/运行时核，不把未知记成当前失败或增加无关硬门。
+28: 
+29: | 已确认需求 | 主归属 | 已有充分部分与STEP018还需完成 |
+30: |---|---|---|
+31: | FR001、DR001/003 | M01/M02 | 继承逐文件/PDF/version；新增资料到两链、替换后不混上下文并保留草稿。 |
+32: | FR002/003/012 | M03（面试M09）、M11 | 继承目标/范围/文字；新增完整入口、澄清后继续与同库重开。 |
+33: | FR004、NFR001、INT002 | M04 | 继承定位验证；新增融合检索、跨链证据装配、逐结论语义支持/真实服务质量。 |
+34: | FR006/007/008 | M05 | 继承领域事务；新增完整链及数值、概念、程序正反例，不用字符串评分。 |
+35: | FR009、SEC003 | M07 | 继承G11固定宿主安全切片；新增当前练习/反馈真实交互关联与失败保持。 |
+36: | FR010 | M06 | 继承保守推进和理由；新增复测反馈到保存/后续路径使用。 |
+37: | FR011 | M09 | 继承文字场次/追问纪律；新增完整链、真实有据认可与缺证具体补充。 |
+38: | NFR002/003、SEC001/002 | M10 | 继承限额/监督/脱敏；新kind/profile不可绕过，provider和费用采用门另列。 |
+39: | NFR005 | M08/M11（面试背景M09） | 继承记忆查看修正撤销；同库续作及面试背景是实际不足，不以只读恢复替代。 |
+40: | DR002 | M12 | 继承R01可读退出；新增R02包括检索调用事实，不复制执行资格。 |
+41: | NFR004 | 验收合同 | 冻结有限样本、分层逐例保存。未运行，全部新验收待证。 |
+42: | CON002 | M13 | 使用现有核心/Compose/许可；Redis可重建缓存、MCP/框架、Linux/Nginx未来条件不新升首版门。 |
+43: 
+44: ## B. 正常/失败时序与实施细节
+45: 
+46: ### B1. 两条流程只接现有领域命令
+47: 
+48: 学习：导入并核对 →明确选ready版本/用途/上限 →创建同一活动 →目标保存（可复用合格G7 seed；有选记忆走teaching）→一次显式“准备本活动检索” →必要澄清并修订目标 →plan →用户accept_path →exercise(initial) →answer零费用原文保存 →evaluate →正确部分认可/实际错误/未知归因分别展示 →用户选针对练习(exercise continuation，绑定当前feedback/纠错) →有需要时有限计算或固定交互解释 →retest →evaluate同事务保存progress及保留/推进理由 →显式继续下一节点。缺目标/同名歧义时保持该阶段，不用额外无限Agent循环。首题参考答案默认隐藏，用户显式查看记录exposure；后续不能抹除exposure来凑独立作答。
+49: 
+50: 面试：同样的资料/当前范围 →新interview域活动（不把已教学活动改域）→start/goal及resume/experience/measurement/reference角色 →显式检索准备 →ask →answer原文零费用保存 →review；确有材料/回答缺口时输出probe，用户回答后再次review →相应认可/证据不足具体补充/可追溯反馈 →finish保留历史。probe不为凑次数，最多2层（兼容现有1—4可配范围）；没有测量不能编造百分比。v2可在创建时显式选≤4条记忆作背景，不当简历/测量引用；对已启动场次不偷偷重选。
+51: 
+52: 通用单次时序：读取当前源/记忆/head资格 →构造冻结请求及hash →短事务accept（同键不同正文409；同键同正文GET原事实）→一次launch claim →RootLease/执行generation →短事务admit并持久预留次数/费用/运行时长 →dispatch前复核 →单次外部HTTP →worker校验合法返回 →`received + 007正文 + 新向量/领域投影`同一COMMIT →SUP停止证明及现有结算 →GET回查当前资格 →UI显示。HTTP/模型/Docker不放进事务。
+53: 
+54: 超时、cancel、坏schema、响应丢失及服务中断复用现有分类：确未发送才not_sent；发出后不确定是UNKNOWN并保留预留，绝不自动重试/退次数。结构不合法可能已收费，保存脱敏错误和收到事实但不授领域资格。COMMIT后响应丢失先GET同键/operation，不能以UI报错再次创建收费调用。cancel后晚到可保存事实，必须抑制当前正文/向量与进度投影。源、scope、goal/head、记忆修订或epoch变动均使旧冻结命令失效；用户文字草稿和历史元数据保留。
+55: 
+56: ### B2. 受控检索的具体边界
+57: 
+58: 新增`embedding.v1`；供应商候选固定为智谱开放平台`embedding-3`、请求`dimensions=512`，HTTP POST候选`https://open.bigmodel.cn/api/paas/v4/embeddings`。这三个字符串来自项目旧候选，仅作为待核采用对象，不宣称2026-10-14仍有该能力或价目。采用前必须核官方当前接口、固定模型身份、维度/批量/限额、币种计价、账户与条款。若不成立，Embedding关闭并回主控变更，不能降维/换模型/换供应商自动放行。聊天继续现有DeepSeek受控适配器；精确模型/能力见采用包。
+59: 
+60: 空间键`space_id=SHA256(canonical({provider,configured_model,dimensions:512,normalization:'l2.v1',chunk_recipe:'lossless-line-2048cp.v1'}))`。返回模型、请求id、usage另记事实；返回模型不满足已核别名白名单拒绝。正文规范化只沿原片段换行/原文规则；不把用户补充改为原文。复用`build_fragments`的evidence_id，附source_id、source_version_id、source_revision、physical_page/origin、start/end codepoint、text_sha256。vector只在同space比较；NaN/Inf、零范数、长度≠512、索引不唯一/缺项、超body限拒绝。L2归一化采用一次确定程序，输入/原向量hash与结果hash留在007，不读真实资料做实验。
+61: 
+62: 显式准备范围最多10源；本合同合成验收每活动≤8片段/最多2批，单批≤4片段、每片段≤2048codepoints。产品有限目录沿现有上限≤512候选片段，单准备命令最多128批；面向正常用户的“准备”先列实际片段数/必要bytes/预期调用数，超过本活动余量或目录限制时拒绝并请缩范围，不自动对整库索引。不能把合成样本8片段偷改成TXT/MD单文件输入新上限；大源是否在声明有限目录内必须明确呈现，超限不声称完整覆盖。按source/version/chunk逐条复用合法已存向量，命中不外发、不虚增收费操作；没有当前能力/费用许可不索引。新范围/替换不后台自动外发，用户重新确认。学习/面试每次需要检索的明确模型动作最多一次query embedding（query≤1024chars/4096bytes，本最小方案不新增跨命令query缓存）；HTML使用既有合格父上下文，无额外Embedding。
+63: 
+64: `build_retrieval_query`只从当前目标、节点/题干或面试问题构成必要查询；不把记忆正文或作答默认送Embedding，不拼整份简历。索引Embedding只送当前已确认source片段。两个用途都在admit/result核活动的当前memory eligibility和冻结selection/dependency身份；`_memory_require_call/_interview_require_call`新增严格typed EmbeddingBinding分支（purpose/command/scope/domain/selection hash），不凭emb前缀一般绕门、不假扮teach8m/int10m。记忆不进入Embedding input，但其撤销使该活动尚未完成命令失效；已经合格源向量是同space/source/version的派生缓存，不把旧活动的执行权限授给使用它的新活动。新活动仍独立核范围/预算/当前记忆/域资格。
+65: 
+66: `retrieve(activity_id, query, retrieval_command_ref, expected_scope_revision) -> CatalogEnvelope`：先由PG当前scope/currentready/删除tombstone及记忆资格过滤，再分别获取同space精确cosine候选≤32和原词项候选≤32；RRF(k=60)为`sum(1/(60+rank))`，用evidence_id稳定破同分；无ANN/重排外部服务。取≤8片段、沿现有≤12000chars/24000bytes总目录，重新从原件`verify_fragment`，PDF仍物理页/用户补充双身份。每个结论最终引用再回查当前版本/位置；排序分数不证明语义支持。向量索引不可用时显式`retrieval_degraded:terms.v1`且留原因，可读/已授权词项功能保留，但不能签hybrid验收。Embedding UNKNOWN不得暗中改用新query再次收费；需用户查原事实后明确改范围/新动作，旧预留不还。
+67: 
+68: ### B3. 协议、函数与UI精确变更
+69: 
+70: 以下新增名称为本合同规定，尚不存在。旧名称见M表和读取身份；同名函数实现变更应以实际span定位。
+71: 
+72: | 产品位置 | 规定的最小变更/签名和返回语义 |
+73: |---|---|
+74: | `capabilities/contracts.py` +新增`embedding.py` | `EmbeddingRequest(profile='embedding.v1', purpose:'source_index'|'query', inputs:tuple[EmbeddingInput,1..4], dimensions:Literal[512], space_id, activity_id, business_key, request_sha256, scope_revision)`；每input含ordinal、identity/hash、text。`EmbeddingServiceConfig`只允许候选固定base/path、环境变量名与已核模型/返回别名；工具集空、output_tokens=0。`EmbeddingOutcome`独立结构，含vector/usage/returned_model/remote_request_id与received/not_sent/unknown事实，不伪装成ChatMessage/TeachingOutput。 |
+75: | `capabilities/gateway.py`、`transport.py` | 保留聊天实现；新增`ControlledEmbeddingGateway.call(context, request)`，共用Httpx的无redirect/trust_env=False/无隐式retry/1次POST语义；服务timeout≤10s、request/response≤65536bytes，不记录key/input原文。超限在调用前拒绝，响应超限按可能发出事实处理。 |
+76: | `worker/one_call.py`、`worker_main.py`、`launcher.py`、`session.py` | 新wire v4封闭`capability_kind=model|embedding` union。v3聊天继续旧解析，不更改旧字节；父/worker均核类型与profile。新增`EmbeddingOneCallInput`、`run_one_embedding(ledger, session, activity_id, executor_id, operation_id, request, config, *, run_tag)`，继续同SUP/Job窗口/RootLease。禁止任意命令/自由网络/SDK二次调用。 |
+77: | `activities/repository.py` +新增`retrieval/repository.py` | `admit_embedding(context, operation_id, intent, binding)`、`record_embedding_outcome(credential, outcome)`：同一锁序、generation、取消、预算、current source检查；kind=embedding，显式无输出tokens且不扣tools；次数/费用/时间照扣。received的007正文与相应chunk向量及命令进度同COMMIT，同键重复逐byte等效；普通`record_outcome`仍只认model，工具/领域/preview parent API必须拒embedding。 |
+78: | 新增`retrieval/service.py/contracts.py/api.py` | `prepare_index(aid, command)`、`prepare_query(aid, command)`、`read_command(aid,key)`、`retrieve(...)`；HTTP `POST /api/activities/{aid}/retrieval/commands`、`GET .../retrieval/commands/{key}`、`GET .../retrieval/status`。命令严格`business_key, action,index/query input, expected_scope_revision, expected_domain_revision, confirmed:true`；服务器冻结源/当前领域父记录、space/profile与输入hash。返回accepted/launch_claimed/terminal元数据、每批operation ID和未知原因；向量及原文不返回浏览器。 |
+79: | `activities/api.py/service.py`、`service_config.py` | capabilities增加`retrieval`、provider+用途/bytes/估计次数、v2 profile readiness；create增加可选`expected_sources`（ID/version/revision），服务重新核；只从受信配置加入chat和embedding允许pair。旧create缺该字段仍按旧机制，不能由请求填任意provider/price/工具/外发权限。Embedding能力配置缺失时默认关闭；修正teaching profile展示与真实memory.v2选择，不改变旧协议语义。 |
+80: | `learning/contracts.py/service.py/evidence.py` | 保留learning.v1 terms存量；新增learning.v2/hybrid目录标识及检索命令引用。无选记忆的G7可用；有选记忆不放开旧learning.v1门，入口转teaching。所有继承引用ID仍可原位验证，不更改旧请求hash。 |
+81: | `teaching_contracts.py/teaching_service.py/teaching_evidence.py`、`activities/teaching_repository.py` | 新`teaching.v3`在现v2 memory recipe上增加`retrieval_ref={business_key,query_sha256,space_id,result_sha256}`，在freeze/admit/result均校验其当前资格；v1/v2旧读取与hash原样保留。`_submit_model`使用检索目录而不现场绕账发Embedding。原领域记录/CAS/进度策略不复制；必要澄清仍由已有Output与用户goal修订承载。 |
+82: | `interview/contracts.py/service.py`、`activities/interview_repository.py`、`memory/repository.py` | 新`interview.v2`同时加retrieval_ref及可空`memory_recipe/selection_sha256/dependency_sha256`。复用现≤4条、版本/hash重查、低信任材料化容量规则，记忆不得进入source_refs/recognition已证栏。start准入仅允许新v2、fresh、零操作/无teaching且合法显式memory binding；旧v1仍要求unselected。`_memory_require_call/_interview_require_call/_interview_domain/_interview_verify_frozen/_interview_result_sql`按严格profile绑定扩分支，不能凭operation前缀绕过；既有source→memory→activity→domain→operation相对锁序不变。收费新grant先取其advisory lock，详见采用包；没有反向取grant的嵌套路径。新增v2使用独立`int18m.`前缀，旧`int10m.`结果原样可读。 |
+83: | `frontend/src/main.tsx`、`activities/ActivityWorkspace.tsx` | `onStartFromMaterials({sources:[{id,version_id,revision}],domain})`只填范围草稿；显式域/目标/预算/必要外发确认。新增`initialScopeDraft`prop，刷新重核，保留旧选择/文字。activity详情以既有domain/head显示当前步骤及下一合格动作；“重开/继续”先GET，不自动POST。 |
+84: | 新增`frontend/src/activities/RetrievalPanel.tsx`与接口 | 在活动内显示必要资料范围、用途、供应商、预计次数/费用及余量。`submitWithRetrieval(action,input)`在一次明确确认中冻结查询key和领域key，顺序完成最多一次query及一次原领域动作；仅当前owner/view/上下文仍有效且前一步确已COMMIT时继续，失败/卸载/响应未知立即停此链。重开先GET，再由用户明确继续未发送的原键；不得重放unknown。首次准备索引告知实际有限批数（本合成许可最多2批），后台不得自行续剩余批。技术space/chunk/SQL不进产品主流程；命令状态与domain/head、DataContext共同绑定。 |
+85: | Teaching/InterviewWorkspace、`MemoryWorkspace.tsx`及其api/types/意图台账 | 重用已有IndexedDB/owner/view/CAS，新增profile字面值/检索引用/场次记忆选择；参数/旧回答草稿本地保留。显示clarification/conflict/no_evidence下一可行修正、针对练习/复测/理由，并区分模型建议/确定核算/自报。route/只读壳和C03最终bundle guard保持；v2记忆资格失效时禁止请求并抑制旧正文，不吞旧意图。 |
+86: 
+87: 采用新增schema/profile只能作为新非空迁移的一部分，不能在独立“准备”卡里先打开provider或未知接口。所有新API仍过现session token、localhost、DataContext与mutation gate；restored_readonly只允许status/GET合格元数据，POST一律拒。GET不得触发索引/模型/SUP。
+88: 
+89: ### B4. 014迁移的持久定义、旧行及权限
+90: 
+91: 推荐只有一份前向`backend/migrations/014_step018_retrieval.sql`。001—013原字节不变；新DDL在新的**正常合成库**测试，通过后再提供正常本人库明确迁移命令，TASK116不迁移任何库。以下为规范DDL字段，不是已执行SQL；uuid/text/bigint/jsonb/check/FK名称可由实现规范化，但含义与空值兼容不能删。
+92: 
+93: ```sql
+94: CREATE EXTENSION IF NOT EXISTS vector; -- 须实核已缓存PG镜像中的版本/许可和可用性
+95: CREATE TABLE retrieval_spaces (
+96:  space_id text PRIMARY KEY CHECK(space_id ~ '^[0-9a-f]{64}$'),
+97:  provider text NOT NULL, configured_model text NOT NULL,
+98:  dimensions smallint NOT NULL CHECK(dimensions=512),
+99:  normalization text NOT NULL CHECK(normalization='l2.v1'),
+100:  chunk_recipe text NOT NULL CHECK(chunk_recipe='lossless-line-2048cp.v1'),
+101:  created_at timestamptz NOT NULL DEFAULT now(),
+102:  UNIQUE(provider,configured_model,dimensions,normalization,chunk_recipe)
+103: );
+
+DocuN/evidence/TASK-116/design/adoption-package.md
+1: # STEP018具体采用包（待主控串行处理）
+2: 
+3: 本包是TASK116设计产物，尚未采用、实施、出卡或开启费用。主控可在既有开发授权内直接编排资料/目标/领域命令/UI接线、当前能力的普通修复、文档维护及获准的合成验证；这些不因新阶段再请用户批准。真正新增模型/公开接口/权限/外发/费用只收在下面两个决定中。原TASK114/115关闭、所有失败/计数/费用不变。
+4: 
+5: ## AP1：受控向量与前向兼容包
+6: 
+7: 推荐采用[integration-contract.md](D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-116/design/integration-contract.md)B2—B5的**单一完整方案**：014、新embedding kind、OneCall wire v4/v3兼容、3张检索表、R02与R01并存、learning.v2/teaching.v3/interview.v2严格绑定、现主体预算与监督复用。必要性：架构已定pgvector融合当前仅有词项通道；Embedding目前没有类型/准入/事实承载；现恢复器固定十三链/28表，不能无声插表；当前面试明确拒记忆，不能假称已有跨链背景。
+8: 
+9: 改变范围：新增retrieval三HTTP入口（命令POST/命令GET/status GET）、受信Embedding配置及typed能力；新role/profile/准确DDL与旧函数fingerprint增量；面试v2允许创建时可选学习记忆低信任背景。面试读学习记忆是为本卡“两链记忆贯穿”的**新建议**，不是原FR011单独明确的已缺Must；作为推荐集成包一并采用，不将旧v1有限验收降为无效。所有现model/tool旧行、旧领域profile/hash、旧R01包/只读副本保留，不改001—013或固定renderer。
+10: 
+11: AP1并增`activities.outbound_grant_sha256 text NULL CHECK(NULL或64位sha)`（旧行NULL）用于新真实外发许可归属。create由受信服务器配置填，浏览器不能选择/重绑定；已有活动不可改grant去借新额度。R02明确导出/恢复该列，R01投影仍是原列集。纯合成transport不要求真实外发grant；所有新真实chat/embedding准入要求受信`OutboundGrant`，未知或过期失败关闭。此列属于014/profile采用影响，不用第四张通用预算表。
+12: 
+13: `OutboundGrant`仅为固定operator部署配置，不存key，字段封闭：`schema,grant_id,approved_receipt_sha256,valid_from_utc,valid_until_utc,provider_capabilities,allowed_activity_ids,global_max_requests,global_max_cost_microunits,price_snapshot_sha256,data_class='synthetic',source_manifest_sha256`。hash进入activity，固定活动roster的价额合计不大于global cap。新收费准入先取grant advisory lock，再依现source→memory→activity→domain→operation锁序，PG查询该grant所有活动的累计request/cost预留（含unknown）核门；随后每activity原admit再次核四账。kind=embedding也走该锁，不能用浏览器另建活动、换供应商或换grant重置本次许可。received结算不倒减已用请求；旧unknown未核不折回。无需Redis/新SDK/通用Agent框架/新增常驻看门服务。
+14: 
+15: 安全与失败影响：API仍localhost session + DataContext + mutation gate；snapshot只读、loader仅loading、seal后全部新写拒；embedding007不能作任何领域父。迁移仅新正常合成库先证非空兼容，失败保留旧链/资源，不能降R02到R01丢事实。R01/R02恢复均永久只读；本包没有“恢复副本继续执行”变更。独立审计覆盖新kind/公开入口/角色/R02/memory域传播稳定成果一次集中完成，旧充分原件复用。
+16: 
+17: 若AP1未采用，可继续现有领域/词项合成接线与文档；hybrid、新profile/权限及完整STEP018门保持未实施。这个有限替代保留成果，不是降低原Must或把词项自称向量；不另提平台选型。
+18: 
+19: ## AP2：真实服务合成验收许可（一次20元封顶，待核后开启）
+20: 
+21: 推荐先仅合成必要片段，不包含真实履历、学习记录/原件、旧库私配或整库；仅固定下面两个候选能力，不自动换模型。
+22: 
+23: | 能力/服务配置 | 推荐候选与采用前必须确认 | 运行上限 |
+24: |---|---|---|
+25: | Chat / 现DeepSeek适配器 | provider `deepseek_chat_completions`；候选configured_model `deepseek-chat`、既有固定base `https://api.deepseek.com`及chat-completions路径；thinking disabled。精确当前ID/返回别名、无额外思考账单、结构输出能力/账户条款/价目必须官方现行核，不用旧Flash/Pro实验担保 | 一次POST、timeout≤10s、request/response各≤65536bytes；learning v2≤256输出tokens，teaching v3/interview v2≤2048，HTML≤4096且沿原固定描述schema；无隐式重试/额外tool服务。 |
+26: | Embedding / 新typed adapter | provider `zhipu_embeddings`，candidate `embedding-3`、512维、候选`https://open.bigmodel.cn/api/paas/v4/embeddings`；须核当前批量/维度/输出identity/usage/账户/条款，资料仅本JSON合成片段 | 一次POST，≤4inputs/每项≤2048codepoints（query单项≤1024chars/4096bytes）、timeout≤10s、body≤65536bytes；不调用reranker/后台索引/其它模型。 |
+27: 
+28: 本卡不联网，因此上述候选不是已核当前产品承诺。主控在获得相应联网核查范围后记录官方能力/价目/条款日期、具体页面、账户适用性及模型别名；若候选缺必需能力或任一次10s无法完成，失败留证回主控，不能延timeout或换供应商当普通夹具修正。
+29: 
+30: 收费许可建议从未来明确生效时起72小时；仅以下三固定新合成活动ID：`01800000-0000-4000-8000-000000000001`学习、`...0002`面试、`...0003`剩余语义补证（真实完整UUID在实施卡）。每activity deadline24h、max_running_seconds3600、max_request_bytes65536、common max_output_tokens4096；每次model/embedding预留0.25元人民币（250000 microunits，1元=1000000 microunits）。学习max40requests/max10元，面试24/6元，补证16/4元；合计80requests/**最多20元新余额**，含全部失败、超时与unknown，旧13元耗尽/旧626.566秒等不追认或抵扣。单activity finite_calculate≤8次，允许工具只有finite_calculate，无外部收费工具；预览仍3次/180s、一次30—60s。所有模型/嵌入共享每activity次数/时间/费用；不按两家各80次。
+31: 
+32: 0.25是建议安全预留，不是报价。只有**已核当前最坏成本≤0.25元**的具体request可发；按官方当前单价、已核token计数或保守上界（不能把UTF8bytes声称精确token）、output cap、币种/必要汇率/税及至少25%裕量向上取整核算。缺价格/计量/税汇率边界即关闭真实能力；超0.25拒该动作，不自行提reserve/global20门。这个用量上限允许完整链与普通失败余地但不保证全部质量场景成功；不足停止回主控给精确剩余矩阵，不能购买额外额度/开新活动借余额。
+33: 
+34: 真实故障/UNKNOWN测试使用最低transport替身，避免向供方故意发失败付费。Q语义以验收合同L/I冻结rubric逐项记录，通过与失败都保留。主控可先发零网络合成实施卡，AP2核价与授权未就绪只封收费部分，AP1后的正常合成实现不被阻塞。确认AP2后仅后续完整实施卡可激活本grant；TASK116上限始终0。
+35: 
+36: ## SEC001及本机配置的具体交接
+37: 
+38: 现model key继续服务器`RETROLUME_MODEL_API_KEY`，新embedding key仅服务器`RETROLUME_EMBEDDING_API_KEY`；本地activity/retrieval/operator配置放用户已授权private位置，由正常secret loader读取环境名，不写浏览器/日志/证据/导出，不向对话索key。provider告知包括用途（必要片段索引/问题检索/路径题反馈/面试/描述生成）、资料类synthetic、所选scope与bytes/有限调用/成本；本地确认不能越过服务端批准grant。provider现条款未核时连合成付费也不自动发。
+39: 
+40: 真正本人资料以后若要外发，需要另一个**数据范围决定**：明确资料类别/范围、同一已核供应商用途与保留/训练条款、账号适用性及费用模板；不是重新审批项目或本地只读导入。AP2不包含这一权限，不提前把真实资料贴进合成许可。STEP020可以本人在本机用冻结合成资料完成启动/继续/停止运行交接；真实个人内容只在相应范围有效时使用。
+41: 
+42: ## 推荐串行节点及最终通过条件
+43: 
+44: 1. 主控采用AP1，按完整实施卡草案发**一个**工程成果合同：两链、hybrid/新kind/R02、normal重开、本机启动/文档、有限验证及普通修复连续完成。不预占TASK/R或把每次准备/修夹具/重试另转卡。
+45: 2. 在该工程窗口达到稳定完整合成候选后交一个独立窗口集中核新增安全/权限/预算/兼容/最终bundle传播，可作为适用STEP019主体原件；关键新边界未通过前不开AP2。AP2核实和许可形成后原工程窗口补真实合成语义，再由同一独立窗口只补语义/实际变更和剩余项目验收项，沿用未变审计，避免整套重审。实际缺陷可范围内连续修复，不能承诺固定余卡数。
+46: 3. STEP018只有两链真实对应层、全部本合同Must样本及normal同库继续成立才提交通过；无AP2只提交合成成果和Q未验证，不能签STEP018全部完成。适用STEP019集中收口SEC001/002/003、persistent预算/unknown、R01/R02及最终bundle、新供应商证据和整体剩余Must；必要审计独立于工程，不由本窗口自签。
+47: 4. STEP020依赖STEP018/019通过且未有阻断缺陷，再本人运行正常本机交付，确认一次启动/能力就绪/两链保存/重开明确继续/停止自有资源/可读退出与readonly隔离查看。本人真实数据需已有效数据范围，不借pilot；Should/Could/未来Linux/Nginx公开发布未纳入不阻首版。主控串行维护DocuS/编号/裁定，本窗口只回传保存路径。

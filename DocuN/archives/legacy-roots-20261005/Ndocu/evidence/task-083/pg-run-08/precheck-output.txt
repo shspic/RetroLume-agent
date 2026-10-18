@@ -1,0 +1,42 @@
+TASK-083 pg-run-08 只读预检输出
+时间: 2026-09-25T14:50+08:00 (Asia/Shanghai) 预检窗口
+命令: precheck.py (托管 Python 3.13.12, 只读)
+
+--- stdout ---
+hash:backend/tests/fixtures/task083/pg_migration.py = MATCH
+hash:backend/tests/fixtures/task083/pg_close.py = MATCH
+hash:backend/app/activities/repository.py = MATCH
+hash:backend/migrations/005_activities_dispatch_closed.sql = MATCH
+venv:exists = True
+venv:python_version = Python 3.12.10
+venv:psycopg = psycopg 3.3.5
+docker:reachable = False
+docker:server_version = failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine; check if the path is correct and if the daemon is running: open //./pipe/dockerDesktopLinuxEngine: The system cannot f
+image:present = SKIPPED_docker_unreachable
+port:55437 = FREE
+PRECHECK_VERDICT = FAIL
+
+--- stderr ---
+
+exit=0
+
+
+===== 第二次预检（用户手动启动 Docker Desktop 后，2026-09-25 15:07+08:00）=====
+--- stdout ---
+hash:backend/tests/fixtures/task083/pg_migration.py = MATCH
+hash:backend/tests/fixtures/task083/pg_close.py = MATCH
+hash:backend/app/activities/repository.py = MATCH
+hash:backend/migrations/005_activities_dispatch_closed.sql = MATCH
+venv:exists = True
+venv:python_version = Python 3.12.10
+venv:psycopg = psycopg 3.3.5
+docker:reachable = True
+docker:server_version = 29.7.2
+image:present = True
+image:info = sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f|["pgvector/pgvector:0.8.6-pg17-bookworm"]
+port:55437 = FREE
+PRECHECK_VERDICT = PASS
+
+--- stderr ---
+
+exit=0

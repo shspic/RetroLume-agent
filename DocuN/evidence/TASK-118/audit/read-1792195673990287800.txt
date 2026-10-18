@@ -1,0 +1,435 @@
+
+backend/app/data_exit/control.py
+1: """私有日志为长期操作和选择器的唯一权威；GET 不执行动作。"""
+2: import ctypes
+3: import io
+4: import json
+5: import os
+6: from pathlib import Path
+7: import struct
+8: from uuid import uuid4
+9: from datetime import datetime, timezone
+10: from .contracts import DataContext, DataError, canonical, digest, business_key, uuid
+11: from .files import RootLease, safe_root, regular, publish,private_file
+12: 
+13: MAX_FRAME, MAX_JOURNAL = 65536, 64 * 1024**2
+14: TAIL = b"\nCOMMIT:"
+15: PUBLIC_JOB = ("job_id", "business_key", "kind", "request_sha256", "state", "stage", "revision",
+16:               "control_seq", "package_id", "root_sha256", "plan_id", "target_id", "error_code",
+17:               "selection_generation", "created_at", "updated_at", "counts", "latest_status")
+18: PUBLIC_JOB += ('receipt_id','receipt_sha256')
+19: 
+20: 
+21: class ControlHub:
+22:     def __init__(self, root):
+23:         self.root = safe_root(root)
+24:         private_file(self.root,directory=True)
+25:         self.lock = RootLease(self.root, ".journal.lock")
+26:         self.operation_lock = RootLease(self.root, ".operation.lock")
+27:         self.path = self.root / "journal.bin"
+28:         with self.lock.acquire(True):
+29:             if not self.path.exists():
+30:                 with self.path.open("xb") as stream:
+31:                     stream.flush(); os.fsync(stream.fileno())
+32:                 private_file(self.path)
+33:                 self._append([], "hub.init", {"control_id": str(uuid4())})
+34:             events, tail = self._read()
+35:             if not events or events[0]["kind"] != "hub.init":
+36:                 raise DataError("control_unavailable", 503)
+37:             self.control_id = events[0]["payload"]["control_id"]
+38: 
+39:     def _read(self, snapshot=None):
+40:         regular(self.path)
+41:         if self.path.stat().st_size > MAX_JOURNAL:
+42:             raise DataError("capacity_exceeded", 413)
+43:         events, previous = [], "0" * 64
+44:         with (self.path.open("rb") if snapshot is None else io.BytesIO(snapshot)) as stream:
+45:             while True:
+46:                 header = stream.read(4)
+47:                 if not header:
+48:                     return events, False
+49:                 if len(header) != 4:
+50:                     return events, True
+51:                 length = struct.unpack("!I", header)[0]
+52:                 if not 1 <= length <= MAX_FRAME:
+53:                     raise DataError("control_corrupt", 503)
+54:                 raw = stream.read(length)
+55:                 tail = stream.read(len(TAIL) + 65)
+56:                 if len(raw) != length or len(tail) != len(TAIL) + 65:
+57:                     return events, True
+58:                 if tail != TAIL + digest(raw).encode("ascii") + b"\n":
+59:                     raise DataError("control_corrupt", 503)
+60:                 try:
+61:                     from .codec import load_json
+62:                     event = load_json(raw)
+63:                     valid = (event["format"] == "data.control.v1" and event["seq"] == len(events) + 1
+64:                              and event["prev_hash"] == previous and event["body_hash"] == digest(canonical(event["payload"])))
+65:                 except (KeyError, ValueError, TypeError):
+66:                     valid = False
+67:                 if not valid:
+68:                     raise DataError("control_corrupt", 503)
+69:                 if raw != canonical(event).encode('utf-8'):
+70:                     raise DataError('control_corrupt',503)
+71:                 previous = digest(raw)
+72:                 events.append(event)
+73: 
+74:     def _append(self, events, kind, payload):
+75:         event = {"format": "data.control.v1", "seq": len(events) + 1,
+76:                  "prev_hash": "0" * 64 if not events else digest(canonical(events[-1])),
+77:                  "event_id": str(uuid4()), "kind": kind, "payload": payload,
+78:                  "body_hash": digest(canonical(payload)), "utc": datetime.now(timezone.utc).isoformat()}
+79:         raw = canonical(event).encode("utf-8")
+80:         frame = struct.pack("!I", len(raw)) + raw + TAIL + digest(raw).encode("ascii") + b"\n"
+81:         if len(raw) > MAX_FRAME or self.path.stat().st_size + len(frame) > MAX_JOURNAL:
+82:             raise DataError("capacity_exceeded", 413)
+83:         with self.path.open("ab") as stream:
+84:             stream.write(frame); stream.flush(); os.fsync(stream.fileno())
+85:         return event
+86: 
+87:     @staticmethod
+88:     def replay(events):
+89:         state = {"jobs": {}, "plans": {}, "targets": {}, "selection": None, "fence": None, "owned": {}, "deletions": {}, 'source':None}
+90:         for event in events:
+91:             kind, p = event["kind"], event["payload"]
+92:             if kind in ("job.create", "job.update"):
+93:                 old = state["jobs"].get(p["job_id"], {})
+94:                 state["jobs"][p["job_id"]] = {**old, **p, "control_seq": event["seq"]}
+95:             elif kind == "plan.create":
+96:                 state["plans"][p["plan_id"]] = p
+97:             elif kind in ("target.register", "target.seal"):
+98:                 state["targets"][p["target_id"]] = {**state["targets"].get(p["target_id"], {}), **p}
+99:             elif kind == "selector_commit":
+100:                 state["selection"] = p
+101:             elif kind == "maintenance.fence":
+102:                 state["fence"] = p
+103:             elif kind in ("owned.begin", "owned.end"):
+104:                 state["owned"][p["owned_id"]] = {**state["owned"].get(p["owned_id"], {}), **p}
+105:             elif kind == "deletion.observe":
+106:                 state["deletions"][p["entity_kind"] + ":" + p["entity_id"]] = p
+107:             elif kind=='source.register':state['source']=p
+108:         return state
+109: 
+110:     def _current_snapshot(self, job_id=None, *, writable=False):
+111:         with self.lock.acquire():
+112:             # 每次仍在真实锁内读取当前完整字节；仅复用同一文件对象和摘要的已验投影。
+113:             info = regular(self.path)
+114:             with self.path.open('rb') as stream:
+115:                 opened = os.fstat(stream.fileno())
+116:                 if (info.st_dev, info.st_ino) != (opened.st_dev, opened.st_ino):
+117:                     raise DataError('control_corrupt', 503)
+118:                 if opened.st_size > MAX_JOURNAL:
+119:                     raise DataError('capacity_exceeded', 413)
+120:                 raw = stream.read(opened.st_size + 1)
+121:                 after = os.fstat(stream.fileno())
+122:             current = regular(self.path)
+123:             if len(raw) > MAX_JOURNAL:
+124:                 raise DataError('capacity_exceeded', 413)
+125:             if (opened.st_dev, opened.st_ino, opened.st_size) != (after.st_dev, after.st_ino, len(raw)) or (current.st_dev, current.st_ino, current.st_size) != (opened.st_dev, opened.st_ino, len(raw)):
+126:                 raise DataError('control_corrupt', 503)
+127:             identity = (opened.st_dev, opened.st_ino, digest(raw))
+128:             cached = getattr(self, '_state_cache', None)
+129:             if cached is None or cached[0] != identity:
+130:                 events, tail = self._read(raw)
+131:                 if not events or events[0]['kind']!='hub.init' or events[0]['payload'].get('control_id')!=self.control_id:
+132:                     raise DataError('control_corrupt',503)
+133:                 state = self.replay(events)
+134:                 cached = (identity, canonical(state), {key: canonical(job) for key, job in state['jobs'].items()}, tail)
+135:                 self._state_cache = cached
+136:             if writable and cached[3]:
+137:                 raise DataError('control_tail_unconfirmed', 503)
+138:             # 不把可变的日志payload或缓存对象交给调用者。
+139:             return json.loads(cached[1] if job_id is None else cached[2][job_id])
+140: 
+141:     def state(self):
+142:         return self._current_snapshot()
+143: 
+144:     def execution_job(self, job_id):
+145:         """同一完整字节校验，只复制当前操作，避免逐行解码无关计划。"""
+146:         return self._current_snapshot(job_id)
+147: 
+148:     def commit(self, kind, payload, *, validate=None):
+149:         with self.lock.acquire(True, timeout=1):
+150:             events, tail = self._read()
+151:             if tail:
+152:                 raise DataError("control_tail_unconfirmed", 503)
+153:             state = self.replay(events)
+154:             if validate is not None:
+155:                 validate(state)
+156:             return self._append(events, kind, payload)
+157: 
+158:     def assert_writable(self):
+159:         return self._current_snapshot(writable=True)
+160: 
+161:     @staticmethod
+162:     def receipt(job):
+163:         return {key: job[key] for key in PUBLIC_JOB if key in job}
+164: 
+165:     def current_receipt(self, state, job):
+166:         receipt = self.receipt(job)
+167:         if job.get('completion_protocol') == 1 and job['state'] in ('published','received','verified','active_readonly','deleted','deleted_pending'):
+168:             confirmation=job.get('completion_confirmed_ns')
+169:             deadline=job.get('execution',{}).get('deadline_ns')
+170:             if type(confirmation) is not int or type(deadline) is not int or not 0 < confirmation < deadline:
+171:                 receipt.update(state={'portable_export':'published_unconfirmed','restore_checkpoint':'published_unconfirmed',
+172:                     'upload':'upload_unconfirmed','restore':'restore_unconfirmed','activate':'activation_unconfirmed',
+173:                     'source_delete':'deletion_unconfirmed'}[job['kind']],stage='completion_unconfirmed')
+174:         if job['kind']=='restore':
+175:             receipt.update(plan_id=job['scope']['plan_id'],plan_sha256=job['scope']['plan_sha256'])
+176:         selection = state['selection']
+177:         if selection is not None and selection.get('activation_job_id') == job['job_id']:
+178:             receipt.update(selector_commit='confirmed',selection_generation=selection['generation'],target_id=selection['target_id'])
+179:             if job['state'] != 'active_readonly':
+180:                 receipt.update(state='activation_unconfirmed', stage='selector_committed')
+
+backend/app/data_exit/operations.py
+1: """一次消费、一个进程时钟域、取消和不可逆准入的短CAS协议。
+2: 
+3: 日志中只保存私有执行事实；进程重启不能恢复旧时钟域的执行权。
+4: """
+5: from contextlib import contextmanager
+6: import asyncio
+7: import contextvars
+8: import functools
+9: import math
+10: import time
+11: from uuid import uuid4
+12: from .contracts import DataError
+13: 
+14: CLOCK_DOMAIN = str(uuid4())
+15: TERMINAL = frozenset(('published', 'received', 'verified', 'active_readonly', 'deleted',
+16:                      'cancelled', 'failed', 'published_unconfirmed', 'upload_unconfirmed',
+17:                      'restore_unconfirmed', 'activation_unconfirmed', 'cleanup_unconfirmed'))
+18: ADMISSIONS = {'portable_export': ('file_publish', ('published',)), 'restore_checkpoint': ('file_publish', ('published',)),
+19:               'upload': ('upload_publish', ('received',)), 'restore': ('readonly_seal', ('verified',)),
+20:               'source_delete': ('source_tombstone_commit', ('deleted', 'deleted_pending')),
+21:               'activate': ('readonly_maintenance_selector', ('active_readonly',))}
+22: 
+23: 
+24: async def joined_thread(function, *args, **kwargs):
+25:     """取消外层协程不能冒称同步线程已停；收尾须等准确消费者返回。"""
+26:     context = contextvars.copy_context()
+27:     future = asyncio.get_running_loop().run_in_executor(None, functools.partial(context.run, function, *args, **kwargs))
+28:     cancelled = None
+29:     while True:
+30:         try:
+31:             result = await asyncio.shield(future)
+32:             if cancelled is not None: raise cancelled
+33:             return result
+34:         except asyncio.CancelledError as error:
+35:             if future.done(): raise
+36:             cancelled = error  # 重复协程cancel也不放弃准确同步消费者。
+37:         except BaseException:
+38:             if cancelled is not None: raise cancelled
+39:             raise
+40: 
+41: 
+42: def validate_success(job, state):
+43:     execution = job.get('execution', {})
+44:     phase, outcomes = ADMISSIONS[job['kind']]
+45:     if (job['state'] != 'committing' or execution.get('clock_domain') != CLOCK_DOMAIN
+46:         or (execution.get('admission') or {}).get('phase') != phase or state not in outcomes):
+47:         raise DataError('operation_authority_unknown')
+48:     if time.monotonic_ns() >= execution['deadline_ns']: raise DataError('operation_timeout', 504)
+49: 
+50: 
+51: def request_cancel(hub, job_id):
+52:     def decide(job):
+53:         if job.get('execution_protocol') != 2:
+54:             raise DataError('operation_authority_unknown')
+55:         if job['state'] in ('cancel_requested', 'cancelled'):
+56:             return None
+57:         if job['state'] not in ('prepared', 'running') or job.get('execution', {}).get('admission'):
+58:             raise DataError('operation_not_cancelable')
+59:         return {'state': 'cancel_requested', 'stage': 'cancel_requested'}
+60:     return hub.change_job(job_id, decide)
+61: 
+62: 
+63: def acknowledge_unstarted(hub, job_id):
+64:     def decide(job):
+65:         if job.get('execution_protocol') != 2 or job.get('execution') is not None:
+66:             raise DataError('operation_authority_unknown')
+67:         if job['state'] == 'cancel_requested':
+68:             return {'state': 'cancelled', 'stage': 'cancelled'}
+69:         return None
+70:     return hub.change_job(job_id, decide)
+71: 
+72: 
+73: class Operation:
+74:     def __init__(self, hub, job_id, seconds, stage, **changes):
+75:         self.hub, self.job_id, self.actor = hub, job_id, str(uuid4())
+76:         if not math.isfinite(seconds) or seconds <= 0: raise DataError('operation_timeout', 504)
+77:         now = time.monotonic_ns()
+78:         self.deadline_ns = now + int(seconds * 1e9)
+79:         self.admission = None
+80:         def begin(job):
+81:             if job.get('execution_protocol') != 2 or job.get('completion_protocol') != 1 or job.get('execution') is not None:
+82:                 raise DataError('operation_authority_unknown')
+83:             if job['state'] in ('cancel_requested', 'cancelled'):
+84:                 raise DataError('operation_cancelled')
+85:             if job['state'] != 'prepared': raise DataError('request_conflict')
+86:             return {**changes, 'state': 'running', 'stage': stage,
+87:                     'execution': {'clock_domain': CLOCK_DOMAIN, 'actor_id': self.actor,
+88:                                   'started_ns': now, 'deadline_ns': self.deadline_ns, 'admission': None}}
+89:         self.revision = hub.change_job(job_id, begin)['revision']
+90: 
+91:     @classmethod
+92:     def resume_cleanup(cls, hub, job_id):
+93:         self = cls.__new__(cls)
+94:         self.hub, self.job_id = hub, job_id
+95:         job = hub.state()['jobs'][job_id]
+96:         execution = job.get('execution', {})
+97:         if job.get('execution_protocol') != 2 or execution.get('clock_domain') != CLOCK_DOMAIN:
+98:             raise DataError('operation_authority_unknown')
+99:         self.actor, self.deadline_ns, self.admission = execution['actor_id'], execution['deadline_ns'], execution['admission']
+100:         def resume(current):
+101:             if current['revision'] != job['revision'] or current['state'] not in ('deleted_pending', 'deletion_unconfirmed'):
+102:                 raise DataError('request_conflict')
+103:             self.remaining()
+104:             if self.admission is None: raise DataError('operation_authority_unknown')
+105:             return {'state': 'committing', 'stage': 'cleanup_retry'}
+106:         self.revision = hub.change_job(job_id, resume)['revision']
+107:         return self
+108: 
+109:     def remaining(self, cap=None):
+110:         remaining = (self.deadline_ns - time.monotonic_ns()) / 1e9
+111:         if remaining <= 0: raise DataError('operation_timeout', 504)
+112:         return min(remaining, cap) if cap is not None else remaining
+113: 
+114:     def _validate(self, job, *, deadline=True):
+115:         execution = job.get('execution', {})
+116:         if (execution.get('clock_domain') != CLOCK_DOMAIN or execution.get('actor_id') != self.actor
+117:             or execution.get('deadline_ns') != self.deadline_ns):
+118:             raise DataError('operation_authority_unknown')
+119:         if job['state'] in ('cancel_requested', 'cancelled'): raise DataError('operation_cancelled')
+120:         if job['state'] not in ('running', 'committing'): raise DataError('request_conflict')
+121:         if deadline: self.remaining()
+122: 
+123:     def check(self):
+124:         job = self.hub.execution_job(self.job_id)
+125:         self._validate(job)
+126:         if job['revision'] != self.revision: raise DataError('request_conflict')
+127: 
+128:     def stage(self, stage, **changes):
+129:         self.check()
+130:         receipt = self.hub.update_job(self.job_id, self.revision, expected_states=('running',),
+131:                                       validate=self._validate, stage=stage, **changes)
+132:         self.revision = receipt['revision']
+133:         return receipt
+134: 
+135:     def admit(self, phase):
+136:         self.check()
+137:         ticket = str(uuid4())
+138:         job = self.hub.state()['jobs'][self.job_id]
+139:         if ADMISSIONS[job['kind']][0] != phase: raise DataError('operation_authority_unknown')
+140:         execution = {**job['execution'], 'admission': {'phase': phase, 'ticket': ticket}}
+141:         receipt = self.hub.update_job(self.job_id, self.revision, expected_states=('running',),
+142:                                       validate=self._validate, state='committing', stage=phase, execution=execution)
+143:         self.revision, self.admission = receipt['revision'], execution['admission']
+144:         return self.admission
+145: 
+146:     def validate_admission(self, job):
+147:         self._validate(job)
+148:         if job['state'] != 'committing' or job['execution'].get('admission') != self.admission or self.admission is None:
+149:             raise DataError('request_conflict')
+150: 
+151:     def finish(self, state, stage=None, **changes):
+152:         # 精确执行者持有的revision；从不读取latest revision授成功。
+153:         validate_success(self.hub.state()['jobs'][self.job_id], state)
+154:         receipt = self.hub.update_job(self.job_id, self.revision, expected_states=('committing',),
+155:             validate=self.validate_admission, state=state, stage=stage or state, **changes)
+
+DocuN/evidence/TASK-118/audit/diffs/backend__app__data_exit__maintenance.py.diff
+1: --- first-pre/backend/app/data_exit/maintenance.py
+2: +++ current/backend/app/data_exit/maintenance.py
+3: @@ -14,7 +14,8 @@
+4:  NEW_WORK = frozenset(('create_activity','revise_scope','claim_lease','admit','admit_tool_operation','mark_tool_started',
+5:                       'mark_dispatch_started','apply_teaching_local','accept_teaching_command','claim_teaching_launch',
+6:                       'apply_interview_local','accept_interview_command','claim_interview_launch','accept_html_command',
+7: -                     'claim_html_command','reserve_html_preview','apply_memory_command'))
+8: +                     'claim_html_command','reserve_html_preview','apply_memory_command',
+9: +                     'retrieval_freeze','retrieval_claim','admit_embedding','mark_embedding_dispatch_started'))
+10:  
+11:  
+12:  def outgoing_operation(operation):
+
+DocuN/evidence/TASK-118/audit/diffs/backend__app__data_exit__api.py.diff
+1: --- first-pre/backend/app/data_exit/api.py
+2: +++ current/backend/app/data_exit/api.py
+3: @@ -79,6 +79,8 @@
+4:      local_session(request, allow_own_origin=True)
+5:      value = getattr(request.app.state, "data_exit", None)
+6:      if value is None: raise DataError("storage_unavailable", 503)
+7: +    if hasattr(value,'_reader_context') and request.method not in ('GET','HEAD','OPTIONS'):
+8: +        raise DataError('data_readonly')
+9:      return value
+10:  
+11:  
+
+DocuN/evidence/TASK-118/audit/diffs/backend__app__data_exit__codec.py.diff
+1: --- first-pre/backend/app/data_exit/codec.py
+2: +++ current/backend/app/data_exit/codec.py
+3: @@ -52,19 +52,26 @@
+4:      return value
+5:  
+6:  
+7: -def encode_row(table, row):
+8: -    from .schema import COLUMNS
+9: +def encode_row(table, row,profile='data_exit.v1.r01'):
+10: +    from .schema_profiles import get_profile
+11: +    COLUMNS=get_profile(profile).columns
+12:      encoded = {}
+13:      for column, kind in COLUMNS[table].items():
+14:          value = row[column]
+15:          if value is not None and kind == "bigint":
+16:              value = str(value)
+17: +        elif value is not None and kind=='vector(512)':
+18: +            from app.capabilities.embedding import float32_values,vector_digest
+19: +            value=list(float32_values(json.loads(value) if isinstance(value,str) else value))
+20: +            if vector_digest(value)!=row['vector_sha256']:raise DataError('integrity_failed',422)
+21:          encoded[column] = plain(value)
+22:      return encoded
+23:  
+24:  
+25: -def decode_row(table, row):
+26: -    from .schema import COLUMNS
+27: +def decode_row(table, row,profile='data_exit.v1.r01'):
+28: +    from .schema_profiles import get_profile
+29: +    COLUMNS=get_profile(profile).columns
+30: +    if table not in COLUMNS:raise DataError('codec_mismatch',422)
+31:      if not isinstance(row, dict) or set(row) != set(COLUMNS[table]):
+32:          raise DataError("codec_mismatch", 422)
+33:      result = {}
+34: @@ -73,7 +80,14 @@
+35:          if value is None:
+36:              result[column] = None
+37:              continue
+38: -        if kind.endswith("[]"):
+39: +        if kind=='vector(512)':
+40: +            from app.capabilities.embedding import float32_values,vector_digest
+41: +            try:
+42: +                values=float32_values(value)
+43: +                if list(values)!=value or vector_digest(values)!=row['vector_sha256']:raise ValueError()
+44: +                value=canonical(list(values))
+45: +            except (ValueError,TypeError,KeyError):raise DataError('integrity_failed',422) from None
+46: +        elif kind.endswith("[]"):
+47:              if not isinstance(value, list): raise DataError("codec_mismatch", 422)
+48:              if kind == "uuid[]":
+49:                  if any(not isinstance(v, str) or str(UUID(v)) != v for v in value): raise DataError("codec_mismatch", 422)
+50: @@ -149,7 +163,7 @@
+51:                    'cleanup_state_observed','manifest_sha256','hash_size_targets'}
+52:  
+53:  
+54: -def validate_metadata(name,row):
+55: +def validate_metadata(name,row,profile='data_exit.v1.r01'):
+56:      from .contracts import PROFILE,uuid
+57:      expected=CONTROL_FIELDS if name=='source_control' else HISTORY_FIELDS if name=='operation_history' else TOMBSTONE_FIELDS
+58:      if not isinstance(row,dict) or set(row)!=expected:raise DataError('codec_mismatch',422)
+59: @@ -165,7 +179,7 @@
+60:          if not isinstance(value,str) or re.fullmatch(r'[0-9a-f]{64}',value) is None:raise DataError('codec_mismatch',422)
+61:      if name=='source_control':
+62:          uuid(row['dataset_id']);uuid(row['source_instance_observed'])
+63: -        if row['schema_profile']!=PROFILE or row['mode_observed'] not in ('normal','loading','frozen','restored_readonly'):raise DataError('codec_mismatch',422)
+64: +        if row['schema_profile']!=profile or row['mode_observed'] not in ('normal','loading','frozen','restored_readonly'):raise DataError('codec_mismatch',422)
+65:          timestamp('created_at');hex_value('source_root_sha256',True)
+66:          if row['source_snapshot_id'] is not None:uuid(row['source_snapshot_id'])
+67:      elif name=='operation_history':

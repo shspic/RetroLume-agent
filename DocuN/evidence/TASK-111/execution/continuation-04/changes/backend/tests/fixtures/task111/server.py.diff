@@ -1,0 +1,12 @@
+--- pre/backend/tests/fixtures/task111/server.py
++++ backend/tests/fixtures/task111/server.py
+@@ -35,7 +35,8 @@
+       model_service=ModelServiceConfig(provider="deepseek_chat_completions",base_url="https://api.deepseek.com",model="task111-synthetic",
+         api_key=SecretStr(secrets.token_urlsafe(32)),timeout_seconds=1.0,max_request_bytes=65536,max_response_bytes=65536,max_output_tokens_limit=4096),
+       create_layer=LayerState(True),continue_layer=LayerState(True),teaching_layer=LayerState(True),teaching_output_tokens=2048,html_generation_layer=LayerState(True),html_output_tokens=4096)
+-    policy=HostPolicy(**policy_data,registry_dir=(synthetic_root()/"http-control").resolve(),authorization=PERMIT,owner_name="Global\\RetroLumePreviewV2Task111")
++    from .control import registry_root
++    policy=HostPolicy(**policy_data,registry_dir=registry_root().resolve(),authorization=PERMIT,owner_name="Global\\RetroLumePreviewV2Task111")
+     def name(pid,generation):
+         return preview_name(pid,generation)
+     def observer(kind,data):

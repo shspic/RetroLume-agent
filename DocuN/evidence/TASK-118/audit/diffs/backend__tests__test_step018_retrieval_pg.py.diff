@@ -1,0 +1,15 @@
+--- first-pre/backend/tests/test_step018_retrieval_pg.py
++++ current/backend/tests/test_step018_retrieval_pg.py
+@@ -8,7 +8,10 @@
+         vector=json.loads(row['vector']);assert len(vector)==512
+         assert vector_digest(vector)==row['vector_sha256']==row['sql_sha']
+     operations=connection.execute("SELECT count(*) AS n FROM activity_operations WHERE kind='embedding' AND state='received'").fetchone()['n']
++    current=connection.execute("SELECT count(*) AS n FROM activity_operations o JOIN retrieval_commands c ON c.activity_id=o.activity_id AND c.business_key::text=split_part(o.operation_id,'.',2) WHERE o.kind='embedding' AND o.state='received' AND c.request_body IS NOT NULL").fetchone()['n']
++    purged=connection.execute("SELECT count(*) AS n FROM activity_operations o JOIN retrieval_commands c ON c.activity_id=o.activity_id AND c.business_key::text=split_part(o.operation_id,'.',2) WHERE o.kind='embedding' AND o.state='received' AND c.request_body IS NULL").fetchone()['n']
+     bodies=connection.execute("SELECT count(*) AS n FROM activity_operations o JOIN activity_operation_results r USING(activity_id,operation_id) WHERE o.kind='embedding' AND o.state='received'").fetchone()['n']
+-    assert operations==bodies
++    assert operations==current+purged and current==bodies
++    assert connection.execute("SELECT count(*) AS n FROM activity_operation_results r JOIN activity_operations o USING(activity_id,operation_id) JOIN retrieval_commands c ON c.activity_id=o.activity_id AND c.business_key::text=split_part(o.operation_id,'.',2) WHERE o.kind='embedding' AND c.request_body IS NULL").fetchone()['n']==0
+     assert connection.execute("SELECT count(*) AS n FROM activity_operation_results r JOIN activity_operations o USING(activity_id,operation_id) WHERE o.kind='embedding' AND o.state<>'received'").fetchone()['n']==0
+-    return {'vectors':len(rows),'received_embedding_operations':operations,'matching_007':bodies,'float32_sql_python_equal':True,'unknown_has_no_new_body':True}
++    return {'vectors':len(rows),'received_embedding_operations':operations,'matching_007':bodies,'source_deleted_payloads':purged,'float32_sql_python_equal':True,'unknown_has_no_new_body':True}

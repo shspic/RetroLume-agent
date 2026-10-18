@@ -1,0 +1,448 @@
+DocuN/evidence/TASK-117/execution/continuation-07/TASK118-four-repairs.diff
+304: --- TASK118-audited/frontend/src/activities/TeachingWorkspace.tsx
+305: +++ final/frontend/src/activities/TeachingWorkspace.tsx
+306: @@ -24,7 +24,8 @@
+307:  import { HtmlExplanationPanel } from "../explanations/HtmlExplanationPanel";
+308:  import type { HtmlParent } from "../explanations/contracts";
+309:  import {RetrievalPanel} from './RetrievalPanel';
+310: -import {retrieveForCommand,storeRetrievalChain,type RetrievalChain} from './retrieval-api';
+311: +import {retrieveForCommand,storeRetrievalChain,type RetrievalChain,type ServiceIdentity} from './retrieval-api';
+312: +import {canonical,dataNamespace,getDataContext} from '../data/context';
+313:  
+314:  const POLL_MS = 3000;
+315:  const OBSERVE_MAX_SECONDS = 120;
+316: @@ -113,7 +114,7 @@
+317:  }
+318:  
+319:  export function TeachingWorkspace({
+320: -  activityId, token, scopeRevision, teachingAvailable, calculationAvailable, memoryModelAvailable = false,
+321: +  activityId, token, scopeRevision, teachingAvailable, calculationAvailable, memoryModelAvailable = false,modelService=null,
+322:    onCapabilitiesDirty, seed,
+323:  }: {
+324:    activityId: string;
+325: @@ -122,6 +123,7 @@
+326:    teachingAvailable: boolean;
+327:    calculationAvailable: boolean;
+328:    memoryModelAvailable?: boolean;
+329: +  modelService?: ServiceIdentity|null;
+330:    onCapabilitiesDirty?: () => void;
+331:    seed?: TeachingSeed | null;
+332:  }) {
+333: @@ -153,7 +155,9 @@
+334:    const editorOwner = useRef<string|null>(null);
+335:    const dirty = useRef({answer:false,goal:false,correction:false});
+336:    const workspaceToken = useRef("");
+337: +  const observedHead = useRef("");
+338:    const [retrievalMode,setRetrievalMode]=useState<'hybrid'|'terms'>('hybrid');
+339: +  const [modelNoticeReady,setModelNoticeReady]=useState(false);
+340:    const historySeq = useRef(0);
+341:    const historyAbort = useRef<AbortController|null>(null);
+342:    const pageSeq = useRef(0);
+343: @@ -206,6 +210,7 @@
+344:        const view = await getTeachingWorkspace(activityId, token, controller.signal);
+345:        if (!mounted.current || seq !== readSeq.current) return;
+346:        if (view === null) { setReadError("教学读取不可用（未确认）"); return; }
+347: +      observedHead.current=canonical({revision:view.head.revision,goal: view.head.goal_version});
+348:        const key = [activityId, view.head.goal_record_id, view.head.path_record_id, view.head.node_id,
+349:          view.head.exercise_record_id, view.head.answer_record_id].join("|");
+350:        const editKey = `${key}|${view.head.revision}`;
+351: @@ -320,9 +325,14 @@
+352:    async function submit(action: TeachingAction, body: Record<string, unknown>,
+353:                           extra?: Partial<TeachingIntentSummary>, recovered?:RetrievalChain) {
+354:      if (busy || !intentsOk) return;
+355: +    if(['plan','exercise','evaluate'].includes(action)&&!modelNoticeReady){setError('供应商、模型或用途额度无法核对，未提交');return;}
+356:      if ((action==='answer'||action==='correct') && editConflict) { setError("输入仍属于旧作答身份；请先核对并明确沿用草稿"); return; }
+357:      const submittedContext=contextKey.current;
+358: -    const stillCurrent=()=>mounted.current&&activityRef.current===activityId&&contextKey.current===submittedContext;
+359: +    const origin={activity:activityId,owner:editorOwner.current,view:workspaceToken.current,head:observedHead.current,
+360: +      scope:scopeRef.current,namespace:dataNamespace(),dataContext:canonical(getDataContext())};
+361: +    const stillCurrent=()=>mounted.current&&activityRef.current===origin.activity&&contextKey.current===submittedContext
+362: +      &&editorOwner.current===origin.owner&&workspaceToken.current===origin.view&&observedHead.current===origin.head
+363: +      &&scopeRef.current===origin.scope&&dataNamespace()===origin.namespace&&canonical(getDataContext())===origin.dataContext;
+364:      setBusy(action); setError(""); setNotice("");
+365:      const key = recovered?String(recovered.domain_input.business_key):newTeachingKey();
+366:      const input: Omit<TeachingCommandInput, "body"> = {
+367: @@ -341,14 +351,15 @@
+368:        let retrievalChain:RetrievalChain|undefined;
+369:        if (['plan','exercise','evaluate'].includes(action)&&retrievalMode==='hybrid') {
+370:          const owner=await teachingEditorOwner();
+371: -        if(!owner||!stillCurrent()||editorOwner.current!==owner)throw new Error('编辑身份不可核对，未提交');
+372: +        if(!owner||!stillCurrent()||origin.owner!==owner)throw new Error('编辑身份不可核对，未提交');
+373:          if(recovered&&JSON.stringify(recovered.domain_input)!==JSON.stringify({...input,body}))throw new Error('原动作版本不同，不能改绑');
+374:          const query=String(workspace?.goal?.goal??goalText).trim().slice(0,1024);
+375: -        const result=await retrieveForCommand(token,activityId,owner,'teaching',{...input,body},scopeRevision,input.expected_revision,query,()=>stillCurrent()&&editorOwner.current===owner,recovered);
+376: +        const result=await retrieveForCommand(token,activityId,owner,'teaching',{...input,body},scopeRevision,input.expected_revision,query,()=>stillCurrent()&&editorOwner.current===owner,recovered,modelService);
+377:          if(!stillCurrent()||!result.ref)return;
+378:          input.retrieval_ref=result.ref;retrievalChain=result.row;
+379:        }
+380:        const built = await buildTeachingCommand(activityId, { ...input, body });
+381: +      if(!stillCurrent())return;
+382:        // 顺序：规范字节 → IndexedDB 完整正文 → localStorage 摘要 → POST 一次。
+383:        const stored = await saveTeachingDraft({
+384:          draft_id: `draft-${key}`,
+385: @@ -359,9 +370,11 @@
+386:          path_record_id: workspace?.head.path_record_id ?? null,
+387:          node_id: workspace?.head.node_id ?? null,
+388:          head_revision: input.expected_revision,
+389: +        editor_owner_id:origin.owner??undefined,
+390:          content: built.request_body,
+391:          created_at: new Date().toISOString(),
+392:        });
+393: +      if(!stillCurrent())return;
+394:        if (!stored) { setError("本机草稿写入失败，输入已保留，未发出任何请求"); return; }
+395:        draftId.current = `draft-${key}`;
+396:        const summary: TeachingIntentSummary = {
+397: @@ -372,23 +385,28 @@
+398:          answer_id: workspace?.head.answer_record_id ?? undefined,
+399:          request_sha: built.request_sha256, draft_id: draftId.current,
+400:          created_at: new Date().toISOString(), state: "pending",
+401: +        editor_owner_id:origin.owner??undefined,view_token:origin.view,namespace:origin.namespace,
+402:          ...extra,
+403:        };
+404: -      if (!await appendTeachingIntent(summary)) {
+405: +      const appended=await appendTeachingIntent(summary,stillCurrent);
+406: +      if(!stillCurrent())return;
+407: +      if (!appended) {
+408:          setError("本机恢复台账写入失败，未发出任何请求");
+409:          return;
+410:        }
+411: -      reloadIntents();
+412: -      if (!await updateTeachingIntent(key, { state: "submitted" })) {
+413: -        setError("本机恢复台账确认失败，未发出请求"); return;
+414: -      }
+415: +      if(!stillCurrent())return;
+416:        reloadIntents();
+417:        let receipt: TeachingReceipt;
+418:        try {
+419: +        const currentOwner=await teachingEditorOwner();
+420: +        if(!stillCurrent()||!currentOwner||currentOwner!==origin.owner)return;
+421: +        // 最后身份检查后先实际发起POST，异步标记只能描述已发起的动作。
+422: +        const delivery=postTeachingCommand(activityId,{...input,body},token,stillCurrent)
+423: +          .then(value=>({value,error:null}),error=>({value:null,error}));
+424:          if(retrievalChain)await storeRetrievalChain({...retrievalChain,domain_sent:true});
+425: -        const currentOwner=await teachingEditorOwner();
+426: -        if(!stillCurrent()||!currentOwner||currentOwner!==editorOwner.current)return;
+427: -        receipt = await postTeachingCommand(activityId, { ...input, body }, token);
+428: +        await updateTeachingIntent(key,{state:"submitted"});
+429: +        const delivered=await delivery;if(delivered.error)throw delivered.error;
+430: +        receipt=delivered.value!;
+431:        } catch (reason) {
+432:          const known = reason instanceof TeachingApiError && reason.status > 0;
+433:          await updateTeachingIntent(key, known
+434: @@ -531,7 +549,7 @@
+435:      ||Number(budgets.running_reserved_seconds)+Number(budgets.running_settled_seconds)>=Number(budgets.max_running_seconds)));
+436:    const canLocal = Boolean(workspace) && !readError && !overlay?.cancelled && !overlay?.expired;
+437:    const memoryModelBlocked=Boolean(workspace?.memory_selected&&!memoryModelAvailable);
+438: -  const canModel = !memoryModelBlocked && !workspace?.memory_invalid && canLocal && Boolean(teachingAvailable) && !exhausted && !overlay?.source_invalid && !overlay?.processing && !overlay?.unknown;
+439: +  const canModel = modelNoticeReady && !memoryModelBlocked && !workspace?.memory_invalid && canLocal && Boolean(teachingAvailable) && !exhausted && !overlay?.source_invalid && !overlay?.processing && !overlay?.unknown;
+440:    const canTool = !workspace?.memory_invalid && canLocal && calculationAvailable && !overlay?.source_invalid && !overlay?.processing && !overlay?.unknown
+441:      && Number(budgets?.tools_reserved)<Number(budgets?.max_tool_calls)
+442:      && Number(budgets?.running_reserved_seconds)+Number(budgets?.running_settled_seconds)<Number(budgets?.max_running_seconds);
+443: @@ -544,14 +562,14 @@
+444:  
+445:    return (
+446:      <section className="ws-teaching" aria-label="教学工作区">
+447: -      <RetrievalPanel token={token} activityId={activityId} scopeRevision={scopeRevision} domainRevision={workspace?.head.revision??0} owner={editorOwner.current} mode={retrievalMode} onMode={setRetrievalMode} onContinue={chain=>{const saved=chain.domain_input;void submit(saved.action as TeachingAction,saved.body as Record<string,unknown>,undefined,chain);}}/>
+448: +      <RetrievalPanel token={token} activityId={activityId} scopeRevision={scopeRevision} domainRevision={workspace?.head.revision??0} owner={editorOwner.current} mode={retrievalMode} modelService={modelService} onDisclosureChange={setModelNoticeReady} onMode={setRetrievalMode} onContinue={chain=>{const saved=chain.domain_input;void submit(saved.action as TeachingAction,saved.body as Record<string,unknown>,undefined,chain);}}/>
+449:        <div className="section-title">
+450:          <h4>教学闭环（零费保存 · 显式评价）</h4>
+451:          <span className="quiet">
+452:            {head ? `${PHASE_TEXT[head.phase] ?? head.phase} · 修订 ${head.revision} · 目标版本 ${head.goal_version}` : "读取中…"}
+453:          </span>
+454:        </div>
+455: -      <button className="secondary" disabled={busy!==""} onClick={()=>void refresh()}>刷新教学工作区（只读）</button>
+456: +      <button className="secondary" onClick={()=>void refresh()}>刷新教学工作区（只读）</button>
+457:        {workspace?.memory_selected && <p>本活动固定使用明确选择的背景版本。旧作答不算本活动的新独立表现。</p>}
+458:        {memoryModelBlocked && <p role="status">学习背景使用尚未配置，模型动作暂不可用。</p>}
+459:        {workspace?.memory_invalid && <p role="alert" className="failure">所选背景已更新或撤销，相关教学内容停用。原始作答仍保留，可新建活动重新选择。</p>}
+460: --- TASK118-audited/frontend/src/activities/teachingIntents.ts
+461: +++ final/frontend/src/activities/teachingIntents.ts
+462: @@ -15,7 +15,10 @@
+463:  let editorOwner: Promise<string | null> | null = null;
+464:  
+465:  export function teachingEditorOwner(): Promise<string | null> {
+466: -  if (editorOwner) return editorOwner;
+467: +  if (editorOwner) return editorOwner.then(id=>{
+468: +    // 会话存储身份被更换时不能把原链自动改绑给新owner。
+469: +    try{return id&&sessionStorage.getItem(EDITOR_OWNER_KEY())===id?id:null;}catch{return null;}
+470: +  });
+471:    editorOwner = new Promise(resolve => {
+472:      if (!navigator.locks || !crypto.randomUUID) { resolve(null); return; }
+473:      void (async () => {
+474: @@ -63,6 +66,9 @@
+475:    state: "pending" | "submitted" | "committed" | "unconfirmed" | "refused";
+476:    last_code?: string;
+477:    last_message?: string;
+478: +  editor_owner_id?: string;
+479: +  view_token?: string;
+480: +  namespace?: string;
+481:  };
+482:  
+483:  function isSummary(value: unknown): value is TeachingIntentSummary {
+484: @@ -103,19 +109,21 @@
+485:    }
+486:  }
+487:  
+488: -async function mutateSummaries(change: (items: TeachingIntentSummary[]) => TeachingIntentSummary[]): Promise<boolean> {
+489: +async function mutateSummaries(change: (items: TeachingIntentSummary[]) => TeachingIntentSummary[],guard=()=>true): Promise<boolean> {
+490:    // 回环原生浏览器具有 Web Locks；缺失时保持零 POST，不退回竞态写入。
+491:    if (!navigator.locks) return false;
+492:    try {
+493: -    return await navigator.locks.request(SUMMARY_KEY(), () => {
+494: +    const storageKey=SUMMARY_KEY();
+495: +    return await navigator.locks.request(storageKey, () => {
+496: +      if(!guard()||storageKey!==SUMMARY_KEY())return false;
+497:        const current = loadTeachingIntents();
+498:        return current.ok && saveTeachingIntents(change(current.items));
+499:      });
+500:    } catch { return false; }
+501:  }
+502:  
+503: -export function appendTeachingIntent(summary: TeachingIntentSummary): Promise<boolean> {
+504: -  return mutateSummaries(items => [summary, ...items.filter(item => item.key !== summary.key)]);
+505: +export function appendTeachingIntent(summary: TeachingIntentSummary,guard=()=>true): Promise<boolean> {
+506: +  return mutateSummaries(items => [summary, ...items.filter(item => item.key !== summary.key)],guard);
+507:  }
+508:  
+509:  export function updateTeachingIntent(key: string, patch: Partial<TeachingIntentSummary>): Promise<boolean> {
+510: --- TASK118-audited/frontend/src/activities/RetrievalPanel.tsx
+511: +++ final/frontend/src/activities/RetrievalPanel.tsx
+512: @@ -1,21 +1,26 @@
+513:  import {useEffect,useRef,useState} from 'react';
+514: -import {retrievalRequest,retrievalChains,retrieveForCommand,storeRetrievalChain,type RetrievalChain,type RetrievalReceipt,type RetrievalStatus} from './retrieval-api';
+515: +import {retrievalRequest,retrievalChains,retrieveForCommand,storeRetrievalChain,retrievalDisclosureKnown,serviceIdentityKnown,type ServiceIdentity,type RetrievalChain,type RetrievalReceipt,type RetrievalStatus} from './retrieval-api';
+516:  
+517: -export function RetrievalPanel({token,activityId,scopeRevision,domainRevision,owner,mode,onMode,onContinue,indexAllowed=true}:{token:string;activityId:string;scopeRevision:number;domainRevision:number;owner:string|null;mode:'hybrid'|'terms';onMode:(mode:'hybrid'|'terms')=>void;onContinue?:(chain:RetrievalChain)=>void;indexAllowed?:boolean}){
+518: +export function RetrievalPanel({token,activityId,scopeRevision,domainRevision,owner,mode,onMode,onContinue,indexAllowed=true,modelService=null,onDisclosureChange}:{token:string;activityId:string;scopeRevision:number;domainRevision:number;owner:string|null;mode:'hybrid'|'terms';onMode:(mode:'hybrid'|'terms')=>void;onContinue?:(chain:RetrievalChain)=>void;indexAllowed?:boolean;modelService?:ServiceIdentity|null;onDisclosureChange?:(ready:boolean)=>void}){
+519:    const [status,setStatus]=useState<RetrievalStatus|null>(null),[chains,setChains]=useState<RetrievalChain[]>([]),[error,setError]=useState(''),[busy,setBusy]=useState(false);
+520:    const current=useRef('');current.current=`${activityId}:${scopeRevision}:${domainRevision}:${owner}`;
+521:    const mounted=useRef(false);useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;};},[]);
+522: +  const vectorKnown=retrievalDisclosureKnown(status),chatKnown=serviceIdentityKnown(modelService);
+523: +  const modelNoticeReady=chatKnown&&(mode==='terms'||vectorKnown);
+524: +  useEffect(()=>{onDisclosureChange?.(modelNoticeReady);},[modelNoticeReady,onDisclosureChange]);
+525:    async function refresh(){const identity=current.current;const live=()=>mounted.current&&identity===current.current;try{const s=await retrievalRequest<RetrievalStatus>(token,activityId,'/status',undefined,live);const c=await retrievalChains(activityId);if(live()){setStatus(s);setChains(c);}}catch(e){if(live())setError((e as Error).message);}}
+526:    useEffect(()=>{setStatus(null);setChains([]);void refresh();},[activityId,scopeRevision,domainRevision,owner,token]);
+527: -  async function index(){if(!owner||busy||!indexAllowed)return;const identity=current.current;setBusy(true);setError('');try{await retrieveForCommand(token,activityId,owner,'index',{},scopeRevision,domainRevision,'',()=>mounted.current&&identity===current.current);await refresh();}catch(e){if(identity===current.current)setError((e as Error).message);}finally{if(identity===current.current)setBusy(false);}}
+528: +  async function index(){if(!owner||busy||!indexAllowed||!vectorKnown)return;const identity=current.current;setBusy(true);setError('');try{await retrieveForCommand(token,activityId,owner,'index',{},scopeRevision,domainRevision,'',()=>mounted.current&&identity===current.current);await refresh();}catch(e){if(identity===current.current)setError((e as Error).message);}finally{if(identity===current.current)setBusy(false);}}
+529:    async function reconcile(row:RetrievalChain){const identity=current.current;setBusy(true);setError('');try{const receipt=await retrievalRequest<RetrievalReceipt>(token,activityId,`/commands/${row.query.business_key}`,undefined,()=>mounted.current&&identity===current.current);if(receipt.business_key!==row.query.business_key)throw new Error('原操作身份不同');await storeRetrievalChain({...row,receipt});await refresh();}catch(e){if(identity===current.current)setError((e as Error).message);}finally{if(identity===current.current)setBusy(false);}}
+530:    return <section aria-label="资料检索与恢复"><h4>资料检索</h4><p>只使用当前确认的资料片段与本轮必要问题；回答和学习记忆不发送给向量服务。</p>
+531:      <p>选择混合检索后，每次生成或评价先查询一次，合格后再调用一次模型，共需2次请求、两笔费用预留及两个运行窗口。未确认时保留原键，不自动重发。</p>
+532: +    {vectorKnown&&status?<p data-service-disclosure="vector">向量供应商：{status.provider}；模型：{status.model}。用途：{status.purpose}；索引单批预留 {status.reserve_cost_microunits} 微单位，每批运行窗口 {status.window_reserve_seconds} 秒。</p>:<p role="status">向量供应商、模型、用途或额度无法核对；索引及混合检索动作暂停。</p>}
+533: +    {chatKnown?<p data-service-disclosure="chat">聊天供应商：{modelService.provider}；模型：{modelService.model}。用途：后续教学或面试生成与评价，使用本轮目标、回答、必要历史及明确选择的学习记忆。</p>:<p role="status">聊天供应商或模型无法核对；模型动作暂停。本地保存、取消和只读核对仍按原资格可用。</p>}
+534:      <label><input type="radio" checked={mode==='hybrid'} onChange={()=>onMode('hybrid')}/>结合原文词项与向量检索</label> <label><input type="radio" checked={mode==='terms'} onChange={()=>onMode('terms')}/>明确使用词项降级（不算混合检索通过）</label>
+535:      <p>{status?.available?`已核对 ${status.fragments??0} 个片段，缓存 ${status.cached_fragments??0} 个。${status.ready?'当前索引就绪。':`本次至多 ${status.index_batches??0} 批，单批预留 ${status.reserve_cost_microunits} 微单位。`}`:'混合检索尚未就绪，请检查本机服务配置。'}</p>
+536:      {status?.available&&<p>当前剩余 {status.remaining_requests} 次请求、{status.remaining_cost_microunits} 微单位费用额度、{status.remaining_running_seconds} 秒；查询及后续模型需预留 {status.query_then_model_reserve_microunits} 微单位、{2*status.window_reserve_seconds} 秒。预览后服务器仍逐笔核准；不足时整步不发。</p>}
+537:      {!indexAllowed&&<p>请先保存面试目标并开始场次，再确认资料索引。</p>}
+538: -    <button disabled={busy} onClick={()=>void refresh()}>只读核对索引与原意图</button> <button disabled={busy||!owner||!status?.available||status.ready||!indexAllowed} onClick={()=>void index()}>确认用途、费用与索引当前资料</button>
+539: -    {chains.filter(c=>c.owner===owner).map(c=><div key={c.key}><p>{c.domain==='index'?'资料索引':'本轮查询'} · {c.receipt?.terminal_disposition??'未确认'}{c.domain_sent?' · 后续动作已交付，请核对领域原意图':''}</p><button disabled={busy} onClick={()=>void reconcile(c)}>按原键只读核对</button>{c.domain!=='index'&&!c.domain_sent&&c.receipt?.current&&c.receipt.terminal_disposition==='received'&&onContinue&&<button disabled={busy||c.query.expected_scope_revision!==scopeRevision||c.query.expected_domain_revision!==domainRevision} onClick={()=>onContinue(c)}>明确继续尚未发送的原动作</button>}</div>)}
+540: +    <button disabled={busy} onClick={()=>void refresh()}>只读核对索引与原意图</button> <button disabled={busy||!owner||!vectorKnown||status?.ready||!indexAllowed} onClick={()=>void index()}>确认用途、费用与索引当前资料</button>
+541: +    {chains.filter(c=>c.owner===owner).map(c=><div key={c.key}><p>{c.domain==='index'?'资料索引':'本轮查询'} · {c.receipt?.terminal_disposition??'未确认'}{c.domain_sent?' · 后续动作已交付，请核对领域原意图':''}</p><button disabled={busy} onClick={()=>void reconcile(c)}>按原键只读核对</button>{c.domain!=='index'&&!c.domain_sent&&c.receipt?.current&&c.receipt.terminal_disposition==='received'&&onContinue&&<button disabled={busy||!modelNoticeReady||c.query.expected_scope_revision!==scopeRevision||c.query.expected_domain_revision!==domainRevision} onClick={()=>onContinue(c)}>明确继续尚未发送的原动作</button>}</div>)}
+542:      {error&&<p role="alert">{error}</p>}</section>;
+543:  }
+544: --- TASK118-audited/frontend/src/activities/retrieval-api.ts
+545: +++ final/frontend/src/activities/retrieval-api.ts
+546: @@ -3,7 +3,20 @@
+547:  export type RetrievalRef={business_key:string;query_sha256:string;space_id:string;result_sha256:string};
+548:  export type RetrievalCommand={business_key:string;action:'source_index'|'query';expected_scope_revision:number;expected_domain_revision:number;query:string|null;confirmed:true};
+549:  export type RetrievalReceipt={business_key:string;action:string;status:string;current:boolean;terminal_disposition:string|null;error_code:string|null;retrieval_ref?:RetrievalRef};
+550: -export type RetrievalStatus={available:boolean;reason:string|null;ready?:boolean;fragments?:number;cached_fragments?:number;index_batches?:number;domain_revision?:number;purpose:string;reserve_cost_microunits:number;remaining_requests:number;remaining_cost_microunits:number;remaining_running_seconds:number;query_then_model_reserve_microunits:number;window_reserve_seconds:number};
+551: +export type ServiceIdentity={provider:string;model:string};
+552: +export type RetrievalStatus={available:boolean;reason:string|null;provider:string|null;model:string|null;ready?:boolean;fragments?:number;cached_fragments?:number;index_batches?:number;domain_revision?:number;purpose:string;reserve_cost_microunits:number;remaining_requests:number;remaining_cost_microunits:number;remaining_running_seconds:number;query_then_model_requests:number;query_then_model_reserve_microunits:number;window_reserve_seconds:number};
+553: +// D04：只认可只读配置给出的有限服务身份，不能从服务类型猜模型。
+554: +export function serviceIdentityKnown(value:unknown):value is ServiceIdentity{
+555: +  if(!value||typeof value!=='object')return false;
+556: +  const row=value as Record<string,unknown>;
+557: +  return ['provider','model'].every(key=>typeof row[key]==='string'&&/^[A-Za-z0-9._:/-]{1,128}$/.test(row[key] as string));
+558: +}
+559: +export function retrievalDisclosureKnown(status:RetrievalStatus|null):boolean{
+560: +  return Boolean(status?.available&&serviceIdentityKnown(status)&&typeof status.purpose==='string'&&status.purpose.trim().length>0&&status.purpose.length<=300
+561: +    &&[status.reserve_cost_microunits,status.window_reserve_seconds,status.query_then_model_reserve_microunits].every(n=>Number.isSafeInteger(n)&&n>0)
+562: +    &&status.query_then_model_requests===2&&status.query_then_model_reserve_microunits>=2*status.reserve_cost_microunits
+563: +    &&[status.remaining_requests,status.remaining_cost_microunits,status.remaining_running_seconds].every(n=>Number.isFinite(n)&&n>=0));
+564: +}
+565:  export type RetrievalChain={key:string;namespace:string;activity_id:string;owner:string;domain:'teaching'|'interview'|'index';domain_input:Record<string,unknown>;query:RetrievalCommand;domain_sent:boolean;receipt?:RetrievalReceipt;created_at:string};
+566:  const base=(aid:string)=>`/api/activities/${encodeURIComponent(aid)}/retrieval`;
+567:  export async function retrievalRequest<T>(token:string,aid:string,suffix:string,body?:unknown,guard=()=>true):Promise<T>{
+568: @@ -19,14 +32,14 @@
+569:    const db=await database();try{await new Promise<void>((resolve,reject)=>{const tx=db.transaction('chains','readwrite');tx.objectStore('chains').put(row);tx.oncomplete=()=>resolve();tx.onabort=tx.onerror=()=>reject(new Error('本机意图不可写，未提交'));});}finally{db.close();}
+570:  }
+571:  export async function retrievalChains(aid:string){const db=await database();try{return await new Promise<RetrievalChain[]>((resolve,reject)=>{const r=db.transaction('chains').objectStore('chains').getAll();r.onsuccess=()=>resolve((r.result as RetrievalChain[]).filter(x=>x.activity_id===aid&&x.namespace===dataNamespace()));r.onerror=()=>reject(new Error('本机检索意图无法读取'));});}finally{db.close();}}
+572: -export async function retrieveForCommand(token:string,aid:string,owner:string,domain:RetrievalChain['domain'],input:Record<string,unknown>,scope:number,revision:number,query:string,guard:()=>boolean,recovered?:RetrievalChain){
+573: +export async function retrieveForCommand(token:string,aid:string,owner:string,domain:RetrievalChain['domain'],input:Record<string,unknown>,scope:number,revision:number,query:string,guard:()=>boolean,recovered?:RetrievalChain,modelService?:ServiceIdentity|null){
+574:    const row:RetrievalChain=recovered??{key:crypto.randomUUID(),namespace:dataNamespace(),activity_id:aid,owner,domain,domain_input:input,query:{business_key:crypto.randomUUID(),action:domain==='index'?'source_index':'query',expected_scope_revision:scope,expected_domain_revision:revision,query:domain==='index'?null:query.trim(),confirmed:true},domain_sent:false,created_at:new Date().toISOString()};
+575:    const live=()=>guard()&&row.namespace===dataNamespace();
+576:    if(!live()||row.owner!==owner||row.domain!==domain||row.domain_sent||row.query.expected_scope_revision!==scope||row.query.expected_domain_revision!==revision)throw new Error('原动作资格已变化，请只读核对');
+577:    await storeRetrievalChain(row);if(!live())throw new Error('页面身份已变化，未提交');
+578: +  const preview=await retrievalRequest<RetrievalStatus>(token,aid,'/status',undefined,live);
+579: +  if(!retrievalDisclosureKnown(preview)||(domain!=='index'&&!serviceIdentityKnown(modelService)))throw new Error('本步供应商、模型、用途或额度尚不可核对，未发送。');
+580:    if(!recovered){
+581: -    const preview=await retrievalRequest<RetrievalStatus>(token,aid,'/status',undefined,live);
+582: -    if(!preview.available||![preview.remaining_requests,preview.remaining_cost_microunits,preview.remaining_running_seconds,preview.reserve_cost_microunits,preview.window_reserve_seconds].every(Number.isFinite))throw new Error('本步用途或额度尚不可核对，未发送。');
+583:      const needed=domain==='index'?(preview.index_batches??0):2;
+584:      if(preview.remaining_requests<needed||preview.remaining_cost_microunits<needed*preview.reserve_cost_microunits||preview.remaining_running_seconds<needed*preview.window_reserve_seconds)throw new Error('剩余额度不足以完成本步，查询和后续动作均未发送。');
+585:    }
+586: --- TASK118-audited/frontend/src/activities/InterviewWorkspace.tsx
+587: +++ final/frontend/src/activities/InterviewWorkspace.tsx
+588: @@ -6,7 +6,7 @@
+589:  import {InterviewCitations} from "./InterviewCitations";
+590:  import "./interview-workspace.css";
+591:  import {RetrievalPanel} from './RetrievalPanel';
+592: -import {retrieveForCommand,retrievalChains,storeRetrievalChain,type RetrievalChain} from './retrieval-api';
+593: +import {retrieveForCommand,retrievalChains,storeRetrievalChain,type RetrievalChain,type ServiceIdentity} from './retrieval-api';
+594:  import type {InterviewCommand} from './interviewApi';
+595:  
+596:  const PHASE:Record<string,string>={needs_goal:"请补充具体目标",ready:"可开始提问",question_ready:"等待你的回答",answer_ready:"回答已保存，可请求追问或反馈",feedback_ready:"本轮反馈已保存",ended:"本场次已结束，只读历史"};
+597: @@ -15,7 +15,7 @@
+598:  type Material={id:string;title:string;version_id:string;revision:number;sha256:string};
+599:  type HistoryEdit={activity:string;owner:string;record:string;version:number;bodyHash:string;view:string;revision:number;goal:number;scope:number;text:string};
+600:  
+601: -export function InterviewWorkspace({activityId,token,scopeRevision,onChanged}:{activityId:string;token:string;scopeRevision:number;onChanged?:()=>void}){
+602: +export function InterviewWorkspace({activityId,token,scopeRevision,onChanged,modelService=null}:{activityId:string;token:string;scopeRevision:number;onChanged?:()=>void;modelService?:ServiceIdentity|null}){
+603:    const [view,setView]=useState<InterviewWorkspaceView|null>(null),[details,setDetails]=useState<Record<string,InterviewDetail>>({}),[history,setHistory]=useState<InterviewHistory|null>(null);
+604:    const [target,setTarget]=useState(""),[focus,setFocus]=useState(""),[answer,setAnswer]=useState(""),[roles,setRoles]=useState<Record<string,MaterialRole>>({});
+605:    const [error,setError]=useState(""),[notice,setNotice]=useState(""),[busy,setBusy]=useState(false),[owner,setOwner]=useState<string|null>(null),[intents,setIntents]=useState<InterviewIntent[]>([]);
+606: @@ -25,6 +25,7 @@
+607:    const draftIdentity=useRef<{key:string;hash:string;text:string}|null>(null),viewRef=useRef<InterviewWorkspaceView|null>(null);
+608:    const readGeneration=useRef(0),reconciliation=useRef<string|null>(null);
+609:    const [retrievalMode,setRetrievalMode]=useState<'hybrid'|'terms'>('hybrid');
+610: +  const [modelNoticeReady,setModelNoticeReady]=useState(false);
+611:    active.current={activityId,token,owner,viewToken:view?.view_token??""};viewRef.current=view;
+612:    const alive=(stamp:number,aid=activityId)=>panel.current===stamp&&active.current.activityId===aid;
+613:    function controller(){const c=new AbortController();controllers.current.add(c);return c;}
+614: @@ -63,6 +64,7 @@
+615:    function goal():InterviewGoal{return {target,focus:focus.trim()?focus:null,clarifications:[],material_roles:(view?.sources??[]).map(s=>({source_id:s.source_id,role:roles[s.source_id]??"unspecified"}))};}
+616:    async function submit(action:InterviewAction,body:Record<string,unknown>,recovered?:RetrievalChain){
+617:      if(busy||!owner||!view)return;
+618: +    if(['ask','review'].includes(action)&&!modelNoticeReady){setError('供应商、模型或用途额度无法核对，未提交');return;}
+619:      const expectedOwner=owner,stamp=panel.current,aid=activityId,expectedView=view.view_token;
+620:      let command=makeInterviewCommand(action,view.head,view.head?.scope_revision??scopeRevision,body,recovered?String(recovered.domain_input.business_key):crypto.randomUUID(),view.head?view.profile==='interview.v2':retrievalMode==='hybrid');
+621:      if(command.schema==='interview.command.v2'&&['ask','review'].includes(action)){
+622: @@ -71,7 +73,7 @@
+623:        setBusy(true);setError('');
+624:        try{
+625:          if(recovered&&requestText(aid,command)!==requestText(aid,recovered.domain_input as InterviewCommand))throw new Error('原动作版本不同，不能改绑');
+626: -        const result=await retrieveForCommand(token,aid,expectedOwner,'interview',command as unknown as Record<string,unknown>,view.head?.scope_revision??scopeRevision,view.head?.revision??0,[currentGoal.target,currentGoal.focus].filter(Boolean).join(' ').slice(0,1024),()=>alive(stamp,aid)&&active.current.owner===expectedOwner&&active.current.viewToken===expectedView,recovered);
+627: +        const result=await retrieveForCommand(token,aid,expectedOwner,'interview',command as unknown as Record<string,unknown>,view.head?.scope_revision??scopeRevision,view.head?.revision??0,[currentGoal.target,currentGoal.focus].filter(Boolean).join(' ').slice(0,1024),()=>alive(stamp,aid)&&active.current.owner===expectedOwner&&active.current.viewToken===expectedView,recovered,modelService);
+628:          if(!result.ref||!alive(stamp,aid)||active.current.owner!==expectedOwner||active.current.viewToken!==expectedView)return;
+629:          command={...command,retrieval_ref:result.ref};
+630:        }catch(e){if(alive(stamp,aid))setError((e as Error).message);return;}
+631: @@ -184,7 +186,7 @@
+632:      </article>;
+633:    }
+634:    return <div className="interview-workspace" aria-label="文字模拟面试工作区" data-interview-activity-id={activityId}><h3>文字模拟面试</h3><p>新混合检索场次可明确选择最多四条学习记忆作低信任背景。经历与收益保留自报身份；模型反馈是建议。</p>
+635: -    <RetrievalPanel token={token} activityId={activityId} scopeRevision={view?.head?.scope_revision??scopeRevision} domainRevision={view?.head?.revision??0} owner={owner} mode={retrievalMode} indexAllowed={Boolean(head)} onMode={mode=>{if(!view?.head)setRetrievalMode(mode);}} onContinue={chain=>{const saved=chain.domain_input;void submit(saved.action as InterviewAction,saved.body as Record<string,unknown>,chain);}}/>
+636: +    <RetrievalPanel token={token} activityId={activityId} scopeRevision={view?.head?.scope_revision??scopeRevision} domainRevision={view?.head?.revision??0} owner={owner} mode={retrievalMode} modelService={modelService} onDisclosureChange={setModelNoticeReady} indexAllowed={Boolean(head)} onMode={mode=>{if(!view?.head)setRetrievalMode(mode);}} onContinue={chain=>{const saved=chain.domain_input;void submit(saved.action as InterviewAction,saved.body as Record<string,unknown>,chain);}}/>
+637:      {error&&<p role="alert" className="failure">{error}</p>}{notice&&<p role="status">{notice}</p>}<button type="button" onClick={()=>void refresh()}>只读刷新／恢复场次</button>
+638:      {!owner&&<p>本机编辑身份或锁不可用，保持只读。可以复制自己的草稿。</p>}
+639:      {view&&<><section><h4>本次资料范围与预算</h4>{view.sources.map(s=><p key={s.source_id}>{s.title} · 版本{s.source_revision} · {s.valid?"当前可用":"已更新，须重新确认范围"}</p>)}
+640: @@ -199,9 +201,9 @@
+641:        {!view.capabilities.model&&<p>模型动作未开放：{view.capabilities.model_reason}；本地答案与只读核对仍按当前资格可用。</p>}
+642:        {detailCard(question)}{detailCard(savedAnswer)}{(head.phase==="question_ready"||head.phase==="answer_ready"||head.phase==="feedback_ready")&&<section><label>{head.phase==="question_ready"?"你的回答":"修改当前回答（另存新版本）"}<textarea aria-label="面试回答" value={answer} maxLength={4096} disabled={writeDisabled} onChange={e=>setAnswer(e.target.value)}/></label><button type="button" disabled={writeDisabled||!answer.trim()||(!head.current_question_id)} onClick={()=>void submit(head.current_answer_id?"correct_answer":"answer",head.current_answer_id?{answer_record_id:head.current_answer_id,expected_answer_version:savedAnswer?.record.answer_version??1,text:answer}:{question_record_id:head.current_question_id,text:answer})}>保存回答{head.current_answer_id?"新版本":""}（不调用模型）</button></section>}
+643:        {detailCard(feedback)}<div className="interview-actions">
+644: -        {head.phase==="ready"&&<button type="button" disabled={writeDisabled||pending||!modelGoalReady} onClick={()=>void submit("ask",{mode:"first"})}>开始提问</button>}
+645: -        {head.phase==="answer_ready"&&<button type="button" disabled={writeDisabled||pending||!modelGoalReady} onClick={()=>void submit("review",{question_record_id:head.current_question_id,answer_record_id:head.current_answer_id})}>获取必要追问或反馈</button>}
+646: -        {head.phase==="feedback_ready"&&<button type="button" disabled={writeDisabled||pending||!modelGoalReady} onClick={()=>void submit("ask",{mode:"next",parent_feedback_id:head.current_feedback_id})}>继续下一题（显式调用）</button>}
+647: +        {head.phase==="ready"&&<button type="button" disabled={writeDisabled||pending||!modelGoalReady||!modelNoticeReady} onClick={()=>void submit("ask",{mode:"first"})}>开始提问</button>}
+648: +        {head.phase==="answer_ready"&&<button type="button" disabled={writeDisabled||pending||!modelGoalReady||!modelNoticeReady} onClick={()=>void submit("review",{question_record_id:head.current_question_id,answer_record_id:head.current_answer_id})}>获取必要追问或反馈</button>}
+649: +        {head.phase==="feedback_ready"&&<button type="button" disabled={writeDisabled||pending||!modelGoalReady||!modelNoticeReady} onClick={()=>void submit("ask",{mode:"next",parent_feedback_id:head.current_feedback_id})}>继续下一题（显式调用）</button>}
+650:          {pending&&<button type="button" disabled={writeDisabled} onClick={()=>void submit("abandon",{pending_key:head.pending_key})}>显式放弃原意图（不退款／不重发）</button>}
+651:          {!finished&&<button type="button" disabled={writeDisabled||pending} onClick={()=>void submit("finish",{})}>结束本场次</button>}
+652:        </div></>}
+653: --- TASK118-audited/backend/tests/test_step018_control_snapshot.py
+
+DocuN/evidence/TASK-117/execution/continuation-07/TASK118-four-repairs.diff
+942: --- TASK118-audited/README.md
+943: +++ final/README.md
+944: @@ -1,6 +1,8 @@
+945:  # RetroLume 本地工程入口
+946:  
+947:  本目录为 RetroLume 本地工程，提供资料、学习、文字面试、低信任记忆和隔离只读恢复入口。STEP018 的混合检索集成仍在 TASK117 合成候选收口中；实际验收状态以 [执行动态文档](DocuS/执行动态文档.MD) 为准。合成传输与真实供应商语义分别验证。
+948: +
+949: +TASK117 S08已形成四项缺陷修正的合成工程候选，正式bundle8完成八项定向浏览器检查；等待原TASK118增量独审，Q继续冻结。已有PG、恢复、PDF和固定预览证据按原版本继承，本轮未重跑这些业务链，也未启用真实供应商或费用。
+950:  
+951:  TASK117 的 S06 工程候选已补齐本轮定向证据，提交主控安排独立复核，真实供应商调用保持关闭。面试须先开始场次，再明确确认资料索引；模型动作等待持久目标正文核对就绪，并使用该版本的目标构造查询。合成 source/compat 已应用记忆资格的传递只读授权及删源触发器别名修补，通过受信目录与业务行不变检查。该事实只适用于本次两个合成库，不授权自动迁移用户库。
+952:  
+953: @@ -51,6 +53,18 @@
+954:  一次动作最多检查10个来源、合计5 MiB原件和512个候选片段，PDF最多50物理页。旧词项入口保持原有限行为。集成入口显式确认当前资料索引，再对本轮必要问题查询；512维向量与词项按固定规则合并，仍逐段核对当前原件。索引按每批最多4段预览次数和预留，缓存命中不重复索引。查询后还需一次模型时，先检查完整两次调用的次数、费用与时间余量；预览不替代服务器逐笔事务准入。同名歧义、证据不足和冲突保持可见，检索排序不证明结论正确。
+955:  
+956:  `RETROLUME_INTEGRATION_CONFIG` 指向私有配置，结构见 `config/integration.example.json`。真实外发需要主控采用的激活回执、独立审核结果、价格原件、不可重绑的 OutboundGrant 和实际 source/version/revision/原件哈希及必要片段白名单。grant 的 `source_manifest_sha256` 绑定 `retrolume.outbound-sources.v1` 规范JSON摘要，清单另保留冻结设计样本摘要；不能以文件名或64位格式检查替代范围核对。provider密钥只在服务器环境，不能通过浏览器、资料或operator预览票据批准模型外发。当前TASK117的Q未启用。
+957: +
+958: +S08修正进一步要求模型清单批准完整发送范围。`model_requests`最多128项，每项只有`payload_sha256`和`request_sha256`，分别绑定规范JSON的完整供应商payload与`ModelCallRequest.model_dump(mode='json')`。payload包含模型、system/user/history、选用记忆及版本、派生上下文、输出/格式/工具等实际发送字段；仅批准资料片段不足以批准这些正文。空字段保持原Embedding清单摘要，旧清单的模型外发失败关闭。非空字段进入新的manifest摘要，loader、grant和私有wire必须共同绑定新值；不能改活动已绑定的grant或复用旧hash。准入和dispatch前核同一冻结对象，await中变化保留已预扣、停止发送，不退款或自动重发。
+959: +
+960: +无秘密字段示意如下；尖括号是说明占位，不是可采用的摘要，也不启用Q：
+961: +
+962: +```json
+963: +{"model_requests":[{"payload_sha256":"<审核后完整供应商payload的规范JSON SHA256>","request_sha256":"<同一完整typed request的规范JSON SHA256>"}]}
+964: +```
+965: +
+966: +operator必须先固定有限样本的business_key、活动/记录ID、scope/head、明确选择的记忆版本和必要本地事实，用当前装配器形成确切请求及payload，审核全部正文后离线计算这两个摘要，一次采用到本地受信清单与绑定grant；运行时不能把任意新请求加入白名单。服务生成的ID和上下文也没有“任意值”例外。可执行样本限已完整冻结且获批的请求；依赖未知模型输出的新正文、变化后的版本或新key会被拒绝，不能据此自动换绑grant。后续有限Q若需要这种新请求，由主控在不可重绑及持久共享总门合同内另行采用，当前修复不声称所有Q流程已能运行。测试中的grant、费用原件和receipt只在隔离test-only目录，不能复制到正常operator配置。
+967: +
+968: +索引确认前会显示只读配置给出的向量provider/model、用途、单批预留及运行窗口；教学与面试混合动作同时显示聊天provider/model及两次请求、两笔费用和两个窗口。字段缺失或资格无法核对时相关外发按钮停用，本地零费保存、取消及原键只读核对保持原资格。S08的正式产物与合成验证结果见TASK117结果；Q仍冻结，合成HTTP和transport不代表真实PG或供应商通过。
+969:  
+970:  成果从活动存储读取，展示答案或必要提示、确认目标、引用和能力限制。点击“查看引用”回查该版本的真实行段；PDF显示物理页并区分原文和用户补充。版本被替换或来源失效时明确不可用，不拿新版本替代旧引用。引用身份与位置合法不代表结论已独立证实，真实供应商的整体语义质量仍待获准样本验证。
+971:  
+972: --- TASK118-audited/frontend/src/activities/teachingApi.ts
+973: +++ final/frontend/src/activities/teachingApi.ts
+974: @@ -118,8 +118,9 @@
+975:  }
+976:  
+977:  export async function postTeachingCommand(
+978: -  activityId: string, command: TeachingCommandInput, token: string,
+979: +  activityId: string, command: TeachingCommandInput, token: string, guard=()=>true,
+980:  ): Promise<TeachingReceipt> {
+981: +  if(!guard())throw new TeachingApiError(0,"view_changed","原页面身份已变化，草稿与原键保留，未提交");
+982:    const data = await request(`/api/activities/${activityId}/teaching/commands`, token, {
+983:      method: "POST",
+984:      headers: { "Content-Type": "application/json" },
+985: --- TASK118-audited/frontend/src/activities/ActivityWorkspace.tsx
+986: +++ final/frontend/src/activities/ActivityWorkspace.tsx
+987: @@ -851,7 +851,7 @@
+988:                  </div>
+989:                )}
+990:  
+991: -              {(variant === "interview" || detail.business_domain === "interview") ? detail.activity_id === selectedId ? <InterviewWorkspace key={detail.activity_id} activityId={detail.activity_id} token={token} scopeRevision={detail.scope_revision} onChanged={() => { void refreshDetail(detail.activity_id, true); }}/> : <p role="status">正在读取选中的面试活动…</p> : detail.business_domain === "unknown" ? <p role="alert">活动领域资格不可核对，保持只读；请核对服务状态。</p> : <>
+992: +              {(variant === "interview" || detail.business_domain === "interview") ? detail.activity_id === selectedId ? <InterviewWorkspace key={detail.activity_id} activityId={detail.activity_id} token={token} scopeRevision={detail.scope_revision} modelService={caps?.provider??null} onChanged={() => { void refreshDetail(detail.activity_id, true); }}/> : <p role="status">正在读取选中的面试活动…</p> : detail.business_domain === "unknown" ? <p role="alert">活动领域资格不可核对，保持只读；请核对服务状态。</p> : <>
+993:                <div className="ws-block">
+994:                  <h4>资料范围 · 范围修订 {detail.scope_revision}</h4>
+995:                  {(detail.sources ?? []).map(source => (
+996: @@ -910,6 +910,7 @@
+997:                    activityId={detail.activity_id}
+998:                    token={token}
+999:                    scopeRevision={detail.scope_revision}
+1000: +                  modelService={caps?.provider??null}
+1001:                    teachingAvailable={Boolean(caps?.teaching?.available)}
+1002:                    calculationAvailable={Boolean(caps?.teaching_calculation?.available)}
+1003:                    memoryModelAvailable={Boolean(caps?.memory_model?.available)}
+1004: --- TASK118-audited/backend/app/retrieval/service.py
+1005: +++ final/backend/app/retrieval/service.py
+1006: @@ -40,7 +40,7 @@
+1007:          from app.capabilities.transport import HttpxModelTransport
+1008:          return self.service is not None and self.reason is None and (self.service.outbound_grant is not None or not HttpxModelTransport.is_external)
+1009:      def public(self):return {'available':self.available,'reason':self.reason,'method':'hybrid.cosine-terms.rrf60.v1',
+1010: -      'purpose':'当前已确认资料片段与本轮必要问题','provider':'zhipu_embeddings','model':'embedding-3','dimensions':512,
+1011: +      'purpose':'当前已确认资料片段与本轮必要问题','provider':self.service.provider if self.service else None,'model':self.service.model if self.service else None,'dimensions':512,
+1012:        'batch_size':4,'max_index_fragments':self.max_index_fragments,'query_limit_chars':1024,'query_limit_bytes':4096,
+1013:        'real_outbound_authorized':bool(self.service and self.service.outbound_grant),'reserve_cost_microunits':250000}
+1014:  
+1015: --- TASK118-audited/backend/tests/test_step018_flows.py
+1016: +++ final/backend/tests/test_step018_flows.py
+1017: @@ -103,7 +103,8 @@
+1018:              async def send(self,**kwargs):counts['send']+=1;raise AssertionError('expired grant sent')
+1019:          context=CallContext(activity_id=request.activity_id,operation_id='emb18i.'+request.binding.business_key+'.0',executor_id='S02-pure',execution_generation=1,scope_revision=1)
+1020:          config=EmbeddingServiceConfig(api_key='synthetic',outbound_grant=grant.model_dump(mode='json'),outbound_source_manifest=manifest.model_dump(mode='json'))
+1021: -        with patch('app.capabilities.embedding.datetime',Clock):result=asyncio.run(ControlledEmbeddingGateway(config,ledger=Ledger(),transport=Transport()).call(context,request))
+1022: +        from tests.fixtures.step018.s08_loop import run_no_io
+1023: +        with patch('app.capabilities.embedding.datetime',Clock):result=run_no_io(ControlledEmbeddingGateway(config,ledger=Ledger(),transport=Transport()).call(context,request))
+1024:          self.assertEqual(result.status,CallStatus.REJECTED);self.assertEqual(counts,{'admit':1,'dispatch':0,'send':0})
+1025:  
+1026:      def test_frozen_numeric_variants_and_safe_preview_descriptor(self):
+1027: @@ -135,7 +136,8 @@
+1028:  
+1029:      def test_valid_adopted_source_and_both_capabilities(self):
+1030:          entry,manifest,grant,request=adopted_fixture();manifest.check_embedding(request)
+1031: -        manifest.check_model(SimpleNamespace(learning_profile=None,teaching_profile=SimpleNamespace(catalog=[entry]),interview_profile=None,html_profile=None))
+1032: +        # D02：旧清单仍可批准Embedding；完整模型正文缺少独立批准时必须拒绝。
+1033: +        with self.assertRaises(AdmissionDenied):manifest.check_model(SimpleNamespace(learning_profile=None,teaching_profile=SimpleNamespace(catalog=[entry]),interview_profile=None,html_profile=None))
+1034:          manifest.check_sources(manifest.sources)
+1035:          for provider,model in [('zhipu_embeddings','embedding-3'),('deepseek_chat_completions','deepseek-chat')]:grant.check(request.activity_id,provider,model,1000,200)
+1036:          self.assertEqual(OutboundGrant.from_wire(grant.model_dump(mode='json')).sha256,grant.sha256)

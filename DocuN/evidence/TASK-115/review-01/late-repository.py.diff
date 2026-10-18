@@ -1,0 +1,25 @@
+--- as-run/backend/app/data_exit/repository.py
++++ final/backend/app/data_exit/repository.py
+@@ -27,8 +27,8 @@
+         except psycopg.Error:
+             raise DataError("storage_unavailable", 503) from None
+ 
+-    def state(self):
+-        with self.connection(readonly=True) as connection:
++    def state(self, operation=None):
++        with self.connection(readonly=True, operation=operation) as connection:
+             state = connection.execute("SELECT public.data_state() AS value").fetchone()["value"]
+         if not isinstance(state, dict): raise DataError("mode_unknown", 503)
+         return state
+@@ -39,9 +39,9 @@
+         if row is None: raise DataError("mode_unknown", 503)
+         return row
+ 
+-    def observe_job(self, receipt):
++    def observe_job(self, receipt, operation=None):
+         from psycopg.types.json import Jsonb
+-        with self.connection() as connection:
++        with self.connection(operation=operation) as connection:
+             connection.execute("SELECT public.data_observe_job(%s)", (Jsonb(receipt),))
+ 
+     def latest(self, operation=None):

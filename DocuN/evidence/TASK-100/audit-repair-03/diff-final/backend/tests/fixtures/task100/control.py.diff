@@ -1,0 +1,50 @@
+--- pre/backend/tests/fixtures/task100/control.py
++++ post/backend/tests/fixtures/task100/control.py
+@@ -13,10 +13,13 @@
+ 
+ ROOT=Path(__file__).resolve().parents[4]
+ BACKEND=ROOT/'backend'
+-EVIDENCE=ROOT/'DocuN/evidence/TASK-100/continuation-02'
++REPAIR_PERMIT='TASK-100-audit-repair-03-20261005'
++IS_REPAIR=os.environ.get('RETROLUME_TASK100_PERMIT')==REPAIR_PERMIT
++EVIDENCE=ROOT/('DocuN/evidence/TASK-100/audit-repair-03' if IS_REPAIR else 'DocuN/evidence/TASK-100/continuation-02')
+ LEDGER=EVIDENCE/'attempt-ledger.json'
+-PERMIT='TASK-100-continuation-02-20261004'
+-LIMITS={'real_entries':3,'container_starts':3,'app_starts':3,'sup_creates':24,'browser':2,'driver':3,'frontend_build':1}
++PERMIT=REPAIR_PERMIT if IS_REPAIR else 'TASK-100-continuation-02-20261004'
++LIMITS=({'real_entries':4,'container_starts':4,'app_starts':3,'sup_creates':18,'browser':3,'driver':3,'frontend_build':2}
++        if IS_REPAIR else {'real_entries':3,'container_starts':3,'app_starts':3,'sup_creates':24,'browser':2,'driver':3,'frontend_build':1})
+ TIME_LIMITS={'offline':1800,'real':3600,'cleanup':480,'active':21600}
+ SUPPLEMENT_ID='TASK-100-continuation-02-supplement-20261005'
+ SUPPLEMENT_APPROVAL='批准追加各最多2次及主动3小时，保持其余原总上限，以完成剩余验证'
+@@ -35,6 +38,10 @@
+ def utc(): return datetime.now(timezone.utc).isoformat()
+ 
+ def supplement(value):
++    if IS_REPAIR:
++        if any(k in value for k in ('supplementary_permit','browser_supplementary_permit','preflight_supplementary_permit')):
++            raise ControlRefusal('old_grant_not_valid_for_repair')
++        return None
+     grant=value.get('supplementary_permit')
+     if grant is None:return None
+     if (not isinstance(grant,dict) or grant.get('id')!=SUPPLEMENT_ID
+@@ -84,6 +91,11 @@
+     return limits
+ 
+ def active_remaining(value,now=None):
++    if IS_REPAIR:
++        start=value.get('active_monotonic_start')
++        if type(start) not in (int,float) or not math.isfinite(start) or start>time.monotonic():
++            raise ControlRefusal('repair_clock_invalid')
++        return TIME_LIMITS['active']-(time.monotonic()-start)
+     grant=supplement(value);now=now or datetime.now(timezone.utc)
+     if grant:
+         elapsed=(now-datetime.fromisoformat(grant['active_started_at'])).total_seconds()+grant['initial_read_upper_seconds']
+@@ -147,6 +159,7 @@
+         return value
+     def consume(self,name,detail=None):
+         def mutate(value):
++            if IS_REPAIR and active_remaining(value)<=0: raise ControlRefusal('active_budget_exhausted')
+             limits=effective_limits(value)
+             if name not in limits or value['counts'][name]>=limits[name]: raise ControlRefusal('attempt_limit_'+name)
+             value['counts'][name]+=1

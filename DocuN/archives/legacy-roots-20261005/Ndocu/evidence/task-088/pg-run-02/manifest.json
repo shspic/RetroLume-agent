@@ -1,0 +1,63 @@
+{
+ "batch_tag": "02",
+ "purpose": "TASK-088 G3 真实合成 PG 定向批",
+ "outer_deadline_seconds": 600,
+ "container_name": "retrolume-task-088-g3-02",
+ "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+ "db_name": "retrolume_task088_g3",
+ "db_user": "retrolume_task088_synth",
+ "search_path": "public",
+ "port": "127.0.0.1:55441",
+ "resources": {
+  "cpus": 1,
+  "memory": "512MiB",
+  "pids_limit": 128,
+  "restart": "no",
+  "privileged": false,
+  "host_binds": 0
+ },
+ "credential_path": "POSTGRES_PASSWORD 经 docker run 环境变量注入（pgvector 镜像既定路径）；不写版本化文件/日志/argv 之外的证据；DSN 证据脱敏",
+ "steps": [
+  {
+   "step": "wait_ready",
+   "rc": 0
+  },
+  {
+   "step": "migrations",
+   "rc": 0
+  },
+  {
+   "step": "unittest",
+   "rc": -9
+  },
+  {
+   "step": "stop",
+   "rc": 0,
+   "running_after": "False"
+  }
+ ],
+ "cid": "1c53cf4bb65bdab0996d13ad6a0936aeb37204a53bdebfd67e38894e4ee1e149",
+ "volume": "retrolume-task-088-g3-02-data",
+ "inspect": {
+  "image_id": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+  "created": "2026-09-28T15:31:18.600307402Z",
+  "state_pid": 588,
+  "state_started_at": "2026-09-28T15:31:18.656580809Z",
+  "state_running": true,
+  "nano_cpus": 1000000000,
+  "memory_bytes": 536870912,
+  "pids_limit": 128,
+  "restart_policy": "no",
+  "privileged": false,
+  "binds": [
+   "retrolume-task-088-g3-02-data:/var/lib/postgresql/data"
+  ],
+  "port_bindings": [
+   "5432/tcp"
+  ],
+  "mounts_unknown": true
+ },
+ "dsn_redacted": "postgresql://retrolume_task088_synth:***@127.0.0.1:55441/retrolume_task088_g3",
+ "final_running": "False",
+ "wall_seconds": 484.141
+}

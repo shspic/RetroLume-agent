@@ -1,0 +1,370 @@
+# Read-only no-index diff of supplied pre copies and current source
+diff --git "a/Ndocu\\evidence\\task-083\\d3-implementation-10\\pre\\backend__app__activities__repository.py" b/backend/app/activities/repository.py
+index 08acb3e..410f4b6 100644
+--- "a/Ndocu\\evidence\\task-083\\d3-implementation-10\\pre\\backend__app__activities__repository.py"
++++ b/backend/app/activities/repository.py
+@@ -31,6 +31,7 @@ _MAX_RESPONSE_BYTES = 67_108_864
+ # 时间账本（TASK-077）：M/R/S 计数上限与 004 迁移的 BIGINT CHECK 上界一致。
+ _MAX_RUNNING_SECONDS = 2_147_483_647
+ _MAX_WINDOW_SECONDS = 3_600
++_MAX_WINDOWS_SESSION_ID = 4_294_967_295
+ 
+ 
+ class ActivityLedgerConflict(RuntimeError):
+@@ -55,6 +56,9 @@ class WindowSnapshot:
+     execution_generation: int
+     running_reserved_seconds: int
+     dispatch_closed: bool
++    running_owner_session_id: int | None = None
++    lease_recoverable: bool = False
++    sources_valid: bool = False
+ 
+ 
+ @dataclass(frozen=True)
+@@ -88,6 +92,7 @@ class ActivityLease:
+     scope_revision: int
+     lease_expires_at: datetime
+     window_seconds: int
++    running_owner_session_id: int | None = None
+ 
+ 
+ @dataclass(frozen=True)
+@@ -314,6 +319,8 @@ class PostgresAdmissionLedger:
+         *,
+         lease_seconds: int,
+         window_seconds: int,
++        running_owner_session_id: int | None = None,
++        expected_previous_generation: int | None = None,
+     ) -> ActivityLease | None:
+         """认领活动租约并预扣时间预算；时间预算耗尽返回 None，其余冲突仍抛异常。
+ 
+@@ -330,6 +337,8 @@ class PostgresAdmissionLedger:
+           代次失效）同样 +1，返回 None，不以事务内异常回滚撤销折叠；
+         - 活动已是 pending 且 A=0：不写任何行、不递增代次，直接返回 None。
+ 
++        低层缺省 NULL 仅供合成调用兼容，不授予旧 Job 自动恢复资格；
++        生产 SUP 必须提供自身 Windows 会话号并先完成旧树核查。
+         过期 running 租约按既有接续规则处理：先把真实残留 R 全额保守折叠
+         入 S 并清零、关闭旧代次资格；已结算（pending、R=0）的窗口不折叠。
+         不得抢占有效租约。
+@@ -344,15 +353,30 @@ class PostgresAdmissionLedger:
+             or not 1 <= window_seconds <= _MAX_WINDOW_SECONDS
+         ):
+             raise ValueError("时间窗口必须在 1 到 3600 秒之间")
++        if running_owner_session_id is not None and (
++            type(running_owner_session_id) is not int
++            or not 0 <= running_owner_session_id <= _MAX_WINDOWS_SESSION_ID
++        ):
++            raise ValueError("Windows 会话号必须在 DWORD 域内")
++        if expected_previous_generation is not None and (
++            type(expected_previous_generation) is not int or expected_previous_generation < 0
++        ):
++            raise ValueError("旧执行代次必须是非负整数")
+ 
+         async def operation(connection: object) -> ActivityLease | None:
+             snapshots = await self._source_rows(connection, activity_id)
+             sources_valid = bool(snapshots) and await self._lock_sources(connection, snapshots)
+-            cursor = await connection.execute("SELECT * FROM activities WHERE id = %s FOR UPDATE", (activity_id,))
++            cursor = await connection.execute("SELECT *, CURRENT_TIMESTAMP AS database_now FROM activities WHERE id = %s FOR UPDATE", (activity_id,))
+             row = await cursor.fetchone()
+-            now = datetime.now(timezone.utc)
++            now = row["database_now"] if row is not None else None
+             if row is None or not sources_valid:
+                 raise ActivityLedgerConflict("活动或来源快照不可用")
++            if expected_previous_generation is not None and (
++                row["status"] != "running"
++                or row["execution_generation"] != expected_previous_generation
++                or row["running_owner_session_id"] != running_owner_session_id
++            ):
++                raise ActivityLedgerConflict("已核查旧代次或会话身份已变化")
+             if row["status"] == "cancelled" or row["deadline_at"] <= now:
+                 raise ActivityLedgerConflict("活动已取消或过期")
+             if row["status"] == "running" and row["lease_expires_at"] is not None and row["lease_expires_at"] > now:
+@@ -375,6 +399,7 @@ class PostgresAdmissionLedger:
+                               SET status = 'pending',
+                                   execution_generation = execution_generation + 1,
+                                   executor_id = NULL, lease_expires_at = NULL,
++                                  running_owner_session_id = NULL,
+                                   dispatch_closed = TRUE,
+                                   running_reserved_seconds = 0,
+                                   running_settled_seconds = %s,
+@@ -390,10 +415,12 @@ class PostgresAdmissionLedger:
+                 """UPDATE activities
+                       SET status = 'running', executor_id = %s, execution_generation = %s,
+                           lease_expires_at = %s, running_reserved_seconds = %s,
++                          running_owner_session_id = %s,
+                           dispatch_closed = FALSE,
+                           running_settled_seconds = %s, updated_at = CURRENT_TIMESTAMP
+                     WHERE id = %s""",
+-                (executor_id, generation, lease_expires_at, effective_window, settled, activity_id),
++                (executor_id, generation, lease_expires_at, effective_window,
++                 running_owner_session_id, settled, activity_id),
+             )
+             return ActivityLease(
+                 activity_id,
+@@ -402,17 +429,24 @@ class PostgresAdmissionLedger:
+                 row["scope_revision"],
+                 lease_expires_at,
+                 effective_window,
++                running_owner_session_id,
+             )
+ 
+         return await self._transaction(operation)
+ 
+     async def inspect_window(self, activity_id: str) -> WindowSnapshot:
+-        """恢复入口的只读快照；调用方须持活动排他锁并在 claim 前核对旧 Job。"""
++        """恢复入口短事务快照；来源锁沿用 claim 顺序，调用方须持活动互斥。"""
+         activity_id = self._uuid(activity_id, "activity_id")
+ 
+         async def operation(connection: object) -> WindowSnapshot:
++            snapshots = await self._source_rows(connection, activity_id)
++            sources_valid = bool(snapshots) and await self._lock_sources(connection, snapshots)
+             cursor = await connection.execute(
+-                """SELECT status, execution_generation, running_reserved_seconds, dispatch_closed
++                """SELECT status, execution_generation, running_reserved_seconds, dispatch_closed,
++                          running_owner_session_id,
++                          (lease_expires_at IS NULL OR lease_expires_at <= CURRENT_TIMESTAMP)
++                              AS lease_recoverable,
++                          (deadline_at > CURRENT_TIMESTAMP) AS deadline_live
+                      FROM activities WHERE id = %s""",
+                 (activity_id,),
+             )
+@@ -422,6 +456,9 @@ class PostgresAdmissionLedger:
+             return WindowSnapshot(
+                 row["status"], row["execution_generation"],
+                 row["running_reserved_seconds"], row["dispatch_closed"],
++                row["running_owner_session_id"],
++                bool(row["lease_recoverable"] and row["deadline_live"]),
++                sources_valid,
+             )
+ 
+         return await self._transaction(operation)
+@@ -537,6 +574,7 @@ class PostgresAdmissionLedger:
+                       SET status = 'pending',
+                           execution_generation = execution_generation + 1,
+                           executor_id = NULL, lease_expires_at = NULL,
++                          running_owner_session_id = NULL,
+                           running_reserved_seconds = 0,
+                           running_settled_seconds = running_settled_seconds + %s,
+                           dispatch_closed = TRUE,
+@@ -571,6 +609,7 @@ class PostgresAdmissionLedger:
+                 """UPDATE activities
+                       SET status = 'cancelled', execution_generation = %s, executor_id = NULL,
+                           lease_expires_at = NULL, cancelled_at = CURRENT_TIMESTAMP,
++                          running_owner_session_id = NULL,
+                           dispatch_closed = TRUE,
+                           running_reserved_seconds = 0,
+                           running_settled_seconds = running_settled_seconds + running_reserved_seconds,
+diff --git "a/Ndocu\\evidence\\task-083\\d3-implementation-10\\pre\\backend__app__worker__session.py" b/backend/app/worker/session.py
+index 53aad31..ca40e4b 100644
+--- "a/Ndocu\\evidence\\task-083\\d3-implementation-10\\pre\\backend__app__worker__session.py"
++++ b/backend/app/worker/session.py
+@@ -12,7 +12,10 @@ from typing import Protocol
+ from app.activities import ActivityLease, CloseResult, SettleResult, WindowSnapshot
+ 
+ from .command import WorkerCommand
+-from .windows_job import ActivityMutex, JobUnknown, NamedJob, job_name
++from .windows_job import (
++    ActivityMutex, ERROR_FILE_NOT_FOUND, JobOpenError, JobUnknown,
++    NamedJob, current_process_session_id, job_name,
++)
+ 
+ 
+ _LOCAL_LOCKS_GUARD = threading.Lock()
+@@ -26,7 +29,7 @@ def _local_lock(activity_id: str) -> threading.Lock:
+ 
+ class WindowLedger(Protocol):
+     async def inspect_window(self, activity_id: str) -> WindowSnapshot: ...
+-    async def claim_lease(self, activity_id: str, executor_id: str, *, lease_seconds: int, window_seconds: int) -> ActivityLease | None: ...
++    async def claim_lease(self, activity_id: str, executor_id: str, *, lease_seconds: int, window_seconds: int, running_owner_session_id: int | None = None, expected_previous_generation: int | None = None) -> ActivityLease | None: ...
+     async def begin_window_close(self, activity_id: str, executor_id: str, execution_generation: int) -> CloseResult: ...
+     async def settle_execution_window(self, activity_id: str, executor_id: str, execution_generation: int, *, window_seconds: int, elapsed_seconds: float) -> SettleResult: ...
+ 
+@@ -41,8 +44,11 @@ class SessionConfig:
+     cleanup_seconds: float = 5.0
+     mutex_wait_seconds: float = 3.0
+     manager_overhead_seconds: float = 30.0
++    single_host_single_session_recovery: bool = False
+ 
+     def __post_init__(self) -> None:
++        if type(self.single_host_single_session_recovery) is not bool:
++            raise ValueError("单主机单交互会话恢复部署声明须为布尔值")
+         if type(self.window_seconds) is not int or not 1 <= self.window_seconds <= 3600:
+             raise ValueError("单窗秒数须在1到3600之间")
+         values = (
+@@ -81,6 +87,8 @@ class SessionOutcome:
+     timing_diagnostic: tuple[int, int, int, int, int] | None = None
+     manager_pid: int | None = None
+     manager_created_100ns: int | None = None
++    running_owner_session_id: int | None = None
++    worker_created_100ns: int | None = None
+ 
+ 
+ class _StopSession(Exception):
+@@ -131,12 +139,14 @@ class SingleWindowSupervisor:
+         identity_name = job_name(activity_id, 0)  # 在任何副作用前验证 UUID。
+         del identity_name
+         self._remaining(manager_deadline_ns)
++        session_id = current_process_session_id()  # 生产 SUP 自身读取，失败不认领/恢复。
+ 
+         config = self.config
+         lease: ActivityLease | None = None
+         job: NamedJob | None = None
+         owner: ActivityMutex | None = None
+         pid: int | None = None
++        worker_created_100ns: int | None = None
+         name: str | None = None
+         t0_ns: int | None = None
+         tree_empty = False
+@@ -163,24 +173,37 @@ class SingleWindowSupervisor:
+                 state = "cancelled"
+                 raise _StopSession
+             if snapshot.status == "running":
+-                old = NamedJob.open_existing(activity_id, snapshot.execution_generation)
+-                old_failure: BaseException | None = None
++                # 部署声明仅是已配置的运维前提；numeric ID 不能证明同一主机。
++                if not config.single_host_single_session_recovery:
++                    raise JobUnknown("未配置单主机单交互会话恢复前提")
++                if snapshot.running_owner_session_id is None or snapshot.running_owner_session_id != session_id:
++                    raise JobUnknown("旧代次会话身份缺失或不匹配")
++                if not snapshot.sources_valid or not snapshot.lease_recoverable:
++                    raise JobUnknown("来源、截止或数据库租约不允许接续")
+                 try:
+-                    old.terminate()
+-                    old_deadline = min(manager_deadline_ns, time.monotonic_ns() + int(config.cleanup_seconds * 1e9))
+-                    if not old.wait_empty_until(old_deadline):
+-                        raise JobUnknown("旧Job整树未确认退出")
+-                except BaseException as exc:
+-                    old_failure = exc
+-                try:
+-                    old.close()
+-                except BaseException as exc:
+-                    if old_failure is None:
++                    old = NamedJob.open_existing(activity_id, snapshot.execution_generation)
++                except JobOpenError as exc:
++                    if exc.code != ERROR_FILE_NOT_FOUND:
++                        raise
++                    old = None
++                if old is not None:
++                    old_failure: BaseException | None = None
++                    try:
++                        old.terminate()
++                        old_deadline = min(manager_deadline_ns, time.monotonic_ns() + int(config.cleanup_seconds * 1e9))
++                        if not old.wait_empty_until(old_deadline):
++                            raise JobUnknown("旧Job整树未确认退出")
++                    except BaseException as exc:
+                         old_failure = exc
+-                    else:
+-                        cleanup_errors.append(type(exc).__name__)
+-                if old_failure is not None:
+-                    raise old_failure
++                    try:
++                        old.close()
++                    except BaseException as exc:
++                        if old_failure is None:
++                            old_failure = exc
++                        else:
++                            cleanup_errors.append(type(exc).__name__)
++                    if old_failure is not None:
++                        raise old_failure
+             elif snapshot.status != "pending":
+                 raise JobUnknown("未知活动状态")
+ 
+@@ -190,10 +213,14 @@ class SingleWindowSupervisor:
+                 activity_id, executor_id,
+                 lease_seconds=config.window_seconds,
+                 window_seconds=config.window_seconds,
++                running_owner_session_id=session_id,
++                expected_previous_generation=(snapshot.execution_generation if snapshot.status == "running" else None),
+             ), manager_deadline_ns)
+             if lease is None:
+                 state = "budget_exhausted"
+                 raise _StopSession
++            if lease.running_owner_session_id != session_id:
++                raise JobUnknown("新代次持久会话身份与 SUP 不一致")
+             window = lease.window_seconds
+             reserved_seconds = window
+             pending_fold_seconds = window
+@@ -214,6 +241,7 @@ class SingleWindowSupervisor:
+             created_job = True
+             name = job.name
+             pid = job.spawn_suspended(command.argv(), cwd=command.cwd)
++            worker_created_100ns = job.process_creation_time_100ns()
+             if time.monotonic_ns() >= min(t0_ns + int(config.startup_limit_seconds * 1e9), stop_ns):
+                 state = "startup_deadline"
+                 raise _StopSession
+@@ -312,6 +340,8 @@ class SingleWindowSupervisor:
+             settled_seconds, reserved_seconds, pending_fold_seconds,
+             elapsed_seconds, incomplete, error_type, tuple(cleanup_errors),
+             timing_diagnostic,
++            running_owner_session_id=session_id if lease is not None else None,
++            worker_created_100ns=worker_created_100ns,
+         )
+         if interrupted is not None:
+             interrupted.session_outcome = result
+diff --git "a/Ndocu\\evidence\\task-083\\d3-implementation-10\\pre\\backend__app__worker__windows_job.py" b/backend/app/worker/windows_job.py
+index 042cd96..6fcf3d5 100644
+--- "a/Ndocu\\evidence\\task-083\\d3-implementation-10\\pre\\backend__app__worker__windows_job.py"
++++ b/backend/app/worker/windows_job.py
+@@ -20,6 +20,8 @@ JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION_CLASS = 1
+ JOB_OBJECT_QUERY = 0x0004
+ JOB_OBJECT_TERMINATE = 0x0008
+ ERROR_ALREADY_EXISTS = 183
++ERROR_FILE_NOT_FOUND = 2
++ERROR_ACCESS_DENIED = 5
+ WAIT_OBJECT_0 = 0
+ WAIT_ABANDONED = 0x80
+ WAIT_TIMEOUT = 0x102
+@@ -29,6 +31,14 @@ class JobUnknown(RuntimeError):
+     """不能确认Job身份、状态或终止结果；调用者必须失败关闭。"""
+ 
+ 
++class JobOpenError(JobUnknown):
++    """保留 OpenJobObjectW 的原始 Windows 错误码。"""
++
++    def __init__(self, code: int):
++        self.code = code
++        super().__init__(f"OpenJobObjectW Windows error {code}")
++
++
+ class _STARTUPINFOW(ctypes.Structure):
+     _fields_ = [
+         ("cb", wintypes.DWORD), ("lpReserved", wintypes.LPWSTR),
+@@ -104,6 +114,10 @@ def _kernel():
+     if os.name != "nt":
+         raise JobUnknown("Windows Job不可用")
+     api = ctypes.WinDLL("kernel32", use_last_error=True)
++    api.GetCurrentProcessId.argtypes = []
++    api.GetCurrentProcessId.restype = wintypes.DWORD
++    api.ProcessIdToSessionId.argtypes = [wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
++    api.ProcessIdToSessionId.restype = wintypes.BOOL
+     api.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
+     api.CreateMutexW.restype = wintypes.HANDLE
+     api.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+@@ -145,6 +159,15 @@ def _error(action: str) -> JobUnknown:
+     return JobUnknown(f"{action} Windows error {ctypes.get_last_error()}")
+ 
+ 
++def current_process_session_id() -> int:
++    """可信 SUP 自身进程的 Windows 会话号；读取失败不得启动工作。"""
++    api = _kernel()
++    session = wintypes.DWORD()
++    if not api.ProcessIdToSessionId(api.GetCurrentProcessId(), ctypes.byref(session)):
++        raise _error("ProcessIdToSessionId")
++    return int(session.value)
++
++
+ def _activity_key(activity_id: str) -> str:
+     return UUID(activity_id).hex
+ 
+@@ -239,8 +262,8 @@ class NamedJob:
+         name = job_name(activity_id, generation)
+         handle = api.OpenJobObjectW(JOB_OBJECT_QUERY | JOB_OBJECT_TERMINATE, False, name)
+         if not handle:
+-            # 包括不存在/会话不符/ACL拒绝；调用者绝不将其推断为旧树为空。
+-            raise _error("OpenJobObjectW")
++            # 只有 ERROR_FILE_NOT_FOUND 可成为同会话旧树不存在的候选证据。
++            raise JobOpenError(ctypes.get_last_error())
+         return cls(api, handle, name)
+ 
+     def spawn_suspended(self, command: list[str], *, cwd: str) -> int:

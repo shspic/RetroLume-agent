@@ -1,0 +1,132 @@
+--- pre/backend/app/worker/one_call.py
++++ post/backend/app/worker/one_call.py
+@@ -1,4 +1,10 @@
+-"""内部单次调用的数据合同；回执只是未提交的模型返回，不是业务写入授权。"""
++"""内部单次调用的数据合同；G3 协议3：回执仅身份/状态/hash，正文从数据库读取。
++
++SUCCEEDED 回执表示正文已与 received 同事务提交并获 record 确认；只携带
++payload_sha256，text/json_object 恒为 None。business_commit 三值：
++committed（本次已确认持久正文）/ unconfirmed（尝试提交但未确认结果，不是
++“未提交”）/ not_committed（本次返回不携带成功提交确认，不否定同键历史）。
++"""
+ from __future__ import annotations
+ 
+ from dataclasses import asdict, dataclass, field, fields
+@@ -17,6 +23,7 @@
+ MAX_DATA_BYTES = 131_072
+ _ID = re.compile(r"[A-Za-z0-9._:/-]{1,128}\Z")
+ _TAG = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
++_HEX64 = re.compile(r"[0-9a-f]{64}\Z")
+ 
+ 
+ def bounded(value, limit=MAX_DATA_BYTES):
+@@ -87,14 +94,14 @@
+     context = CallContext(activity_id=lease.activity_id, executor_id=lease.executor_id,
+                           operation_id=call.operation_id, execution_generation=lease.execution_generation,
+                           scope_revision=lease.scope_revision)
+-    return {"protocol": 2, "call": call.to_wire(), "ledger": ledger_data,
++    return {"protocol": 3, "call": call.to_wire(), "ledger": ledger_data,
+             "context": context.model_dump(), "run_tag": run_tag,
+             "stop_ns": stop_ns, "call_seconds": call_seconds}
+ 
+ 
+ def decode_worker_request(value):
+     exact(value, ("protocol", "call", "ledger", "context", "run_tag", "stop_ns", "call_seconds"))
+-    if type(value["protocol"]) is not int or value["protocol"] != 2:
++    if type(value["protocol"]) is not int or value["protocol"] != 3:
+         raise ValueError("worker protocol mismatch")
+     call = OneCallInput.from_wire(value["call"])
+     context = CallContext.model_validate(value["context"], strict=True)
+@@ -114,8 +121,25 @@
+ 
+ 
+ def receipt(result, context, run_tag):
+-    return bounded({"protocol": 2, "context": context.model_dump(), "run_tag": run_tag,
+-                    "business_commit": "not_committed", "result": asdict(result)})
++    """协议3 回执：状态/身份/hash，result 去正文副本（text/json_object 恒 None）。
++
++    business_commit 推导：succeeded→committed（缺合法 hash 属内部错误即拒）；
++    unknown 且 error_code==record_unconfirmed→unconfirmed；其余→not_committed。
++    """
++    status = result.status.value
++    if status == "succeeded":
++        if type(result.payload_sha256) is not str or _HEX64.fullmatch(result.payload_sha256) is None:
++            raise ValueError("succeeded result lacks confirmed payload digest")
++        commit = "committed"
++    elif status == "unknown" and result.error_code == "record_unconfirmed":
++        commit = "unconfirmed"
++    else:
++        commit = "not_committed"
++    data = asdict(result)
++    data["text"] = None
++    data["json_object"] = None
++    return bounded({"protocol": 3, "context": context.model_dump(), "run_tag": run_tag,
++                    "business_commit": commit, "result": data})
+ 
+ 
+ def decode_receipt(value, context, run_tag):
+@@ -125,8 +149,8 @@
+         received_context = CallContext.model_validate(value["context"], strict=True)
+     except Exception:
+         raise ValueError("invalid receipt context") from None
+-    if (type(value["protocol"]) is not int or value["protocol"] != 2 or value["context"] != context.model_dump()
+-            or value["run_tag"] != run_tag or value["business_commit"] != "not_committed"):
++    if (type(value["protocol"]) is not int or value["protocol"] != 3 or value["context"] != context.model_dump()
++            or value["run_tag"] != run_tag or value["business_commit"] not in ("committed", "not_committed", "unconfirmed")):
+         raise ValueError("model receipt identity mismatch")
+     data = value["result"]
+     exact(data, (f.name for f in fields(ModelCallResult)))
+@@ -151,14 +175,25 @@
+             ToolRegistry().plan(plan["call_id"], plan["name"], json.dumps(plan["arguments"]), frozenset({"finite_calculate"}))
+         except Exception:
+             raise ValueError("invalid receipt tool plan") from None
++    # 协议3 严格配对：正文永不夹带回执；SUCCEEDED 必须 committed 且 hash 合法。
++    digest = data["payload_sha256"]
+     if data["status"] == "succeeded":
+-        if bool(data["text"] is not None) == bool(data["json_object"] is not None) or data["tool_plans"]:
+-            raise ValueError("invalid successful receipt")
++        if value["business_commit"] != "committed":
++            raise ValueError("succeeded receipt requires committed confirmation")
++        if type(digest) is not str or _HEX64.fullmatch(digest) is None:
++            raise ValueError("invalid payload digest")
++        if data["text"] is not None or data["json_object"] is not None or data["tool_plans"]:
++            raise ValueError("receipt carries business payload")
+     elif data["status"] == "tool_plan":
+-        if not data["tool_plans"] or data["text"] is not None or data["json_object"] is not None:
++        if value["business_commit"] != "not_committed":
++            raise ValueError("plan receipt requires not_committed")
++        if digest is not None or not data["tool_plans"] or data["text"] is not None or data["json_object"] is not None:
+             raise ValueError("invalid plan receipt")
+-    elif data["text"] is not None or data["json_object"] is not None or data["tool_plans"]:
+-        raise ValueError("failure receipt carries business output")
++    else:
++        if value["business_commit"] == "committed":
++            raise ValueError("non-succeeded receipt cannot be committed")
++        if digest is not None or data["text"] is not None or data["json_object"] is not None or data["tool_plans"]:
++            raise ValueError("failure receipt carries business output")
+     try:
+         return TypeAdapter(ModelCallResult).validate_json(json.dumps(data, allow_nan=False))
+     except Exception:
+@@ -167,16 +202,18 @@
+ 
+ def run_one_call(ledger, config, activity_id: str, executor_id: str, operation_id: str,
+                  request: ModelCallRequest, service: ModelServiceConfig, *, run_tag: str):
+-    """阻塞受信内部入口。SUCCEEDED 仅为模型返回，业务成果尚未提交。
+-
+-    调用者不得把本回执当作原子提交凭证；取消/来源/代次可在返回后变化。
+-    正文仅存于短生命周期内存，不支持重启后幂等取回。
++    """阻塞受信内部入口。SUCCEEDED 表示正文已同事务提交并获确认。
++
++    取消/来源/代次可在返回后变化；回执仅携带 payload_sha256，正文经只读
++    恢复接口从持久层读取，不夹带跨进程副本。
+     """
+     from .command import WorkerCommand
+     from .launcher import run_supervised_window
+     validate_identity(activity_id, executor_id, operation_id, run_tag)
+     call = OneCallInput(operation_id, request, service)
+     call.to_wire()
++    if config.request_timeout_seconds > 120:
++        raise ValueError("one_call request timeout exceeds 120s limit")
+     if service.timeout_seconds > config.request_timeout_seconds:
+         raise ValueError("model timeout exceeds supervised call budget")
+     return run_supervised_window(ledger, config, activity_id, executor_id, WorkerCommand("one_call"),

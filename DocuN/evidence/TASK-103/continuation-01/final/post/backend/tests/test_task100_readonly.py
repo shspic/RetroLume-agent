@@ -1,0 +1,52 @@
+"""Final readonly entry guard and editor-owner offline checks; no resources started."""
+from __future__ import annotations
+import ast
+import inspect
+import subprocess
+import sys
+import unittest
+from unittest.mock import patch
+from tests.fixtures.task100.control import ROOT, ControlRefusal
+
+
+class ReadonlyControlTests(unittest.TestCase):
+    def test_reused_real_HTTP_and_windows_dependencies_match_current_bytes(self):
+        from tests.fixtures.task100 import repair_runner
+        from tests.fixtures.task100.repair_readonly import SOURCE_BATCH
+        current=repair_runner.hash_files(repair_runner.source_paths())
+        for stage in ('http','windows'):
+            result=repair_runner.verified_reuse(SOURCE_BATCH,stage,current)
+            self.assertEqual(result['status'],'pass')
+            self.assertFalse(result['executed_now'])
+            self.assertTrue(result['exact_dependencies'])
+
+    def test_editor_owner_collision_reload_and_closed_storage(self):
+        result=subprocess.run(['node',str(ROOT/'frontend/tests/task100-owner-offline.cjs')],
+                              cwd=ROOT/'frontend',capture_output=True,encoding='utf-8',timeout=10)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn('pure_JS_lock_substitute_no_browser_launch',result.stdout)
+        print(result.stdout.strip())
+
+    def test_readonly_and_application_segments_cannot_mix(self):
+        from tests.fixtures.task100 import repair_runner
+        argv=['repair_runner','readonly-browser-combo','--stages',
+              'container,database,application,readonly-snapshots,browser-readonly']
+        with patch.object(sys,'argv',argv), patch.object(repair_runner,'actual') as actual:
+            with self.assertRaisesRegex(ControlRefusal,'cannot_mix_application'):repair_runner.main()
+            actual.assert_not_called()
+
+    def test_archived_two_answer_heads_and_native_projection_only_entry(self):
+        from tests.fixtures.task100 import repair_readonly
+        _,a1,a2=repair_readonly.archived_inputs()
+        self.assertNotEqual(a1['head']['answer_record_id'],a2['head']['answer_record_id'])
+        for key in ('goal_record_id','path_record_id','node_id','exercise_record_id'):
+            self.assertEqual(a1['head'][key],a2['head'][key])
+        tree=ast.parse(inspect.getsource(repair_readonly))
+        calls=[n.func for n in ast.walk(tree) if isinstance(n,ast.Call)]
+        forbidden={'FastAPI','create_app','TestClient','submit_command','accept_teaching_command','put','save','activity','text','start'}
+        self.assertFalse([f for f in calls if isinstance(f,ast.Name) and f.id in forbidden
+                          or isinstance(f,ast.Attribute) and f.attr in forbidden])
+        for node in ast.walk(tree):
+            if isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute) and node.func.attr=='rows':
+                self.assertIsInstance(node.args[0],ast.Constant)
+                self.assertTrue(node.args[0].value.startswith('SELECT '))

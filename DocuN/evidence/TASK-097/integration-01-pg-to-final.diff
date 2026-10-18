@@ -1,0 +1,515 @@
+--- integration-01-pg/backend/app/capabilities/gateway.py
++++ final/backend/app/capabilities/gateway.py
+@@ -97,6 +97,8 @@
+         self._tools = tools or ToolRegistry()
+ 
+     async def call(self, context: CallContext, request: ModelCallRequest) -> ModelCallResult:
++        if request.learning_profile is None and context.operation_id.startswith(("learn-first-v1.", "learn-next-v1.")):
++            return self._result(context, CallStatus.REJECTED, "invalid_learning_profile")
+         if request.learning_profile is not None:
+             from app.learning.adapter import validate_learning_request
+             code = await validate_learning_request(context, request, self._ledger)
+--- integration-01-pg/backend/app/learning/adapter.py
++++ final/backend/app/learning/adapter.py
+@@ -34,7 +34,8 @@
+             parent = await ledger.read_committed_result(context.activity_id, ref.operation_id)
+             if parent.read_status.value != "committed_current" or parent.kind != "model" or parent.payload_sha256 != ref.payload_sha256:
+                 return "result_invalidated"
+-            parent_profile, parent_output = read_document(json.loads(parent.payload)["value"])
++            parent_profile, parent_output = read_document(json.loads(parent.payload)["value"],
++                activity_id=context.activity_id, operation_id=profile.parent_operation_id)
+             if parent_profile.goal != profile.goal or canonical(parent_output.model_dump()) != profile.history:
+                 return "invalid_learning_profile"
+         snapshot = await ledger.read_learning_snapshot(context.activity_id)
+@@ -42,6 +43,11 @@
+         if (snapshot["scope_revision"] != profile.scope_revision
+                 or [s.model_dump() for s in sources] != [s.model_dump() for s in profile.sources]):
+             return "result_invalidated"
++        authoritative = {s["source_id"]: s for s in snapshot["sources"]}
++        if any(e.original_sha256 != authoritative[e.source_id]["sha256"]
++                or e.title != authoritative[e.source_id]["title"] or e.format != authoritative[e.source_id]["format"]
++                for e in profile.catalog):
++            return "invalid_learning_profile"
+         slot = await ledger.find_learning_operation(context.activity_id, prefix)
+         if slot is not None:
+             return "learning_slot_occupied" if slot == context.operation_id else "learning_input_conflict"
+--- integration-01-pg/backend/app/learning/api.py
++++ final/backend/app/learning/api.py
+@@ -3,7 +3,7 @@
+ import secrets
+ 
+ from fastapi import APIRouter, Request
+-from pydantic import BaseModel, ConfigDict, Field
++from pydantic import BaseModel, ConfigDict, Field, field_validator
+ 
+ from app.activities.api import _guard, _ledger, _config, _uuid_text, _error, _operation_payload, _map_read_error
+ from app.capabilities.contracts import AdmissionUnavailable
+@@ -21,6 +21,13 @@
+     goal: str = Field(max_length=1024)
+     confirmed: Literal[True]
+ 
++    @field_validator("confirmed", mode="before")
++    @classmethod
++    def explicit_confirmation(cls, value):
++        if type(value) is not bool or value is not True:
++            raise ValueError("explicit_confirmation_required")
++        return value
++
+ 
+ class FollowupInput(BaseModel):
+     model_config = ConfigDict(extra="forbid", strict=True)
+@@ -28,6 +35,13 @@
+     parent_operation_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:/-]+$")
+     question: str = Field(max_length=1024)
+     confirmed: Literal[True]
++
++    @field_validator("confirmed", mode="before")
++    @classmethod
++    def explicit_confirmation(cls, value):
++        if type(value) is not bool or value is not True:
++            raise ValueError("explicit_confirmation_required")
++        return value
+ 
+ 
+ def _service(request):
+--- integration-01-pg/backend/app/learning/contracts.py
++++ final/backend/app/learning/contracts.py
+@@ -182,8 +182,50 @@
+         return self
+ 
+ 
+-def normalize_result(profile: LearningProfile, value: object) -> dict:
+-    profile = LearningProfile.model_validate(profile.model_dump())
++class StoredProfile(Strict):
++    """持久业务上下文不携父消费摘要、凭证或历史正文副本。"""
++    profile: Literal["learning.v1"]
++    action: Literal["first", "followup"]
++    activity_id: str
++    request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
++    goal: str = Field(min_length=1, max_length=MAX_INPUT_CHARS)
++    question: str | None = Field(min_length=1, max_length=MAX_INPUT_CHARS)
++    scope_revision: int = Field(ge=1, le=2_147_483_647)
++    sources: list[SourceIdentity] = Field(min_length=1, max_length=10)
++    parent_operation_id: str | None = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:/-]+$")
++    max_output_tokens: int = Field(ge=1, le=256)
++    retrieval_mode: Literal["terms.v1"]
++    catalog: list[CatalogEntry] = Field(min_length=1, max_length=8)
++
++    @model_validator(mode="after")
++    def validate_stored(self):
++        if str(UUID(self.activity_id)) != self.activity_id or normalize_input(self.goal) != self.goal:
++            raise ValueError("invalid_learning_document")
++        if self.action == "first":
++            if self.question is not None or self.parent_operation_id is not None:
++                raise ValueError("invalid_learning_document")
++            # 首次摘要不依赖任何消费凭证，可完整复算。
++            LearningProfile(**self.model_dump(), parent_payload_sha256=None, history=None)
++        elif self.question is None or self.parent_operation_id is None or normalize_input(self.question) != self.question:
++            raise ValueError("invalid_learning_document")
++        identities = [s.model_dump() for s in self.sources]
++        if len({s.source_id for s in self.sources}) != len(self.sources) or identities != sorted(identities,key=lambda s:s["source_id"]):
++            raise ValueError("invalid_learning_scope")
++        allowed={(s.source_id,s.version_id,s.source_revision) for s in self.sources}
++        ids=set()
++        for e in self.catalog:
++            if ((e.source_id,e.version_id,e.source_revision) not in allowed or e.citation_id in ids
++                    or e.citation_id!="lc_"+sha(self.request_sha256+e.evidence_id)[:24]):
++                raise ValueError("invalid_learning_catalog")
++            ids.add(e.citation_id)
++        if sum(len(e.text) for e in self.catalog)>12000 or sum(len(e.text.encode("utf-8")) for e in self.catalog)>24000:
++            raise ValueError("learning_context_limit")
++        # 续问摘要的父正文绑定由受信profile及G4在提交前完成；存储后依赖
++        # G3封套hash与同活动只读资格，不把内部消费凭证再复制到业务JSON。
++        return self
++
++
++def validated_output(profile, value):
+     result = LearningOutput.model_validate(value)
+     catalog = {e.citation_id: e for e in profile.catalog}
+     cited_sources = set()
+@@ -196,7 +238,14 @@
+             cited_sources.add(catalog[citation].source_id)
+     if result.kind == "conflict" and len(cited_sources) < 2:
+         raise ValueError("invalid_learning_conflict")
+-    return {**profile.model_dump(), "result": result.model_dump(), "limitations": list(LIMITATIONS)}
++    return result
++
++
++def normalize_result(profile: LearningProfile, value: object) -> dict:
++    profile = LearningProfile.model_validate(profile.model_dump())
++    result = validated_output(profile,value)
++    stored = StoredProfile.model_validate(profile.model_dump(exclude={"parent_payload_sha256", "history"}))
++    return {**stored.model_dump(), "result": result.model_dump(), "limitations": list(LIMITATIONS)}
+ 
+ 
+ def parse_output(raw: str) -> object:
+@@ -213,11 +262,26 @@
+         parse_constant=lambda _: (_ for _ in ()).throw(ValueError("invalid_learning_number")))
+ 
+ 
+-def read_document(value: object) -> tuple[LearningProfile, LearningOutput]:
+-    if type(value) is not dict or set(value) != set(LearningProfile.model_fields) | {"result", "limitations"}:
++def read_document(value: object, *, activity_id=None, operation_id=None) -> tuple[StoredProfile, LearningOutput]:
++    if type(value) is not dict or set(value) != set(StoredProfile.model_fields) | {"result", "limitations"}:
+         raise ValueError("invalid_learning_document")
+-    profile = LearningProfile.model_validate({k: value[k] for k in LearningProfile.model_fields})
+-    normalized = normalize_result(profile, value["result"])
+-    if normalized != value:
++    profile = StoredProfile.model_validate({k: value[k] for k in StoredProfile.model_fields})
++    if activity_id is not None and profile.activity_id != activity_id:
++        raise ValueError("invalid_learning_document_identity")
++    if operation_id is not None:
++        if profile.action == "first":
++            valid = operation_id == FIRST_PREFIX + profile.request_sha256
++        else:
++            prefix, separator, digest = operation_id.rpartition(".")
++            key = prefix.removeprefix(NEXT_PREFIX)
++            try:
++                valid = (prefix.startswith(NEXT_PREFIX) and str(UUID(key)) == key
++                    and separator == "." and digest == profile.request_sha256)
++            except (ValueError, AttributeError, TypeError):
++                valid = False
++        if not valid:
++            raise ValueError("invalid_learning_document_identity")
++    output = validated_output(profile,value["result"])
++    if value["limitations"] != LIMITATIONS:
+         raise ValueError("invalid_learning_document")
+-    return profile, LearningOutput.model_validate(value["result"])
++    return profile, output
+--- integration-01-pg/backend/app/learning/evidence.py
++++ final/backend/app/learning/evidence.py
+@@ -137,7 +137,7 @@
+     snapshot = await ledger.read_committed_result(activity_id, operation_id)
+     if snapshot.read_status.value not in {"committed_current", "committed_history_cancelled"}:
+         raise LearningRefusal("citation_unavailable", "引用已失效或成果未提交，不能以当前新版本冒充原引用")
+-    profile, _ = read_document(json.loads(snapshot.payload)["value"])
++    profile, _ = read_document(json.loads(snapshot.payload)["value"], activity_id=activity_id, operation_id=operation_id)
+     entry = next((e for e in profile.catalog if e.citation_id == citation_id), None)
+     if entry is None:
+         raise LearningRefusal("citation_not_found", "该引用不属于此成果")
+--- integration-01-pg/backend/app/learning/service.py
++++ final/backend/app/learning/service.py
+@@ -43,7 +43,7 @@
+             if parent.kind != "model":
+                 raise LearningRefusal("result_kind_read_only", "该成果不能作为学习续问依据")
+             try:
+-                p, output = read_document(json.loads(parent.payload)["value"])
++                p, output = read_document(json.loads(parent.payload)["value"], activity_id=activity_id, operation_id=parent_operation_id)
+             except (ValueError, TypeError, KeyError):
+                 raise LearningRefusal("result_kind_read_only", "普通模型成果请使用原显式继续入口") from None
+             goal, question, parent_sha, history = p.goal, text, parent.payload_sha256, canonical(output.model_dump())
+--- integration-01-pg/backend/tests/fixtures/task097/network.py
++++ final/backend/tests/fixtures/task097/network.py
+@@ -4,6 +4,7 @@
+ import os
+ from pathlib import Path
+ import socket
++import threading
+ 
+ ALLOWED={18097,15197,55441}
+ 
+@@ -12,8 +13,18 @@
+     original_connect=socket.socket.connect
+     original_ex=socket.socket.connect_ex
+     original_dns=socket.getaddrinfo
++    original_pair=socket.socketpair
++    pair_context=threading.local()
+     def allowed(address):
+-        return isinstance(address,tuple) and len(address)>=2 and address[0]=="127.0.0.1" and address[1] in ALLOWED
++        return isinstance(address,tuple) and len(address)>=2 and (
++            (address[0]=="127.0.0.1" and address[1] in ALLOWED)
++            or (getattr(pair_context,"active",False) and address[0] in {"127.0.0.1","::1"}))
++    def socketpair(*args,**kwargs):
++        # 标准库自管socketpair的临时端口只在本线程同步创建期间许可。
++        # 普通connect/DNS仍仅097固定端口，不将任意回环端口加入白名单。
++        pair_context.active=True
++        try:return original_pair(*args,**kwargs)
++        finally:pair_context.active=False
+     def blocked(event,address):
+         evidence=os.environ.get("RETROLUME_TASK097_OUT")
+         if evidence:
+@@ -30,4 +41,4 @@
+         if host!="127.0.0.1" or (port not in ALLOWED and str(port) not in {str(x) for x in ALLOWED}):
+             blocked("dns",(host,port));raise OSError("097 DNS guard blocked address")
+         return original_dns(host,port,*args,**kwargs)
+-    socket.socket.connect=connect;socket.socket.connect_ex=connect_ex;socket.getaddrinfo=dns
++    socket.socket.connect=connect;socket.socket.connect_ex=connect_ex;socket.getaddrinfo=dns;socket.socketpair=socketpair
+--- integration-01-pg/backend/tests/fixtures/task097/pg_run.py
++++ final/backend/tests/fixtures/task097/pg_run.py
+@@ -10,6 +10,20 @@
+ from artifacts import write,imported_modules
+ from tests.fixtures.task097.network import install
+ install()
++# 第一批三次setUp在建资料后、建活动前被selfpipe守卫中断。
++# 新建097空库与三份相同固定样本的身份可以精确归属；按实际ID清理。
++from tests.fixtures.task097.support import Fixture,DSN
++from tests.fixtures.task097.samples import ENGLISH
++import hashlib
++fixture=Fixture(DSN,ROOT/"DocuN/evidence/TASK-097/runtime/pg-originals")
++orphans=fixture.rows("SELECT s.id::text AS source_id FROM material_sources s JOIN material_versions v ON v.source_id=s.id "
++    "WHERE v.filename='atomicity.md' AND v.sha256=%s AND NOT EXISTS(SELECT 1 FROM activity_scope_sources a WHERE a.source_id=s.id)",
++    (hashlib.sha256(ENGLISH.encode()).hexdigest(),))
++if orphans:
++    if len(orphans)!=3:raise ValueError("遗留合成资料归属数量不匹配")
++    write(Path(os.environ["RETROLUME_TASK097_OUT"])/"prior-fixture-cleanup.json",{"origin":"integration-01-pg三次setUp中断",
++        "source_ids":[r["source_id"] for r in orphans],"fixed_content_sha256":hashlib.sha256(ENGLISH.encode()).hexdigest()})
++    fixture.sources=[r["source_id"] for r in orphans];fixture.cleanup()
+ suite=unittest.defaultTestLoader.loadTestsFromNames(["tests.test_learning_pg","tests.test_learning_api"])
+ result=unittest.TextTestRunner(verbosity=2).run(suite)
+ write(Path(os.environ["RETROLUME_TASK097_OUT"])/"pg-summary.json",{"tests":result.testsRun,"skipped":result.skipped,
+--- integration-01-pg/backend/tests/fixtures/task097/resource_runner.py
++++ final/backend/tests/fixtures/task097/resource_runner.py
+@@ -106,6 +106,8 @@
+     attempts=json.loads((E/"attempt-ledger.json").read_text(encoding="utf-8")) if (E/"attempt-ledger.json").exists() else []
+     entries=sum(1 for x in attempts if x.get("category")=="integration_entry")
+     if entries>=8:raise ValueError("097入口额度已用尽")
++    if any(x.get("category")=="integration_end" and not x.get("cleanup_ok") for x in attempts):
++        raise ValueError("已有资源收尾失败，停止新启动")
+     label=f"integration-{entries+1:02d}-{mode}"
+     out=E/label;out.mkdir()
+     start=time.monotonic();started_container=False;cleanup_start=None;resultcode=1;error=None
+@@ -133,6 +135,8 @@
+             cmd=[str(PY),"-B",str(ROOT/"backend/tests/fixtures/task097/pg_run.py")]
+         elif mode=="business":
+             cmd=[str(PY),"-B",str(ROOT/"backend/tests/fixtures/task097/business_run.py")]
++        elif mode=="browser":
++            cmd=[str(PY),"-B",str(ROOT/"backend/tests/fixtures/task097/browser_run.py")]
+         else:raise ValueError("未授权的runner模式")
+         remaining=min(900-(time.monotonic()-start),3600-sum(x.get("business_seconds",0) for x in attempts if x.get("category")=="integration_end"))
+         result=subprocess.run(cmd,cwd=ROOT,capture_output=True,env=env,timeout=remaining)
+@@ -145,10 +149,14 @@
+     finally:
+         cleanup_start=time.monotonic();business=cleanup_start-start
+         cleanup_ok=True
++        if mode in {"business","browser"}:
++            sys.path.insert(0,str(ROOT/"backend"))
++            from tests.fixtures.task097.processes import cleanup as process_cleanup
++            cleanup_ok=process_cleanup(out)
+         if started_container:
+             r=docker("stop","--time","5",CID,timeout=30)
+             facts=inspect_guard();write(out/"container-post.json",facts)
+-            cleanup_ok=r.returncode==0 and not facts["running"] and facts["pid"]==0
++            cleanup_ok=cleanup_ok and r.returncode==0 and not facts["running"] and facts["pid"]==0
+         for port in [18097,15197]:
+             try:free(port)
+             except OSError:cleanup_ok=False
+--- integration-01-pg/backend/tests/test_learning_api.py
++++ final/backend/tests/test_learning_api.py
+@@ -29,16 +29,15 @@
+         self.env=patch.dict(os.environ,{"RETROLUME_DATA_DIR":str(data),"RETROLUME_BACKUP_DIR":str(backup),
+             "RETROLUME_DATABASE_URL":DSN,"RETROLUME_ACTIVITY_CONFIG":str(self.configpath),"RETROLUME_TEST097_KEY":"synthetic"})
+         self.env.start()
++        self.addCleanup(self.env.stop)
+         self.app=create_app();self.client=TestClient(self.app)
++        self.addCleanup(self.client.close)
+         self.headers={"X-RetroLume-Session":self.app.state.session_token}
+         self.fixture=Fixture(DSN,originals)
++        self.addCleanup(self.fixture.cleanup)
+         self.source=self.fixture.text(ENGLISH)
+         with asyncio.Runner(loop_factory=psycopg_compatible_loop_factory) as r:
+             self.activity=r.run(self.fixture.activity([self.source]))
+-    def tearDown(self):
+-        if hasattr(self,"fixture"):self.fixture.cleanup()
+-        if hasattr(self,"client"):self.client.close()
+-        if hasattr(self,"env"):self.env.stop()
+     def post(self,body):
+         return self.client.post(f"/api/activities/{self.activity}/learning/first",json=body,headers=self.headers)
+     def test_request_scope_authority_and_confirmation_refused_before_launcher(self):
+@@ -78,10 +77,11 @@
+         response=self.client.post(f"/api/activities/{self.activity}/learning/first",headers=self.headers|{"Origin":"https://outside.invalid"},
+             json={"business_key":key,"goal":"atomicity","confirmed":True})
+         self.assertEqual(response.status_code,403)
++        created=str(uuid4())
++        self.fixture.activities.append(created)
+         response=self.client.post("/api/activities",headers=self.headers,
+-            json={"activity_id":str(uuid4()),"source_ids":[self.source["id"]]})
+-        self.assertEqual(response.status_code,201)
+-        created=response.json()["activity_id"]
+-        self.fixture.activities.append(created)
++            json={"activity_id":created,"source_ids":[self.source["id"]]})
++        self.assertEqual(response.status_code,200)
++        self.assertEqual(response.json()["activity"]["activity_id"],created)
+         self.assertEqual(self.fixture.rows("SELECT requests_reserved,cost_reserved_microunits FROM activities WHERE id=%s",(created,))[0],
+             {"requests_reserved":0,"cost_reserved_microunits":0})
+--- integration-01-pg/backend/tests/test_learning_contracts.py
++++ final/backend/tests/test_learning_contracts.py
+@@ -83,6 +83,19 @@
+             with self.assertRaises(ValueError): LearningProfile.model_validate(data | patch)
+         self.assertEqual(ModelCallRequest(messages=messages, max_output_tokens=256, learning_profile=p).learning_profile.profile, PROFILE)
+ 
++    def test_stored_context_binds_real_operation_and_hides_consumption_material(self):
++        from app.learning.api import FirstInput, FollowupInput
++        for model,fields in [(FirstInput,{"goal":"atomicity"}), (FollowupInput,{"question":"atomicity","parent_operation_id":"parent"})]:
++            for value in [1,"true",False,None]:
++                with self.assertRaises(ValueError):model.model_validate({"business_key":"key","confirmed":value,**fields})
++            model.model_validate({"business_key":"key","confirmed":True,**fields})
++        p=profile(); document=normalize_result(p,answer(p))
++        read_document(document,activity_id=p.activity_id,operation_id=FIRST_PREFIX+p.request_sha256)
++        for op in ["ordinary-model",FIRST_PREFIX+"0"*64,NEXT_PREFIX+"bad."+p.request_sha256]:
++            with self.assertRaises(ValueError):read_document(document,activity_id=p.activity_id,operation_id=op)
++        with self.assertRaises(ValueError):read_document(document,activity_id="00000000-0000-0000-0000-000000000097")
++        self.assertNotIn("parent_payload_sha256",document);self.assertNotIn("history",document)
++
+     def test_fixed_semantic_positive_and_negative_are_separate_from_id_validity(self):
+         p = profile()
+         supported = answer(p)
+--- integration-01-pg/backend/tests/test_learning_gateway.py
++++ final/backend/tests/test_learning_gateway.py
+@@ -22,8 +22,10 @@
+     def __init__(self,p):
+         self.p=p; self.events=[]; self.slot=None; self.outcomes=[]; self.scope=p.scope_revision
+     async def read_learning_snapshot(self,activity_id):
++        catalog={e.source_id:e for e in self.p.catalog}
+         return {"scope_revision":self.scope,"status":"running","source_count":len(self.p.sources),
+-            "sources":[s.model_dump()|{"valid":True,"ready":True,"size":100} for s in self.p.sources]}
++            "sources":[s.model_dump()|{"valid":True,"ready":True,"size":100,"sha256":catalog[s.source_id].original_sha256,
++                "title":catalog[s.source_id].title,"format":catalog[s.source_id].format} for s in self.p.sources]}
+     async def find_learning_operation(self,activity_id,prefix): return self.slot
+     async def admit(self,intent):
+         self.events.append("admit"); return AdmissionPermit("permit",intent.context.operation_id,intent.context.executor_id)
+@@ -65,6 +67,8 @@
+         envelope=json.loads(ledger.outcomes[-1].payload)
+         self.assertEqual(envelope["value"],normalize_result(p,answer(p)))
+         self.assertEqual(envelope["value"]["goal"],p.goal)
++        self.assertNotIn("parent_payload_sha256",envelope["value"])
++        self.assertNotIn("history",envelope["value"])
+         self.assertEqual(receipt(result,ctx,"test097")["business_commit"],"committed")
+         r=decode_receipt(receipt(result,ctx,"test097"),ctx,"test097")
+         self.assertIsNone(r.text);self.assertIsNone(r.json_object)
+@@ -99,6 +103,10 @@
+ 
+     async def test_worker_after_claim_scope_slot_and_mixed_profile_rejection(self):
+         p=profile()
++        plain=ModelCallRequest(messages=[{"role":"user","content":"self reported learning.v1"}],max_output_tokens=256)
++        result,ledger,transport,_=await self.call(p,answer(p),request=plain)
++        self.assertEqual(result.status,CallStatus.REJECTED)
++        self.assertEqual(transport.calls,[]);self.assertEqual(ledger.events,[])
+         for mutate in [lambda l:setattr(l,"scope",2),lambda l:setattr(l,"slot",FIRST_PREFIX+"a"*64)]:
+             r,l,t,_=await self.call(p,answer(p),mutate=mutate)
+             self.assertEqual(r.status,CallStatus.REJECTED);self.assertEqual(t.calls,[]);self.assertEqual(l.events,[])
+--- integration-01-pg/backend/tests/test_learning_pg.py
++++ final/backend/tests/test_learning_pg.py
+@@ -12,7 +12,7 @@
+ from app.learning.evidence import *
+ from app.learning.prompt import messages_for
+ from app.learning.service import LearningService
+-from app.activities import ActivityService, PostgresAdmissionLedger
++from app.activities import PostgresAdmissionLedger
+ from tests.fixtures.task097.support import PGBase
+ from tests.fixtures.task097.samples import ENGLISH, CHINESE, XSS, answer
+ from tests.test_learning_gateway import service, Transport
+--- integration-01-pg/frontend/src/activities/ActivityWorkspace.tsx
++++ final/frontend/src/activities/ActivityWorkspace.tsx
+@@ -1,6 +1,7 @@
+ import { useCallback, useEffect, useRef, useState } from "react";
+ import "./activity-workspace.css";
+ import { isLearningDocument, LearningResult } from "./LearningResult";
++import { compareLearningIntent } from "./learningIntentMatch";
+ import {
+   appendIntent, clearIntents, loadIntents, newActivityId, newOperationKey,
+   normalizeSourceIds, removeIntent, updateIntent, type PendingIntent,
+@@ -491,7 +492,7 @@
+     if (!intentsOk) { setError("恢复记录不可用：为避免出现无法核对的重复动作，继续已暂停；请优先清除本机恢复记录。"); return; }
+     const text = followup.trim();
+     if (!text) { setError("请输入要继续的内容"); return; }
+-    if (isLearningDocument(openOperation?.payload?.value)) {
++    if (isLearningDocument(openOperation?.payload?.value, openOperation?.operation_id)) {
+       if (!caps?.learning?.available) { setError(`学习续问未开放：${reasonText(caps?.learning?.reason)}`); return; }
+       await createLearningIntent("learning_followup", text, continueFor);
+       return;
+@@ -520,6 +521,8 @@
+   }
+ 
+   async function reconcileLearning(intent: PendingIntent) {
++    const initialActivity = selectedRef.current;
++    const initialView = ++openSeq.current;
+     setBusy(`reconcile-${intent.intent_id}`);
+     try {
+       const action = intent.kind === "learning_first" ? "first" : "followup";
+@@ -529,12 +532,20 @@
+         setNotice("尚无持久操作记录，原请求可能仍在途；可由你显式重试同一意图，不会自动重发。");
+         return;
+       }
+-      if (row.read_status !== "unresolved") removeIntent(intent.intent_id);
+-      else updateIntent(intent.intent_id, { state: "unconfirmed", operation_id: row.operation_id });
++      const match = compareLearningIntent(intent, row.payload?.value);
++      if (match === "matching" && row.read_status !== "unresolved") removeIntent(intent.intent_id);
++      else updateIntent(intent.intent_id, { state: match === "conflict" ? "refused" : "unconfirmed", operation_id: row.operation_id,
++        ...(match === "conflict" ? { last_code: "learning_input_conflict", last_message: "持久槽位已绑定不同目标或问题，未将旧成果视为本次成功" } : {}) });
+       reloadIntents();
+-      await selectActivity(intent.activity_id);
++      if (!mountedRef.current || initialView !== openSeq.current || initialActivity !== selectedRef.current) return;
++      const selecting = selectActivity(intent.activity_id);
++      const selectedView = openSeq.current;
++      await selecting;
++      if (!mountedRef.current || selectedRef.current !== intent.activity_id || selectedView !== openSeq.current) return;
+       setOpenOperation(row);
+-      setNotice("已只读核对学习动作。未知结果保留提示，可能已执行；同键重试只返回已存在的持久事实。");
++      setNotice(match === "conflict" ? "已只读核对学习动作：发现不同输入，保留本机意图；请审阅旧成果后显式续问或新建活动。"
++        : match === "matching" ? "已只读核对学习动作并匹配持久输入；当前资格以下方事实为准。"
++        : "已只读核对学习动作，输入尚不可确认，可能已执行；保留恢复提示，同键重试只返回已存在事实。");
+     } catch (reason) {
+       setError(reason instanceof Error ? reason.message : "核对未完成");
+     } finally { setBusy(""); }
+@@ -875,7 +886,7 @@
+                               {op.prompt_tokens !== null ? ` · 提示 ${op.prompt_tokens} / 补全 ${op.completion_tokens ?? 0} token` : ""}
+                             </p>
+                             {op.payload
+-                              ? isLearningDocument(op.payload.value)
++                              ? isLearningDocument(op.payload.value, op.operation_id)
+                                 ? <LearningResult key={`${detail.activity_id}:${op.operation_id}`} document={op.payload.value}
+                                   activityId={detail.activity_id} operationId={op.operation_id} token={token} />
+                                 : <pre>{op.payload.format === "json" ? JSON.stringify(op.payload.value, null, 2) : String(op.payload.value)}</pre>
+@@ -888,7 +899,7 @@
+                                   <textarea
+                                     value={followup}
+                                     aria-label="续问内容"
+-                                    maxLength={isLearningDocument(op.payload?.value) ? 1024 : caps?.followup_max_chars ?? 4096}
++                                    maxLength={isLearningDocument(op.payload?.value, op.operation_id) ? 1024 : caps?.followup_max_chars ?? 4096}
+                                     placeholder="输入要继续的内容（只保存在本机浏览器，可随时清除）"
+                                     onChange={event => setFollowup(event.target.value)}
+                                   />
+@@ -896,14 +907,14 @@
+                                     本次动作将消耗 1 次模型请求与 1 次单次费用预留；当前剩余请求 {Math.max(detail.max_requests - detail.requests_reserved, 0)}，
+                                     剩余费用 {Math.max(detail.max_cost_microunits - detail.cost_reserved_microunits, 0)} 微单位。
+                                   </p>
+-                                  <button className="primary" disabled={busy !== "" || !intentsOk || (isLearningDocument(op.payload?.value) && !caps?.learning?.available)} onClick={() => void continueFromOperation()}>
++                                  <button className="primary" disabled={busy !== "" || !intentsOk || (isLearningDocument(op.payload?.value, op.operation_id) && !caps?.learning?.available)} onClick={() => void continueFromOperation()}>
+                                     {busy.startsWith("continue-") ? "执行中…" : "发出并等待"}
+                                   </button>
+                                   <button className="secondary" onClick={() => { setContinueFor(null); setFollowup(""); }}>返回</button>
+                                 </div>
+                               ) : (
+-                                <button className="secondary" disabled={busy !== "" || !intentsOk || (isLearningDocument(op.payload?.value) ? !caps?.learning?.available : !caps?.continue.available)} onClick={() => { setContinueFor(row.operation_id); setFollowup(""); }}>
+-                                  {isLearningDocument(op.payload?.value) ? "从该学习成果续问…" : "从该成果继续…"}
++                                <button className="secondary" disabled={busy !== "" || !intentsOk || (isLearningDocument(op.payload?.value, op.operation_id) ? !caps?.learning?.available : !caps?.continue.available)} onClick={() => { setContinueFor(row.operation_id); setFollowup(""); }}>
++                                  {isLearningDocument(op.payload?.value, op.operation_id) ? "从该学习成果续问…" : "从该成果继续…"}
+                                 </button>
+                               )
+                             )}
+--- integration-01-pg/frontend/src/activities/LearningResult.tsx
++++ final/frontend/src/activities/LearningResult.tsx
+@@ -7,15 +7,21 @@
+   start_line: number; end_line: number; text: string;
+ };
+ export type LearningDocument = {
++  action: "first" | "followup"; request_sha256: string;
+   profile: "learning.v1"; goal: string; question: string | null; retrieval_mode: string;
+   catalog: Citation[]; limitations: string[];
+   result: { kind: string; message: string; segments: { text: string; citations: string[] }[]; questions: string[] };
+ };
+ 
+-export function isLearningDocument(value: unknown): value is LearningDocument {
++export function isLearningDocument(value: unknown, operationId?: string): value is LearningDocument {
+   if (typeof value !== "object" || value === null) return false;
+   const item = value as Record<string, unknown>;
+-  return item.profile === "learning.v1" && Array.isArray(item.catalog) && typeof item.result === "object" && item.result !== null;
++  const digest = item.request_sha256;
++  const bound = typeof digest === "string" && /^[a-f0-9]{64}$/.test(digest) && typeof operationId === "string" &&
++    (item.action === "first" ? operationId === `learn-first-v1.${digest}` :
++      item.action === "followup" && /^learn-next-v1\.[a-f0-9-]{36}\.[a-f0-9]{64}$/.test(operationId) && operationId.endsWith(`.${digest}`));
++  return bound && item.profile === "learning.v1" && typeof item.goal === "string" &&
++    Array.isArray(item.limitations) && Array.isArray(item.catalog) && typeof item.result === "object" && item.result !== null;
+ }
+ 
+ const KINDS: Record<string, string> = { answer: "学习答案", clarification: "需要补充信息", no_evidence: "证据不足", conflict: "来源冲突" };

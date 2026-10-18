@@ -1,0 +1,105 @@
+--- backend/app/preview/production_supervisor.py.pre
++++ backend/app/preview/production_supervisor.py.post
+@@ -48,15 +48,45 @@
+     async def recover(self):
+         if not self.available or not self._owner.held:return
+         if not self.current_file.exists():return
++        recovery_stage="registry"
+         try:
+             pointer=json.loads(self.current_file.read_text(encoding="utf-8"));folder=Path(pointer["folder"]).resolve()
+             if folder.parent!=self.root.resolve():raise OwnershipUnknown("recovery_path")
+             registry=json.loads((folder/"registry.json").read_text(encoding="utf-8"));intent=registry["intent"]
+             if intent["labels"].get("retrolume.domain")!="preview.v2" or registry["preview_id"]!=pointer["preview_id"]:raise OwnershipUnknown("recovery_identity")
+-            old_parent=birth(registry["parent"]["pid"])
++            # 已完整结算的同一个已停生命周期复用持久收据。Docker事件有有限留存，
++            # 不能在历史事件已淘汰后否认原先完整取得的停止证明。
++            if pointer.get("complete") is True and registry.get("complete") is True and registry.get("cid"):
++                settled=await self.ledger.read_html_preview(registry["activity_id"],registry["preview_id"])
++                if settled["state"]=="stopped":
++                    saved=await self.ledger._read_html_stop_confirmation(registry["activity_id"],registry["preview_id"])
++                    facts=json.loads((folder/"kernel-premises.json").read_text(encoding="utf-8"))
++                    previous=json.loads((folder/"supervisor-result.json").read_text(encoding="utf-8"))
++                    if saved is None or previous.get("confirmed") is not True or canonical(saved)!=canonical(previous.get("proof")):
++                        raise OwnershipUnknown("settled_stop_receipt_mismatch")
++                    actual=inspect_owned(self.policy.docker,registry["cid"],intent);old_after=saved.get("after",{})
++                    events=saved.get("events",{});dies=[json.loads(line) for line in events.get("stdout","").splitlines() if line.strip()]
++                    if (saved.get("tree_confirmation")!="private_pid_init_terminated" or saved.get("cid")!=registry["cid"]
++                        or saved.get("image_id")!=intent["image_id"] or saved.get("nonce")!=intent["nonce"]
++                        or saved.get("kernel_premises_sha256")!=digest(facts) or saved.get("attach_eof_confirmed") is not True
++                        or saved.get("owned_reaper_ended") is not True or saved.get("wait",{}).get("code")!=0
++                        or any(saved.get(key,{}).get("ActiveProcesses")!=0 for key in ("reaper_windows_job","supervisor_cli_windows_job"))
++                        or not any(e.get("Actor",{}).get("ID")==registry["cid"] and e.get("Action")=="die" for e in dies)
++                        or actual["state"]["Running"] or actual["state"]["Pid"]!=0 or actual["state"]["Restarting"]
++                        or actual["state"]["StartedAt"]!=old_after.get("state",{}).get("StartedAt")
++                        or actual["state"]["FinishedAt"]!=old_after.get("state",{}).get("FinishedAt")):
++                        raise OwnershipUnknown("settled_stop_binding_unconfirmed")
++                    for owned in (dict(pid=registry["attach_pid"],birth=registry["attach_birth"]),registry["reaper_owner"]):
++                        status=birth(owned["pid"])
++                        if status["state"]=="unknown" or status["state"]=="running" and status["birth"]==owned["birth"]:
++                            raise OwnershipUnknown("settled_owned_process_not_ended")
++                    atomic_json(folder/("recovery-reused-"+self.boot_id+".json"),{"tree_confirmation":saved["tree_confirmation"],"cid":registry["cid"],
++                      "source_receipt_sha256":digest(saved),"same_started_finished_identity":True,"current_owned_instances_ended":True,"current_inspect":actual})
++                    self.blocked=False;return
++            recovery_stage="parent";old_parent=birth(registry["parent"]["pid"])
+             if old_parent["state"]=="unknown" or (old_parent["state"]=="running" and old_parent["birth"]==registry["parent"]["birth"]):
+                 raise OwnershipUnknown("recovery_parent_not_ended")
+-            cid=registry.get("cid") or find_intent(self.policy.docker,intent)
++            recovery_stage="container";cid=registry.get("cid") or find_intent(self.policy.docker,intent)
+             facts=json.loads((folder/"kernel-premises.json").read_text(encoding="utf-8")) if (folder/"kernel-premises.json").is_file() else None
+             state=None;created=None
+             if cid is None:
+@@ -75,13 +105,14 @@
+                 state=inspect_owned(self.policy.docker,cid,intent)
+                 if state["state"]["Running"] and call(self.policy.docker,["kill",cid])["code"]:
+                     raise OwnershipUnknown("recovery_kill_unconfirmed")
+-            attach_ended=True
++            recovery_stage="owned_cli";attach_ended=True
+             if registry.get("attach_pid"):
+                 attach_ended=terminate_owned(registry["attach_pid"],registry["attach_birth"])
+             ready_file=folder/"reaper-ready.json"
+             if ready_file.is_file():
+                 reaper=json.loads(ready_file.read_text(encoding="utf-8"));terminate_owned(reaper["pid"],reaper["birth"])
+             else:raise OwnershipUnknown("recovery_reaper_identity_missing")
++            recovery_stage="tree_proof"
+             if cid is None:
+                 proof={"tree_confirmation":"never_started","cid":None,"image_id":intent["image_id"],"nonce":intent["nonce"],
+                     "name":intent["name"],"recovery":True,"cause":"known_failure_before_create" if created.get("create_never_requested") else "exact_cli_pid_parse_rejection","create_receipt_sha256":digest(created),
+@@ -92,7 +123,7 @@
+                     proof={"tree_confirmation":"never_started","cid":cid,"inspect":state,"recovery":True}
+                 proof["owned_reaper_ended"]=True;proof["parent_lifetime_ended"]=True
+             if proof["tree_confirmation"] not in ("private_pid_init_terminated","never_started"):raise OwnershipUnknown("recovery_tree_unknown")
+-            row=await self.ledger.read_html_preview(registry["activity_id"],registry["preview_id"])
++            recovery_stage="persistent_row";row=await self.ledger.read_html_preview(registry["activity_id"],registry["preview_id"])
+             if row["state"] not in ("stopped","failed_unstarted"):
+                 key=unprotect_control_key(registry["control_key_blob"])
+                 if row["state"]!="cleanup_unconfirmed":
+@@ -101,7 +132,10 @@
+                     confirmation=proof,elapsed=row["reserve_seconds"])
+             registry["complete"]=True;atomic_json(folder/"registry.json",registry);atomic_json(folder/"recovery-proof.json",proof)
+             atomic_json(self.current_file,{"folder":str(folder),"preview_id":registry["preview_id"],"complete":True});self.blocked=False
+-        except Exception:self.blocked=True
++        except Exception as error:
++            self.blocked=True
++            code=str(error)[:128] if isinstance(error,(OwnershipUnknown,DockerUnknown,HtmlRefusal)) else "bounded_recovery_error"
++            atomic_json(self.root/("recovery-error-"+self.boot_id+".json"),{"stage":recovery_stage,"error_type":type(error).__name__,"code":code})
+ 
+     def _event(self,kind,value):
+         if self._event_sink:self._event_sink(kind,value)
+@@ -182,7 +216,7 @@
+                 head,body=read_packet(c["attach"].stdout,c)
+                 kind=head["type"]
+                 if kind=="ready":
+-                    if head["seq"]!=0 or c["received_ready"] is not None or body.get("load_manifest_sha256")!=self.policy.load_manifest_sha256 or body.get("renderer_sha256")!=self.policy.renderer_sha256:
++                    if head["seq"]!=0 or c["received_ready"] is not None or body.get("load_manifest_sha256")!=self.policy.load_manifest_sha256 or body.get("renderer_sha256")!=self.policy.renderer_sha256 or body.get("description_sha256")!=digest(c["description"]):
+                         raise ValueError("ready_identity")
+                     c["received_ready"]=body;c["kernel_ready"]=body;atomic_json(c["folder"]/"ready.json",body);atomic_json(c["folder"]/"ready-packet.json",{"header":head,"body":body});atomic_json(c["folder"]/"kernel-premises.json",body);c["ready"].set()
+                 elif kind=="frame":
+@@ -194,6 +228,8 @@
+                 else:
+                     if body.get("reason_code")=="bootstrap_identity":
+                         c["kernel_ready"]=body;atomic_json(c["folder"]/"kernel-premises.json",body)
++                    elif body.get("reason_code")=="fixed_input_observation":
++                        atomic_json(c["folder"]/("engine-observation-"+str(body["last_input_seq"])+".json"),body)
+                     elif body.get("state")=="stopping":c["error_code"]=body.get("reason_code");c["stop"].set()
+                 self._event("packet",{"preview_id":c["preview_id"],"type":kind,"seq":head["seq"],"body_bytes":head["body_bytes"],"body_sha256":head["body_sha256"]})
+         except EOFError:c["pipe_eof"]=True;c["stop"].set()

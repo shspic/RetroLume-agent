@@ -1,0 +1,189 @@
+
+backend/app/service_config.py
+22: from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
+23: 
+24: from app.activities import ActivitySpec, PostgresAdmissionLedger, SourceSnapshot
+25: from app.capabilities.contracts import (
+26:     ModelCallRequest,
+27:     ModelServiceConfig,
+28:     Provider,
+29:     ThinkingMode,
+30: )
+31: from app.worker.one_call import OneCallInput
+32: 
+33: _SERVICE_REQUEST_TIMEOUT = 10.0  # 与 SessionConfig 默认 request_timeout_seconds 一致
+34: _ONECALL_CONFIGURED_BODY_LIMIT = 65_536  # one_call 受控通道配置字节上限
+35: _MAX_CONTINUE_OUTPUT_TOKENS = 256  # continue_from_result 使用的固定输出预算
+36: 
+37: 
+38: @dataclass(frozen=True)
+39: class LayerState:
+40:     available: bool
+41:     reason: str | None = None
+42: 
+43: 
+44: @dataclass(frozen=True)
+45: class ActivityConfig:
+46:     provider: str | None
+47:     model: str | None
+48:     quota_preview: dict | None
+49:     model_service: ModelServiceConfig | None
+50:     create_layer: LayerState
+51:     continue_layer: LayerState
+52:     learning_layer: LayerState = LayerState(False, "learning_not_configured")
+53:     learning_output_tokens: int | None = None
+54:     # G8 教学层（TASK-100）：独立 teaching.v1 输出 1..2048，默认关闭。
+55:     teaching_layer: LayerState = LayerState(False, "teaching_not_configured")
+56:     teaching_output_tokens: int | None = None
+57:     teaching_calculation_layer: LayerState = LayerState(False, "teaching_not_configured")
+58:     memory_context: object | None = None
+59:     memory_layer: LayerState = LayerState(False,"memory_not_configured")
+60:     interview_local_layer: LayerState = LayerState(False,"interview_schema_probe_required")
+61:     interview_model_layer: LayerState = LayerState(False,"interview_not_configured")
+62:     interview_output_tokens: int | None = None
+63:     interview_followups: int | None = None
+64:     html_generation_layer: LayerState = LayerState(False,"html_not_configured")
+65:     html_output_tokens: int | None = None
+66: 
+67: 
+68: class _ModelIdentity(BaseModel):
+
+backend/app/capabilities/contracts.py
+24:     ZHIPU_EMBEDDINGS = "zhipu_embeddings"
+25: 
+26: 
+27: class ThinkingMode(StrEnum):
+28:     ENABLED = "enabled"
+29:     DISABLED = "disabled"
+30: 
+31: 
+32: _ALLOWED_BASE_URLS = {
+33:     Provider.DEEPSEEK_CHAT_COMPLETIONS: frozenset({"https://api.deepseek.com"}),
+34: }
+35: 
+36: 
+37: class ModelServiceConfig(BaseModel):
+38:     """只能由服务端配置构造；密钥不会出现在 repr 中。"""
+39: 
+40:     model_config = ConfigDict(extra="forbid", frozen=True)
+41: 
+42:     provider: Provider
+43:     base_url: str
+44:     model: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:/-]+$")
+45:     api_key: SecretStr = Field(repr=False)
+46:     thinking: ThinkingMode = ThinkingMode.DISABLED
+47:     timeout_seconds: float = Field(default=30.0, gt=0, le=120)
+48:     max_output_tokens_limit: int = Field(default=8192, ge=1, le=32768)
+49:     max_request_bytes: int = Field(default=262_144, ge=1024, le=2_097_152)
+50:     max_response_bytes: int = Field(default=1_048_576, ge=1024, le=4_194_304)
+51:     outbound_grant: dict | None = Field(default=None, repr=False)
+52:     outbound_source_manifest: dict | None = Field(default=None, repr=False)
+53: 
+54:     @field_validator("base_url")
+55:     @classmethod
+56:     def validate_base_url(cls, value: str, info: Any) -> str:
+57:         normalized = value.rstrip("/")
+58:         provider = info.data.get("provider")
+59:         if provider is None or normalized not in _ALLOWED_BASE_URLS.get(provider, frozenset()):
+60:             raise ValueError("base_url 不在所选服务类型的固定允许列表中")
+61:         return normalized
+62: 
+63:     @field_validator("api_key")
+64:     @classmethod
+65:     def validate_api_key(cls, value: SecretStr) -> SecretStr:
+66:         if not value.get_secret_value().strip():
+67:             raise ValueError("api_key 不能为空")
+68:         return value
+69: 
+70: 
+71: class ToolFunctionCall(BaseModel):
+72:     model_config = ConfigDict(extra="forbid", frozen=True)
+73: 
+74:     name: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+75:     arguments: str = Field(max_length=2048)
+76: 
+77: 
+78: class AssistantToolCall(BaseModel):
+79:     model_config = ConfigDict(extra="forbid", frozen=True)
+80: 
+81:     id: str = Field(min_length=1, max_length=128)
+82:     type: Literal["function"] = "function"
+83:     function: ToolFunctionCall
+84: 
+85: 
+
+backend/app/worker/one_call.py
+134:             "stop_ns": stop_ns, "call_seconds": call_seconds}
+135: 
+136: 
+137: def decode_worker_request(value):
+138:     exact(value, ("protocol", "call", "ledger", "context", "run_tag", "stop_ns", "call_seconds"))
+139:     if type(value["protocol"]) is not int or value["protocol"] not in (3, 4):
+140:         raise ValueError("worker protocol mismatch")
+141:     call = OneCallInput.from_wire(value["call"])
+142:     if call.protocol != value['protocol']: raise ValueError('capability_protocol_binding_invalid')
+143:     context = CallContext.model_validate(value["context"], strict=True)
+144:     validate_identity(context.activity_id, context.executor_id, call.operation_id, value["run_tag"])
+145:     if call.request.input_result is not None and call.request.input_result.activity_id != context.activity_id:
+146:         raise ValueError("worker input result activity mismatch")
+147:     if context.operation_id != call.operation_id or context.execution_generation < 1:
+148:         raise ValueError("worker identity mismatch")
+149:     exact(value["ledger"], ("dsn", "connect_timeout_seconds", "statement_timeout_ms", "lock_timeout_ms") + (('data_guard',) if 'data_guard' in value['ledger'] else ()))
+150:     dsn = value["ledger"]["dsn"]
+151:     if type(dsn) is not str or not 1 <= len(dsn.encode("utf-8")) <= 4096 or "\0" in dsn:
+152:         raise ValueError("invalid ledger configuration")
+153:     seconds = value["call_seconds"]
+154:     if type(seconds) not in (float, int) or not 0 < seconds <= 120 or call.service.timeout_seconds > seconds:
+155:         raise ValueError("call timeout incompatible with session")
+156:     if type(value["stop_ns"]) is not int or (value["stop_ns"] - time.monotonic_ns()) / 1e9 <= seconds + 0.25:
+157:         raise ValueError("insufficient actual call window")
+158:     return call, context
+159: 
+
+backend/app/data_exit/api.py
+174: @router.get('/saved-records')
+175: async def saved_records(request:Request,category:str='activities',offset:int=0):
+176:     value=runtime(request)
+177:     context = value.context()
+178:     observed = request.headers.get('x-retrolume-data-context')
+179:     if observed is not None and observed != canonical(context.public()): raise DataError('selection_changed')
+180:     ledger = request.app.state.activities_ledger
+181:     if ledger is None: raise DataError('storage_unavailable', 503)
+182:     if offset<0:raise DataError('invalid_input',400)
+183:     mapping={'activities':'activities','learning':'activity_operation_results','teaching':'teaching_records',
+184:              'interview':'interview_records','memories':'learning_memory_revisions','preview_history':'html_preview_sessions','versions':'material_versions'}
+185:     table=mapping.get(category)
+186:     if table is None:raise DataError('invalid_input',400)
+187:     def read():
+188:         from .repository import DataRepository
+189:         from .schema import COLUMNS
+190:         from .codec import encode_row
+191:         from .readability import memory_projection, history_qualification
+192:         repository=DataRepository(ledger._dsn)
+193:         columns=','.join(COLUMNS[table])
+194:         with repository.connection(readonly=True,repeatable=True) as connection:
+195:             identity=connection.execute('SELECT dataset_id,source_instance_observed FROM public.data_export_control_v1').fetchone()
+196:             if identity is None or (str(identity['dataset_id']),str(identity['source_instance_observed'])) != (context.dataset_id,context.instance_id):
+197:                 raise DataError('selection_changed')
+198:             rows=connection.execute('SELECT '+columns+' FROM public.'+table+' ORDER BY '+','.join(list(COLUMNS[table])[:2])+' LIMIT 20 OFFSET %s',(offset,)).fetchall()
+199:             items=[]
+200:             for row in rows:
+201:                 item=encode_row(table,row);availability='present'
+202:                 aid=row.get('activity_id')
+203:                 if aid is not None:
+204:                     deleted=connection.execute("""SELECT EXISTS(SELECT 1 FROM public.activity_scope_sources s JOIN public.data_tombstones t
+205:                       ON t.entity_kind='source' AND t.entity_id=s.source_id WHERE s.activity_id=%s) AS deleted""",(aid,)).fetchone()['deleted']
+206:                     if deleted:
+207:                         availability='source_deleted'
+208:                         for name in ('body','payload','local_body','source_refs','state_after'):
+209:                             if name in item:item[name]=None
+210:                 if table=='learning_memory_revisions':
+211:                     item['body'], availability = memory_projection(connection, row['memory_id'], row['version'])
+212:                 elif table in ('activity_operation_results', 'teaching_records', 'interview_records') and availability == 'present':
+213:                     availability = history_qualification(connection, table, row)
+214:                     if availability != 'present':
+215:                         for name in ('body', 'payload', 'local_body', 'source_refs', 'state_after'):
+216:                             if name in item: item[name] = None
+217:                 items.append({'record':item,'availability':availability})
+218:         return {'items':items,'next_offset':offset+len(items) if len(items)==20 else None,
+219:                 'accounting_point':'snapshot_observation','execution_frozen':context.mode!='normal','data_context':context.public()}

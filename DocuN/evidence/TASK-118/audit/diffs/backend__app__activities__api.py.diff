@@ -1,0 +1,57 @@
+--- first-pre/backend/app/activities/api.py
++++ current/backend/app/activities/api.py
+@@ -50,6 +50,7 @@
+     activity_id: str
+     source_ids: list[str] = Field(min_length=1, max_length=128)
+     memory_selection: MemorySelectionInput | None = None
++    expected_sources: list[dict] | None = Field(default=None,max_length=128)
+ 
+ 
+ class ContinueInput(BaseModel):
+@@ -270,6 +271,7 @@
+             "selected_items":4,"max_memory_bytes":4096},
+         "quota_preview": config.quota_preview,
+         "provider": provider_info,
++        "retrieval":getattr(request.app.state,'integration_config',None).public() if getattr(request.app.state,'integration_config',None) is not None else {'available':False,'reason':'retrieval_not_configured'},
+         "supervision_management_budget_seconds": SessionConfig().manager_total_seconds,
+         "window_seconds": SessionConfig().window_seconds,
+         "followup_max_chars": _FOLLOWUP_MAX_CHARS,
+@@ -334,7 +336,27 @@
+                 "sources": not_ready,
+             },
+         )
+-    quota = config.quota_preview or {}
++    if body.expected_sources is not None:
++        expected={item.get('source_id'):(item.get('version_id'),item.get('revision')) for item in body.expected_sources}
++        if len(expected)!=len(body.expected_sources) or set(expected)!=set(source_ids) or any(expected[item]!=(str(current[item]['current_version']),int(current[item]['revision'])) for item in source_ids):
++            raise _error(409,'source_replaced','资料版本已变化，请重新确认范围')
++    quota = dict(config.quota_preview or {})
++    integration=getattr(request.app.state,'integration_config',None)
++    embedding=integration.service if integration is not None and integration.available else None
++    grant=embedding.outbound_grant if embedding else None
++    grant_sha=None
++    if grant:
++        from app.capabilities.embedding import OutboundGrant
++        trusted=OutboundGrant.from_wire(grant)
++        from app.capabilities.embedding import OutboundSourceManifest
++        manifest=OutboundSourceManifest.from_wire(embedding.outbound_source_manifest)
++        if manifest.sha256!=trusted.source_manifest_sha256:raise _error(409,'outbound_manifest_mismatch','资料采用清单身份不符')
++        approved={(s['source_id'],s['source_version_id'],s['source_revision']) for s in manifest.sources}
++        if any((item,str(current[item]['current_version']),int(current[item]['revision'])) not in approved for item in source_ids):raise _error(409,'outbound_source_not_approved','所选资料版本不在已批准的合成清单')
++        if activity_id not in trusted.allowed_activity_ids:raise _error(409,'outbound_grant_mismatch','该活动不在已批准名单')
++        roster=['01800000-0000-4000-8000-000000000001','01800000-0000-4000-8000-000000000002','01800000-0000-4000-8000-000000000003']
++        index=roster.index(activity_id);grant_sha=trusted.sha256
++        quota.update(deadline_hours=24,max_requests=(40,24,16)[index],max_cost_microunits=(10000000,6000000,4000000)[index],reserve_cost_microunits=250000,max_running_seconds=3600,max_request_bytes=65536,max_output_tokens=4096,max_tool_calls=8)
+     if not quota:
+         raise _error(503, "config_unavailable", "活动额度配置不可用")
+     spec = ActivitySpec(
+@@ -350,7 +372,8 @@
+         max_request_bytes=int(quota["max_request_bytes"]),
+         max_output_tokens=int(quota["max_output_tokens"]),
+         max_running_seconds=int(quota["max_running_seconds"]),
+-        allowed_models=((config.provider, config.model),),
++        allowed_models=((config.provider, config.model),)+(((embedding.provider,embedding.model),) if embedding else ()),
++        outbound_grant_sha256=grant_sha,
+         allowed_tools=tuple(quota.get('allowed_tools',[])) if config.teaching_calculation_layer.available else (),
+         max_tool_calls=quota.get('max_tool_calls') if config.teaching_calculation_layer.available else None,
+     )

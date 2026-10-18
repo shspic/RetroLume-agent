@@ -1,0 +1,58 @@
+--- first-pre/backend/tests/fixtures/step018/lifecycle.py
++++ current/backend/tests/fixtures/step018/lifecycle.py
+@@ -8,6 +8,27 @@
+         self._condition=threading.Condition(threading.RLock());self._entries=[]
+         self.closing=False;self.closed=threading.Event();self.report=None;self._thread=None
+         self.cleanup_deadline=deadline+300
++        self._memory_probe=None;self._memory_every=2;self._memory_next=0;self._memory_lows=0
++        self.memory={'samples':0,'minimum_bytes':None,'maximum_bytes':None,'pressure_events':[]}
++
++    def monitor_memory(self,probe,*,every=2,minimum=256*1024**2):
++        self._memory_probe=probe;self._memory_every=every;self._memory_minimum=minimum
++
++    def _memory_tick(self):
++        if self._memory_probe is None or self.clock()<self._memory_next:return None
++        self._memory_next=self.clock()+self._memory_every
++        try:
++            available=self._memory_probe()
++            if not isinstance(available,int) or available<0:raise ValueError('invalid physical memory sample')
++        except BaseException as exc:
++            self.memory['pressure_events'].append({'at':self.clock(),'error_type':type(exc).__name__})
++            return 'memory_sample_failed'
++        self.memory['samples']+=1;self.memory['last']={'at':self.clock(),'available_bytes':available}
++        for key,op in [('minimum_bytes',min),('maximum_bytes',max)]:
++            self.memory[key]=available if self.memory[key] is None else op(self.memory[key],available)
++        self._memory_lows=self._memory_lows+1 if available<self._memory_minimum else 0
++        if self._memory_lows and len(self.memory['pressure_events'])<8:self.memory['pressure_events'].append({**self.memory['last'],'consecutive':self._memory_lows})
++        return 'memory_pressure' if self._memory_lows>=2 else None
+ 
+     def remaining_cleanup(self,maximum):
+         return max(.1,min(maximum,self.cleanup_deadline-self.clock()))
+@@ -28,13 +49,16 @@
+         with self._condition:self._condition.notify_all()
+ 
+     def _watch(self):
++        pressure=None
+         with self._condition:
+             while not self.closing:
+                 remaining=self.deadline-self.clock()
+                 if remaining<=0:break
+-                self._condition.wait(min(remaining,1))
++                pressure=self._memory_tick()
++                if pressure:break
++                self._condition.wait(min(remaining,1,self._memory_every))
+             timed_out=not self.closing
+-        if timed_out:self.close('business_deadline')
++        if timed_out:self.close(pressure or 'business_deadline')
+ 
+     def close(self,reason='normal_exit'):
+         with self._condition:
+@@ -45,7 +69,7 @@
+         if waiter:
+             if threading.current_thread() is not self._thread:self.closed.wait(300)
+             return self.report
+-        report={'reason':reason,'resources':[],'all_confirmed':True}
++        report={'reason':reason,'resources':[],'all_confirmed':True,'physical_memory':self.memory}
+         try:
+             for _,_,name,callback in sorted(self._entries,reverse=True):
+                 try:

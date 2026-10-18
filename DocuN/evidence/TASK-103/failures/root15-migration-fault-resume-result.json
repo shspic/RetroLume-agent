@@ -1,0 +1,107 @@
+{
+  "status": "FAIL",
+  "executed": true,
+  "mode": "fault-resume",
+  "cases": [
+    {
+      "name": "V20 同名kind CHECK被弱化迁移失败且全回滚",
+      "status": "PASS",
+      "executed": true,
+      "sqlstate": "P0001",
+      "reason": "010旧kind约束不符",
+      "pre_sha": "cb25c24811bf16a50b57e6cb640270088037c6059e42f58b721868cc7f82d417",
+      "post_sha": "cb25c24811bf16a50b57e6cb640270088037c6059e42f58b721868cc7f82d417"
+    },
+    {
+      "name": "V20 007 payload列类型错迁移失败且全回滚",
+      "status": "PASS",
+      "executed": true,
+      "sqlstate": "P0001",
+      "reason": "010列基线不符",
+      "pre_sha": "b644e0b30d2c9676d95df7d5b288797f79bc70fcd5dd140ea27e6774e97f04c5",
+      "post_sha": "b644e0b30d2c9676d95df7d5b288797f79bc70fcd5dd140ea27e6774e97f04c5"
+    },
+    {
+      "name": "V20 009触发器身份缺失迁移失败且全回滚",
+      "status": "PASS",
+      "executed": true,
+      "sqlstate": "P0001",
+      "reason": "010旧事实不可变基线不符",
+      "pre_sha": "62b97ceff2acd3427e278ea3fd5d14deb0ceb266595fae6b1abccf4563dab951",
+      "post_sha": "62b97ceff2acd3427e278ea3fd5d14deb0ceb266595fae6b1abccf4563dab951"
+    },
+    {
+      "name": "V20 新表残迹迁移失败且全回滚",
+      "status": "PASS",
+      "executed": true,
+      "sqlstate": "P0001",
+      "reason": "010残迹/重复迁移",
+      "pre_sha": "41e5aa426b92610804575460ac5b461c933b67a6adf44e22880f11c70220ec53",
+      "post_sha": "41e5aa426b92610804575460ac5b461c933b67a6adf44e22880f11c70220ec53"
+    },
+    {
+      "name": "V20 新角色残迹迁移失败且全回滚",
+      "status": "PASS",
+      "executed": true,
+      "sqlstate": "P0001",
+      "reason": "010角色残迹，不宽松复用",
+      "pre_sha": "32763020e65e05dfd80f452eb9d51f3f07c9b616c190b45f7fcea6fb4309a98e",
+      "post_sha": "32763020e65e05dfd80f452eb9d51f3f07c9b616c190b45f7fcea6fb4309a98e"
+    },
+    {
+      "name": "V19 第二版删除中途故障整笔回滚，墓碑保留",
+      "status": "PASS",
+      "executed": true,
+      "memory_id": "5036479e-7db2-49c0-a6ad-268ee9db98fd",
+      "bodies_before": 2,
+      "bodies_after": 2,
+      "rows_sha_before": "5ee3185a4db7685fe43eb6e55e70e7caebcac6ee2443cd4cd5c67b4624a1d5b8",
+      "rows_sha_after": "5ee3185a4db7685fe43eb6e55e70e7caebcac6ee2443cd4cd5c67b4624a1d5b8"
+    },
+    {
+      "name": "V19 正文hash不符拒绝且零效果",
+      "status": "PASS",
+      "executed": true,
+      "sqlstate": "P0001",
+      "reason": "清理目标hash不符",
+      "pre_sha": "d3a87b1a907bd3d79c3ab86fdf710751ee55de4d9a3d029433a09990145d493f",
+      "post_sha": "d3a87b1a907bd3d79c3ab86fdf710751ee55de4d9a3d029433a09990145d493f"
+    },
+    {
+      "name": "V19 清单缺版本拒绝且零效果",
+      "status": "PASS",
+      "executed": true,
+      "sqlstate": "P0001",
+      "reason": "清理集合不符",
+      "pre_sha": "287d9fbc990b0cd3e672b027e0bb4bcb930cbed26b845364797696f6f9baab01",
+      "post_sha": "287d9fbc990b0cd3e672b027e0bb4bcb930cbed26b845364797696f6f9baab01"
+    },
+    {
+      "name": "V19 清单额外版本拒绝且零效果",
+      "status": "PASS",
+      "executed": true,
+      "sqlstate": "P0001",
+      "reason": "清理集合不符",
+      "pre_sha": "490e2ffe80a2dee2da22ddc2dfed5c1707046270d00e3f73668a2e4ffd5e4140",
+      "post_sha": "490e2ffe80a2dee2da22ddc2dfed5c1707046270d00e3f73668a2e4ffd5e4140"
+    }
+  ],
+  "inherited_root13_cases": 2,
+  "server": [
+    "PostgreSQL 17.11 (Debian 17.11-1.pgdg12+2) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit",
+    "UTF8",
+    "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+  ],
+  "error_type": "AssertionError",
+  "message": "app privilege bypass accepted",
+  "sqlstate": null,
+  "cleanup": {
+    "cid": "4b813f9e4317aef9c613eb140fcb2d40c55a6bd98ee5d79807ea5851975d7f68",
+    "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+    "name": "retrolume-task-103-g9-pg3",
+    "volume": "retrolume-task-103-g9-pg3-data",
+    "running": false,
+    "pid": 0,
+    "exit_code": 0
+  }
+}

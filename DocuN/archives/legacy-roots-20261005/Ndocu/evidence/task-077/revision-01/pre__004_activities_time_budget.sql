@@ -1,0 +1,51 @@
+-- 候选迁移：时间账本基础切片（TASK-077 / R-071，需求v1.1/架构v0.26 批准增量）。
+-- 仅允许在获批的全新/空 activities 合成库执行；本卡只写不运行，
+-- 真实执行、非空拒绝行为与 CHECK 验证由后续独立任务卡安排。
+-- 002/003 保持不变；不改用户库。
+BEGIN;
+
+-- 先取 ACCESS EXCLUSIVE 锁再判空：判空与 DDL 之间不存在并发写入窗口。
+LOCK TABLE activities IN ACCESS EXCLUSIVE MODE;
+
+DO $$
+BEGIN
+    PERFORM 1 FROM activities LIMIT 1;
+    IF FOUND THEN
+        RAISE EXCEPTION 'activities 非空：004 仅允许在空 activities 合成库执行，本事务已回滚';
+    END IF;
+END $$;
+
+-- 五列：M=max_running_seconds，R=running_reserved_seconds，S=running_settled_seconds，
+-- 最近结算代次与秒数。计数用 BIGINT；M 上界 2147483647 与 Python 侧校验一致。
+ALTER TABLE activities
+    ADD COLUMN max_running_seconds BIGINT NOT NULL
+        CHECK (max_running_seconds > 0 AND max_running_seconds <= 2147483647),
+    ADD COLUMN running_reserved_seconds BIGINT NOT NULL DEFAULT 0
+        CHECK (running_reserved_seconds >= 0),
+    ADD COLUMN running_settled_seconds BIGINT NOT NULL DEFAULT 0
+        CHECK (running_settled_seconds >= 0),
+    ADD COLUMN last_settled_generation INTEGER,
+    ADD COLUMN last_settled_seconds BIGINT
+        CHECK (last_settled_seconds IS NULL OR last_settled_seconds >= 0);
+
+-- 余额守恒：R <= M - S。减法写法在 BIGINT 非负域内不可溢出
+-- （M<=2^31-1、S>=0，M-S 下界 1-(2^63-1) 仍在 BIGINT 范围内），
+-- 不依赖加法回绕语义。
+ALTER TABLE activities
+    ADD CONSTRAINT activities_time_budget_balance CHECK (
+        running_reserved_seconds <= max_running_seconds - running_settled_seconds
+    );
+
+-- running 当且仅当 R>0；其余状态 R=0。
+ALTER TABLE activities
+    ADD CONSTRAINT activities_time_budget_running_shape CHECK (
+        (status = 'running') = (running_reserved_seconds > 0)
+    );
+
+-- 最近结算两列成对出现：从未结算时同为 NULL，首次结算后同非 NULL。
+ALTER TABLE activities
+    ADD CONSTRAINT activities_time_budget_last_settled_pair CHECK (
+        (last_settled_generation IS NULL) = (last_settled_seconds IS NULL)
+    );
+
+COMMIT;

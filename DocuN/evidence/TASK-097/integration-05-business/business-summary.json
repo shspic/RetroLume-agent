@@ -1,0 +1,575 @@
+{
+  "exit_code": 1,
+  "checks": [
+    {
+      "name": "reused_passed_evidence",
+      "actual": {
+        "pg_atomic": "integration-03-business/affected-pg-summary.json",
+        "http_create": "integration-04-business/affected-pg-summary.json",
+        "real_first_followup": "integration-04-business/business-checks.json#normal_first_followup_atomic"
+      }
+    },
+    {
+      "name": "real_concurrent_first",
+      "actual": {
+        "responses": [
+          [
+            200,
+            {
+              "activity_id": "98b617dd-2a15-48e3-844f-6e0df062dd97",
+              "business_key": "a4314f37-29a3-4589-ae96-835b4154cfa5",
+              "operation_id": "learn-first-v1.db7e05ed09cd8ae888460824516ac7998ec2145dd56dd21546d270327eb88ea3",
+              "status": "committed_current",
+              "business": {
+                "read_status": "committed_current",
+                "payload_available": true
+              },
+              "supervision": {
+                "state": "settled",
+                "settled_seconds": 1,
+                "reserved_seconds": 0,
+                "pending_fold_seconds": 0,
+                "cleanup_incomplete": false
+              }
+            }
+          ],
+          [
+            200,
+            {
+              "activity_id": "98b617dd-2a15-48e3-844f-6e0df062dd97",
+              "business_key": "84f43e2a-ff4e-49f7-96bd-190d34ba2e5f",
+              "operation_id": "learn-first-v1.db7e05ed09cd8ae888460824516ac7998ec2145dd56dd21546d270327eb88ea3",
+              "status": "committed_current",
+              "business": {
+                "read_status": "committed_current",
+                "payload_available": true
+              },
+              "supervision": {
+                "state": "settled",
+                "settled_seconds": 1,
+                "reserved_seconds": 0,
+                "pending_fold_seconds": 0,
+                "cleanup_incomplete": false
+              }
+            }
+          ]
+        ],
+        "persistent_operation": "learn-first-v1.db7e05ed09cd8ae888460824516ac7998ec2145dd56dd21546d270327eb88ea3",
+        "actual_sends": 1
+      }
+    },
+    {
+      "name": "stable_first_slot_and_profile_downgrade_refusal",
+      "actual": {
+        "sends_added": 0
+      }
+    },
+    {
+      "name": "actual_unknown",
+      "actual": {
+        "row": {
+          "operation_id": "learn-first-v1.392aa20f0702cebda346cc19d2c6937c1649a5ef9b9cc600568a3f3db212edc6",
+          "kind": "model",
+          "state": "unknown",
+          "disposition": "unknown",
+          "error_code": "delivery_unknown",
+          "reserved_at": "2026-10-02T04:11:40.952093+00:00",
+          "dispatch_started_at": "2026-10-02T04:11:40.972332+00:00",
+          "recorded_at": "2026-10-02T04:11:40.990020+00:00",
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "finish_reason": null,
+          "returned_model": null,
+          "committed_at": null,
+          "read_status": "unresolved",
+          "payload_available": false,
+          "payload": null
+        },
+        "fact": {
+          "activity_id": "236cbd5a-e003-490c-bc9e-8d09a2ae72ce",
+          "status": "pending",
+          "created_at": "2026-10-02T04:11:39.311015+00:00",
+          "updated_at": "2026-10-02T04:11:41.153212+00:00",
+          "deadline_at": "2026-10-02T05:11:39.285499+00:00",
+          "cancelled_at": null,
+          "scope_revision": 1,
+          "max_requests": 16,
+          "requests_reserved": 1,
+          "max_cost_microunits": 1600000,
+          "cost_reserved_microunits": 100000,
+          "reserve_cost_microunits": 100000,
+          "max_running_seconds": 900,
+          "running_reserved_seconds": 0,
+          "running_settled_seconds": 1,
+          "max_tool_calls": null,
+          "tools_reserved": 0,
+          "source_count": 1,
+          "source_titles": [
+            "TASK097 atomicity.md"
+          ],
+          "last_settled_generation": 1,
+          "last_settled_seconds": 1,
+          "allowed_models": [
+            {
+              "provider": "deepseek_chat_completions",
+              "model": "synthetic-model-097"
+            }
+          ],
+          "sources": [
+            {
+              "source_id": "984aa308-f56d-480f-b97c-bfbb2f3e6c58",
+              "title": "TASK097 atomicity.md",
+              "valid": true
+            }
+          ]
+        },
+        "sends": 1,
+        "same_key_additional_sends": 0
+      }
+    },
+    {
+      "name": "actual_invalid",
+      "actual": {
+        "row": {
+          "operation_id": "learn-first-v1.bbf797dfa2d0f6e45529e70c162011cae28e63e300ae6386ee420621a3c19e2d",
+          "kind": "model",
+          "state": "received",
+          "disposition": "received",
+          "error_code": "invalid_learning_output",
+          "reserved_at": "2026-10-02T04:11:42.998728+00:00",
+          "dispatch_started_at": "2026-10-02T04:11:43.022794+00:00",
+          "recorded_at": "2026-10-02T04:11:43.082926+00:00",
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "finish_reason": null,
+          "returned_model": null,
+          "committed_at": null,
+          "read_status": "terminal_without_payload",
+          "payload_available": false,
+          "payload": null
+        },
+        "fact": {
+          "activity_id": "f6b732eb-43a6-4ac7-b58e-81d749e750a7",
+          "status": "pending",
+          "created_at": "2026-10-02T04:11:41.383615+00:00",
+          "updated_at": "2026-10-02T04:11:43.222496+00:00",
+          "deadline_at": "2026-10-02T05:11:41.374489+00:00",
+          "cancelled_at": null,
+          "scope_revision": 1,
+          "max_requests": 16,
+          "requests_reserved": 1,
+          "max_cost_microunits": 1600000,
+          "cost_reserved_microunits": 100000,
+          "reserve_cost_microunits": 100000,
+          "max_running_seconds": 900,
+          "running_reserved_seconds": 0,
+          "running_settled_seconds": 1,
+          "max_tool_calls": null,
+          "tools_reserved": 0,
+          "source_count": 1,
+          "source_titles": [
+            "TASK097 atomicity.md"
+          ],
+          "last_settled_generation": 1,
+          "last_settled_seconds": 1,
+          "allowed_models": [
+            {
+              "provider": "deepseek_chat_completions",
+              "model": "synthetic-model-097"
+            }
+          ],
+          "sources": [
+            {
+              "source_id": "984aa308-f56d-480f-b97c-bfbb2f3e6c58",
+              "title": "TASK097 atomicity.md",
+              "valid": true
+            }
+          ]
+        },
+        "sends": 1,
+        "same_key_additional_sends": 0
+      }
+    },
+    {
+      "name": "actual_not_sent",
+      "actual": {
+        "row": {
+          "operation_id": "learn-first-v1.eab58a5803123133be701b732dd4775a4f217ab7f0851a8438b4b26bb90a7748",
+          "kind": "model",
+          "state": "not_sent",
+          "disposition": "not_sent",
+          "error_code": "request_not_sent",
+          "reserved_at": "2026-10-02T04:11:45.098344+00:00",
+          "dispatch_started_at": "2026-10-02T04:11:45.120507+00:00",
+          "recorded_at": "2026-10-02T04:11:45.164111+00:00",
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "finish_reason": null,
+          "returned_model": null,
+          "committed_at": null,
+          "read_status": "terminal_without_payload",
+          "payload_available": false,
+          "payload": null
+        },
+        "fact": {
+          "activity_id": "c5f4ef24-56ee-4892-8ace-6130d1404a82",
+          "status": "pending",
+          "created_at": "2026-10-02T04:11:43.483792+00:00",
+          "updated_at": "2026-10-02T04:11:45.289858+00:00",
+          "deadline_at": "2026-10-02T05:11:43.459791+00:00",
+          "cancelled_at": null,
+          "scope_revision": 1,
+          "max_requests": 16,
+          "requests_reserved": 1,
+          "max_cost_microunits": 1600000,
+          "cost_reserved_microunits": 100000,
+          "reserve_cost_microunits": 100000,
+          "max_running_seconds": 900,
+          "running_reserved_seconds": 0,
+          "running_settled_seconds": 1,
+          "max_tool_calls": null,
+          "tools_reserved": 0,
+          "source_count": 1,
+          "source_titles": [
+            "TASK097 atomicity.md"
+          ],
+          "last_settled_generation": 1,
+          "last_settled_seconds": 1,
+          "allowed_models": [
+            {
+              "provider": "deepseek_chat_completions",
+              "model": "synthetic-model-097"
+            }
+          ],
+          "sources": [
+            {
+              "source_id": "984aa308-f56d-480f-b97c-bfbb2f3e6c58",
+              "title": "TASK097 atomicity.md",
+              "valid": true
+            }
+          ]
+        },
+        "sends": 1,
+        "same_key_additional_sends": 0
+      }
+    },
+    {
+      "name": "atomic_structured_clarification",
+      "actual": {
+        "operation": "learn-first-v1.bdf3fa2ab77088d1e2505287f11b54ff13d2641db5544d615622df45d816df1f",
+        "disposition": "received"
+      }
+    },
+    {
+      "name": "atomic_structured_no_evidence",
+      "actual": {
+        "operation": "learn-first-v1.455c10b003c15c66bd4800e0895693611a0cf73063090c75f3f5975f105c533a",
+        "disposition": "received"
+      }
+    },
+    {
+      "name": "atomic_structured_conflict",
+      "actual": {
+        "operation": "learn-first-v1.f1c2145e9e01fa8d8927f9e9235533f6a0aee75923415a7c9d773418313377b6",
+        "disposition": "received"
+      }
+    },
+    {
+      "name": "legacy_no_profile_real_parent_and_continue",
+      "actual": {
+        "activity": "a6cef441-bfd1-4025-aca7-1788ed7bbec5",
+        "parent": "legacy-a7cd2a58268a4afe99cd6a499916f992"
+      }
+    },
+    {
+      "name": "cancel_after_send_preserves_results",
+      "actual": {
+        "response": [
+          200,
+          {
+            "activity_id": "98b617dd-2a15-48e3-844f-6e0df062dd97",
+            "business_key": "39f92120-51c2-4201-a284-e80fb41ef200",
+            "operation_id": "learn-next-v1.39f92120-51c2-4201-a284-e80fb41ef200.59f771b87df88d2b2f45f5387b4c198c7a9165eefc18e082f9a0d6e8eece7c2b",
+            "status": "supervision_unknown",
+            "business": {
+              "read_status": "unresolved",
+              "payload_available": false
+            },
+            "supervision": {
+              "state": "worker_failed_full_reservation",
+              "settled_seconds": 0,
+              "reserved_seconds": 90,
+              "pending_fold_seconds": 90,
+              "cleanup_incomplete": false
+            }
+          }
+        ],
+        "sends": 1,
+        "fact": {
+          "activity_id": "98b617dd-2a15-48e3-844f-6e0df062dd97",
+          "status": "cancelled",
+          "created_at": "2026-10-02T04:11:35.969128+00:00",
+          "updated_at": "2026-10-02T04:11:56.763393+00:00",
+          "deadline_at": "2026-10-02T05:11:35.938347+00:00",
+          "cancelled_at": "2026-10-02T04:11:56.763393+00:00",
+          "scope_revision": 1,
+          "max_requests": 16,
+          "requests_reserved": 2,
+          "max_cost_microunits": 1600000,
+          "cost_reserved_microunits": 200000,
+          "reserve_cost_microunits": 100000,
+          "max_running_seconds": 900,
+          "running_reserved_seconds": 0,
+          "running_settled_seconds": 92,
+          "max_tool_calls": null,
+          "tools_reserved": 0,
+          "source_count": 1,
+          "source_titles": [
+            "TASK097 atomicity.md"
+          ],
+          "last_settled_generation": 3,
+          "last_settled_seconds": 1,
+          "allowed_models": [
+            {
+              "provider": "deepseek_chat_completions",
+              "model": "synthetic-model-097"
+            }
+          ],
+          "sources": [
+            {
+              "source_id": "984aa308-f56d-480f-b97c-bfbb2f3e6c58",
+              "title": "TASK097 atomicity.md",
+              "valid": true
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "modules": [
+    {
+      "module": "app.activities",
+      "path": "backend/app/activities/__init__.py",
+      "sha256": "81e2b05d7d4ad32e54df045170961809c4efc44636f60523ed76942410482f3d"
+    },
+    {
+      "module": "app.activities.repository",
+      "path": "backend/app/activities/repository.py",
+      "sha256": "b2603534adea756111e6f84356848c7940cbc6a7828db827d1684f2c6180f08e"
+    },
+    {
+      "module": "app.capabilities",
+      "path": "backend/app/capabilities/__init__.py",
+      "sha256": "85d0a4340b60a229a2ea9089014549fc7a4cb34758c3732d0359461a8da73a07"
+    },
+    {
+      "module": "app.capabilities.contracts",
+      "path": "backend/app/capabilities/contracts.py",
+      "sha256": "ef6a27beb2ed2e887fb42d67254de2438cd2b2448826838647c193fc995f1dea"
+    },
+    {
+      "module": "app.capabilities.gateway",
+      "path": "backend/app/capabilities/gateway.py",
+      "sha256": "f91908182a4327c8767e0569afb247ac432b9fa71f2b56f551a4964bcbe46d08"
+    },
+    {
+      "module": "app.capabilities.tool_execution",
+      "path": "backend/app/capabilities/tool_execution.py",
+      "sha256": "92f4f528e4aac2031bffc31857f64e59d9cecfdceaeb8dea7b425e27aa912326"
+    },
+    {
+      "module": "app.capabilities.tools",
+      "path": "backend/app/capabilities/tools.py",
+      "sha256": "bb94408fc68b31b35bfb423c618d82c2b4fc3971c559c03948d4d70a4cea5838"
+    },
+    {
+      "module": "app.capabilities.transport",
+      "path": "backend/app/capabilities/transport.py",
+      "sha256": "1d80347e2e41434297dafedfc7123cfdafdb661f576672290108de191e55b656"
+    },
+    {
+      "module": "app.learning",
+      "path": "backend/app/learning/__init__.py",
+      "sha256": "84b086ecf032d3299d6d13f7ba63d5112c82496225c811541c7db87d2dd95936"
+    },
+    {
+      "module": "app.learning.contracts",
+      "path": "backend/app/learning/contracts.py",
+      "sha256": "81756653b14e4fefdc03b233232886de7d7787db4911d84f14a24942f9759995"
+    },
+    {
+      "module": "app.learning.evidence",
+      "path": "backend/app/learning/evidence.py",
+      "sha256": "489b0637001b09465f1328add59097ae1b6b60689aec6c4e6b3b58ec41ac848c"
+    },
+    {
+      "module": "app.materials",
+      "path": "backend/app/materials/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "module": "app.materials.locations",
+      "path": "backend/app/materials/locations.py",
+      "sha256": "f3e238c127fd0beda532e32f80ab40011d03fc2c26dbf1007c23481b215157c5"
+    },
+    {
+      "module": "app.materials.repository",
+      "path": "backend/app/materials/repository.py",
+      "sha256": "a1ef7e51e606f9b9f7c594761d69d7f9eca07e7fa474495f2896b14e57d92387"
+    },
+    {
+      "module": "app.pdf_import",
+      "path": "backend/app/pdf_import/__init__.py",
+      "sha256": "21a2c9df1669ea4cabd1be77ab3a0b1530669a5c635f9e2c209d4485ce6b9bda"
+    },
+    {
+      "module": "app.pdf_import._windows_job",
+      "path": "backend/app/pdf_import/_windows_job.py",
+      "sha256": "797f445f807d7d9264ea33bddb3388b4848b5d01c10498c221b352b24a236425"
+    },
+    {
+      "module": "app.pdf_import.contracts",
+      "path": "backend/app/pdf_import/contracts.py",
+      "sha256": "12f886da0302cefba30b9511bfc433b7d75e0276e44ec15d5cabf1b030449fca"
+    },
+    {
+      "module": "app.pdf_import.errors",
+      "path": "backend/app/pdf_import/errors.py",
+      "sha256": "9418f0d65ec69336d04e9e5e9e55f79181b9a84f2d2bf2ca6ef98e86751a7033"
+    },
+    {
+      "module": "app.pdf_import.supervisor",
+      "path": "backend/app/pdf_import/supervisor.py",
+      "sha256": "95f914830a615feb9be45c083b1460874c6bb5db83514f3963470b880a16527d"
+    },
+    {
+      "module": "app.pdf_review",
+      "path": "backend/app/pdf_review/__init__.py",
+      "sha256": "3a822340b06c1a51e82c983e82a2753a3d527fddf8053f8c736cf91499527844"
+    },
+    {
+      "module": "app.pdf_review.contracts",
+      "path": "backend/app/pdf_review/contracts.py",
+      "sha256": "1d4b26261887e650f95cba727b05ae1bdf44fe46914b4d11f507665c2e57c351"
+    },
+    {
+      "module": "app.retrieval",
+      "path": "backend/app/retrieval/__init__.py",
+      "sha256": "f06f9694e213db25dff7119f6609ca553ffb339868b51c1d9e181104d91efdcc"
+    },
+    {
+      "module": "app.retrieval.evidence",
+      "path": "backend/app/retrieval/evidence.py",
+      "sha256": "5a7d3717daf2680f0ed6acd4aaf42883ecc4cd7a281201f9405cb5904a6be3c1"
+    },
+    {
+      "module": "app.runtime",
+      "path": "backend/app/runtime.py",
+      "sha256": "067021e11430318595d5079678a0b7e5acb561ff1057006eca32cd3b45880f6b"
+    },
+    {
+      "module": "app.service_config",
+      "path": "backend/app/service_config.py",
+      "sha256": "4027f4b3dd74b5583231d5c9c6ecc4e46a0078251eac59c746b7aae284904eec"
+    },
+    {
+      "module": "app.storage",
+      "path": "backend/app/storage/__init__.py",
+      "sha256": "61a8ffebb54f5a5353d1706c28199e5a76bd8a82702fdfcb60de205156983ec3"
+    },
+    {
+      "module": "app.storage.originals",
+      "path": "backend/app/storage/originals.py",
+      "sha256": "633a90517377ceea867d962a62a5149913392f9b065ad92ee5c9706816ba4bf0"
+    },
+    {
+      "module": "app.worker",
+      "path": "backend/app/worker/__init__.py",
+      "sha256": "3cde04c3e4440ecc8f53edbe14eed500b7783e14517c9d05add6a314e3c38a0f"
+    },
+    {
+      "module": "app.worker.command",
+      "path": "backend/app/worker/command.py",
+      "sha256": "4dc54e64a11077cffea5bee2f6ae63cb0d2dae59e97477c3d244dff1c7868aef"
+    },
+    {
+      "module": "app.worker.gate",
+      "path": "backend/app/worker/gate.py",
+      "sha256": "7e7588a58869038f53d850816c027aab00ecd1270d2c893d1fc4902978d32674"
+    },
+    {
+      "module": "app.worker.launcher",
+      "path": "backend/app/worker/launcher.py",
+      "sha256": "2071d7ce11b0264d1382956b9e292932277729509efb212efc3b00c342071f4f"
+    },
+    {
+      "module": "app.worker.one_call",
+      "path": "backend/app/worker/one_call.py",
+      "sha256": "3120abbea7b565179d67612ac16dbc1f0944dff0663d6e210ed9633f9841dc76"
+    },
+    {
+      "module": "app.worker.one_tool",
+      "path": "backend/app/worker/one_tool.py",
+      "sha256": "44339a110fedeb46832f8f57d8a8fa30286d77a3823b92905e63c35365bd4333"
+    },
+    {
+      "module": "app.worker.session",
+      "path": "backend/app/worker/session.py",
+      "sha256": "ae1f957da3b2032eb35709b4a2dd3f06ab036e09c9fc76666cecfa2f20d09829"
+    },
+    {
+      "module": "app.worker.supervisor_ipc",
+      "path": "backend/app/worker/supervisor_ipc.py",
+      "sha256": "f471649cca087c130cb901cd9e550534a159c5b07ca1e769edd31e1b99d2b751"
+    },
+    {
+      "module": "app.worker.windows_job",
+      "path": "backend/app/worker/windows_job.py",
+      "sha256": "d04ed8f249106328d81147707451e6092c2d650c9199bd6c4989931d5249c596"
+    },
+    {
+      "module": "tests.fixtures.task097",
+      "path": "backend/tests/fixtures/task097/__init__.py",
+      "sha256": "d48cede5e4a265321cf7a2aa2932b2938ec4950d677f4f1a457e4d2ced80dc1b"
+    },
+    {
+      "module": "tests.fixtures.task097.bootstrap",
+      "path": "backend/tests/fixtures/task097/bootstrap.py",
+      "sha256": "de6c5e031910d11f660b7a472281130747280c4addaa4d8cd9e7cb8579678ac7"
+    },
+    {
+      "module": "tests.fixtures.task097.network",
+      "path": "backend/tests/fixtures/task097/network.py",
+      "sha256": "f4fd517bba34c615409b64d75425eaf3a435d54d09b70d343612ccb33eb3d8ac"
+    },
+    {
+      "module": "tests.fixtures.task097.processes",
+      "path": "backend/tests/fixtures/task097/processes.py",
+      "sha256": "4f2c4e7222409f6b739b048ea6f24d7cc8d7fbd5c8664a4ec21e5b256563110a"
+    },
+    {
+      "module": "tests.fixtures.task097.repair",
+      "path": "backend/tests/fixtures/task097/repair.py",
+      "sha256": "47c8b625c48a443f77edbf78ee0fb606edb1d43b9af3f0f5ba0074e61d1d28de"
+    },
+    {
+      "module": "tests.fixtures.task097.samples",
+      "path": "backend/tests/fixtures/task097/samples.py",
+      "sha256": "9dba292410c5ed0b4dacb2f129eb8acaffbf691dba94ca2e7a211b8552ba41b8"
+    },
+    {
+      "module": "tests.fixtures.task097.support",
+      "path": "backend/tests/fixtures/task097/support.py",
+      "sha256": "cccbc87ea330de24dedb1886297e1db8c371d0af9b8ed42e955bff2311fff4c2"
+    },
+    {
+      "module": "tests.test_learning_config",
+      "path": "backend/tests/test_learning_config.py",
+      "sha256": "2163259ae8aa61fc07b6df4643a033e61b7c35da63ad38c7a9a91c9bd6f04ab2"
+    }
+  ],
+  "sup_attempts": 11,
+  "actual_sends": 10,
+  "process_cleanup_ok": true,
+  "fixture_cleanup_ok": true
+}

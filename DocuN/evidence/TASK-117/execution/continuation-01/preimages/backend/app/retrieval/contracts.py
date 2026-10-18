@@ -1,0 +1,79 @@
+"""有限检索命令、空间身份及领域引用；不携带授权秘密。"""
+from __future__ import annotations
+import hashlib
+import json
+from typing import Literal
+from uuid import UUID
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+HEX=r'^[0-9a-f]{64}$'
+
+
+def canonical(value):
+    return json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':'),allow_nan=False)
+
+
+def digest(value):return hashlib.sha256(canonical(value).encode('utf-8')).hexdigest()
+
+
+class RetrievalRef(BaseModel):
+    model_config=ConfigDict(extra='forbid',frozen=True,strict=True)
+    business_key:str
+    query_sha256:str=Field(pattern=HEX)
+    space_id:str=Field(pattern=HEX)
+    result_sha256:str=Field(pattern=HEX)
+
+    @field_validator('business_key')
+    @classmethod
+    def key(cls,value):
+        if str(UUID(value))!=value:raise ValueError('retrieval_binding_invalid')
+        return value
+
+
+class RetrievalCommandInput(BaseModel):
+    model_config=ConfigDict(extra='forbid',frozen=True,strict=True)
+    business_key:str
+    action:Literal['source_index','query']
+    expected_scope_revision:int=Field(ge=1,le=2147483647)
+    expected_domain_revision:int=Field(ge=0,le=2147483647)
+    query:str|None=Field(default=None,max_length=1024)
+    confirmed:Literal[True]
+
+    @field_validator('confirmed',mode='before')
+    @classmethod
+    def explicit_bool(cls,value):
+        if type(value) is not bool or value is not True:raise ValueError('explicit_confirmation_required')
+        return value
+
+    @field_validator('business_key')
+    @classmethod
+    def key(cls,value):
+        if str(UUID(value))!=value:raise ValueError('invalid_input')
+        return value
+
+    @model_validator(mode='after')
+    def body(self):
+        if self.action=='query':
+            if not self.query or not self.query.strip() or len(self.query.encode('utf-8'))>4096:raise ValueError('retrieval_query_limit')
+        elif self.query is not None:raise ValueError('retrieval_input_invalid')
+        return self
+
+
+class RetrievalRefusal(RuntimeError):
+    def __init__(self,code,status=409):self.code,self.status=code,status;super().__init__(code)
+
+
+def space_identity(provider,model):
+    return digest({'provider':provider,'configured_model':model,'dimensions':512,'normalization':'l2.v1','chunk_recipe':'lossless-line-2048cp.v1'})
+
+
+def fused_rank(term_ids,vector_ids,*,top_k=8):
+    """同分按原证据ID确定排序；距离/排名不构成语义支持。"""
+    if not 1<=top_k<=8 or len(term_ids)>32 or len(vector_ids)>32:raise ValueError('retrieval_catalog_limit')
+    scores={}
+    for ids in (term_ids,vector_ids):
+        seen=set()
+        for rank,eid in enumerate(ids,1):
+            if eid in seen:raise ValueError('retrieval_duplicate_candidate')
+            seen.add(eid);scores[eid]=scores.get(eid,0)+1/(60+rank)
+    return sorted(scores,key=lambda eid:(-scores[eid],eid))[:top_k]

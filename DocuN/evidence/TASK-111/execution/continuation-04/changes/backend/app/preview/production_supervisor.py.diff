@@ -1,0 +1,222 @@
+--- pre/backend/app/preview/production_supervisor.py
++++ backend/app/preview/production_supervisor.py
+@@ -58,6 +58,22 @@
+             # 不能在历史事件已淘汰后否认原先完整取得的停止证明。
+             if pointer.get("complete") is True and registry.get("complete") is True and registry.get("cid"):
+                 settled=await self.ledger.read_html_preview(registry["activity_id"],registry["preview_id"])
++                if settled["state"]=="failed_unstarted":
++                    saved=await self.ledger._read_html_stop_confirmation(registry["activity_id"],registry["preview_id"])
++                    previous=json.loads((folder/"supervisor-result.json").read_text(encoding="utf-8"))
++                    actual=inspect_owned(self.policy.docker,registry["cid"],intent)
++                    if (saved is None or saved.get("tree_confirmation")!="never_started" or previous.get("confirmed") is not True
++                        or canonical(saved)!=canonical(previous.get("proof")) or saved.get("cid")!=registry["cid"]
++                        or saved.get("image_id")!=intent["image_id"] or saved.get("nonce")!=intent["nonce"]
++                        or actual["state"]["Status"]!="created" or actual["state"]["Running"] or actual["state"]["Pid"]!=0
++                        or actual["state"]["StartedAt"]!=saved.get("inspect",{}).get("state",{}).get("StartedAt")
++                        or any(saved.get(key,{}).get("ActiveProcesses")!=0 for key in ("reaper_windows_job","supervisor_cli_windows_job"))):
++                        raise OwnershipUnknown("settled_unstarted_receipt_mismatch")
++                    for owned in (dict(pid=registry["attach_pid"],birth=registry["attach_birth"]),registry["reaper_owner"]):
++                        status=birth(owned["pid"])
++                        if status["state"]=="unknown" or status["state"]=="running" and status["birth"]==owned["birth"]:
++                            raise OwnershipUnknown("settled_owned_process_not_ended")
++                    self.blocked=False;return
+                 if settled["state"]=="stopped":
+                     saved=await self.ledger._read_html_stop_confirmation(registry["activity_id"],registry["preview_id"])
+                     facts=json.loads((folder/"kernel-premises.json").read_text(encoding="utf-8"))
+@@ -119,9 +135,13 @@
+                     "lookup":"exact_name_and_nonce_absent","parent_lifetime_ended":True,"owned_reaper_ended":True,"attach_never_started":True}
+             else:
+                 proof=stop_owned(self.policy.docker,cid,intent,facts,attach_ended=attach_ended)
+-                if state["state"]["Status"]=="created" and not state["state"]["Running"] and state["state"]["Pid"]==0 and not registry.get("start_requested_ns"):
++                if state["state"]["Status"]=="created" and not state["state"]["Running"] and state["state"]["Pid"]==0 and state["state"]["StartedAt"].startswith("0001-"):
+                     proof={"tree_confirmation":"never_started","cid":cid,"inspect":state,"recovery":True}
+                 proof["owned_reaper_ended"]=True;proof["parent_lifetime_ended"]=True
++                if proof["tree_confirmation"]=="private_pid_init_terminated":
++                    for role,key in (("SUP","supervisor_cli_windows_job"),("REAP","reaper_windows_job")):
++                        with HostJob(job_name(registry["preview_id"],intent["nonce"],role),existing=True) as owned_job:
++                            proof[key]=owned_job.finish()
+             if proof["tree_confirmation"] not in ("private_pid_init_terminated","never_started"):raise OwnershipUnknown("recovery_tree_unknown")
+             recovery_stage="persistent_row";row=await self.ledger.read_html_preview(registry["activity_id"],registry["preview_id"])
+             if row["state"] not in ("stopped","failed_unstarted"):
+@@ -206,9 +226,26 @@
+ 
+     def _registry(self,c):atomic_json(c["folder"]/"registry.json",c["registry"])
+ 
++    def _diagnose(self,c,stage,error,path_alias):
++        """只记录固定阶段与系统错误号；写失败不能阻挡物理清场。"""
++        c["stop"].set();c["error_code"]=c["error_code"] or "supervision_unconfirmed"
++        row={"stage":stage,"type":type(error).__name__,"errno":getattr(error,"errno",None),
++          "winerror":getattr(error,"winerror",None),"path_alias":path_alias,"at_ns":time.monotonic_ns()}
++        c.setdefault("diagnostics",[]).append(row)
++        try:atomic_json(c["folder"]/"failure.json",row)
++        except OSError:pass
++
++    def _save_observation(self,c,path,value):
++        try:atomic_json(path,value);return True
++        except OSError as error:self._diagnose(c,"observation_publish",error,path.name);return False
++
++    def _observe(self,c,kind,value):
++        try:self._event(kind,value)
++        except Exception as error:self._diagnose(c,"event_publish",error,"event_sink")
++
+     def _transition(self,c,state,**fields):
+         self._db(self.ledger.update_html_preview(c["preview_id"],c["control_key"],state,**fields));c["state"]=state
+-        self._event("state",{"preview_id":c["preview_id"],"state":state,"at_ns":time.monotonic_ns()})
++        self._observe(c,"state",{"preview_id":c["preview_id"],"state":state,"at_ns":time.monotonic_ns()})
+ 
+     def _read(self,c):
+         try:
+@@ -218,22 +255,31 @@
+                 if kind=="ready":
+                     if head["seq"]!=0 or c["received_ready"] is not None or body.get("load_manifest_sha256")!=self.policy.load_manifest_sha256 or body.get("renderer_sha256")!=self.policy.renderer_sha256 or body.get("description_sha256")!=digest(c["description"]):
+                         raise ValueError("ready_identity")
+-                    c["received_ready"]=body;c["kernel_ready"]=body;atomic_json(c["folder"]/"ready.json",body);atomic_json(c["folder"]/"ready-packet.json",{"header":head,"body":body});atomic_json(c["folder"]/"kernel-premises.json",body);c["ready"].set()
++                    c["received_ready"]=body;c["kernel_ready"]=body
++                    for filename,value in (("ready.json",body),("ready-packet.json",{"header":head,"body":body}),("kernel-premises.json",body)):
++                        self._save_observation(c,c["folder"]/filename,value)
++                    c["ready"].set()
+                 elif kind=="frame":
+                     if head["seq"]<=c["frame_seq"]:raise ValueError("frame_order")
+                     c["frame_seq"]=head["seq"];c["frame"]=(head,body)
+                 elif kind=="input_ack":
+                     if head["seq"]!=c["input_seq"]:raise ValueError("ack_order")
+-                    c["last_ack"]=body;c["ack"].set();self._event("ack",{"preview_id":c["preview_id"],"seq":head["seq"],"body":body})
++                    c["last_ack"]=body;c["ack"].set();self._observe(c,"ack",{"preview_id":c["preview_id"],"seq":head["seq"],"body":body})
+                 else:
+                     if body.get("reason_code")=="bootstrap_identity":
+-                        c["kernel_ready"]=body;atomic_json(c["folder"]/"kernel-premises.json",body)
++                        c["kernel_ready"]=body;self._save_observation(c,c["folder"]/"kernel-premises.json",body)
+                     elif body.get("reason_code")=="fixed_input_observation":
+-                        atomic_json(c["folder"]/("engine-observation-"+str(body["last_input_seq"])+".json"),body)
++                        self._save_observation(c,c["folder"]/("engine-observation-"+str(body["last_input_seq"])+".json"),body)
+                     elif body.get("state")=="stopping":c["error_code"]=body.get("reason_code");c["stop"].set()
+-                self._event("packet",{"preview_id":c["preview_id"],"type":kind,"seq":head["seq"],"body_bytes":head["body_bytes"],"body_sha256":head["body_sha256"]})
++                self._observe(c,"packet",{"preview_id":c["preview_id"],"type":kind,"seq":head["seq"],"body_bytes":head["body_bytes"],"body_sha256":head["body_sha256"]})
+         except EOFError:c["pipe_eof"]=True;c["stop"].set()
+-        except Exception:c["error_code"]="protocol_unconfirmed";c["stop"].set()
++        except Exception:
++            c["error_code"]="protocol_unconfirmed";c["stop"].set()
++            # 协议已拒绝，仍排空同一个匿名管道直至真实EOF。
++            try:
++                while c["attach"].stdout.read(4096):pass
++                c["pipe_eof"]=True
++            except OSError:pass
+ 
+     def _stderr(self,c):
+         data=bytearray()
+@@ -242,7 +288,8 @@
+             if not chunk:break
+             if len(data)+len(chunk)>8192:c["error_code"]="stderr_limit";c["stop"].set();break
+             data.extend(chunk)
+-        (c["folder"]/"container-stderr.bin").write_bytes(data)
++        try:(c["folder"]/"container-stderr.bin").write_bytes(data)
++        except OSError as error:self._diagnose(c,"stderr_publish",error,"container-stderr.bin")
+ 
+     def _run(self,c):
+         with HostJob(job_name(c["preview_id"],c["nonce"],"SUP")) as job:
+@@ -250,7 +297,7 @@
+             with scope(job):self._run_owned(c)
+ 
+     def _run_owned(self,c):
+-        proof=None;started=False;registry=c["folder"]/"registry.json"
++        proof=None;started=False;registry=c["folder"]/"registry.json";stage="reaper_start"
+         try:
+             reaper=subprocess.Popen([str(BACKEND/".venv"/"Scripts"/"python.exe"),"-B","-m","app.preview.production_reaper",str(registry)],
+                 cwd=BACKEND,env=clean_env(),stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,creationflags=subprocess.CREATE_NO_WINDOW)
+@@ -288,19 +335,25 @@
+             if bound["cid"]!=cid or bound["deadline_ns"]!=c["deadline_ns"]:raise OwnershipUnknown("reaper_bind_identity")
+             self._transition(c,"start_requested");c["registry"]["start_requested_ns"]=time.monotonic_ns();self._registry(c)
+             self._event("start_attempt",{"preview_id":c["preview_id"],"cid":cid})
+-            attach=JobChild([self.policy.docker,"start","-a","-i",cid],c["host_job"],env=clean_env())
+-            c["attach"]=attach;started=True
++            stage="suspended_attach_create"
++            attach=JobChild([self.policy.docker,"start","-a","-i",cid],c["host_job"],env=clean_env(),suspended=True)
++            c["attach"]=attach
+             born=birth(attach.pid)
+             if born["state"]!="running":raise OwnershipUnknown("attach_birth_unconfirmed")
+-            c["registry"]["attach_pid"]=attach.pid;c["registry"]["attach_birth"]=born["birth"];self._registry(c)
++            c["registry"]["attach_pid"]=attach.pid;c["registry"]["attach_birth"]=born["birth"];c["registry"]["attach_suspended"]=True
++            stage="readers_prepare"
+             c["reader"]=threading.Thread(target=self._read,args=(c,),daemon=False);c["reader"].start()
+             c["stderr_reader"]=threading.Thread(target=self._stderr,args=(c,),daemon=False);c["stderr_reader"].start()
++            stage="suspended_attach_registry";self._registry(c)
++            if c["stop"].is_set() or time.monotonic_ns()>=min(c["t0_ns"]+8000000000,c["deadline_ns"]-10000000000):
++                raise OwnershipUnknown("start_window_closed")
++            stage="attach_resume";attach.resume();started=True;stage="init_send"
+             with self._writer:send_packet(attach.stdin,c,"init",0,{"schema":"retrolume.preview.init.v2","description":c["description"],
+               "description_sha256":digest(c["description"]),"renderer_sha256":self.policy.renderer_sha256,"viewport":{"width":640,"height":480}})
+             ready_deadline=min(c["t0_ns"]+8000000000,c["deadline_ns"]-10000000000)
+             while not c["ready"].wait(.02):
+                 if c["stop"].is_set() or time.monotonic_ns()>=ready_deadline:raise OwnershipUnknown("ready_unconfirmed")
+-            self._transition(c,"ready")
++            stage="ready_transition";self._transition(c,"ready");stage="running"
+             while not c["stop"].wait(.05):
+                 now=time.monotonic_ns()
+                 if now>=c["deadline_ns"]-10000000000 or now-c["last_contact_ns"]>2000000000:
+@@ -309,8 +362,7 @@
+                 row=self._db(self.ledger.read_html_preview(c["aid"],c["preview_id"]))
+                 if not row["eligible"]:c["error_code"]="source_invalid";break
+         except Exception as exc:
+-            atomic_json(c["folder"]/"failure.json",{"type":type(exc).__name__,"code":str(exc) if isinstance(exc,(OwnershipUnknown,DockerUnknown)) else "bounded_supervision_error","at_ns":time.monotonic_ns()})
+-            c["error_code"]=c["error_code"] or "supervision_unconfirmed"
++            self._diagnose(c,stage,exc,"registry.json" if stage=="suspended_attach_registry" else "fixed_control_flow")
+         finally:
+             c["stop"].set();diagnostic=c["deadline_ns"]+15000000000
+             try:
+@@ -331,13 +383,19 @@
+                         if c["reader"]:c["reader"].join(timeout=2)
+                         if c["stderr_reader"]:c["stderr_reader"].join(timeout=2)
+                         proof=stop_owned(self.policy.docker,c["cid"],c["intent"],c["kernel_ready"],
+-                            attach_ended=c["pipe_eof"] and c["attach"].poll() is not None and not c["reader"].is_alive() and not c["stderr_reader"].is_alive(),
++                            attach_ended=c["pipe_eof"] and c["attach"].poll() is not None and c["reader"] is not None and c["stderr_reader"] is not None and not c["reader"].is_alive() and not c["stderr_reader"].is_alive(),
+                             diagnostic_deadline_ns=diagnostic)
+                         proof["first_stop_observation"]=initial
+                 elif c["cid"]:
++                    if c["attach"]:
++                        c["attach"].terminate();c["attach"].wait(timeout=2)
++                    for reader in (c["reader"],c["stderr_reader"]):
++                        if reader and reader.ident is not None:reader.join(timeout=2)
+                     state=inspect_owned(self.policy.docker,c["cid"],c["intent"])
+                     if state["state"]["Status"]=="created" and not state["state"]["Running"] and state["state"]["Pid"]==0:
+-                        proof={"tree_confirmation":"never_started","cid":c["cid"],"image_id":self.policy.image_id,"nonce":c["nonce"],"inspect":state,"end_ns":time.monotonic_ns()}
++                        proof={"tree_confirmation":"never_started","cid":c["cid"],"image_id":self.policy.image_id,"nonce":c["nonce"],"inspect":state,
++                          "attach_resumed":False,"attach_birth":c["registry"].get("attach_birth"),"attach_pid":c["registry"].get("attach_pid"),
++                          "attach_ended":c["attach"] is None or c["attach"].poll() is not None,"end_ns":time.monotonic_ns()}
+             except Exception:proof=None
+             if proof is not None and proof["tree_confirmation"] in ("private_pid_init_terminated","never_started"):
+                 try:
+@@ -361,23 +419,27 @@
+                 self.blocked=True
+                 try:self._transition(c,"cleanup_unconfirmed",first_receipt=proof or {"tree_confirmation":"unconfirmed","error_code":c["error_code"]})
+                 except Exception:pass
+-            c["registry"]["complete"]=confirmed;self._registry(c)
++            c["registry"]["complete"]=confirmed
++            try:self._registry(c)
++            except OSError as error:self._diagnose(c,"final_registry",error,"registry.json");self.blocked=True;confirmed=False
+             if c["reaper"]:
+                 if c["reaper_owner"]:terminate_owned(c["reaper_owner"]["pid"],c["reaper_owner"]["birth"])
+                 try:c["reaper"].wait(timeout=2)
+                 except subprocess.TimeoutExpired:c["reaper"].terminate();c["reaper"].wait(timeout=2)
+             if c["reaper_job"]:
+-                try:atomic_json(c["folder"]/"reaper-job-final.json",c["reaper_job"].finish())
++                try:self._save_observation(c,c["folder"]/"reaper-job-final.json",c["reaper_job"].finish())
+                 except Exception:self.blocked=True
+                 finally:c["reaper_job"].close()
+-            try:atomic_json(c["folder"]/"supervisor-job-final.json",c["host_job"].finish())
++            try:self._save_observation(c,c["folder"]/"supervisor-job-final.json",c["host_job"].finish())
+             except Exception:self.blocked=True
+             if c["attach"]:c["attach"].close()
+-            atomic_json(c["folder"]/"supervisor-result.json",{"preview_id":c["preview_id"],"state":c["state"],"confirmed":confirmed,
+-                         "error_code":c["error_code"],"proof":proof,"at_ns":time.monotonic_ns()})
+-            self._event("finished",{"preview_id":c["preview_id"],"state":c["state"],"confirmed":confirmed,"error_code":c["error_code"]})
++            published=self._save_observation(c,c["folder"]/"supervisor-result.json",{"preview_id":c["preview_id"],"state":c["state"],"confirmed":confirmed,
++                         "error_code":c["error_code"],"diagnostics":c.get("diagnostics",[]),"proof":proof,"at_ns":time.monotonic_ns()})
++            self._observe(c,"finished",{"preview_id":c["preview_id"],"state":c["state"],"confirmed":confirmed,"error_code":c["error_code"]})
++            if not published:self.blocked=True;confirmed=False
+             if confirmed:
+-                atomic_json(self.current_file,{"folder":str(c["folder"]),"preview_id":c["preview_id"],"complete":True})
++                if not self._save_observation(c,self.current_file,{"folder":str(c["folder"]),"preview_id":c["preview_id"],"complete":True}):
++                    self.blocked=True;return
+                 with self._lock:
+                     if self.current is c:self.current=None
+ 

@@ -1,0 +1,559 @@
+{
+  "actual_file": "html-shape-normalized-1088137906000000.json",
+  "expected_sha256": "573ba0d1e7c70f11834920837a694ee52cfa705eed4206dfcc272b914b33abac",
+  "actual_sha256": "d67d91cdbc39660ad8f2d2013c305c0f36d64b5d28e4b4d7e4196b5caa096b80",
+  "different_sections": [
+    "constraints"
+  ],
+  "constraints": [
+    {
+      "index": 30,
+      "expected": {
+        "conname": "html_preview_budgets_activity_id_fkey",
+        "contype": "f",
+        "convalidated": true,
+        "definition": "FOREIGN KEY (activity_id) REFERENCES activities(id)",
+        "relname": "html_preview_budgets"
+      },
+      "actual": {
+        "relname": "html_preview_budgets",
+        "conname": "data_restore_budget_shape",
+        "contype": "t",
+        "convalidated": true,
+        "definition": "TRIGGER DEFERRABLE INITIALLY DEFERRED"
+      }
+    },
+    {
+      "index": 31,
+      "expected": {
+        "conname": "html_preview_budgets_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK (((settled_seconds + reserved_seconds) <= max_seconds))",
+        "relname": "html_preview_budgets"
+      },
+      "actual": {
+        "relname": "html_preview_budgets",
+        "conname": "html_preview_budgets_activity_id_fkey",
+        "contype": "f",
+        "convalidated": true,
+        "definition": "FOREIGN KEY (activity_id) REFERENCES activities(id)"
+      }
+    },
+    {
+      "index": 32,
+      "expected": {
+        "conname": "html_preview_budgets_config_sha256_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK ((config_sha256 ~ '^[0-9a-f]{64}$'::text))",
+        "relname": "html_preview_budgets"
+      },
+      "actual": {
+        "relname": "html_preview_budgets",
+        "conname": "html_preview_budgets_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK (((settled_seconds + reserved_seconds) <= max_seconds))"
+      }
+    },
+    {
+      "index": 33,
+      "expected": {
+        "conname": "html_preview_budgets_max_seconds_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK ((max_seconds = 180))",
+        "relname": "html_preview_budgets"
+      },
+      "actual": {
+        "relname": "html_preview_budgets",
+        "conname": "html_preview_budgets_config_sha256_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK ((config_sha256 ~ '^[0-9a-f]{64}$'::text))"
+      }
+    },
+    {
+      "index": 34,
+      "expected": {
+        "conname": "html_preview_budgets_max_starts_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK ((max_starts = 3))",
+        "relname": "html_preview_budgets"
+      },
+      "actual": {
+        "relname": "html_preview_budgets",
+        "conname": "html_preview_budgets_max_seconds_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK ((max_seconds = 180))"
+      }
+    },
+    {
+      "index": 35,
+      "expected": {
+        "conname": "html_preview_budgets_pkey",
+        "contype": "p",
+        "convalidated": true,
+        "definition": "PRIMARY KEY (activity_id)",
+        "relname": "html_preview_budgets"
+      },
+      "actual": {
+        "relname": "html_preview_budgets",
+        "conname": "html_preview_budgets_max_starts_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK ((max_starts = 3))"
+      }
+    },
+    {
+      "index": 36,
+      "expected": {
+        "conname": "html_preview_budgets_reserved_seconds_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK (((reserved_seconds >= 0) AND (reserved_seconds <= 180)))",
+        "relname": "html_preview_budgets"
+      },
+      "actual": {
+        "relname": "html_preview_budgets",
+        "conname": "html_preview_budgets_pkey",
+        "contype": "p",
+        "convalidated": true,
+        "definition": "PRIMARY KEY (activity_id)"
+      }
+    },
+    {
+      "index": 37,
+      "expected": {
+        "conname": "html_preview_budgets_revision_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK (((revision >= 0) AND (revision <= 2147483647)))",
+        "relname": "html_preview_budgets"
+      },
+      "actual": {
+        "relname": "html_preview_budgets",
+        "conname": "html_preview_budgets_reserved_seconds_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK (((reserved_seconds >= 0) AND (reserved_seconds <= 180)))"
+      }
+    },
+    {
+      "index": 38,
+      "expected": {
+        "conname": "html_preview_budgets_settled_seconds_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK (((settled_seconds >= 0) AND (settled_seconds <= 180)))",
+        "relname": "html_preview_budgets"
+      },
+      "actual": {
+        "relname": "html_preview_budgets",
+        "conname": "html_preview_budgets_revision_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK (((revision >= 0) AND (revision <= 2147483647)))"
+      }
+    },
+    {
+      "index": 39,
+      "expected": {
+        "conname": "html_preview_budgets_starts_used_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK (((starts_used >= 0) AND (starts_used <= 3)))",
+        "relname": "html_preview_budgets"
+      },
+      "actual": {
+        "relname": "html_preview_budgets",
+        "conname": "html_preview_budgets_settled_seconds_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK (((settled_seconds >= 0) AND (settled_seconds <= 180)))"
+      }
+    },
+    {
+      "index": 40,
+      "expected": {
+        "conname": "html_preview_sessions_activity_id_artifact_id_fkey",
+        "contype": "f",
+        "convalidated": true,
+        "definition": "FOREIGN KEY (activity_id, artifact_id) REFERENCES html_artifacts(activity_id, artifact_id)",
+        "relname": "html_preview_sessions"
+      },
+      "actual": {
+        "relname": "html_preview_budgets",
+        "conname": "html_preview_budgets_starts_used_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK (((starts_used >= 0) AND (starts_used <= 3)))"
+      }
+    },
+    {
+      "index": 41,
+      "expected": {
+        "conname": "html_preview_sessions_activity_id_fkey",
+        "contype": "f",
+        "convalidated": true,
+        "definition": "FOREIGN KEY (activity_id) REFERENCES activities(id)",
+        "relname": "html_preview_sessions"
+      },
+      "actual": {
+        "relname": "html_preview_sessions",
+        "conname": "data_restore_session_shape",
+        "contype": "t",
+        "convalidated": true,
+        "definition": "TRIGGER DEFERRABLE INITIALLY DEFERRED"
+      }
+    },
+    {
+      "index": 42,
+      "expected": {
+        "conname": "html_preview_sessions_activity_id_generation_key",
+        "contype": "u",
+        "convalidated": true,
+        "definition": "UNIQUE (activity_id, generation)",
+        "relname": "html_preview_sessions"
+      },
+      "actual": {
+        "relname": "html_preview_sessions",
+        "conname": "html_preview_sessions_activity_id_artifact_id_fkey",
+        "contype": "f",
+        "convalidated": true,
+        "definition": "FOREIGN KEY (activity_id, artifact_id) REFERENCES html_artifacts(activity_id, artifact_id)"
+      }
+    },
+    {
+      "index": 43,
+      "expected": {
+        "conname": "html_preview_sessions_activity_id_start_key_key",
+        "contype": "u",
+        "convalidated": true,
+        "definition": "UNIQUE (activity_id, start_key)",
+        "relname": "html_preview_sessions"
+      },
+      "actual": {
+        "relname": "html_preview_sessions",
+        "conname": "html_preview_sessions_activity_id_fkey",
+        "contype": "f",
+        "convalidated": true,
+        "definition": "FOREIGN KEY (activity_id) REFERENCES activities(id)"
+      }
+    },
+    {
+      "index": 44,
+      "expected": {
+        "conname": "html_preview_sessions_artifact_sha256_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK ((artifact_sha256 ~ '^[0-9a-f]{64}$'::text))",
+        "relname": "html_preview_sessions"
+      },
+      "actual": {
+        "relname": "html_preview_sessions",
+        "conname": "html_preview_sessions_activity_id_generation_key",
+        "contype": "u",
+        "convalidated": true,
+        "definition": "UNIQUE (activity_id, generation)"
+      }
+    },
+    {
+      "index": 45,
+      "expected": {
+        "conname": "html_preview_sessions_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK ((deadline_ns > t0_ns))",
+        "relname": "html_preview_sessions"
+      },
+      "actual": {
+        "relname": "html_preview_sessions",
+        "conname": "html_preview_sessions_activity_id_start_key_key",
+        "contype": "u",
+        "convalidated": true,
+        "definition": "UNIQUE (activity_id, start_key)"
+      }
+    },
+    {
+      "index": 46,
+      "expected": {
+        "conname": "html_preview_sessions_check1",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK ((deadline_ns = (t0_ns + ((reserve_seconds)::bigint * 1000000000))))",
+        "relname": "html_preview_sessions"
+      },
+      "actual": {
+        "relname": "html_preview_sessions",
+        "conname": "html_preview_sessions_artifact_sha256_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK ((artifact_sha256 ~ '^[0-9a-f]{64}$'::text))"
+      }
+    },
+    {
+      "index": 47,
+      "expected": {
+        "conname": "html_preview_sessions_check2",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK (((state = ANY (ARRAY['stopped'::text, 'failed_unstarted'::text])) = (elapsed_seconds IS NOT NULL)))",
+        "relname": "html_preview_sessions"
+      },
+      "actual": {
+        "relname": "html_preview_sessions",
+        "conname": "html_preview_sessions_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK ((deadline_ns > t0_ns))"
+      }
+    },
+    {
+      "index": 48,
+      "expected": {
+        "conname": "html_preview_sessions_cid_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK ((cid ~ '^[0-9a-f]{64}$'::text))",
+        "relname": "html_preview_sessions"
+      },
+      "actual": {
+        "relname": "html_preview_sessions",
+        "conname": "html_preview_sessions_check1",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK ((deadline_ns = (t0_ns + ((reserve_seconds)::bigint * 1000000000))))"
+      }
+    },
+    {
+      "index": 49,
+      "expected": {
+        "conname": "html_preview_sessions_confirmation_receipt_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK (((octet_length(confirmation_receipt) >= 2) AND (octet_length(confirmation_receipt) <= 24576)))",
+        "relname": "html_preview_sessions"
+      },
+      "actual": {
+        "relname": "html_preview_sessions",
+        "conname": "html_preview_sessions_check2",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK (((state = ANY (ARRAY['stopped'::text, 'failed_unstarted'::text])) = (elapsed_seconds IS NOT NULL)))"
+      }
+    },
+    {
+      "index": 50,
+      "expected": {
+        "conname": "html_preview_sessions_control_key_sha256_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK ((control_key_sha256 ~ '^[0-9a-f]{64}$'::text))",
+        "relname": "html_preview_sessions"
+      },
+      "actual": {
+        "relname": "html_preview_sessions",
+        "conname": "html_preview_sessions_cid_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK ((cid ~ '^[0-9a-f]{64}$'::text))"
+      }
+    },
+    {
+      "index": 51,
+      "expected": {
+        "conname": "html_preview_sessions_elapsed_seconds_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK (((elapsed_seconds >= 0) AND (elapsed_seconds <= 60)))",
+        "relname": "html_preview_sessions"
+      },
+      "actual": {
+        "relname": "html_preview_sessions",
+        "conname": "html_preview_sessions_confirmation_receipt_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK (((octet_length(confirmation_receipt) >= 2) AND (octet_length(confirmation_receipt) <= 24576)))"
+      }
+    },
+    {
+      "index": 52,
+      "expected": {
+        "conname": "html_preview_sessions_first_stop_receipt_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK (((octet_length(first_stop_receipt) >= 2) AND (octet_length(first_stop_receipt) <= 24576)))",
+        "relname": "html_preview_sessions"
+      },
+      "actual": {
+        "relname": "html_preview_sessions",
+        "conname": "html_preview_sessions_control_key_sha256_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK ((control_key_sha256 ~ '^[0-9a-f]{64}$'::text))"
+      }
+    },
+    {
+      "index": 53,
+      "expected": {
+        "conname": "html_preview_sessions_generation_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK ((generation > 0))",
+        "relname": "html_preview_sessions"
+      },
+      "actual": {
+        "relname": "html_preview_sessions",
+        "conname": "html_preview_sessions_elapsed_seconds_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK (((elapsed_seconds >= 0) AND (elapsed_seconds <= 60)))"
+      }
+    },
+    {
+      "index": 54,
+      "expected": {
+        "conname": "html_preview_sessions_image_id_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK ((image_id ~ '^sha256:[0-9a-f]{64}$'::text))",
+        "relname": "html_preview_sessions"
+      },
+      "actual": {
+        "relname": "html_preview_sessions",
+        "conname": "html_preview_sessions_first_stop_receipt_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK (((octet_length(first_stop_receipt) >= 2) AND (octet_length(first_stop_receipt) <= 24576)))"
+      }
+    },
+    {
+      "index": 55,
+      "expected": {
+        "conname": "html_preview_sessions_nonce_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK ((nonce ~ '^[0-9a-f]{64}$'::text))",
+        "relname": "html_preview_sessions"
+      },
+      "actual": {
+        "relname": "html_preview_sessions",
+        "conname": "html_preview_sessions_generation_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK ((generation > 0))"
+      }
+    },
+    {
+      "index": 56,
+      "expected": {
+        "conname": "html_preview_sessions_owner_key_sha256_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK ((owner_key_sha256 ~ '^[0-9a-f]{64}$'::text))",
+        "relname": "html_preview_sessions"
+      },
+      "actual": {
+        "relname": "html_preview_sessions",
+        "conname": "html_preview_sessions_image_id_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK ((image_id ~ '^sha256:[0-9a-f]{64}$'::text))"
+      }
+    },
+    {
+      "index": 57,
+      "expected": {
+        "conname": "html_preview_sessions_pkey",
+        "contype": "p",
+        "convalidated": true,
+        "definition": "PRIMARY KEY (preview_id)",
+        "relname": "html_preview_sessions"
+      },
+      "actual": {
+        "relname": "html_preview_sessions",
+        "conname": "html_preview_sessions_nonce_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK ((nonce ~ '^[0-9a-f]{64}$'::text))"
+      }
+    },
+    {
+      "index": 58,
+      "expected": {
+        "conname": "html_preview_sessions_reserve_seconds_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK (((reserve_seconds >= 30) AND (reserve_seconds <= 60)))",
+        "relname": "html_preview_sessions"
+      },
+      "actual": {
+        "relname": "html_preview_sessions",
+        "conname": "html_preview_sessions_owner_key_sha256_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK ((owner_key_sha256 ~ '^[0-9a-f]{64}$'::text))"
+      }
+    },
+    {
+      "index": 59,
+      "expected": {
+        "conname": "html_preview_sessions_state_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK ((state = ANY (ARRAY['reserved'::text, 'registered'::text, 'start_requested'::text, 'ready'::text, 'running'::text, 'stopping'::text, 'stopped'::text, 'failed_unstarted'::text, 'cleanup_unconfirmed'::text])))",
+        "relname": "html_preview_sessions"
+      },
+      "actual": {
+        "relname": "html_preview_sessions",
+        "conname": "html_preview_sessions_pkey",
+        "contype": "p",
+        "convalidated": true,
+        "definition": "PRIMARY KEY (preview_id)"
+      }
+    },
+    {
+      "index": 60,
+      "expected": {
+        "conname": "html_preview_sessions_t0_ns_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK ((t0_ns > 0))",
+        "relname": "html_preview_sessions"
+      },
+      "actual": {
+        "relname": "html_preview_sessions",
+        "conname": "html_preview_sessions_reserve_seconds_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK (((reserve_seconds >= 30) AND (reserve_seconds <= 60)))"
+      }
+    },
+    {
+      "index": 61,
+      "expected": null,
+      "actual": {
+        "relname": "html_preview_sessions",
+        "conname": "html_preview_sessions_state_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK ((state = ANY (ARRAY['reserved'::text, 'registered'::text, 'start_requested'::text, 'ready'::text, 'running'::text, 'stopping'::text, 'stopped'::text, 'failed_unstarted'::text, 'cleanup_unconfirmed'::text])))"
+      }
+    },
+    {
+      "index": 62,
+      "expected": null,
+      "actual": {
+        "relname": "html_preview_sessions",
+        "conname": "html_preview_sessions_t0_ns_check",
+        "contype": "c",
+        "convalidated": true,
+        "definition": "CHECK ((t0_ns > 0))"
+      }
+    }
+  ]
+}

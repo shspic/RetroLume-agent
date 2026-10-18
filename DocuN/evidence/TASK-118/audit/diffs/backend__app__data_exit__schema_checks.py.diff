@@ -1,0 +1,73 @@
+--- first-pre/backend/app/data_exit/schema_checks.py
++++ current/backend/app/data_exit/schema_checks.py
+@@ -22,9 +22,10 @@
+  (c.relname='teaching_commands' AND q.contype='f' AND q.confrelid='public.teaching_records'::regclass))"""
+ 
+ 
+-def check_data_shape(rows,roles,triggers,constraints):
++def check_data_shape(rows,roles,triggers,constraints,profile='data_exit.v1.r01'):
+     from .schema import DATA_FUNCTIONS
+-    from .contracts import TABLES
++    from .schema_profiles import get_profile
++    TABLES=get_profile(profile).tables
+     if len(rows)!=len(DATA_FUNCTIONS):raise DataError('data_schema_not_ready',503)
+     for row in rows:
+         expected=DATA_FUNCTIONS[row['proname']]
+@@ -32,7 +33,7 @@
+             or row['provolatile']!=expected['volatility'] or row['proconfig']!=['search_path=pg_catalog, pg_temp']
+             or row['owner']!='retrolume_data_owner' or row['public_execute']):raise DataError('data_schema_not_ready',503)
+     if len(roles)!=4 or any(any(v for k,v in row.items() if k!='rolname') for row in roles):raise DataError('data_schema_not_ready',503)
+-    if len(triggers)!=28 or {row['relname'] for row in triggers}!=set(TABLES) or any(
++    if len(triggers)!=len(TABLES) or {row['relname'] for row in triggers}!=set(TABLES) or any(
+         row['tgenabled']!='O' or row['tgtype']!=31 or row['function_name']!='data_runtime_write_guard' or row['function_schema']!='public'
+         for row in triggers):raise DataError('data_schema_not_ready',503)
+     expected={
+@@ -49,16 +50,23 @@
+         if kind=='f' and row['reference_table'] not in ('teaching_records','public.teaching_records'):raise DataError('data_schema_not_ready',503)
+ 
+ 
+-def assert_data_schema_sync(connection):
++def assert_data_schema_sync(connection,profile=None):
+     from .schema import DATA_FUNCTIONS
++    from .schema_profiles import observed_profile,get_profile,R02,extra_shape_queries,check_extra_shape
++    profile=get_profile(profile) if profile is not None else observed_profile(connection)
+     rows=connection.execute(FUNCTION_QUERY,(list(DATA_FUNCTIONS),)).fetchall()
+     roles=connection.execute(ROLE_QUERY,(DATA_ROLES,)).fetchall()
+     triggers=connection.execute(TRIGGER_QUERY).fetchall()
+-    check_data_shape(rows,roles,triggers,connection.execute(CONSTRAINT_QUERY).fetchall())
++    check_data_shape(rows,roles,triggers,connection.execute(CONSTRAINT_QUERY).fetchall(),profile.name)
++    if profile.name==R02:
++        shape={key:connection.execute(query).fetchall() for key,query in extra_shape_queries().items()}
++        check_extra_shape(shape)
+ 
+ 
+ async def assert_data_schema(connection):
+     from .schema import DATA_FUNCTIONS
++    from .schema_profiles import observed_profile_async,R02,extra_shape_queries,check_extra_shape
++    profile=await observed_profile_async(connection)
+     cursor=await connection.execute(FUNCTION_QUERY,(list(DATA_FUNCTIONS),))
+     rows=await cursor.fetchall()
+     cursor=await connection.execute(ROLE_QUERY,(DATA_ROLES,))
+@@ -66,7 +74,12 @@
+     cursor=await connection.execute(TRIGGER_QUERY)
+     triggers=await cursor.fetchall()
+     cursor=await connection.execute(CONSTRAINT_QUERY)
+-    check_data_shape(rows,roles,triggers,await cursor.fetchall())
++    check_data_shape(rows,roles,triggers,await cursor.fetchall(),profile.name)
++    if profile.name==R02:
++        shape={}
++        for key,query in extra_shape_queries().items():
++            cursor=await connection.execute(query);shape[key]=await cursor.fetchall()
++        check_extra_shape(shape)
+ 
+ 
+ async def schema_mode(connection):
+@@ -81,6 +94,8 @@
+     """核十三版精确新增后投影回十二版指纹，任意额外授权仍会失败。"""
+     import copy
+     from .schema import BUSINESS_FUNCTIONS_013,LEGACY_FUNCTION_SOURCES
++    from .schema_profiles import project_014
++    shape=project_014(shape)
+     result=copy.deepcopy(shape)
+     allowed={'retrolume_data_snapshot':{'r'},'retrolume_data_restore_loader':{'ar','ra'},'retrolume_data_owner':{'r'}}
+     runtime_tables={'material_sources','material_versions','pdf_review_candidates','pdf_extracted_pages','pdf_review_pages',

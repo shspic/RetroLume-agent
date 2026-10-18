@@ -1,0 +1,11 @@
+--- pre/backend/app/worker/session.py
++++ final/backend/app/worker/session.py
+@@ -144,6 +144,8 @@
+             if type(one_call) is not OneCallInput:
+                 raise ValueError("one_call requires explicit data")
+             validate_identity(activity_id, executor_id, one_call.operation_id, run_tag)
++            if one_call.request.input_result is not None and one_call.request.input_result.activity_id != activity_id:
++                raise ValueError("input result activity mismatch")
+             one_call.to_wire()
+             # N1：claim 前早拒绝超 120 秒配置（idle 配置域不收紧）；防止 SUP
+             # 先 claim 预扣、worker 侧才解码失败关闭造成全额预扣。

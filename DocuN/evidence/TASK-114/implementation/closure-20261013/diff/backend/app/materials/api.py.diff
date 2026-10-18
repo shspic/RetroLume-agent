@@ -1,0 +1,39 @@
+--- before/backend/app/materials/api.py
++++ final/backend/app/materials/api.py
+@@ -32,7 +32,9 @@
+ @router.get("/session")
+ def session(request: Request):
+     local_request(request)
+-    return {"token": request.app.state.session_token, "storage_configured": request.app.state.materials is not None, "max_bytes": MAX_BYTES}
++    data = getattr(request.app.state, "data_exit", None)
++    return {"token": request.app.state.session_token, "storage_configured": request.app.state.materials is not None, "max_bytes": MAX_BYTES,
++            "data_context": data.context().public() if data is not None else None}
+ 
+ 
+ @router.get("/materials")
+@@ -89,6 +91,25 @@
+         if not text.strip() or "\x00" in text:
+             raise HTTPException(422, "文件为空或包含二进制内容")
+     try:
++        if getattr(repo, "data_enabled", False):
++            def fenced_upload():
++                import hashlib
++                from app.data_exit.contracts import DataError
++                references = repo.reference_coordinator
++                if references is None: raise DataError("data_readonly")
++                extraction = parse_pdf_bytes(data) if suffix == 'pdf' else None
++                prepared = references.prepare_reference(hashlib.sha256(data).hexdigest(), len(data), source_id=source_id, pdf=suffix == 'pdf')
++                with references.acquire_shared(prepared) as pin:
++                    original = request.app.state.originals.put(io.BytesIO(data), max_bytes=MAX_BYTES, reference_pin=pin)
++                    if suffix == 'pdf':
++                        return {'candidate':repo.create_pdf_candidate(source_id=source_id, expected_version=expected_version,
++                            expected_revision=expected_revision if expected_revision is not None else 0, filename=filename,
++                            sha256=original.sha256,size=original.size,extraction=extraction,reference_pin=pin,prepared_ids=prepared),'query_ready':False}
++                    return {'material':repo.save(source_id=source_id, expected_version=expected_version, filename=filename,
++                        format='txt' if suffix == 'txt' else 'md', sha256=original.sha256,size=original.size,reference_pin=pin,prepared_ids=prepared)}
++            try:return await run_in_threadpool(fenced_upload)
++            except PdfImportError:
++                raise HTTPException(422,'PDF解析未完成，资料未提交；旧资料保持不变') from None
+         original = await run_in_threadpool(request.app.state.originals.put, io.BytesIO(content), max_bytes=MAX_BYTES)
+         if suffix == "pdf":
+             try:

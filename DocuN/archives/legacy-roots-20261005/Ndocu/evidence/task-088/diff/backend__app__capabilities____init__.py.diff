@@ -1,0 +1,53 @@
+--- pre/backend/app/capabilities/__init__.py
++++ post/backend/app/capabilities/__init__.py
+@@ -1,6 +1,7 @@
+ """受控模型与确定性工具入口。"""
+ 
+ from .contracts import (
++    BUSINESS_PAYLOAD_MAX_BYTES,
+     AdmissionDenied,
+     AdmissionIntent,
+     AdmissionLedger,
+@@ -16,12 +17,17 @@
+     ModelCallResult,
+     ModelServiceConfig,
+     Provider,
++    RecordOutcome,
+     RejectingAdmissionLedger,
+     ResponseMode,
+     ThinkingMode,
+     ToolCallPlan,
+     ToolFunctionCall,
+     Usage,
++    build_business_payload,
++    canonical_payload_bytes,
++    payload_digest,
++    validate_business_payload,
+ )
+ from .gateway import ControlledModelGateway
+ from .tools import TOOL_NAME, ToolRegistry, ToolValidationError
+@@ -34,6 +40,7 @@
+ )
+ 
+ __all__ = [
++    "BUSINESS_PAYLOAD_MAX_BYTES",
+     "AdmissionDenied",
+     "AdmissionIntent",
+     "AdmissionLedger",
+@@ -53,6 +60,7 @@
+     "ModelServiceConfig",
+     "ModelTransport",
+     "Provider",
++    "RecordOutcome",
+     "RejectingAdmissionLedger",
+     "RequestNotSent",
+     "ResponseMode",
+@@ -64,4 +72,8 @@
+     "ToolValidationError",
+     "TransportResponse",
+     "Usage",
++    "build_business_payload",
++    "canonical_payload_bytes",
++    "payload_digest",
++    "validate_business_payload",
+ ]

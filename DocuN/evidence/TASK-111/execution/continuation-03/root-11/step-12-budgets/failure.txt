@@ -1,0 +1,21 @@
+Traceback (most recent call last):
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task111\c03_step.py", line 84, in main
+    execute(resource,built,folder,action)
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task111\c03_matrix.py", line 240, in execute
+    elif action=="budgets":runner.run(budgets(resource,built,folder))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task111\c03_matrix.py", line 222, in budgets
+    try:await h.ledger.reserve_html_preview(item["activity_id"],artifact["artifact_id"],command,identity,60)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\preview\repository.py", line 347, in reserve_html_preview
+    return await self._transaction(transaction)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\activities\repository.py", line 343, in _transaction
+    raise AdmissionUnavailable("持久准入账本暂不可用") from None
+app.capabilities.contracts.AdmissionUnavailable: 持久准入账本暂不可用

@@ -1,0 +1,147 @@
+{
+  "purpose": "TASK099文档结构及UTF8字节推演，不是模型返回、应用验证或运行证据",
+  "citation_policy": "lc_标识是等长设计占位。未来以冻结合成资料目录的实际受信ID替换，不声称这些ID当前存在。",
+  "examples": [
+    {
+      "id": "S1-plan",
+      "output": {
+        "result_type": "path",
+        "message": "先用实际作答核对单位换算，再观察数量级和综合应用；目前能力未知。",
+        "nodes": [
+          {
+            "title": "统一单位",
+            "objective": "能把分钟换成秒，并写出速度单位。",
+            "prerequisites": [],
+            "rationale": "资料要求先统一时间单位，用户自报容易混用，尚无独立作答证据。",
+            "citations": ["lc_000000000000000000000001"],
+            "completion_dimensions": [
+              {"dimension": "conversion", "required_point": "说明分钟到秒的换算。"},
+              {"dimension": "unit", "required_point": "计算量与单位对应。"}
+            ]
+          },
+          {
+            "title": "数量级检查",
+            "objective": "能识别单位混用造成的数量级差异。",
+            "prerequisites": [0],
+            "rationale": "精确运算之后还需要检查结果量级，不凭量级替代计算。",
+            "citations": ["lc_000000000000000000000002"],
+            "completion_dimensions": [
+              {"dimension": "magnitude", "required_point": "用计算和单位解释结果量级。"}
+            ]
+          },
+          {
+            "title": "新实例综合应用",
+            "objective": "在不同数据中独立完成换算、除法和单位说明。",
+            "prerequisites": [0, 1],
+            "rationale": "相同题看过参考后的正确只能说明修正，需要新实例观察。",
+            "citations": ["lc_000000000000000000000001", "lc_000000000000000000000002"],
+            "completion_dimensions": [
+              {"dimension": "transfer", "required_point": "给出新实例的有据完整过程。"}
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "S1-exercise",
+      "output": {
+        "result_type": "exercise",
+        "message": "先作答并保存，再选择评价；参考答案按显式动作展示。",
+        "exercise_type": "calculation",
+        "difficulty": 1,
+        "stem": "骑行120米用时2分钟。以米每秒求平均速度，并写出换算过程。",
+        "reference_points": [
+          {
+            "point_id": "p1",
+            "text": "2分钟为120秒。",
+            "citations": ["lc_000000000000000000000001"],
+            "numeric": {"value_decimal": "120", "unit": "s", "operation": "multiply", "left": 2, "right": 60}
+          },
+          {
+            "point_id": "p2",
+            "text": "120米除以120秒，速度为1米每秒。",
+            "citations": ["lc_000000000000000000000002"],
+            "numeric": {"value_decimal": "1", "unit": "m/s", "operation": "divide", "left": 120, "right": 120}
+          },
+          {
+            "point_id": "p3",
+            "text": "使用米与秒时，单位为米每秒。",
+            "citations": ["lc_000000000000000000000002"],
+            "numeric": null
+          },
+          {
+            "point_id": "p4",
+            "text": "根据120米和120秒，结果量级约为1米每秒。",
+            "citations": ["lc_000000000000000000000002"],
+            "numeric": null
+          }
+        ],
+        "reference_explanation": "先将时间统一为秒，再按路程除以时间；60米每分钟也是等价表示。",
+        "dimensions": [
+          {"id": "conversion", "point_ids": ["p1"], "description": "时间换算有据。"},
+          {"id": "value", "point_ids": ["p2"], "description": "商值与题给数据一致。"},
+          {"id": "unit", "point_ids": ["p3"], "description": "单位与所用量对应。"},
+          {"id": "reason", "point_ids": ["p1", "p4"], "description": "换算及数量级推导有据。"}
+        ],
+        "hint": "先考虑题目的时间单位。",
+        "variant": {
+          "purpose": "initial",
+          "parent_exercise_record_id": null,
+          "parent_feedback_record_id": null,
+          "instance_data": {
+            "quantities": [
+              {"name": "distance", "value_decimal": "120", "unit": "m"},
+              {"name": "duration", "value_decimal": "2", "unit": "min"}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "S2-feedback",
+      "output": {
+        "result_type": "feedback",
+        "message": "余额和原子性解释有正确部分；并发结论需要区分隔离性。",
+        "correct_parts": [
+          {
+            "answer_excerpt": "A还是100，B还是50",
+            "explanation": "第二项失败时，同一原子事务的两项均不生效。",
+            "point_ids": ["p1", "p2"],
+            "citations": ["lc_000000000000000000000001"]
+          }
+        ],
+        "errors": [
+          {
+            "answer_excerpt": "因为有原子性，所以所有事务互不影响",
+            "explanation": "该结论把事务内整体生效与多个事务的并发可见性混在一起，给定资料将二者区分。",
+            "point_ids": ["p3"],
+            "citations": ["lc_000000000000000000000002"]
+          }
+        ],
+        "evidence_gaps": [
+          {
+            "answer_excerpt": "所有事务互不影响",
+            "explanation": "没有隔离级别或并发轨迹，不能判断具体系统的可见性。",
+            "point_ids": ["p4"],
+            "citations": ["lc_000000000000000000000002"]
+          }
+        ],
+        "cause_hypotheses": [
+          {
+            "hypothesis": "可能混淆原子性与隔离性，也可能只是表述遗漏。",
+            "evidence_for": "作答把原子性作为并发互不影响的理由。",
+            "missing_evidence": "尚需分别解释两种性质，不能据一句话确认能力原因。",
+            "confidence": "tentative"
+          }
+        ],
+        "dimension_observations": [
+          {"id": "state", "observation": "met", "reason": "余额符合全部不生效。", "point_ids": ["p1"]},
+          {"id": "atomic_explanation", "observation": "met", "reason": "一起成功或撤销为可接受等价表达。", "point_ids": ["p2"]},
+          {"id": "property_distinction", "observation": "not_met", "reason": "单靠原子性不能推出全部并发隔离结论。", "point_ids": ["p3"]},
+          {"id": "evidence_boundary", "observation": "partial", "reason": "仍需指出未给的实现信息。", "point_ids": ["p4"]}
+        ],
+        "next_focus": {"focus_dimension": "property_distinction", "reason": "分别说明原子性和隔离性，并指出材料不足。", "suggested_mode": "continuation"}
+      }
+    }
+  ]
+}

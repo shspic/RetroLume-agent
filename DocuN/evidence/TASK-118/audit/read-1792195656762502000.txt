@@ -1,0 +1,300 @@
+
+backend/app/data_exit/config.py
+1: """主机配置只从明确私有文件与环境引用读取，不接受 HTTP 路径或 DSN。"""
+2: import os
+3: from pathlib import Path
+4: import secrets
+5: from .codec import load_json
+6: from .contracts import DataContext, DataError, Limits, PROFILE
+7: from .control import ControlHub
+8: from .deletions import SourceDeletionService
+9: from .files import independent_roots, RootLease, safe_root
+10: from .maintenance import MutationGate, MaintenanceCoordinator
+11: from .packages import DataPackageService
+12: from .reference import OriginalReferenceCoordinator
+13: from .repository import DataRepository
+14: from .restore import TargetFactory, RestoreController
+15: from .snapshot import SnapshotCoordinator
+16: 
+17: 
+18: def load_profile():
+19:     path = os.environ.get("RETROLUME_DATA_EXIT_CONFIG")
+20:     if not path: return None
+21:     info = Path(path).lstat()
+22:     if info.st_size > 65536: raise DataError("restore_executor_missing", 503)
+23:     from .files import regular
+24:     regular(path)
+25:     value = load_json(Path(path).read_bytes())
+26:     if set(value) - {"enabled", "snapshot_url_env", "maintenance_key_env", "factory", "limits", "reader"}:
+27:         raise DataError("restore_executor_missing", 503)
+28:     if value.get("enabled") is not True: return None
+29:     if 'reader' in value:
+30:         reader=value['reader']
+31:         if (set(value)!={'enabled','reader'} or not isinstance(reader,dict)
+32:             or set(reader)!={'readonly_url_env','target_id','dataset_id','instance_id','schema_profile'}):
+33:             raise DataError('restore_executor_missing',503)
+34:         from .contracts import uuid
+35:         from .schema_profiles import get_profile
+36:         for field in ('target_id','dataset_id','instance_id'):uuid(reader[field])
+37:         get_profile(reader['schema_profile'])
+38:         name=reader['readonly_url_env']
+39:         if not isinstance(name,str) or not name.startswith('RETROLUME_'):raise DataError('restore_executor_missing',503)
+40:         return value
+41:     for field in ("snapshot_url_env", "maintenance_key_env"):
+42:         name = value.get(field)
+43:         if not isinstance(name, str) or not name.startswith("RETROLUME_"):
+44:             raise DataError("restore_executor_missing", 503)
+45:     if value.get("limits"):
+46:         baseline = Limits()
+47:         for name, limit in value["limits"].items():
+48:             if not hasattr(baseline, name) or type(limit) is not int or not 1 <= limit <= getattr(baseline, name):
+49:                 raise DataError("invalid_input", 400)
+50:     return value
+51: 
+52: 
+53: class DataRuntime:
+54:     def __init__(self, app, settings, profile):
+55:         self.app, self.settings, self.profile = app, settings, profile
+56:         required = ("RETROLUME_CONTROL_ROOT", "RETROLUME_RESTORE_ROOT")
+57:         if any(not os.environ.get(name) for name in required): raise DataError("storage_unavailable", 503)
+58:         _, _, restore_root, control_root = independent_roots(settings.data_dir, settings.backup_dir,
+59:                                                            os.environ[required[1]], os.environ[required[0]])
+60:         self.hub = ControlHub(control_root)
+61:         self.limits = Limits(**profile.get("limits", {}))
+62:         if 'reader' in profile:
+63:             self._configure_reader(profile['reader'])
+64:             return
+65:         source_dsn=os.environ.get('RETROLUME_DATABASE_URL')
+66:         self.source = DataRepository(source_dsn) if source_dsn else None
+67:         self.maintenance_key = os.environ.get(profile["maintenance_key_env"])
+68:         self.snapshot_dsn = os.environ.get(profile["snapshot_url_env"])
+69:         self.factory = TargetFactory(self.hub, restore_root, profile["factory"], limits=self.limits) if profile.get("factory") else None
+70:         self.source_state = None
+71:         self.source_error=None
+72:         self.target_error=None
+73:         selection = self.hub.state()["selection"]
+74:         if selection is None:
+75:             known=self.hub.state()['source']
+76:             try:
+77:                 if self.source is None:raise DataError('storage_unavailable',503)
+78:                 self.source_state = self.source.state()
+79:                 if known is None:self.hub.commit('source.register',self.source_state)
+80:                 elif (known['dataset_id'],known['instance_id'],known['originals_root_id'])!=(self.source_state['dataset_id'],self.source_state['instance_id'],self.source_state['originals_root_id']):
+81:                     raise DataError('source_identity_changed',503)
+82:             except DataError as error:
+83:                 if known is None:raise
+84:                 self.source_error=error.code
+85:                 self.source_state={**known,'mode':'unavailable'}
+86:             from .schema_profiles import get_profile
+87:             get_profile(self.source_state['schema_profile'])
+88:         self.gate = MutationGate(self.hub, self.context)
+89:         self.gate.validate_source=self.validate_source
+90:         async def close_owned():
+91:             controller = app.state.preview_controller
+92:             if controller is not None:
+93:                 await controller.close()
+94:         self.maintenance = MaintenanceCoordinator(self.gate, self.source, self.maintenance_key, close_owned)
+95:         self.incoming = settings.backup_dir / "incoming"
+96:         if not self.incoming.exists(): self.incoming.mkdir()
+97:         safe_root(self.incoming)
+98:         self.restore = RestoreController(self.hub, self.incoming, self.factory, self.source, self.maintenance,
+99:                                          rebind=self.bind_readonly, limits=self.limits)
+100:         self.tasks = {}
+101:         self.references, self.deletions, self.packages = None, None, None
+102:         self.packages=DataPackageService(self.hub,None,self.settings.backup_dir,self.limits)
+103:         if selection is not None:
+104:             if self.factory is None: raise DataError("restore_executor_missing", 503)
+105:             target = self.factory.target(selection["target_id"])
+106:             try:self.bind_readonly(target, self.factory.readonly_credentials(target.target_id), selection)
+107:             except (DataError,OSError) as error:
+108:                 # 选中目标不可连时仍保留同Hub的job/包查询；业务入口已在绑定前关闭。
+109:                 self.target_error=error.code if isinstance(error,DataError) else 'storage_unavailable'
+110:         else:
+111:             self._configure_source()
+112: 
+113:     def context(self):
+114:         if hasattr(self,'_reader_context'):return self._reader_context
+115:         state = self.hub.state()
+116:         selection = state["selection"]
+117:         if selection:
+118:             return DataContext(self.hub.control_id, selection["generation"], selection["dataset_id"], selection["instance_id"],
+119:                                "restored_readonly", selection["target_id"])
+120:         if self.source_state is None: raise DataError("mode_unknown", 503)
+121:         mode = self.source_state["mode"]
+122:         if state["fence"] is not None and state["fence"].get("state") == "frozen": mode = "frozen"
+123:         return DataContext(self.hub.control_id, 0, self.source_state["dataset_id"], self.source_state["instance_id"], mode)
+124: 
+125:     def _configure_reader(self,reader):
+126:         """An isolated sealed reader has no source, loader, maintenance or selector authority."""
+127:         from types import SimpleNamespace
+128:         dsn=os.environ.get(reader['readonly_url_env'])
+129:         if not dsn or os.environ.get('RETROLUME_DATABASE_URL')!=dsn:
+130:             raise DataError('target_seal_unconfirmed',503)
+131:         # The original control hub and its selector are not adopted by a reader.
+132:         state=self.hub.state()
+133:         if state['selection'] is not None or state['fence'] is not None or any(state[k] for k in ('jobs','targets','owned','plans','deletions','source')):
+134:             raise DataError('selection_changed')
+135:         target=SimpleNamespace(**{k:reader[k] for k in ('target_id','dataset_id','instance_id','schema_profile')},data_root=self.settings.data_dir)
+136:         # A deployment mistake must be refused before even probing denied writes.
+137:         with DataRepository(dsn).connection(readonly=True) as connection:
+138:             role=connection.execute('SELECT rolsuper,rolcreaterole,rolcreatedb,rolreplication,rolbypassrls FROM pg_roles WHERE rolname=current_user').fetchone()
+139:             writes=connection.execute("SELECT coalesce(bool_or(has_table_privilege(current_user,c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,TRIGGER,REFERENCES')),false) AS allowed FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','f')").fetchone()
+140:             create=connection.execute("SELECT has_schema_privilege(current_user,'public','CREATE') AS allowed").fetchone()
+141:             if role is None or any(role.values()) or writes['allowed'] or create['allowed']:
+142:                 raise DataError('target_seal_unconfirmed',503)
+143:         TargetFactory._probe_readonly(dsn,target)
+144:         self._reader_context=DataContext(self.hub.control_id,0,target.dataset_id,target.instance_id,'restored_readonly',target.target_id)
+145:         self._reader_profile=target.schema_profile
+146:         self.source=self.factory=self.restore=self.maintenance=None
+147:         self.source_state=None;self.source_error=None;self.target_error=None
+148:         self.snapshot_dsn=self.maintenance_key=None
+149:         self.gate=MutationGate(self.hub,self.context)
+150:         self.tasks={};self.incoming=self.settings.backup_dir/'incoming'
+151:         self.references=self.deletions=None
+152:         self.bind_readonly(target,{'readonly_dsn':dsn},None)
+153: 
+154:     def validate_source(self,context,operation=None):
+155:         if self.source is None:raise DataError('mode_unknown',503)
+156:         current=self.source.state(operation)
+157:         if (current['dataset_id'],current['instance_id'],current['mode'])!=(context.dataset_id,context.instance_id,'normal'):
+158:             raise DataError('mode_unknown',503)
+
+backend/app/data_exit/config.py
+198:             with self.gate.acquire(operation=operation):self.source.observe_job(receipt,operation)
+199:         except DataError:
+200:             if operation is not None:operation.check()
+201: 
+202:     async def observe_memory(self,memory_id):
+203:         import asyncio
+204:         from .codec import plain
+205:         def read():
+206:             with self.source.connection(readonly=True) as connection:
+207:                 return plain(connection.execute("SELECT * FROM public.data_export_tombstones_v1 WHERE entity_kind='memory' AND entity_id=%s",(memory_id,)).fetchone())
+208:         tomb=await asyncio.to_thread(read)
+209:         if tomb is not None:self.hub.commit('deletion.observe',tomb)
+210: 
+211:     def bind_readonly(self, target, credentials, selection):
+212:         from app.materials.repository import PostgresMaterials
+213:         from app.activities import PostgresAdmissionLedger
+214:         from app.storage.originals import OriginalStore
+215:         app=self.app
+216:         # 选择器已提交时，任何后续绑定失败都须关闭旧源读取入口。
+217:         app.state.materials=None
+218:         app.state.activities_ledger=None
+219:         app.state.preview_controller=None
+220:         app.state.session_token=secrets.token_urlsafe(32)
+221:         self.references,self.deletions=None,None
+222:         self.packages=DataPackageService(self.hub,None,self.settings.backup_dir,self.limits)
+223:         safe = DataRepository(credentials["readonly_dsn"]).safe_state()
+224:         if str(safe["dataset_id"]) != target.dataset_id or str(safe["source_instance_observed"]) != target.instance_id or safe["mode_observed"] != "restored_readonly":
+225:             raise DataError("target_seal_unconfirmed", 503)
+226:         self._bound_profile = target.schema_profile
+227:         app.state.originals = OriginalStore(target.data_root / "originals")
+228:         app.state.materials = PostgresMaterials(credentials["readonly_dsn"])
+229:         app.state.materials.configure_data_exit(self.gate)
+230:         app.state.activities_ledger = PostgresAdmissionLedger(credentials["readonly_dsn"])
+231:         app.state.activities_ledger.mutation_gate = self.gate
+232:         app.state.activities_ledger.data_enabled = True
+233:         app.state.activities_ledger.data_readonly = True
+234:         app.state.preview_controller = None
+235:         snapshot = SnapshotCoordinator(credentials["snapshot_dsn"], app.state.originals, RootLease(app.state.originals.root), self.settings.backup_dir, self.limits) if credentials.get('snapshot_dsn') else None
+236:         self.packages = DataPackageService(self.hub, snapshot, self.settings.backup_dir, self.limits)
+237: 
+238:     def caps(self):
+239:         return {**self.context().public(), "format": getattr(self,'_bound_profile',None) or getattr(self,'_reader_profile',None) or (self.source_state['schema_profile'] if self.source_state else PROFILE), "scope": ["all", "selected"],
+240:                 "backup_available": self.packages is not None and self.packages.snapshot is not None, "restore_executor_configured": self.factory is not None,
+241:                 'source_delete_available':self.deletions is not None and self.hub.state()['fence'] is None,
+242:                 'source_observation_status':'unknown' if self.source_error else 'configured',
+243:                 'target_observation_status':'unknown' if self.target_error else 'configured',
+244:                 "limits": self.limits.__dict__, "browser_drafts_included": False, "permanent_readonly_restore": True,
+245:                 "binding_kind":'isolated_sealed_reader' if hasattr(self,'_reader_context') else 'original_control_hub'}
+
+backend/app/data_exit/restore.py
+299:         finally:
+300:             if credentials.get('temporary_credentials_revoked'):
+301:                 self._ephemeral.pop(target.target_id, None)
+302: 
+303:     @staticmethod
+304:     def _probe_readonly(dsn, target, operation=None):
+305:         import psycopg
+306:         with connect(dsn, operation) as connection:
+307:             state = connection.execute("SELECT dataset_id,source_instance_observed,mode_observed FROM public.data_export_control_v1").fetchone()
+308:             if tuple(map(str, state)) != (target.dataset_id, target.instance_id, "restored_readonly"):
+309:                 raise DataError("target_seal_unconfirmed", 503)
+310:             from .schema_profiles import get_profile
+311:             tables=get_profile(target.schema_profile).tables
+312:             profile_row=connection.execute('SELECT schema_profile FROM public.data_export_control_v1').fetchone()
+313:             if profile_row is None or profile_row[0]!=target.schema_profile:raise DataError('target_seal_unconfirmed',503)
+314:             for table in tables: connection.execute("SELECT count(*) FROM public." + table).fetchone()
+315:             for view in ("data_export_control_v1", "data_export_job_history_v1", "data_export_tombstones_v1"):
+316:                 connection.execute("SELECT count(*) FROM public." + view).fetchone()
+317:         rejected = []
+318:         for statement in ("DELETE FROM public.activities", "UPDATE public.material_sources SET current_version=NULL",
+319:                           "SELECT public.html_update_preview('00000000-0000-0000-0000-000000000001','x','stopped',NULL,NULL,NULL,0)"):
+320:             try:
+321:                 with connect(dsn, operation) as connection: connection.execute(statement)
+322:             except psycopg.Error as error:
+323:                 if error.sqlstate != "42501": raise DataError("target_seal_unconfirmed", 503) from None
+324:                 rejected.append(error.sqlstate)
+325:             else: raise DataError("target_seal_unconfirmed", 503)
+326:         checked(operation)
+327:         return {"reads": len(tables)+3, "writes_rejected": rejected,'schema_profile':target.schema_profile}
+
+backend/migrations/007_activity_operation_results.sql
+1: -- 候选迁移 007：G3 业务成果正文（activity_operation_results）。
+2: -- 仅用于获批的新本地合成数据库；不由应用启动器自动执行，不操作用户库。
+3: -- 前置：001/002 已建（material_sources/material_versions/activities/
+4: -- activity_scope_sources/activity_operations 存在）；不要求 activities 为空，
+5: -- 不回填任何旧 received/unknown 操作的正文。
+6: -- 重复执行不支持（无 IF NOT EXISTS）：重复执行报 duplicate table 并整体回滚，
+7: -- 不宣称迁移天然幂等——与 004/005 的“仅空库 ALTER”是两种不同约定。
+8: BEGIN;
+9: 
+10: CREATE TABLE activity_operation_results (
+11:     activity_id UUID NOT NULL,
+12:     operation_id VARCHAR(128) NOT NULL,
+13:     admission_id UUID NOT NULL,
+14:     execution_generation INTEGER NOT NULL CHECK (execution_generation >= 0),
+15:     scope_revision INTEGER NOT NULL CHECK (scope_revision > 0),
+16:     payload_format TEXT NOT NULL CHECK (payload_format IN ('text', 'json')),
+17:     payload TEXT NOT NULL CHECK (octet_length(payload) BETWEEN 1 AND 131072),
+18:     payload_sha256 TEXT NOT NULL CHECK (payload_sha256 ~ '^[0-9a-f]{64}$'),
+19:     committed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+20:     PRIMARY KEY (activity_id, operation_id),
+21:     FOREIGN KEY (activity_id, operation_id)
+22:         REFERENCES activity_operations(activity_id, operation_id)
+23: );
+24: 
+25: COMMIT;
+
+backend/migrations/013_data_exit.sql
+76: CREATE FUNCTION public.data_loading_allowed() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER
+77:  SET search_path=pg_catalog,pg_temp AS $f$
+78:  SELECT EXISTS(SELECT 1 FROM public.data_control WHERE mode='loading' AND loader_session_user=SESSION_USER
+79:  AND source_snapshot_id IS NOT NULL AND pg_has_role(SESSION_USER,'retrolume_data_restore_loader','member'))
+80: $f$;
+81: CREATE FUNCTION public.data_runtime_write_guard() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+82:  SET search_path=pg_catalog,pg_temp AS $f$
+83: DECLARE m text;rid uuid;
+84: BEGIN
+85:  SELECT originals_root_id INTO rid FROM public.data_control;
+86:  PERFORM pg_advisory_xact_lock_shared(hashtextextended(rid::text,113));
+87:  SELECT mode INTO m FROM public.data_control;
+88:  IF m='loading' AND public.data_loading_allowed() AND
+89:    (TG_OP='INSERT' OR(TG_TABLE_NAME='material_sources' AND TG_OP='UPDATE'
+90:       AND (to_jsonb(NEW)-'current_version')=(to_jsonb(OLD)-'current_version'))) THEN RETURN NEW; END IF;
+91:  IF m IS DISTINCT FROM 'normal' THEN RAISE EXCEPTION 'data_runtime_readonly' USING ERRCODE='42501'; END IF;
+92:  IF TG_OP='DELETE' THEN RETURN OLD; END IF;
+93:  RETURN NEW;
+94: END $f$;
+95: CREATE FUNCTION public.data_mutation_enter() RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+96:  SET search_path=pg_catalog,pg_temp AS $f$
+97: DECLARE c public.data_control;
+98: BEGIN
+99:  SELECT * INTO c FROM public.data_control;
+100:  PERFORM pg_advisory_xact_lock_shared(hashtextextended(c.originals_root_id::text,113));
+101:  SELECT * INTO c FROM public.data_control;
+102:  IF c.dataset_id IS NULL OR c.mode<>'normal' THEN RAISE EXCEPTION 'data_runtime_readonly' USING ERRCODE='42501'; END IF;
+103: END $f$;
+104: CREATE FUNCTION public.data_state() RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER
+105:  SET search_path=pg_catalog,pg_temp AS $f$

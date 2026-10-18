@@ -1,0 +1,17 @@
+--- test-api-pre
++++ test-api-current
+@@ -101,6 +101,14 @@
+ 
+     def test_own_origin_allowed_for_same_site_page(self):
+         headers = {"x-retrolume-session": self.token, "origin": "http://testserver"}
++        self.assertEqual(self.client.get("/api/activities/capabilities", headers=headers).status_code, 200)
++
++    def test_materials_default_origin_policy_restored(self):
++        # 续作01（D1 定向区别测试）：materials/PDF 面恢复默认固定允许来源，
++        # 同源自身来源（非白名单端口）不再被放行；活动面同源放行保留。
++        headers = {"x-retrolume-session": self.token, "origin": "http://testserver"}
++        self.assertEqual(self.client.get("/api/materials", headers=headers).status_code, 403)
++        self.assertEqual(self.client.get("/api/pdf-candidates", headers=headers).status_code, 403)
+         self.assertEqual(self.client.get("/api/activities/capabilities", headers=headers).status_code, 200)
+ 
+     def test_capabilities_without_storage(self):

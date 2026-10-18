@@ -1,0 +1,152 @@
+"""本卡唯一计数与持有账；所有真实消费者须先登记后动作。"""
+import argparse
+from datetime import datetime, timezone
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+ROOT = Path(__file__).resolve().parents[4]
+CONTROL = ROOT / "DocuN/evidence/TASK-114/implementation/control"
+RECEIPT = CONTROL / "receipt.json"
+EVIDENCE = ROOT / 'DocuN/evidence/TASK-114/implementation/continuation-02'
+
+
+class Budget:
+    def load(self): return json.loads(RECEIPT.read_text(encoding="utf-8"))
+
+    def save(self, value):
+        temporary = CONTROL / "receipt.pending"
+        temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(temporary, RECEIPT)
+
+    @staticmethod
+    def holding(value):
+        total = value.get("real_holding_seconds", 0)
+        for resource in value["resources"]:
+            if resource.get("begin_ns") is not None and resource.get("end_ns") is None:
+                total += (time.monotonic_ns() - resource["begin_ns"]) / 1e9
+        return total
+
+    def check(self, cleanup=False):
+        value = self.load()
+        continuation=value.get('continuation')
+        if continuation is None:
+            elapsed=(time.monotonic_ns()-value['received_monotonic_ns'])/1e9
+            limit=value['limits']['total_seconds']
+        else:
+            if continuation['pause'] is not None:raise RuntimeError('活动段已暂停，先登记恢复')
+            calendar=(datetime.now(timezone.utc)-datetime.fromisoformat(continuation['received_utc'])).total_seconds()
+            if calendar<0 or calendar>=continuation['calendar_limit_seconds']:raise RuntimeError('续作日历停止门')
+            elapsed=sum(((segment['end_ns'] if segment['end_ns'] is not None else time.monotonic_ns())-segment['begin_ns'])/1e9 for segment in continuation['active_segments'])
+            limit=continuation['active_limit_seconds']
+        if elapsed<0 or elapsed>=limit-(0 if cleanup else 1200):raise RuntimeError('本卡活动窗口已到停止门')
+        if self.holding(value) >= value["limits"]["holding_seconds" if cleanup else "holding_business_seconds"]:
+            raise RuntimeError("本卡真实持有已到停止门")
+        return value
+
+    def root(self,label):
+        value=self.check()
+        existing=next((e for e in value['continuation']['real_batches'] if e['label']==label),None)
+        if existing is not None:
+            if existing.get('end_ns') is not None:raise RuntimeError('已结束真实根不能复活')
+            return existing
+        self.reserve('real_roots');value=self.load()
+        root={'label':label,'begin_ns':time.monotonic_ns(),'end_ns':None}
+        value['continuation']['real_batches'].append(root);self.save(value);self.event('root.begin',root)
+        return root
+
+    def close_root(self,label):
+        value=self.load();root=next(e for e in value['continuation']['real_batches'] if e['label']==label)
+        root['end_ns']=time.monotonic_ns();self.save(value);self.event('root.end',root)
+
+    def reserve(self, counter):
+        value = self.check()
+        count = value["counts"].get(counter, 0)
+        if count >= value["limits"][counter]: raise RuntimeError("本卡次数上限 " + counter)
+        value["counts"][counter] = count + 1
+        self.save(value)
+        self.event("reserve", {"counter": counter, "count": count + 1})
+
+    def event(self, kind, details):
+        entry = {**details, "utc": datetime.now(timezone.utc).isoformat(), "monotonic_ns": time.monotonic_ns(), "kind": kind}
+        with (CONTROL / "events.jsonl").open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(entry, ensure_ascii=False) + "\n"); stream.flush(); os.fsync(stream.fileno())
+
+    def created(self, identity, kind, metadata):
+        value = self.check()
+        if any(r["identity"] == identity for r in value["resources"]): raise RuntimeError("资源身份重复")
+        value["resources"].append({"identity": identity, "kind": kind, "metadata": metadata,
+                                   "created_ns": time.monotonic_ns(), "state": "created", "begin_ns": None, "end_ns": None})
+        self.save(value)
+        self.event("created", {"identity": identity, "resource_kind": kind, "metadata": metadata})
+
+    def begin(self, identity):
+        value = self.check()
+        resource = next(r for r in value["resources"] if r["identity"] == identity)
+        if resource["state"] == "running": raise RuntimeError("重复持有")
+        if sum(r["state"] == "running" and r["kind"] == "pg" for r in value["resources"]) >= 2 and resource["kind"] == "pg":
+            raise RuntimeError("本卡同时 Running 超限")
+        resource.update(begin_ns=time.monotonic_ns(), end_ns=None, state="running")
+        self.save(value); self.event("begin", {"identity": identity})
+
+    def end(self, identity, metadata):
+        value = self.load()
+        resource = next(r for r in value["resources"] if r["identity"] == identity)
+        if resource["begin_ns"] is None or resource["end_ns"] is not None:
+            self.event("stop_observed", {"identity": identity, "metadata": metadata}); return
+        resource["end_ns"] = time.monotonic_ns()
+        seconds = (resource["end_ns"] - resource["begin_ns"]) / 1e9
+        value["real_holding_seconds"] += seconds
+        resource.update(state="stopped", last_seconds=seconds, last_stop=metadata)
+        self.save(value); self.event("end", {"identity": identity, "seconds": seconds, "metadata": metadata})
+
+    def offline(self, label, arguments, timeout=600):
+        value = self.check()
+        if value["offline_seconds"] >= value["limits"]["offline_seconds"]: raise RuntimeError("离线额度已用完")
+        if label.startswith("frontend-build"): self.reserve("frontend_build")
+        start = time.monotonic()
+        log = EVIDENCE / 'offline' / (label + ".log")
+        log.parent.mkdir(parents=True,exist_ok=True)
+        with log.open("xb") as stream:
+            try:
+                result = subprocess.run(arguments, cwd=ROOT, stdout=stream, stderr=subprocess.STDOUT, timeout=min(timeout, value["limits"]["offline_seconds"] - value["offline_seconds"]), check=False)
+                code = result.returncode
+            except subprocess.TimeoutExpired:
+                code = 124
+        seconds = time.monotonic() - start
+        value = self.load(); value["offline_seconds"] += seconds; self.save(value)
+        self.event("offline", {"label": label, "arguments": arguments, "exit_code": code, "seconds": seconds, "log": str(log.relative_to(ROOT))})
+        print(json.dumps({"label": label, "exit_code": code, "seconds": seconds}, ensure_ascii=False))
+        return code
+
+
+class FactoryHooks:
+    def __init__(self, budget): self.budget = budget
+    def before_create(self, slot):
+        from setup_source import memory_guard
+        if not memory_guard()['ready']:raise RuntimeError('创建目标前可用内存不足 2 GiB')
+        value=self.budget.check()
+        if value['counts'].get('pg_success',0)>=value['limits']['pg_success']:raise RuntimeError('PG 成功 slot 上限')
+        self.budget.reserve("pg_create")
+    def created(self, target, identity):
+        self.budget.reserve("pg_success")
+        self.budget.created(target.cid, "pg", identity)
+    def before_start(self, target):
+        from setup_source import memory_guard
+        if not memory_guard()['ready']:raise RuntimeError('启动目标前可用内存不足 2 GiB')
+        self.budget.reserve("pg_start"); self.budget.begin(target.cid)
+    def started(self, target, identity): self.budget.event("running_observed", identity)
+    def stopped(self, target, identity): self.budget.end(target.cid, identity)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("label"); parser.add_argument("arguments", nargs=argparse.REMAINDER)
+    args = parser.parse_args()
+    return Budget().offline(args.label, args.arguments)
+
+
+if __name__ == "__main__": raise SystemExit(main())

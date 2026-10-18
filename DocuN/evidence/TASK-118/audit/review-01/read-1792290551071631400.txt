@@ -1,0 +1,400 @@
+backend/tests/test_step018_audit_repairs.py
+1: """S08/D02：实际网关完整正文边界，仅test-only本机ledger/最低transport。"""
+2: import copy
+3: from dataclasses import replace
+4: from datetime import datetime,timedelta,timezone
+5: import hashlib
+6: import json
+7: import os
+8: from pathlib import Path
+9: from tempfile import mkdtemp
+10: import unittest
+11: from unittest.mock import patch
+12: from uuid import uuid4
+13: 
+14: from app.capabilities.contracts import (AdmissionPermit,CallContext,CallStatus,ModelCallRequest,ModelServiceConfig,
+15:     RecordOutcome,LedgerDisposition,ResponseMode,Message)
+16: from app.capabilities.embedding import OutboundSourceManifest,OutboundGrant
+17: from app.capabilities.gateway import ControlledModelGateway
+18: from app.capabilities.transport import TransportResponse
+19: from app.learning.contracts import SourceIdentity,canonical,sha
+20: from app.learning.teaching_contracts import TeachingCommandInput,TeachingProfile
+21: from app.learning.teaching_prompt import messages_for_teaching
+22: from app.learning.teaching_service import TeachingService
+23: from app.retrieval.contracts import digest
+24: from app.retrieval.service import load_integration_config,IntegrationConfig
+25: from app.worker.one_call import OneCallInput
+26: from test_step018_flows import adopted_fixture
+27: from tests.fixtures.step018.s08_loop import ClosedAsyncTestCase
+28: 
+29: 
+30: def qualified_messages(action,document):
+31:     # 产品教学adapter按typed Message（含默认空tool_calls）核摘要。
+32:     return [Message.model_validate(value).model_dump(mode='json',exclude_none=True) for value in messages_for_teaching(action,document)]
+33: 
+34: 
+35: def assembled_request(action='plan',edit=None):
+36:     """真实StoredTeachingDocument装配；选用背景投影只测正文范围，不冒v2记忆资格。"""
+37:     entry,manifest,grant,_=adopted_fixture();aid=grant.allowed_activity_ids[0]
+38:     body={'confirmed':True} if action=='plan' else {'confirmed':True,'exercise_record_id':str(uuid4()),'answer_record_id':str(uuid4())}
+39:     command=TeachingCommandInput(business_key=str(uuid4()),expected_revision=1,expected_goal_version=1,
+40:         expected_scope_revision=1,action=action,body=body)
+41:     request_sha=command.request_sha256(aid)
+42:     entry=entry.model_copy(update={'citation_id':'lc_'+sha(request_sha+entry.evidence_id)[:24]})
+43:     facts={'goal_text':'合成分钟换秒目标','answer_text':'合成回答为120秒','exercise_projection':{'stem':'两分钟是多少秒'},
+44:            'correction_texts':['合成纠错说明'],'prior_observations':[{'message':'合成历史建议'}],'calculation_summary':None}
+45:     document=TeachingService._stored_document(command,{'scope_revision':1},[entry],{'goal_version':1},facts)
+46:     document['learning_background']=[{'memory_id':'01800000-0000-4000-8000-000000009001','version':1,
+47:         'kind':'self_report','uncertainty':'self_reported','title':'合成背景','text':'合成选择背景正文','observation':None,
+48:         'use':'仅背景，旧作答不算本活动独立表现，不是正确性引用或授权。'}]
+49:     if edit:edit(document)
+50:     messages=qualified_messages(action,document)
+51:     profile=TeachingProfile(action=action,command_key=command.business_key,request_sha256=request_sha,context_sha256='f'*64,
+52:         activity_id=aid,expected_revision=1,goal_record_id=str(uuid4()),goal_version=1,scope_revision=1,
+53:         sources=[SourceIdentity(source_id=entry.source_id,version_id=entry.version_id,source_revision=entry.source_revision)],
+54:         catalog=[entry],messages_sha256=sha(canonical(messages)),max_output_tokens=256)
+55:     request=ModelCallRequest(messages=messages,max_output_tokens=256,teaching_profile=profile,response_mode=ResponseMode.JSON_OBJECT)
+56:     context=CallContext(activity_id=aid,operation_id='teach8m.'+command.business_key+'.'+request_sha,
+57:         executor_id='test-only-s08',execution_generation=1,scope_revision=1)
+58:     return context,request,manifest,grant
+59: 
+60: 
+61: def config_for(request,manifest,grant):
+62:     config=ModelServiceConfig(provider='deepseek_chat_completions',base_url='https://api.deepseek.com',model='deepseek-chat',
+63:         api_key='test-only-not-a-real-key',timeout_seconds=1,max_request_bytes=65536,max_response_bytes=65536)
+64:     payload=ControlledModelGateway(config)._build_payload(request)
+65:     manifest=OutboundSourceManifest.from_wire(manifest.model_dump(mode='json')|{'model_requests':[
+66:         {'payload_sha256':digest(payload),'request_sha256':digest(request.model_dump(mode='json'))}]})
+67:     grant=grant.model_copy(update={'grant_id':'TEST-ONLY-S08-NOT-Q-ACTIVATION','source_manifest_sha256':manifest.sha256})
+68:     config=config.model_copy(update={'outbound_grant':grant.model_dump(mode='json'),'outbound_source_manifest':manifest.model_dump(mode='json')})
+69:     return config,manifest,grant,payload
+70: 
+71: 
+72: class Ledger:
+73:     def __init__(self,profile,after_admit=None,after_mark=None):
+74:         self.profile=profile;self.intents=[];self.marks=[];self.outcomes=[];self.after_admit=after_admit;self.after_mark=after_mark
+75:     async def read_learning_snapshot(self,activity):
+76:         return {'scope_revision':1,'sources':[{'source_id':e.source_id,'valid':True,'ready':True,'sha256':e.original_sha256,'title':e.title,'format':e.format} for e in self.profile.catalog]}
+77:     async def admit(self,intent):
+78:         self.intents.append(intent)
+79:         if self.after_admit:self.after_admit(intent)
+80:         return AdmissionPermit('test-only-permit',intent.context.operation_id,intent.context.executor_id)
+81:     async def mark_dispatch_started(self,permit,**kwargs):
+82:         self.marks.append(permit)
+83:         if self.after_mark:self.after_mark()
+84:     async def record_outcome(self,permit,outcome):self.outcomes.append(outcome);return RecordOutcome.RECORDED
+85: 
+86: 
+87: class Transport:
+88:     is_external=False
+89:     def __init__(self):self.calls=[]
+90:     async def send(self,**kwargs):
+91:         self.calls.append({k:v for k,v in kwargs.items() if k!='api_key'})
+92:         value={'result_type':'no_evidence','message':'合成替身不作语义结论','missing':['合成补充说明']}
+93:         raw=json.dumps({'model':'deepseek-chat','choices':[{'finish_reason':'stop','message':{'role':'assistant','content':json.dumps(value)}}],
+94:                         'usage':{'prompt_tokens':10,'completion_tokens':10,'total_tokens':20}}).encode()
+95:         return TransportResponse(200,raw,len(raw))
+96: 
+97: 
+98: class AuditModelScopeTests(ClosedAsyncTestCase):
+99:     async def test_complete_approved_payload_sends_exactly_once_and_wire_keeps_scope(self):
+100:         context,request,old,grant=assembled_request();config,manifest,grant,payload=config_for(request,old,grant)
+101:         ledger=Ledger(request.teaching_profile);transport=Transport()
+102:         result=await ControlledModelGateway(config,ledger=ledger,transport=transport).call(context,request)
+103:         self.assertEqual(result.status,CallStatus.SUCCEEDED)
+104:         self.assertEqual((len(ledger.intents),len(ledger.marks),len(transport.calls)),(1,1,1))
+105:         self.assertEqual(transport.calls[0]['payload'],json.loads(json.dumps(payload)))
+106:         self.assertEqual(ledger.intents[0].outbound_source_manifest,manifest.model_dump(mode='json'))
+107:         restored=OneCallInput.from_wire(OneCallInput(context.operation_id,request,config).to_wire())
+108:         self.assertEqual(OutboundSourceManifest.from_wire(restored.service.outbound_source_manifest).sha256,manifest.sha256)
+109:         self.assertEqual(restored.service.outbound_grant['source_manifest_sha256'],manifest.sha256)
+110:         self.assertNotEqual(old.sha256,manifest.sha256)
+111: 
+112:     async def test_unapproved_actual_teaching_goal_answer_correction_history_memory_and_version_zero_admit(self):
+113:         context,request,old,grant=assembled_request('evaluate');config,manifest,grant,_=config_for(request,old,grant)
+114:         original=json.loads(request.messages[-1].content)
+115:         edits={
+116:           'goal':lambda x:x.update(goal='未批准目标正文'),
+117:           'answer':lambda x:x['task'].update(answer_text='未批准回答正文'),
+118:           'correction':lambda x:x['task'].update(corrections=['未批准纠错正文']),
+119:           'history':lambda x:x['task'].update(prior_observations=[{'message':'未批准历史正文'}]),
+120:           'selected-memory-text':lambda x:x['learning_background'][0].update(text='未批准记忆正文'),
+121:           'selected-memory-version':lambda x:x['learning_background'][0].update(version=2)}
+122:         for name,edit in edits.items():
+123:             with self.subTest(name=name):
+124:                 value=copy.deepcopy(original);edit(value);messages=qualified_messages('evaluate',value)
+125:                 profile=request.teaching_profile.model_copy(update={'messages_sha256':sha(canonical(messages))})
+126:                 variant=ModelCallRequest(messages=messages,max_output_tokens=256,teaching_profile=profile)
+127:                 ledger=Ledger(profile);transport=Transport()
+128:                 result=await ControlledModelGateway(config,ledger=ledger,transport=transport).call(context,variant)
+129:                 self.assertEqual(result.status,CallStatus.REJECTED);self.assertEqual(result.error_code,'outbound_conditions_unverified')
+130:                 self.assertEqual(ledger.intents,[]);self.assertEqual(transport.calls,[])
+131: 
+132:     async def test_unapproved_complete_request_payload_shape_and_system_zero_send(self):
+133:         context,request,old,grant=assembled_request();config,_,_,_=config_for(request,old,grant)
+134:         variants=[request.model_copy(update={'response_mode':ResponseMode.TEXT}),
+135:             request.model_copy(update={'messages':(request.messages[0].model_copy(update={'content':'未批准system'}),request.messages[1])})]
+136:         for variant in variants:
+137:             ledger=Ledger(variant.teaching_profile);transport=Transport()
+138:             result=await ControlledModelGateway(config,ledger=ledger,transport=transport).call(context,variant)
+139:             self.assertEqual(result.status,CallStatus.REJECTED);self.assertEqual(ledger.intents,[]);self.assertEqual(transport.calls,[])
+140: 
+141:     async def test_after_admit_original_request_config_or_private_scope_change_keeps_reservation_no_dispatch(self):
+142:         for target in ('request','config','intent'):
+143:             with self.subTest(target=target):
+144:                 context,request,old,grant=assembled_request();config,_,_,_=config_for(request,old,grant)
+145:                 def change(intent):
+146:                     if target=='request':request.teaching_profile.catalog.append(request.teaching_profile.catalog[0])
+147:                     elif target=='config':config.outbound_source_manifest['query_input_sha256'].append('0'*64)
+148:                     else:intent.outbound_source_manifest['query_input_sha256'].append('0'*64)
+149:                 ledger=Ledger(request.teaching_profile,after_admit=change);transport=Transport()
+150:                 result=await ControlledModelGateway(config,ledger=ledger,transport=transport).call(context,request)
+151:                 self.assertEqual(result.status,CallStatus.REJECTED)
+152:                 self.assertEqual((len(ledger.intents),len(ledger.marks),len(transport.calls)),(1,0,0))
+153:                 self.assertEqual(ledger.outcomes,[])
+154: 
+155:     async def test_change_during_mark_records_not_sent_without_refund_or_retry(self):
+156:         context,request,old,grant=assembled_request();config,_,_,_=config_for(request,old,grant)
+157:         ledger=Ledger(request.teaching_profile,after_mark=lambda:config.outbound_grant.update(grant_id='test-only-changed'))
+158:         transport=Transport();result=await ControlledModelGateway(config,ledger=ledger,transport=transport).call(context,request)
+159:         self.assertEqual(result.status,CallStatus.NOT_SENT)
+160:         self.assertEqual((len(ledger.intents),len(ledger.marks),len(transport.calls)),(1,1,0))
+161:         self.assertEqual(ledger.outcomes[0].disposition,LedgerDisposition.NOT_SENT)
+162: 
+163:     async def test_old_empty_approval_denies_model_but_local_no_grant_stays_usable(self):
+164:         context,request,old,grant=assembled_request();config,_,_,_=config_for(request,old,grant)
+165:         old_config=config.model_copy(update={'outbound_grant':grant.model_dump(mode='json'),'outbound_source_manifest':old.model_dump(mode='json')})
+166:         ledger=Ledger(request.teaching_profile);transport=Transport()
+167:         result=await ControlledModelGateway(old_config,ledger=ledger,transport=transport).call(context,request)
+168:         self.assertEqual(result.status,CallStatus.REJECTED);self.assertEqual(ledger.intents,[]);self.assertEqual(transport.calls,[])
+169:         self.assertEqual(old.sha256,digest(old.model_dump(mode='json',exclude={'model_requests'})))
+170:         local=config.model_copy(update={'outbound_grant':None,'outbound_source_manifest':None})
+171:         ledger=Ledger(request.teaching_profile);transport=Transport()
+172:         result=await ControlledModelGateway(local,ledger=ledger,transport=transport).call(context,request)
+173:         self.assertEqual(result.status,CallStatus.SUCCEEDED);self.assertEqual(len(transport.calls),1)
+174: 
+175:     async def test_model_grant_expiry_after_admit_keeps_reservation_zero_send(self):
+176:         context,request,old,grant=assembled_request();config,_,_,_=config_for(request,old,grant)
+177:         now=[datetime.now(timezone.utc)]
+178:         class Clock(datetime):
+179:             @classmethod
+180:             def now(cls,tz=None):return now[0]
+181:         ledger=Ledger(request.teaching_profile,after_admit=lambda _:now.__setitem__(0,now[0]+timedelta(hours=2)))
+182:         transport=Transport()
+183:         with patch('app.capabilities.embedding.datetime',Clock):result=await ControlledModelGateway(config,ledger=ledger,transport=transport).call(context,request)
+184:         self.assertEqual(result.status,CallStatus.REJECTED)
+185:         self.assertEqual((len(ledger.intents),len(ledger.marks),len(transport.calls)),(1,0,0))
+186: 
+187: 
+188: class AuditManifestLoaderTests(unittest.TestCase):
+189:     def test_manifest_strict_fields_and_duplicate_pairs(self):
+190:         _,request,old,grant=assembled_request();_,manifest,_,_=config_for(request,old,grant)
+191:         wire=manifest.model_dump(mode='json')
+192:         for approvals in ([wire['model_requests'][0]]*2,[{'payload_sha256':'x','request_sha256':'0'*64}],
+193:                           [wire['model_requests'][0]|{'automatic':True}]):
+194:             with self.assertRaises(ValueError):OutboundSourceManifest.from_wire(wire|{'model_requests':approvals})
+195: 
+196:     def test_real_local_loader_and_private_wire_bind_new_hash_without_normal_Q_files(self):
+197:         context,request,old,grant=assembled_request();_,manifest,grant,_=config_for(request,old,grant)
+198:         root=Path(mkdtemp(prefix='s08-TEST-ONLY-NOT-Q-',dir=os.environ.get('S08_EVIDENCE')))
+199:         price=b'TEST-ONLY-NOT-OFFICIAL-PRICE';(root/'test-price.bin').write_bytes(price)
+200:         receipt={'TEST_ONLY_NOT_Q_ACTIVATION':True,'stage':'Q','status':'enabled','TASK':'TASK-117',
+201:                  'approved_receipt_sha256':grant.approved_receipt_sha256,'source_manifest_sha256':manifest.sha256,
+202:                  'independent_audit_result_sha256':'0'*64}
+203:         raw=json.dumps(receipt).encode();(root/'test-receipt.json').write_bytes(raw)
+204:         grant=grant.model_copy(update={'q_activation_receipt_sha256':hashlib.sha256(raw).hexdigest(),'price_snapshot_sha256':hashlib.sha256(price).hexdigest()})
+205:         (root/'test-grant.json').write_text(grant.model_dump_json(),encoding='utf-8')
+206:         (root/'test-manifest.json').write_text(manifest.model_dump_json(),encoding='utf-8')
+207:         body={'schema':'retrolume.integration.v1','enabled':True,'embedding':{},'outbound_grant_file':str(root/'test-grant.json'),
+208:               'q_activation_receipt_file':str(root/'test-receipt.json'),'price_snapshot_file':str(root/'test-price.bin'),
+209:               'source_manifest_file':str(root/'test-manifest.json')}
+210:         (root/'test-integration.json').write_text(json.dumps(body),encoding='utf-8')
+211:         with patch.dict(os.environ,{'RETROLUME_EMBEDDING_API_KEY':'test-only-key'}):loaded=load_integration_config(root/'test-integration.json')
+212:         self.assertTrue(loaded.available);self.assertEqual(loaded.service.outbound_grant['source_manifest_sha256'],manifest.sha256)
+213:         self.assertEqual(OutboundSourceManifest.from_wire(loaded.service.outbound_source_manifest).sha256,manifest.sha256)
+214:         model=ModelServiceConfig(provider='deepseek_chat_completions',base_url='https://api.deepseek.com',model='deepseek-chat',api_key='test-only',max_request_bytes=65536,max_response_bytes=65536,
+215:             outbound_grant=loaded.service.outbound_grant,outbound_source_manifest=loaded.service.outbound_source_manifest)
+216:         restored=OneCallInput.from_wire(OneCallInput(context.operation_id,request,model).to_wire())
+217:         self.assertEqual(OutboundSourceManifest.from_wire(restored.service.outbound_source_manifest).sha256,manifest.sha256)
+218:         (root/'test-manifest.json').write_text(old.model_dump_json(),encoding='utf-8')
+219:         with patch.dict(os.environ,{'RETROLUME_EMBEDDING_API_KEY':'test-only-key'}):rejected=load_integration_config(root/'test-integration.json')
+220:         self.assertFalse(rejected.available);self.assertEqual(rejected.reason,'retrieval_config_invalid')
+221: 
+222:     def test_public_identity_is_actual_config_or_explicitly_unknown(self):
+223:         self.assertIsNone(IntegrationConfig().public()['provider']);self.assertIsNone(IntegrationConfig().public()['model'])
+224: 
+225: 
+226: if __name__=='__main__':unittest.main()
+
+backend/tests/fixtures/step018/s08_loop.py
+1: """只用于无实际I/O的有限协程夹具；保留asyncio调度/timeout，拒绝注册真实fd。"""
+2: import asyncio
+3: import selectors
+4: import time
+5: import unittest
+6: 
+7: 
+8: class ClosedSelector(selectors.SelectSelector):
+9:     def register(self,*args,**kwargs):raise RuntimeError('纯离线夹具不允许实际I/O')
+10:     def select(self,timeout=None):
+11:         if timeout and timeout>0:time.sleep(timeout)
+12:         return []
+13: 
+14: 
+15: class ClosedLoop(asyncio.SelectorEventLoop):
+16:     def __init__(self):super().__init__(selector=ClosedSelector())
+17:     def _make_self_pipe(self):self._ssock=self._csock=None
+18:     def _close_self_pipe(self):pass
+19:     def _write_to_self(self):pass
+20: 
+21: 
+22: def run_no_io(awaitable):
+23:     with asyncio.Runner(loop_factory=ClosedLoop) as runner:return runner.run(awaitable)
+24: 
+25: 
+26: class ClosedAsyncTestCase(unittest.IsolatedAsyncioTestCase):
+27:     def _setupAsyncioRunner(self):
+28:         assert self._asyncioRunner is None
+29:         self._asyncioRunner=asyncio.Runner(debug=True,loop_factory=ClosedLoop)
+
+backend/app/worker/one_call.py
+49:     if type(run_tag) is not str or _TAG.fullmatch(run_tag) is None:
+50:         raise ValueError("invalid run identity")
+51: 
+52: 
+53: @dataclass(frozen=True)
+54: class OneCallInput:
+55:     operation_id: str
+56:     request: ModelCallRequest = field(repr=False)
+57:     service: ModelServiceConfig = field(repr=False)
+58: 
+59:     @property
+60:     def protocol(self):
+61:         from app.capabilities.embedding import EmbeddingRequest
+62:         return 4 if type(self.request) is EmbeddingRequest or self.request.retrieval_ref is not None or self.service.outbound_grant is not None else 3
+63: 
+64:     @property
+65:     def capability_kind(self):
+66:         from app.capabilities.embedding import EmbeddingRequest
+67:         return 'embedding' if type(self.request) is EmbeddingRequest else 'model'
+68: 
+69:     def to_wire(self):
+70:         if type(self.operation_id) is not str or _ID.fullmatch(self.operation_id) is None:
+71:             raise ValueError("invalid operation identity")
+72:         from app.capabilities.embedding import EmbeddingRequest, EmbeddingServiceConfig
+73:         embedding = type(self.request) is EmbeddingRequest
+74:         if not ((embedding and type(self.service) is EmbeddingServiceConfig)
+75:                 or (type(self.request) is ModelCallRequest and type(self.service) is ModelServiceConfig)):
+76:             raise TypeError("typed request and service required")
+77:         if max(self.service.max_request_bytes, self.service.max_response_bytes) > MAX_BODY_BYTES:
+78:             raise ValueError("internal one_call supports at most 65536 configured body bytes")
+79:         if len(self.service.api_key.get_secret_value().encode("utf-8")) > 4096:
+80:             raise ValueError("credential exceeds internal limit")
+81:         if self.request.input_result is not None and self.request.input_result.operation_id == self.operation_id:
+82:             raise ValueError("invalid_input")
+83:         request_wire=self.request.model_dump(mode="json",exclude_none=self.protocol!=4)
+84:         bounded(request_wire, MAX_BODY_BYTES)
+85:         # 原v3服务字段及字节保持；仅新v4承载新增受信grant。
+86:         service = self.service.model_dump(mode="json", exclude={name for name in ('outbound_grant','outbound_source_manifest') if getattr(self.service,name,None) is None})
+87:         service["api_key"] = self.service.api_key.get_secret_value()
+88:         value = {"operation_id": self.operation_id,
+89:                  "request": request_wire, "service": service}
+90:         if self.protocol == 4:
+91:             value = {'protocol': 4, 'capability_kind': self.capability_kind, **value}
+92:         value = bounded(value)
+
+backend/app/service_config.py
+1: """G6 本地活动与模型配置加载（能力分层 L0/L1/L2，失败关闭）。
+2: 
+3: - L0 读取与取消：仅需存储就绪，不需要本配置；
+4: - L1 新建：需要有效的模型标识段与活动额度段（不含密钥）；
+5: - L2 显式继续：在 L1 之上还需要可用密钥与完整 ModelServiceConfig。
+6: 
+7: 配置文件不含密钥；密钥只经环境变量（变量名在配置中声明）注入，值不进
+8: 文件、不进响应、不进日志。任何缺项或非法值按层失败关闭并给出精确原因
+9: （config_missing/config_invalid/config_incompatible/provider_key_not_configured）。
+10: 示例模板的占位值不能通过校验，直接复制示例不产生可用能力。加载只发生在
+11: 应用启动时；变更配置需要重启，不做热加载。
+12: """
+13: from __future__ import annotations
+14: 
+15: from dataclasses import dataclass
+16: from datetime import datetime, timedelta, timezone
+17: import json
+18: import os
+19: from pathlib import Path
+20: from uuid import uuid4
+21: 
+22: from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
+23: 
+24: from app.activities import ActivitySpec, PostgresAdmissionLedger, SourceSnapshot
+25: from app.capabilities.contracts import (
+26:     ModelCallRequest,
+27:     ModelServiceConfig,
+28:     Provider,
+29:     ThinkingMode,
+30: )
+31: from app.worker.one_call import OneCallInput
+32: 
+33: _SERVICE_REQUEST_TIMEOUT = 10.0  # 与 SessionConfig 默认 request_timeout_seconds 一致
+34: _ONECALL_CONFIGURED_BODY_LIMIT = 65_536  # one_call 受控通道配置字节上限
+35: _MAX_CONTINUE_OUTPUT_TOKENS = 256  # continue_from_result 使用的固定输出预算
+36: 
+37: 
+38: @dataclass(frozen=True)
+39: class LayerState:
+40:     available: bool
+41:     reason: str | None = None
+42: 
+43: 
+44: @dataclass(frozen=True)
+45: class ActivityConfig:
+46:     provider: str | None
+47:     model: str | None
+48:     quota_preview: dict | None
+49:     model_service: ModelServiceConfig | None
+50:     create_layer: LayerState
+51:     continue_layer: LayerState
+52:     learning_layer: LayerState = LayerState(False, "learning_not_configured")
+53:     learning_output_tokens: int | None = None
+54:     # G8 教学层（TASK-100）：独立 teaching.v1 输出 1..2048，默认关闭。
+55:     teaching_layer: LayerState = LayerState(False, "teaching_not_configured")
+56:     teaching_output_tokens: int | None = None
+57:     teaching_calculation_layer: LayerState = LayerState(False, "teaching_not_configured")
+58:     memory_context: object | None = None
+59:     memory_layer: LayerState = LayerState(False,"memory_not_configured")
+60:     interview_local_layer: LayerState = LayerState(False,"interview_schema_probe_required")
+61:     interview_model_layer: LayerState = LayerState(False,"interview_not_configured")
+62:     interview_output_tokens: int | None = None
+63:     interview_followups: int | None = None
+64:     html_generation_layer: LayerState = LayerState(False,"html_not_configured")
+65:     html_output_tokens: int | None = None
+66: 
+67: 
+68: class _ModelIdentity(BaseModel):
+69:     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+70: 
+71:     provider: str = Field(min_length=1, max_length=64)
+72:     model: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:/-]+$")
+73: 
+74: 
+75: class _ActivityDefaults(BaseModel):
+76:     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+77: 
+78:     deadline_hours: int = Field(ge=1, le=720)
+79:     max_requests: int = Field(ge=1, le=2_147_483_647)
+80:     max_cost_microunits: int = Field(ge=1, le=9_223_372_036_854_775_807)
+81:     reserve_cost_microunits: int = Field(ge=1, le=9_223_372_036_854_775_807)
+82:     max_request_bytes: int = Field(ge=1024, le=_ONECALL_CONFIGURED_BODY_LIMIT)
+83:     max_output_tokens: int = Field(ge=1, le=32_768)
+84:     max_running_seconds: int = Field(ge=1, le=2_147_483_647)
+85:     allowed_tools: list[str] = Field(max_length=1)
+86:     max_tool_calls: int | None = Field(default=None, ge=0, le=32)
+87: 
+88:     @field_validator("allowed_tools")
+89:     @classmethod
+90:     def _tool_whitelist(cls, value):
+91:         # G8 薄扩展：仅容许显式 finite_calculate 白名单（教学核算）；
+92:         # 普通模型及全部教学模型请求依然 allowed_tools 为空。
+93:         for name in value:
+94:             if name != "finite_calculate":

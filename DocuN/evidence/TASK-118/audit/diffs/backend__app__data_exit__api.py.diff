@@ -1,0 +1,11 @@
+--- first-pre/backend/app/data_exit/api.py
++++ current/backend/app/data_exit/api.py
+@@ -79,6 +79,8 @@
+     local_session(request, allow_own_origin=True)
+     value = getattr(request.app.state, "data_exit", None)
+     if value is None: raise DataError("storage_unavailable", 503)
++    if hasattr(value,'_reader_context') and request.method not in ('GET','HEAD','OPTIONS'):
++        raise DataError('data_readonly')
+     return value
+ 
+ 

@@ -1,0 +1,371 @@
+frontend/src/data/context.tsx
+1: import React, {useEffect, useRef, useSyncExternalStore} from "react";
+2: 
+3: export type DataContext = {control_id:string; selection_generation:number; dataset_id:string; instance_id:string; current_mode:string; read_only:boolean};
+4: let current: DataContext|null = null;
+5: const listeners = new Set<()=>void>();
+6: function sameIdentity(a:DataContext,b:DataContext){return a.control_id===b.control_id&&a.selection_generation===b.selection_generation&&a.dataset_id===b.dataset_id&&a.instance_id===b.instance_id;}
+7: function validContext(value:DataContext){return typeof value.control_id==='string'&&typeof value.dataset_id==='string'&&typeof value.instance_id==='string'&&Number.isSafeInteger(value.selection_generation)&&value.selection_generation>=0&&typeof value.read_only==='boolean';}
+8: function canAdvance(value:DataContext,sessionBootstrap=false){
+9:   if(!validContext(value))return false;
+10:   if(!current)return sessionBootstrap;
+11:   if(value.control_id!==current.control_id)return sessionBootstrap;
+12:   if(value.selection_generation<current.selection_generation)return false;
+13:   if(value.selection_generation===current.selection_generation){
+14:     if(!sameIdentity(value,current)||current.read_only&&!value.read_only)return false;
+15:   }
+16:   return true;
+17: }
+18: export function setDataContext(value:DataContext|null,options:{sessionBootstrap?:boolean}={}) {
+19:   if(value?!canAdvance(value,options.sessionBootstrap):current!==null&&!options.sessionBootstrap)return false;
+20:   if(value&&current&&canonical(value)===canonical(current))return true;
+21:   current=value?{control_id:value.control_id,selection_generation:value.selection_generation,dataset_id:value.dataset_id,
+22:     instance_id:value.instance_id,current_mode:value.current_mode,read_only:value.read_only}:null;
+23:   listeners.forEach(fn=>fn());
+24:   return true;
+25: }
+26: export function getDataContext(){return current;}
+27: export function dataNamespace(){return current ? `${current.dataset_id}.${current.instance_id}.${current.selection_generation}` : "legacy";}
+28: export function dataStorageKey(base:string){return current ? `${base}:${dataNamespace()}` : base;}
+29: export function canonical(value:unknown):string {
+30:   if(value===null||typeof value!=="object") return JSON.stringify(value);
+31:   if(Array.isArray(value))return `[${value.map(canonical).join(",")}]`;
+32:   const object=value as Record<string,unknown>;
+33:   return `{${Object.keys(object).sort().map(key=>`${JSON.stringify(key)}:${canonical(object[key])}`).join(",")}}`;
+34: }
+35: export function useDataContext(){return useSyncExternalStore(fn=>{listeners.add(fn);return()=>{listeners.delete(fn);};},getDataContext);}
+36: export async function dataFetch(path:RequestInfo|URL,init:RequestInit={},policy:{capabilityRefresh?:boolean}={}) {
+37:   const capture=dataNamespace(),context=current,method=(init.method??'GET').toUpperCase();
+38:   const pathname=new URL(String(path),window.location.origin).pathname;
+39:   const hubRead=['GET','HEAD'].includes(method)&&/^\/api\/data\/(jobs(?:\/|$)|packages(?:\/|$)|restore-plans\/)/.test(pathname);
+40:   const hubCancel=method==='POST'&&/^\/api\/data\/jobs\/[^/]+\/cancel$/.test(pathname);
+41:   const artifactWork=method==='POST'&&(/^\/api\/data\/(jobs|uploads|restore-plans|restore-jobs)$/.test(pathname)||/^\/api\/data\/restore-jobs\/[^/]+\/activate-readonly$/.test(pathname));
+42:   const bootstrap=policy.capabilityRefresh&&method==='GET'&&pathname==='/api/data/capabilities';
+43:   if(context?.read_only&&!hubRead&&!hubCancel&&!artifactWork&&!['GET','HEAD'].includes(method))throw new Error("当前数据仅供只读查看，不能修改或继续调用。");
+44:   const headers=new Headers(init.headers);
+45:   if(context)headers.set('X-RetroLume-Data-Context',canonical(context));
+46:   const response=await fetch(path,{...init,headers});
+47:   const check=()=>{
+48:     if(init.signal?.aborted)throw new DOMException('Aborted','AbortError');
+49:     if(current?.control_id!==context?.control_id||!(hubRead||hubCancel||bootstrap)&&capture!==dataNamespace())throw new Error("当前数据已切换，旧响应未用于当前页面。");
+50:     const observed=response.headers.get('X-RetroLume-Data-Context');
+51:     if(context&&observed){
+52:       let identity:DataContext;try{identity=JSON.parse(observed);}catch{throw new Error('数据身份无法核对。');}
+53:       if(hubRead||hubCancel){if(identity.control_id!==context.control_id)throw new Error('控制身份已改变。');}
+54:       else if(bootstrap){if(!canAdvance(identity))throw new Error('能力响应已过期，请重新刷新。');}
+55:       else if(observed!==canonical(context))throw new Error("数据身份已改变，请刷新后核对。");
+56:     }
+57:   };
+58:   check();
+59:   const json=response.json.bind(response),blob=response.blob.bind(response),arrayBuffer=response.arrayBuffer.bind(response);
+60:   response.json=async()=>{const value=await json();check();if(bootstrap&&value.dataset_id&&!canAdvance(value))throw new Error('能力响应已过期，请重新刷新。');return value;};
+61:   response.blob=async()=>{const value=await blob();check();return value;};
+62:   response.arrayBuffer=async()=>{const value=await arrayBuffer();check();return value;};
+63:   return response;
+64: }
+65: 
+66: export function ReadOnlyBusiness({children}:{children:React.ReactNode}) {
+67:   const context=useDataContext(),root=useRef<HTMLDivElement>(null);
+68:   useEffect(()=>{
+69:     if(!context?.read_only||!root.current)return;
+70:     const apply=()=>{
+71:       root.current?.querySelectorAll<HTMLButtonElement>('button').forEach(button=>{
+72:         if(!/刷新|核对|查看|历史|回查|展开|收起|上一页|下一页|返回|关闭|下载|导出|取消选择/.test(button.textContent??''))button.disabled=true;
+73:       });
+74:       root.current?.querySelectorAll<HTMLInputElement|HTMLTextAreaElement>('input,textarea').forEach(input=>{
+75:         if(input.closest('.line-picker'))return;
+76:         if(input instanceof HTMLTextAreaElement||['text','number','search'].includes(input.type))input.readOnly=true;
+77:         else input.disabled=true;
+78:       });
+79:     };
+80:     apply();const observer=new MutationObserver(apply);observer.observe(root.current,{childList:true,subtree:true});
+81:     return()=>observer.disconnect();
+82:   },[context?.read_only,context?.instance_id]);
+83:   return <div ref={root}>{context?.read_only&&<p role="status" className="data-readonly">当前读取恢复副本或维护中的记录。仅恢复记录与只读查看，未恢复继续学习或调用的执行资格；原数据保留，持续使用需后续验收。历史额度是备份时点记录，未知预留保留。</p>}{children}</div>;
+84: }
+
+frontend/src/activities/TeachingWorkspace.tsx
+325:   async function submit(action: TeachingAction, body: Record<string, unknown>,
+326:                          extra?: Partial<TeachingIntentSummary>, recovered?:RetrievalChain) {
+327:     if (busy || !intentsOk) return;
+328:     if(['plan','exercise','evaluate'].includes(action)&&!modelNoticeReady){setError('供应商、模型或用途额度无法核对，未提交');return;}
+329:     if ((action==='answer'||action==='correct') && editConflict) { setError("输入仍属于旧作答身份；请先核对并明确沿用草稿"); return; }
+330:     const submittedContext=contextKey.current;
+331:     const origin={activity:activityId,owner:editorOwner.current,view:workspaceToken.current,head:observedHead.current,
+332:       scope:scopeRef.current,namespace:dataNamespace(),dataContext:canonical(getDataContext())};
+333:     const stillCurrent=()=>mounted.current&&activityRef.current===origin.activity&&contextKey.current===submittedContext
+334:       &&editorOwner.current===origin.owner&&workspaceToken.current===origin.view&&observedHead.current===origin.head
+335:       &&scopeRef.current===origin.scope&&dataNamespace()===origin.namespace&&canonical(getDataContext())===origin.dataContext;
+336:     setBusy(action); setError(""); setNotice("");
+337:     const key = recovered?String(recovered.domain_input.business_key):newTeachingKey();
+338:     const input: Omit<TeachingCommandInput, "body"> = {
+339:       business_key: key,
+340:       expected_revision: workspace?.head.revision ?? 0,
+341:       expected_goal_version: workspace?.head.goal_version ?? 0,
+342:       expected_scope_revision: scopeRevision,
+343:       action,
+344:     };
+345:     if (action==='answer' && editing.current) {
+346:       input.expected_revision=editing.current.head.revision;
+347:       input.expected_goal_version=editing.current.head.goal_version;
+348:       input.expected_scope_revision=editing.current.scope_revision;
+349:     }
+350:     try {
+351:       let retrievalChain:RetrievalChain|undefined;
+352:       if (['plan','exercise','evaluate'].includes(action)&&retrievalMode==='hybrid') {
+353:         const owner=await teachingEditorOwner();
+354:         if(!owner||!stillCurrent()||origin.owner!==owner)throw new Error('编辑身份不可核对，未提交');
+355:         if(recovered&&JSON.stringify(recovered.domain_input)!==JSON.stringify({...input,body}))throw new Error('原动作版本不同，不能改绑');
+356:         const query=String(workspace?.goal?.goal??goalText).trim().slice(0,1024);
+357:         const result=await retrieveForCommand(token,activityId,owner,'teaching',{...input,body},scopeRevision,input.expected_revision,query,()=>stillCurrent()&&editorOwner.current===owner,recovered,modelService);
+358:         if(!stillCurrent()||!result.ref)return;
+359:         input.retrieval_ref=result.ref;retrievalChain=result.row;
+360:       }
+361:       const built = await buildTeachingCommand(activityId, { ...input, body });
+362:       if(!stillCurrent())return;
+363:       // 顺序：规范字节 → IndexedDB 完整正文 → localStorage 摘要 → POST 一次。
+364:       const stored = await saveTeachingDraft({
+365:         draft_id: `draft-${key}`,
+366:         activity_id: activityId,
+367:         goal_record_id: workspace?.head.goal_record_id ?? null,
+368:         exercise_record_id: workspace?.head.exercise_record_id ?? null,
+369:         answer_record_id: workspace?.head.answer_record_id ?? null,
+370:         path_record_id: workspace?.head.path_record_id ?? null,
+371:         node_id: workspace?.head.node_id ?? null,
+372:         head_revision: input.expected_revision,
+373:         editor_owner_id:origin.owner??undefined,
+374:         content: built.request_body,
+375:         created_at: new Date().toISOString(),
+376:       });
+377:       if(!stillCurrent())return;
+378:       if (!stored) { setError("本机草稿写入失败，输入已保留，未发出任何请求"); return; }
+379:       draftId.current = `draft-${key}`;
+380:       const summary: TeachingIntentSummary = {
+381:         key, action, activity_id: activityId,
+382:         head_revision: input.expected_revision, goal_version: input.expected_goal_version,
+383:         scope_revision: input.expected_scope_revision,
+384:         exercise_id: workspace?.head.exercise_record_id ?? undefined,
+385:         answer_id: workspace?.head.answer_record_id ?? undefined,
+386:         request_sha: built.request_sha256, draft_id: draftId.current,
+387:         created_at: new Date().toISOString(), state: "pending",
+388:         editor_owner_id:origin.owner??undefined,view_token:origin.view,namespace:origin.namespace,
+389:         ...extra,
+390:       };
+391:       const appended=await appendTeachingIntent(summary,stillCurrent);
+392:       if(!stillCurrent())return;
+393:       if (!appended) {
+394:         setError("本机恢复台账写入失败，未发出任何请求");
+395:         return;
+396:       }
+397:       if(!stillCurrent())return;
+398:       reloadIntents();
+399:       let receipt: TeachingReceipt;
+400:       try {
+401:         const currentOwner=await teachingEditorOwner();
+402:         if(!stillCurrent()||!currentOwner||currentOwner!==origin.owner)return;
+403:         // 最后身份检查后先实际发起POST，异步标记只能描述已发起的动作。
+404:         const delivery=postTeachingCommand(activityId,{...input,body},token,stillCurrent)
+405:           .then(value=>({value,error:null}),error=>({value:null,error}));
+406:         if(retrievalChain)await storeRetrievalChain({...retrievalChain,domain_sent:true});
+407:         await updateTeachingIntent(key,{state:"submitted"});
+408:         const delivered=await delivery;if(delivered.error)throw delivered.error;
+409:         receipt=delivered.value!;
+410:       } catch (reason) {
+411:         const known = reason instanceof TeachingApiError && reason.status > 0;
+412:         await updateTeachingIntent(key, known
+413:           ? { state: "refused", last_code: (reason as TeachingApiError).code, last_message: (reason as Error).message }
+414:           : { state: "unconfirmed" });
+415:         if (!stillCurrent()) return;
+416:         reloadIntents();
+417:         if (known) setError(errorText((reason as TeachingApiError).code) || (reason as Error).message);
+418:         else setNotice("结果未确认（连接中断）；输入已保留在本机，刷新只做只读核对，不会自动重发。");
+419:         return;
+420:       }
+421:       if (receipt.activity_id!==activityId||receipt.business_key!==key||receipt.action!==action||receipt.request_sha256!==built.request_sha256) {
+422:         await updateTeachingIntent(key,{state:"unconfirmed",last_code:"receipt_mismatch"});
+423:         if (stillCurrent()) { reloadIntents(); setError("回执身份无法核对，原意图已保留"); }
+424:         return;
+425:       }
+426:       if (receipt.status === "committed" || receipt.status === "history") {
+427:         await removeTeachingIntent(key); await removeTeachingDraft(`draft-${key}`);
+428:         if (stillCurrent()) reloadIntents();
+429:       } else if (["unknown","failed","not_sent"].includes(receipt.status)) {
+430:         await updateTeachingIntent(key, { state: "unconfirmed", last_code: receipt.error_code ?? undefined, last_message:receipt.status });
+431:         reloadIntents();
+432:       } else {
+433:         await updateTeachingIntent(key, { state: "submitted" }); reloadIntents();
+434:       }
+435:       if (!stillCurrent()) return;
+436:       if (receipt.status==='committed') {
+437:         if (action==='answer') dirty.current.answer=false;
+438:         if (action==='correct') dirty.current.correction=false;
+
+frontend/src/activities/memoryIntents.ts
+1: import {dataStorageKey} from "../data/context";
+2: import { teachingEditorOwner } from "./teachingIntents";
+3: import { canonicalMemory } from "./memoryApi";
+4: 
+5: const SUMMARY = () => dataStorageKey("retrolume.memory-intents.v1");
+6: const DB = () => dataStorageKey("retrolume-memory");
+7: export type MemoryIntent = { key: string; action: string; memory_id: string; owner: string; request_sha: string;
+8:   draft_id: string; state: "pending" | "submitted" | "unconfirmed" | "refused"; created_at: string };
+9: export type MemoryDraft = { id: string; memory_id: string; owner: string; version: number; revision: number;
+10:   body_sha: string; content: string };
+11: export const memoryEditorOwner = teachingEditorOwner;
+12: export function loadMemoryIntents(): { ok: boolean; items: MemoryIntent[] } {
+13:   try {
+14:     const raw = localStorage.getItem(SUMMARY());
+15:     if (!raw) return { ok: true, items: [] };
+16:     const items = JSON.parse(raw) as MemoryIntent[];
+17:     if (!Array.isArray(items) || items.length > 16 || items.some(i => typeof i.key !== "string" ||
+18:       typeof i.request_sha !== "string" || typeof i.owner !== "string" || typeof i.memory_id !== "string"))
+19:       return { ok: false, items: [] };
+20:     return { ok: true, items };
+21:   } catch { return { ok: false, items: [] }; }
+22: }
+23: export async function mutateMemoryIntents(change: (items: MemoryIntent[]) => MemoryIntent[]): Promise<boolean> {
+24:   if (!navigator.locks) return false;
+25:   try {
+26:     return await navigator.locks.request(SUMMARY(), () => {
+27:       const current = loadMemoryIntents(); if (!current.ok) return false;
+28:       const next = change(current.items); const raw = canonicalMemory(next);
+29:       if (next.length > 16 || new TextEncoder().encode(raw).length > 32768) return false;
+30:       localStorage.setItem(SUMMARY(), raw); return true;
+31:     });
+32:   } catch { return false; }
+33: }
+34: export const appendMemoryIntent = (intent: MemoryIntent) => mutateMemoryIntents(items => [intent, ...items.filter(i => i.key !== intent.key)]);
+35: export const updateMemoryIntent = (key: string, state: MemoryIntent["state"]) =>
+36:   mutateMemoryIntents(items => items.map(i => i.key === key ? { ...i, state } : i));
+37: export const removeMemoryIntent = (key: string) => mutateMemoryIntents(items => items.filter(i => i.key !== key));
+38: 
+39: function openDb(): Promise<IDBDatabase | null> {
+40:   return new Promise(resolve => {
+41:     try {
+42:       const req = indexedDB.open(DB(), 1);
+43:       req.onupgradeneeded = () => { if (!req.result.objectStoreNames.contains("drafts")) req.result.createObjectStore("drafts", { keyPath: "id" }); };
+44:       req.onsuccess = () => resolve(req.result); req.onerror = () => resolve(null);
+45:     } catch { resolve(null); }
+46:   });
+47: }
+48: export async function saveMemoryDraft(draft: MemoryDraft): Promise<boolean> {
+49:   const db = await openDb(); if (!db) return false;
+50:   return new Promise(resolve => {
+51:     const tx = db.transaction("drafts", "readwrite"); const store = tx.objectStore("drafts");
+52:     const req = store.getAll();
+53:     req.onsuccess = () => {
+54:       const others = (req.result as MemoryDraft[]).filter(x => x.id !== draft.id);
+55:       const bytes = others.reduce((sum, x) => sum + new TextEncoder().encode(x.content).length, 0)
+56:         + new TextEncoder().encode(draft.content).length;
+57:       if (others.length >= 16 || bytes > 262144) { tx.abort(); return; }
+58:       store.put(draft);
+59:     };
+60:     tx.oncomplete = () => { db.close(); resolve(true); }; tx.onabort = () => { db.close(); resolve(false); };
+61:     tx.onerror = () => { db.close(); resolve(false); };
+62:   });
+63: }
+64: export async function readMemoryDraft(id: string): Promise<MemoryDraft | null> {
+65:   const db = await openDb(); if (!db) return null;
+66:   return new Promise(resolve => {
+67:     const tx = db.transaction("drafts", "readonly"); const req = tx.objectStore("drafts").get(id);
+68:     let value: MemoryDraft | null = null; req.onsuccess = () => { value = req.result ?? null; };
+69:     tx.oncomplete = () => { db.close(); resolve(value); }; tx.onabort = () => { db.close(); resolve(null); };
+70:   });
+71: }
+72: export async function removeMemoryDraft(id: string): Promise<boolean> {
+73:   const db = await openDb(); if (!db) return false;
+74:   return new Promise(resolve => {
+75:     const tx = db.transaction("drafts", "readwrite"); tx.objectStore("drafts").delete(id);
+76:     tx.oncomplete = () => { db.close(); resolve(true); }; tx.onabort = () => { db.close(); resolve(false); };
+77:   });
+78: }
+79: export async function removeMemoryDraftIfCurrent(id: string, current: () => boolean): Promise<boolean> {
+80:   const db = await openDb(); if (!db) return false;
+81:   if (!current()) { db.close(); return false; }
+82:   return new Promise(resolve => {
+83:     const tx = db.transaction("drafts", "readwrite"); const store = tx.objectStore("drafts");
+84:     const req = store.get(id); let removed = false;
+85:     req.onsuccess = () => {
+
+frontend/src/activities/interviewIntents.ts
+1: import {dataStorageKey} from "../data/context";
+2: import {teachingEditorOwner} from "./teachingIntents";
+3: import {canonicalInterview,interviewSha,requestText} from "./interviewDrafts";
+4: import type {InterviewCommand,InterviewReceipt} from "./interviewApi";
+5: 
+6: export const interviewEditorOwner=teachingEditorOwner;
+7: const KEY = () => dataStorageKey("retrolume.interview.intents.v1"), DB = () => dataStorageKey("retrolume-interview-drafts"), STORE="drafts";
+8: export type InterviewIntent={key:string;activity_id:string;action:string;hash:string;owner:string;head_revision:number;goal_version:number;scope_revision:number;state:string};
+9: export type InterviewDraft={key:string;activity_id:string;owner:string;hash:string;command:InterviewCommand};
+10: function summaries():InterviewIntent[]{
+11:   const raw=localStorage.getItem(KEY());if(!raw)return [];
+12:   if(new TextEncoder().encode(raw).length>32768)throw new Error("本机意图台账超过上限");
+13:   const rows=JSON.parse(raw);
+14:   if(!Array.isArray(rows)||rows.length>16||rows.some(x=>!x||typeof x.key!=="string"||typeof x.owner!=="string"||typeof x.hash!=="string"||typeof x.activity_id!=="string"))throw new Error("本机意图台账无法核对");
+15:   return rows;
+16: }
+17: export function loadInterviewIntents():{ok:boolean;items:InterviewIntent[]}{try{return {ok:true,items:summaries()};}catch{return {ok:false,items:[]};}}
+18: async function database():Promise<IDBDatabase>{
+19:   return await new Promise((resolve,reject)=>{const r=indexedDB.open(DB(),1);r.onupgradeneeded=()=>r.result.createObjectStore(STORE,{keyPath:"key"});r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(new Error("本机正文库无法打开"));r.onblocked=()=>reject(new Error("本机正文库被阻止"));});
+20: }
+21: export async function readInterviewDraft(key:string):Promise<InterviewDraft|null>{
+22:   const db=await database();try{return await new Promise((resolve,reject)=>{const tx=db.transaction(STORE,"readonly");let value:InterviewDraft|null=null;const r=tx.objectStore(STORE).get(key);r.onsuccess=()=>value=(r.result??null) as InterviewDraft|null;tx.oncomplete=()=>resolve(value);tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);});}finally{db.close();}
+23: }
+24: async function writeDraft(draft:InterviewDraft):Promise<void>{
+25:   const db=await database();try{await new Promise<void>((resolve,reject)=>{const tx=db.transaction(STORE,"readwrite"),store=tx.objectStore(STORE);const get=store.getAll();get.onsuccess=()=>{
+26:     const rows=(get.result as InterviewDraft[]).filter(d=>d.key!==draft.key);rows.push(draft);
+27:     if(rows.length>16||new TextEncoder().encode(canonicalInterview(rows)).length>262144){tx.abort();return;}
+28:     store.put(draft);
+29:   };tx.oncomplete=()=>resolve();tx.onerror=()=>reject(new Error("本机正文保存失败"));tx.onabort=()=>reject(new Error("本机正文保存失败或已达上限"));});}finally{db.close();}
+30: }
+31: export async function saveInterviewIntent(draft:InterviewDraft,stillCurrent:()=>boolean):Promise<void>{
+32:   if(!navigator.locks||!stillCurrent())throw new Error("无法取得本机意图锁或编辑身份已变化");
+33:   await navigator.locks.request(`${KEY()}:drafts`,async()=>{
+34:     if(!stillCurrent()||await interviewEditorOwner()!==draft.owner||!stillCurrent())throw new Error("编辑身份已变化");
+35:     const computed=await interviewSha(requestText(draft.activity_id,draft.command));
+36:     if(!stillCurrent()||computed!==draft.hash)throw new Error("正文身份已变化");
+37:     await writeDraft(draft);
+38:     if(!stillCurrent()||await interviewEditorOwner()!==draft.owner||!stillCurrent())throw new Error("正文已保存，编辑身份变化；未发送");
+39:     await navigator.locks.request(KEY(),async()=>{
+40:       if(!stillCurrent())throw new Error("面板已变化，未发送");
+41:       const rows=summaries().filter(x=>x.key!==draft.key);
+42:       if(rows.length>=16)throw new Error("本机待核对意图已达16条，请先核对原提交");
+43:       rows.push({key:draft.key,activity_id:draft.activity_id,action:draft.command.action,hash:draft.hash,owner:draft.owner,head_revision:draft.command.expected_head_revision,
+
+backend/app/retrieval/service.py
+48: def load_integration_config(path):
+49:     """正常server env loader；文件不携口令，启用Q要求受信激活和价格原件hash。"""
+50:     if path is None:return IntegrationConfig()
+51:     try:
+52:         raw=Path(path).read_bytes()
+53:         if len(raw)>65536:raise ValueError('config_size')
+54:         section=_IntegrationSection.model_validate_json(raw)
+55:         if not section.enabled:return IntegrationConfig(reason='retrieval_disabled')
+56:         key=os.environ.get('RETROLUME_EMBEDDING_API_KEY','').strip()
+57:         if not key:return IntegrationConfig(reason='embedding_key_not_configured')
+58:         body=dict(section.embedding)
+59:         if set(body)-{'provider','base_url','model','dimensions','returned_models','timeout_seconds','max_request_bytes','max_response_bytes'}:raise ValueError('config_shape')
+60:         body['api_key']=key
+61:         if section.outbound_grant_file:
+62:             if not section.q_activation_receipt_file or not section.price_snapshot_file or not section.source_manifest_file:raise ValueError('activation_missing')
+63:             grant_raw=Path(section.outbound_grant_file).read_bytes()
+64:             if len(grant_raw)>65536:raise ValueError('grant_size')
+65:             grant=OutboundGrant.model_validate_json(grant_raw)
+66:             manifest_raw=Path(section.source_manifest_file).read_bytes()
+67:             if len(manifest_raw)>65536:raise ValueError('manifest_size')
+68:             manifest=OutboundSourceManifest.model_validate_json(manifest_raw)
+69:             if manifest.sha256!=grant.source_manifest_sha256:raise ValueError('manifest_hash')
+70:             from hashlib import sha256
+71:             receipt_raw=Path(section.q_activation_receipt_file).read_bytes();price_raw=Path(section.price_snapshot_file).read_bytes()
+72:             if len(receipt_raw)>65536 or len(price_raw)>65536:raise ValueError('receipt_size')
+73:             receipt=json.loads(receipt_raw)
+74:             if (sha256(receipt_raw).hexdigest()!=grant.q_activation_receipt_sha256 or sha256(price_raw).hexdigest()!=grant.price_snapshot_sha256
+75:                 or receipt.get('stage')!='Q' or receipt.get('status')!='enabled' or receipt.get('TASK')!='TASK-117'
+76:                 or receipt.get('approved_receipt_sha256')!=grant.approved_receipt_sha256 or receipt.get('source_manifest_sha256')!=manifest.sha256 or not receipt.get('independent_audit_result_sha256')):raise ValueError('activation_invalid')
+77:             body['outbound_grant']=grant.model_dump(mode='json')
+78:             body['outbound_source_manifest']=manifest.model_dump(mode='json')
+79:         # JSON模式接受数组tuple；受信配置从本地env注入，不向客户端返回秘密。
+80:         service=EmbeddingServiceConfig.model_validate_json(json.dumps(body))
+81:         return IntegrationConfig(service,None,section.max_index_fragments)
+82:     except (ValueError,TypeError,OSError,KeyError):return IntegrationConfig(reason='retrieval_config_invalid')
+83: 

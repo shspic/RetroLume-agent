@@ -1,0 +1,9 @@
+{
+  "kind": "sql",
+  "pid": 28032,
+  "value": {
+    "tag": "memory-detail",
+    "sql": "WITH q AS(\n                 SELECT h.*,r.version,r.claim_kind,r.uncertainty,r.policy_version,r.body_sha256,r.dependencies_sha256,\n                  public.memory_revision_readable(h.memory_id,r.version) AS readable,\n                  public.memory_revision_eligible(h.memory_id,r.version) AS eligible\n                 FROM public.learning_memories h JOIN public.learning_memory_revisions r ON r.memory_id=h.memory_id\n                  AND r.version=COALESCE(%s,h.current_version) WHERE h.memory_id=%s)\n                 SELECT q.*,CASE WHEN q.readable THEN b.body ELSE NULL END AS body,\n                  CASE WHEN q.readable THEN(SELECT jsonb_agg(to_jsonb(d) ORDER BY d.ordinal) FROM public.learning_memory_dependencies d\n                   WHERE d.memory_id=q.memory_id AND d.version=q.version) ELSE NULL END AS dependencies,\n                  CURRENT_TIMESTAMP AS read_at FROM q LEFT JOIN public.learning_memory_bodies b USING(memory_id,version)",
+    "arguments_saved": false
+  }
+}

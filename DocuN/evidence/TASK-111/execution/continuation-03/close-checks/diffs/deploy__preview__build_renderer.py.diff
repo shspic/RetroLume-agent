@@ -1,0 +1,11 @@
+--- deploy/preview/build_renderer.py.pre
++++ deploy/preview/build_renderer.py.post
+@@ -23,7 +23,7 @@
+     manifest_bytes=(base_oci/"blobs/sha256"/BASE_MANIFEST).read_bytes()
+     if sha(manifest_bytes)!=BASE_MANIFEST:raise ValueError("base_manifest_bytes")
+     context_dir.mkdir(parents=True)
+-    source_files=("runtime.cjs","runtime.css","runtime.html","descriptor.schema.json","renderer-host.cjs","renderer-bootstrap.cjs")
++    source_files=("runtime.cjs","runtime.css","runtime.html","descriptor.schema.json","renderer-host.cjs","renderer-bootstrap.cjs","renderer-assembly.cjs","renderer-protocol.cjs")
+     for name in source_files:shutil.copy2(PREVIEW/name,context_dir/name)
+     shutil.copytree(PREVIEW/"vendor/playwright-core",context_dir/"vendor/playwright-core")
+     license_root=PREVIEW/"licenses/base-c091b21d-c02-resolved-02"

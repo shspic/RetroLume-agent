@@ -1,0 +1,37 @@
+--- pre/backend/app/capabilities/gateway.py
++++ final/backend/app/capabilities/gateway.py
+@@ -97,6 +97,12 @@
+         self._tools = tools or ToolRegistry()
+ 
+     async def call(self, context: CallContext, request: ModelCallRequest) -> ModelCallResult:
++        if request.input_result is not None and (
++            request.input_result.activity_id != context.activity_id
++            or request.input_result.operation_id == context.operation_id
++            or request.allowed_tools
++        ):
++            return self._result(context, CallStatus.REJECTED, "invalid_input")
+         if request.max_output_tokens > self._config.max_output_tokens_limit:
+             return self._result(context, CallStatus.REJECTED, "output_token_limit")
+         try:
+@@ -114,6 +120,7 @@
+             request_bytes=len(encoded),
+             max_output_tokens=request.max_output_tokens,
+             tool_names=tuple(sorted(request.allowed_tools)),
++            input_result=request.input_result,
+         )
+         stage = "admit"
+         try:
+@@ -122,8 +129,11 @@
+             self._validate_permit(permit, context)
+             stage = "mark_dispatch"
+             await self._ledger.mark_dispatch_started(permit)
+-        except AdmissionDenied:
+-            return self._result(context, CallStatus.REJECTED, "admission_denied")
++        except AdmissionDenied as exc:
++            code = str(exc)
++            if code not in {"scope_conflict","source_invalid","result_invalidated","cancelled","budget_exhausted","integrity_error","invalid_input"}:
++                code = "admission_denied"
++            return self._result(context, CallStatus.REJECTED, code)
+         except AdmissionUnavailable:
+             return self._result(context, CallStatus.REJECTED, "admission_unavailable")
+         except Exception as exc:

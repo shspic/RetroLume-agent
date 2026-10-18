@@ -1,0 +1,23 @@
+"""实际形状与冻结标准逐段定位，不更改标准或被测数据库。"""
+import json
+import sys
+from budget import ROOT,CONTROL
+sys.path.insert(0,str(ROOT/'backend'))
+from app.data_exit.schema_checks import normalize_html_qualification
+from app.data_exit.contracts import canonical,digest
+expected=json.loads((ROOT/'DocuN/evidence/TASK-111/execution/continuation-04/root-14/step-01-qualify/schema-shape.json').read_text(encoding='utf-8'))
+expected=normalize_html_qualification(expected,{table:'retrolume_task111_admin' for table in ('pdf_review_candidates','pdf_review_pages','pdf_extracted_pages')},'retrolume_task111_app')
+latest=sorted(CONTROL.glob('html-shape-normalized-*.json'))[-1]
+actual=json.loads(latest.read_text(encoding='utf-8'))
+result={'actual_file':latest.name,'expected_sha256':digest(canonical(expected)),'actual_sha256':digest(canonical(actual)),'different_sections':[]}
+for section in expected:
+    if expected[section]!=actual[section]:
+        result['different_sections'].append(section)
+        left,right=expected[section],actual[section]
+        differences=[]
+        for index in range(max(len(left),len(right))):
+            e=left[index] if index<len(left) else None;a=right[index] if index<len(right) else None
+            if e!=a:differences.append({'index':index,'expected':e,'actual':a})
+        result[section]=differences
+(CONTROL/'html-shape-differences.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
+print(json.dumps({'different_sections':result['different_sections'],'diff_rows':{key:len(result[key]) for key in result['different_sections']}}))

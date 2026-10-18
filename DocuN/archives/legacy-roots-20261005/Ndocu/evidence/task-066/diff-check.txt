@@ -1,0 +1,59 @@
+﻿== whitespace-insensitive diff ==
+trimmed_changed_lines=55
+=> // TASK-066锛氬墿浣欐ā寮忎笉鍚姩娴忚鍣紝Edge缂哄け涓嶄綔涓鸿妯″紡寮傚父锛涘叏濂楁ā寮忎粛寮哄埗瑕佹眰銆?  if (!REMAINING_ONLY && !edgePath) throw new Error("绯荤粺Edge鏈湪鏍稿噯璺緞鎵惧埌");
+=> // TASK-066锛歱dfBuffer 鎻愬崌鍒?s2/s4/s6 鍏卞悓鍙鐨?main 灞€閮ㄤ綔鐢ㄥ煙锛?65 s4 ReferenceError 鏍瑰洜锛?  // 鍘熷０鏄庡湪娴忚鍣?try 鍧楀唴锛宻4/s6 鍦ㄥ潡澶栧紩鐢級銆傚彧鐢熸垚鍚屼竴鍚堟垚涓ら〉PDF锛宻2锛堟祻瑙堝櫒涓婁紶锛変笌
+=> // s4/s6锛圓PI锛変娇鐢ㄥ悓涓€浠斤紱涓嶆柊澧?globalThis 琛ユ礊銆?  const pdfBuffer = makePdf(["PDF FIRST PAGE", "PDF SECOND PAGE"]);
+=> // ---- TASK-066 鍓╀綑妯″紡锛氫笉鍚姩Edge銆佷笉鎵ц鍓嶄簲鍦烘櫙锛汚PI鏈€灏忓噯澶囧悗浠呮墽琛?s4/s6 ----
+=> if (REMAINING_ONLY) {
+=> log("鍓╀綑妯″紡 --remaining-s4-s6锛欵dge鏈惎鍔紙鍑嗙‘璁板綍锛岄潪寮傚父/閬楃暀锛夛紱s1a/s2/s3/s1b/s5 鏈€夋嫨");
+=> writeSupervision({ phase: "remaining-prep" });
+=> // 鏈€灏忓噯澶囷紙澶辫触鍗虫姏鍑恒€佸け璐ュ叧闂級锛氳蛋鐪熷疄浜у搧API寤虹珛涓€涓凡纭涓ら〉PDF锛堢2椤靛惈
+=> // "绗簩椤电敤鎴疯ˉ鍏?锛岃韩浠?user_supplement锛夛紝渚?s6 浣跨敤锛涗笉閲嶅仛鍓嶄簲鍦烘櫙杈圭晫鐭╅樀锛?    // 涓嶅啋绉板啀娆￠獙璇佸畠浠紝涓嶇洿鍐欐暟鎹簱锛屼笉澶嶇敤065淇濈暀鏁版嵁搴撱€?    const prepUpload = (await apiReq("POST", `/api/materials?filename=${pdfName}`, { token, raw: pdfBuffer })).body;
+=> assert(prepUpload && prepUpload.candidate && prepUpload.candidate.status === "pending", `鍓╀綑妯″紡鍑嗗锛氫袱椤礟DF鍊欓€夋湭鍒涘缓: ${JSON.stringify(prepUpload ?? null)}`);
+=> const prepConfirm = await apiReq("POST", `/api/pdf-candidates/${prepUpload.candidate.candidate_id}/confirm`, { token, json: { version_id: prepUpload.candidate.version_id, pages: [ { physical_page: 1, reviewed: true }, { physical_page: 2, reviewed: true, supplement: "绗簩椤电敤鎴疯ˉ鍏? } ] } });
+=> assert(prepConfirm.status === 200, `鍓╀綑妯″紡鍑嗗锛氫袱椤礟DF閫愰〉纭澶辫触: ${prepConfirm.status}`);
+=> const prepList = (await apiReq("GET", "/api/materials", { token })).body;
+=> const prepRow = prepList.items.find(x => x.title === pdfName);
+=> assert(prepRow && prepRow.format === "pdf", "鍓╀綑妯″紡鍑嗗锛氱‘璁ゅ悗鐨凱DF涓嶅湪璧勬枡鍒楄〃");
+=> const prepContent = (await apiReq("GET", `/api/materials/${prepRow.id}/content?expected_version=${prepRow.version_id}`, { token })).body;
+=> assert(prepContent.query_ready === true && prepContent.pages.length === 2, "鍓╀綑妯″紡鍑嗗锛氱‘璁DF鍐呭鏌ヨ寮傚父");
+=> const prepSup = prepContent.pages[1].supplements;
+=> assert(prepSup.length === 1 && prepSup[0].identity === "user_supplement" && prepSup[0].text === "绗簩椤电敤鎴疯ˉ鍏? && prepSup[0].physical_page === 2, "鍓╀綑妯″紡鍑嗗锛氱敤鎴疯ˉ鍏呰韩浠?缁戝畾涓嶇");
+=> globalThis.__pdfRow = prepRow; // 涓庡叏濂楁ā寮忓悓涓€閫氶亾锛堝叏濂楃敱s3璁剧疆锛夛紝s4/s6 浣跨敤鍚屼竴鐪熷疄 pdfRow
+=> log(`鍓╀綑妯″紡鍑嗗瀹屾垚骞舵牳瀵瑰搷搴旓細pdfRow=${prepRow.id} candidate=${prepUpload.candidate.candidate_id}`);
+=> checkBudget("remaining-prep-done");
+=> assertSupervisionAlive("remaining-prep-done");
+=> // ---- 鐩爣2锛氫袱椤礟DF瀹為檯涓婁紶銆乧anvas瀹為檯缁樺埗銆侀€愰〉鎴浘锛坧dfBuffer 瑙?main 浣滅敤鍩熸彁鍗囷級 ----
+=> } else {
+=> } // end else锛堝叏濂楁ā寮忔祻瑙堝櫒闃舵锛涙祻瑙堝櫒鍧楀唴浠ｇ爜淇濇寔鍘熺缉杩涗互鏈€灏忓寲宸紓锛?
+=> // TASK-066锛氭憳瑕佹寜妯″紡璁板綍娴忚鍣ㄤ笌閫夋嫨鑼冨洿锛涘墿浣欐ā寮忔祻瑙堝櫒鍑嗙‘璁?鏈惎鍔?銆?  const browserSummary = REMAINING_ONLY
+=> ? { started: false, elapsed_ms: 0, version: null, headless: true, executable_path: edgePath ?? null, note: "鍓╀綑妯″紡鏈惎鍔ㄦ祻瑙堝櫒锛堝噯纭褰曪紝闈炲紓甯?閬楃暀锛? }
+=> : { started: true, elapsed_ms: browserElapsed, version: browserVersion, headless: true, executable_path: edgePath };
+=> writeSummary({ outcome: "cleanup-incomplete", on_time: false, overtime: !onTime, cleanup, migration_mode: migrationMode, browser: browserSummary, ...SUMMARY_MODE, app_restarts: 1 });
+=> writeSummary({ outcome: "overtime-watchdog-fired", on_time: false, overtime: true, cleanup, migration_mode: migrationMode, browser: browserSummary, ...SUMMARY_MODE, app_restarts: 1 });
+=> writeSummary({ outcome: "overtime-completed", on_time: false, overtime: true, cleanup, migration_mode: migrationMode, browser: browserSummary, ...SUMMARY_MODE, app_restarts: 1 });
+=> writeSummary({ outcome: REMAINING_ONLY ? "passed-remaining-s4-s6" : "passed", on_time: true, overtime: false, cleanup, migration_mode: migrationMode, browser: browserSummary, ...SUMMARY_MODE, app_restarts: 1 });
+=> // TASK-066锛氬墿浣欐ā寮忔垚鍔熷彧绉?鍓╀綑鍦烘櫙閫氳繃鍊欓€?锛屼笉鍐掔О鍏ㄥ閫氳繃锛涙暣浣撳垽瀹氱敱Astra鍚堝苟鍘嗗彶璇佹嵁銆?  console.log(REMAINING_ONLY ? "TASK-054/057 REMAINING PASS (s4/s6 only; overall verdict by Astra)" : "TASK-054/057 PASS");
+=> // ---- TASK-066锛氬懡浠よ鍙傛暟锛堟湭鐭ュ弬鏁版槑纭嫆缁濓紝涓嶉潤榛樿烦杩囷級 ----
+=> const CLI_ARGS = process.argv.slice(2);
+=> const UNKNOWN_ARGS = CLI_ARGS.filter(a => a !== "--remaining-s4-s6");
+=> if (UNKNOWN_ARGS.length) {
+=> console.error(`TASK-054/057 FAIL: 鏈煡鍙傛暟 ${UNKNOWN_ARGS.join(" ")}锛涗粎鏀寔 --remaining-s4-s6锛堟棤鍙傛暟=鍏ㄥ涓冨満鏅級`);
+=> // 鍓╀綑妯″紡锛氬叏鏂板悎鎴愬簱+鍘熺洃鐫ｆ満鍒讹紝涓嶅惎鍔‥dge銆佷笉鎵цs1a/s2/s3/s1b/s5锛孉PI鏈€灏忓噯澶囧悗浠呮墽琛宻4/s6锛?// 璇ユā寮忔垚鍔熷彧鑳界О"鍓╀綑鍦烘櫙閫氳繃鍊欓€?锛屾暣浣撳垽瀹氱敱Astra鍚堝苟鍘嗗彶璇佹嵁锛涗笉浼啓鏈疆鏈€夊満鏅痯assed銆?const REMAINING_ONLY = CLI_ARGS.includes("--remaining-s4-s6");
+=> const SUMMARY_MODE = REMAINING_ONLY
+=> ? { mode: "remaining-s4-s6", selected: ["s4", "s6"], not_selected: ["s1a", "s2", "s3", "s1b", "s5"] }
+=> : { mode: "full", selected: [...SCENARIO_ORDER] };
+=> 
+=> process.exit(2);
+=> ...SUMMARY_MODE,
+=> }
+<= if (!edgePath) throw new Error("绯荤粺Edge鏈湪鏍稿噯璺緞鎵惧埌");
+<= // ---- 鐩爣2锛氫袱椤礟DF瀹為檯涓婁紶銆乧anvas瀹為檯缁樺埗銆侀€愰〉鎴浘 ----
+<= const pdfBuffer = makePdf(["PDF FIRST PAGE", "PDF SECOND PAGE"]);
+<= writeSummary({ outcome: "cleanup-incomplete", on_time: false, overtime: !onTime, cleanup, migration_mode: migrationMode, browser: { elapsed_ms: browserElapsed, version: browserVersion, headless: true, executable_path: edgePath }, app_restarts: 1 });
+<= writeSummary({ outcome: "overtime-watchdog-fired", on_time: false, overtime: true, cleanup, migration_mode: migrationMode, browser: { elapsed_ms: browserElapsed, version: browserVersion, headless: true, executable_path: edgePath }, app_restarts: 1 });
+<= writeSummary({ outcome: "overtime-completed", on_time: false, overtime: true, cleanup, migration_mode: migrationMode, browser: { elapsed_ms: browserElapsed, version: browserVersion, headless: true, executable_path: edgePath }, app_restarts: 1 });
+<= writeSummary({ outcome: "passed", on_time: true, overtime: false, cleanup, migration_mode: migrationMode, browser: { elapsed_ms: browserElapsed, version: browserVersion, headless: true, executable_path: edgePath }, app_restarts: 1 });
+<= console.log("TASK-054/057 PASS");
+assert_count pre=47 current=52
+130A5BC9998BB8B2BE049EBBD44C9D34B13518C050900C8B36295557121FF8E2

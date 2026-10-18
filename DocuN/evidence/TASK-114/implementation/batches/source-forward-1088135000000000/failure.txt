@@ -1,0 +1,29 @@
+Traceback (most recent call last):
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task114\forward_source.py", line 68, in main
+    runner.run(scenario(runtime,credentials,budget,output,True))
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task114\matrix_pg.py", line 70, in scenario
+    identities=await seed(runtime)
+               ^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task114\seed_full.py", line 81, in seed
+    return await seed_model(runtime,source,identities,activity)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task114\seed_full.py", line 150, in seed_model
+    command=await ledger.accept_html_command(aid,HtmlCommand(business_key=key,parent={'kind':'learning','operation_id':parent_op,'payload_sha256':parent_sha,'segment_index':0},
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\preview\repository.py", line 199, in accept_html_command
+    return await self._transaction(transaction)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\activities\repository.py", line 372, in _transaction
+    else:result=await operation(guarded)
+                ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\preview\repository.py", line 170, in transaction
+    await self._html_assert_schema(connection)
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\preview\repository.py", line 72, in _html_assert_schema
+    raise HtmlRefusal("html_schema_not_ready", status=503) from None
+app.preview.business_contracts.HtmlRefusal: html_schema_not_ready

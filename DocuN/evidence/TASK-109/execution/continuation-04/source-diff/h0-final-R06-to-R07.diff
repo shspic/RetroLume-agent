@@ -1,0 +1,35 @@
+--- R06/controller-as-run.py
++++ R07/h0-final.py
+@@ -400,7 +400,6 @@
+         raise RuntimeError(error or "本地增量build/load失败，见完整有界构建日志")
+     metadata = json.loads((run / "build-metadata.json").read_text("utf-8"))
+     image = metadata["containerimage.digest"]
+-    config = metadata["containerimage.config.digest"]
+     iid = (run / "image-id.txt").read_text("utf-8").strip()
+     if iid != image or image == "sha256:aa824fa25eb0aae09cee50c10372fb218a7d86ffb10124b46074a5c1e977cc66" or metadata["containerimage.descriptor"]["digest"] != image:
+         raise RuntimeError("新构建manifest绑定不符，不能冒旧镜像")
+@@ -408,6 +407,9 @@
+     if inspected["code"]:
+         raise RuntimeError("新镜像load后不能核证，不启动")
+     actual = json.loads(inspected["stdout"])
++    config = actual["descriptor"].get("annotations", {}).get("config.digest")
++    if not isinstance(config, str) or not config.startswith("sha256:") or len(config) != 71 or config not in stderr.decode("utf-8", "replace"):
++        raise RuntimeError("实际image descriptor与构建原始config记录不能绑定")
+     if actual["id"] != image or actual["descriptor"]["digest"] != image or actual["descriptor"].get("annotations", {}).get("config.digest") != config or actual["user"] != "10001:10001" or actual["entrypoint"] != ["node", "/opt/preview/h0-counter.cjs"] or actual["labels"].get("retrolume.action-permit") != session["action_permit"] or actual["labels"].get("retrolume.root") != record["id"]:
+         raise RuntimeError("新镜像manifest/config或实际tag归属不符")
+     atomic_json(run / "loaded-image.json", {**actual, "config": config, "tag": frozen["tag"], "input_manifest_sha256": frozen["input_manifest_sha256"], "same_browser_binary_expected": "0b20b130e7edd9dd51873be867761295fe0cfad490c2b9a64f95bd3cfc08fa71"})
+@@ -426,8 +428,13 @@
+     if args.run_index == 2:
+         previous = AREA / "root-06/preview/cleanup.json"
+         correction = json.loads((AREA / "correction-02.json").read_text("utf-8"))
+-        if session["roots"][0]["state"] != "ERROR" or not json.loads(previous.read_text("utf-8")).get("docker_stopped") or not correction.get("ordinary_diagnostic_only") or not correction.get("original_error_evidence") or not correction.get("source_diff"):
++        stopped = json.loads(previous.read_text("utf-8")).get("docker_stopped") if previous.is_file() else json.loads((AREA / "root-06/no-runtime-proof.json").read_text("utf-8")).get("no_preview_create_or_start")
++        if session["roots"][0]["state"] != "ERROR" or not stopped or not correction.get("ordinary_diagnostic_only") or not correction.get("original_error_evidence") or not correction.get("source_diff"):
+             raise RuntimeError("第二根没有明确普通修正依据或首CID停止确认")
++        prior_frozen = json.loads((AREA / "root-06/frozen-input.json").read_text("utf-8"))
++        next_frozen = json.loads((AREA / "preparation/frozen-run-02.json").read_text("utf-8"))
++        if prior_frozen["project_files"] == next_frozen["project_files"] or prior_frozen["input_manifest_sha256"] == next_frozen["input_manifest_sha256"]:
++            raise RuntimeError("第二根缺少实际新源码或context身份差异")
+     now = time.monotonic_ns()
+     record = {"id": "H0-R" + str(args.run_index + 5).zfill(2), "global_ordinal": 75 + args.run_index, "task_ordinal": 5 + args.run_index, "start_ns": now, "deadline_ns": min(now + 900000000000, session["effective_deadline_ns"]), "state": "started", "pid": os.getpid(), "birth": process_birth(os.getpid()), "prechecks_counted": True}
+     session["roots"].append(record)

@@ -1,0 +1,162 @@
+{
+  "changes": [
+    {
+      "after": {
+        "acl": "{retrolume_html_owner=r/retrolume_task111_admin}",
+        "attname": "version_id",
+        "relname": "pdf_extracted_pages"
+      },
+      "before": {
+        "acl": null,
+        "attname": "version_id",
+        "relname": "pdf_extracted_pages"
+      }
+    },
+    {
+      "after": {
+        "acl": "{retrolume_html_owner=r/retrolume_task111_admin}",
+        "attname": "id",
+        "relname": "pdf_review_candidates"
+      },
+      "before": {
+        "acl": null,
+        "attname": "id",
+        "relname": "pdf_review_candidates"
+      }
+    },
+    {
+      "after": {
+        "acl": "{retrolume_html_owner=r/retrolume_task111_admin}",
+        "attname": "version_id",
+        "relname": "pdf_review_candidates"
+      },
+      "before": {
+        "acl": null,
+        "attname": "version_id",
+        "relname": "pdf_review_candidates"
+      }
+    },
+    {
+      "after": {
+        "acl": "{retrolume_html_owner=r/retrolume_task111_admin}",
+        "attname": "status",
+        "relname": "pdf_review_candidates"
+      },
+      "before": {
+        "acl": null,
+        "attname": "status",
+        "relname": "pdf_review_candidates"
+      }
+    },
+    {
+      "after": {
+        "acl": "{retrolume_html_owner=r/retrolume_task111_admin}",
+        "attname": "page_count",
+        "relname": "pdf_review_candidates"
+      },
+      "before": {
+        "acl": null,
+        "attname": "page_count",
+        "relname": "pdf_review_candidates"
+      }
+    },
+    {
+      "after": {
+        "acl": "{retrolume_html_owner=r/retrolume_task111_admin}",
+        "attname": "candidate_id",
+        "relname": "pdf_review_pages"
+      },
+      "before": {
+        "acl": null,
+        "attname": "candidate_id",
+        "relname": "pdf_review_pages"
+      }
+    }
+  ],
+  "closure": [
+    {
+      "acl": "{retrolume_memory_owner=X/retrolume_memory_owner,retrolume_memory_app=X/retrolume_memory_owner,retrolume_html_owner=X/retrolume_memory_owner}",
+      "owner": "retrolume_memory_owner",
+      "proconfig": [
+        "search_path=pg_catalog, pg_temp"
+      ],
+      "proname": "memory_dependency_line",
+      "prosecdef": false,
+      "prosrc": "\n SELECT CASE d.dependency_kind\n WHEN 'source' THEN concat_ws('|','source',d.source_id,d.source_version_id,d.source_revision,d.original_sha256)\n WHEN 'event' THEN concat_ws('|','event',d.origin_activity_id,d.record_id,d.record_kind,d.origin_scope_revision,d.origin_goal_version,d.record_sha256)\n WHEN 'memory' THEN concat_ws('|','memory',d.upstream_memory_id,d.upstream_version,d.upstream_body_sha256) END\n"
+    },
+    {
+      "acl": "{retrolume_memory_owner=X/retrolume_memory_owner,retrolume_memory_app=X/retrolume_memory_owner,retrolume_html_owner=X/retrolume_memory_owner}",
+      "owner": "retrolume_memory_owner",
+      "proconfig": [
+        "search_path=pg_catalog, pg_temp"
+      ],
+      "proname": "memory_dependency_digest",
+      "prosecdef": false,
+      "prosrc": "\n SELECT encode(sha256(convert_to(coalesce(string_agg(public.memory_dependency_line(d),E'\\n' ORDER BY ordinal),''),'UTF8')),'hex')\n FROM public.learning_memory_dependencies d WHERE d.memory_id=mid AND d.version=ver\n"
+    },
+    {
+      "acl": "{retrolume_memory_owner=X/retrolume_memory_owner,retrolume_memory_app=X/retrolume_memory_owner,retrolume_html_owner=X/retrolume_memory_owner}",
+      "owner": "retrolume_memory_owner",
+      "proconfig": [
+        "search_path=pg_catalog, pg_temp"
+      ],
+      "proname": "memory_scope_digest",
+      "prosecdef": false,
+      "prosrc": "\n SELECT encode(sha256(convert_to(coalesce(string_agg(concat_ws('|',s.source_id,s.version_id,s.source_revision,v.sha256),\n E'\\n' ORDER BY s.source_id),''),'UTF8')),'hex')\n FROM public.activity_scope_sources s JOIN public.material_versions v ON v.source_id=s.source_id AND v.id=s.version_id WHERE s.activity_id=aid\n"
+    },
+    {
+      "acl": "{retrolume_memory_owner=X/retrolume_memory_owner,retrolume_memory_app=X/retrolume_memory_owner,retrolume_html_owner=X/retrolume_memory_owner}",
+      "owner": "retrolume_memory_owner",
+      "proconfig": [
+        "search_path=pg_catalog, pg_temp"
+      ],
+      "proname": "memory_choice_digest",
+      "prosecdef": false,
+      "prosrc": "\n SELECT encode(sha256(convert_to(coalesce(string_agg(concat_ws('|',memory_id,version,selected_revision,body_sha256),\n E'\\n' ORDER BY ordinal),''),'UTF8')),'hex') FROM public.activity_memory_choices WHERE activity_id=aid\n"
+    },
+    {
+      "acl": "{retrolume_memory_owner=X/retrolume_memory_owner,retrolume_memory_app=X/retrolume_memory_owner,retrolume_html_owner=X/retrolume_memory_owner}",
+      "owner": "retrolume_memory_owner",
+      "proconfig": [
+        "search_path=pg_catalog, pg_temp"
+      ],
+      "proname": "memory_revision_readable",
+      "prosecdef": false,
+      "prosrc": "\n SELECT EXISTS(\n SELECT 1 FROM public.learning_memories h JOIN public.learning_memory_revisions r USING(memory_id)\n JOIN public.learning_memory_bodies b USING(memory_id,version)\n WHERE h.memory_id=mid AND r.version=ver AND h.state='active'\n AND r.body_sha256=encode(sha256(convert_to(b.body,'UTF8')),'hex') AND r.body_bytes=octet_length(b.body)\n AND r.dependency_count=(SELECT count(*) FROM public.learning_memory_dependencies WHERE memory_id=mid AND version=ver)\n AND r.dependencies_sha256=public.memory_dependency_digest(mid,ver)\n AND NOT EXISTS(\n SELECT 1 FROM public.learning_memory_dependencies d\n LEFT JOIN public.material_sources s ON s.id=d.source_id\n LEFT JOIN public.material_versions v ON v.source_id=d.source_id AND v.id=d.source_version_id\n WHERE d.memory_id=mid AND d.version=ver AND d.dependency_kind='source'\n AND(s.current_version IS DISTINCT FROM d.source_version_id OR s.revision IS DISTINCT FROM d.source_revision\n OR v.sha256 IS DISTINCT FROM d.original_sha256\n OR(v.format='pdf' AND NOT EXISTS(SELECT 1 FROM public.pdf_review_candidates c WHERE c.version_id=v.id\n AND c.status='confirmed' AND c.page_count BETWEEN 1 AND 50\n AND(SELECT count(*) FROM public.pdf_review_pages p WHERE p.candidate_id=c.id)=c.page_count\n AND(SELECT count(*) FROM public.pdf_extracted_pages p WHERE p.version_id=c.version_id)=c.page_count))))\n AND NOT EXISTS(\n SELECT 1 FROM public.learning_memory_dependencies d LEFT JOIN public.teaching_records t\n ON t.activity_id=d.origin_activity_id AND t.record_id=d.record_id\n WHERE d.memory_id=mid AND d.version=ver AND d.dependency_kind='event'\n AND(t.kind IS DISTINCT FROM d.record_kind OR t.body_sha256 IS DISTINCT FROM d.record_sha256\n OR t.scope_revision IS DISTINCT FROM d.origin_scope_revision OR t.goal_version IS DISTINCT FROM d.origin_goal_version\n OR EXISTS(SELECT 1 FROM public.teaching_records x WHERE x.activity_id=t.activity_id\n AND((x.kind='correction' AND x.parent_record_id=t.record_id)\n OR(x.kind='answer' AND x.supersedes_record_id=t.record_id)\n OR(x.kind='feedback' AND t.kind IN ('feedback','progress') AND x.answer_record_id=t.answer_record_id AND x.seq>t.seq)))))\n AND NOT EXISTS(\n SELECT 1 FROM public.learning_memory_dependencies d\n LEFT JOIN public.learning_memories up ON up.memory_id=d.upstream_memory_id\n LEFT JOIN public.learning_memory_revisions ur ON ur.memory_id=d.upstream_memory_id AND ur.version=d.upstream_version\n LEFT JOIN public.learning_memory_bodies ub ON ub.memory_id=ur.memory_id AND ub.version=ur.version\n WHERE d.memory_id=mid AND d.version=ver AND d.dependency_kind='memory'\n AND(up.state IS DISTINCT FROM 'active' OR up.current_version IS DISTINCT FROM d.upstream_version\n OR ur.body_sha256 IS DISTINCT FROM d.upstream_body_sha256 OR ub.body IS NULL\n OR encode(sha256(convert_to(ub.body,'UTF8')),'hex') IS DISTINCT FROM d.upstream_body_sha256\n OR EXISTS(SELECT 1 FROM public.learning_memory_dependencies pd WHERE pd.memory_id=d.upstream_memory_id\n AND pd.version=d.upstream_version AND NOT EXISTS(SELECT 1 FROM public.learning_memory_dependencies cd\n WHERE cd.memory_id=mid AND cd.version=ver AND public.memory_dependency_line(cd)=public.memory_dependency_line(pd)))))\n )\n"
+    },
+    {
+      "acl": "{retrolume_memory_owner=X/retrolume_memory_owner,retrolume_memory_app=X/retrolume_memory_owner,retrolume_html_owner=X/retrolume_memory_owner}",
+      "owner": "retrolume_memory_owner",
+      "proconfig": [
+        "search_path=pg_catalog, pg_temp"
+      ],
+      "proname": "memory_revision_eligible",
+      "prosecdef": false,
+      "prosrc": "\n SELECT public.memory_revision_readable(mid,ver) AND EXISTS(SELECT 1 FROM public.learning_memories WHERE memory_id=mid AND current_version=ver AND state='active')\n"
+    },
+    {
+      "acl": "{retrolume_memory_owner=X/retrolume_memory_owner,retrolume_memory_app=X/retrolume_memory_owner,retrolume_html_owner=X/retrolume_memory_owner}",
+      "owner": "retrolume_memory_owner",
+      "proconfig": [
+        "search_path=pg_catalog, pg_temp"
+      ],
+      "proname": "activity_memory_eligible",
+      "prosecdef": false,
+      "prosrc": "\n SELECT (NOT EXISTS(SELECT 1 FROM public.activity_memory_bindings WHERE activity_id=aid)\n AND NOT EXISTS(SELECT 1 FROM public.activity_operation_results r WHERE r.activity_id=aid\n  AND r.payload_format='json' AND r.payload::jsonb->'value'->>'profile'='teaching.v2')\n AND NOT EXISTS(SELECT 1 FROM public.teaching_commands c WHERE c.activity_id=aid\n  AND c.context_body IS NOT NULL AND c.context_body::jsonb->>'schema'='teaching.context.v2')) OR EXISTS(\n SELECT 1 FROM public.activity_memory_bindings b JOIN public.activities a ON a.id=b.activity_id\n WHERE b.activity_id=aid AND b.bound_scope_revision=a.scope_revision\n AND EXISTS(SELECT 1 FROM public.activity_scope_sources WHERE activity_id=aid)\n AND NOT EXISTS(SELECT 1 FROM public.activity_scope_sources sc LEFT JOIN public.material_sources ms ON ms.id=sc.source_id\n WHERE sc.activity_id=aid AND(ms.current_version IS DISTINCT FROM sc.version_id OR ms.revision IS DISTINCT FROM sc.source_revision))\n AND b.bound_scope_sha256=public.memory_scope_digest(aid) AND b.selection_sha256=public.memory_choice_digest(aid)\n AND b.selected_count=(SELECT count(*) FROM public.activity_memory_choices WHERE activity_id=aid)\n AND NOT EXISTS(SELECT 1 FROM public.activity_memory_choices c JOIN public.learning_memories h USING(memory_id)\n WHERE c.activity_id=aid AND(h.revision<>c.selected_revision OR h.current_version<>c.version\n OR NOT public.memory_revision_eligible(c.memory_id,c.version)\n OR c.body_sha256 IS DISTINCT FROM(SELECT body_sha256 FROM public.learning_memory_revisions WHERE memory_id=c.memory_id AND version=c.version)\n OR EXISTS(SELECT 1 FROM public.learning_memory_dependencies d WHERE d.memory_id=c.memory_id AND d.version=c.version\n AND d.dependency_kind='source' AND NOT EXISTS(SELECT 1 FROM public.activity_scope_sources s\n WHERE s.activity_id=aid AND s.source_id=d.source_id AND s.version_id=d.source_version_id AND s.source_revision=d.source_revision))))\n )\n"
+    },
+    {
+      "acl": "{retrolume_html_owner=X/retrolume_html_owner,retrolume_html_app=X/retrolume_html_owner}",
+      "owner": "retrolume_html_owner",
+      "proconfig": [
+        "search_path=pg_catalog, public"
+      ],
+      "proname": "html_parent_eligible",
+      "prosecdef": true,
+      "prosrc": "\n SELECT COALESCE((SELECT a.status<>'cancelled' AND a.deadline_at>CURRENT_TIMESTAMP\n  AND a.scope_revision=(frozen->>'scope_revision')::integer\n  AND public.activity_memory_eligible(a.id)\n  AND (NOT EXISTS(SELECT 1 FROM public.activity_memory_bindings m WHERE m.activity_id=a.id)\n       OR EXISTS(SELECT 1 FROM public.activity_memory_bindings m WHERE m.activity_id=a.id\n             AND m.selection_sha256=frozen->>'memory_selection_sha256'))\n  AND EXISTS(SELECT 1 FROM public.activity_scope_sources s WHERE s.activity_id=a.id)\n  AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(frozen->'sources') ref WHERE NOT EXISTS(\n    SELECT 1 FROM public.activity_scope_sources s JOIN public.material_sources m ON m.id=s.source_id\n      JOIN public.material_versions v ON v.id=s.version_id AND v.source_id=s.source_id\n     WHERE s.activity_id=a.id AND s.source_id::text=ref->>'source_id' AND s.version_id::text=ref->>'version_id'\n      AND s.source_revision=(ref->>'source_revision')::integer AND m.current_version=s.version_id\n      AND m.revision=s.source_revision AND v.sha256=ref->>'original_sha256'))\n  AND jsonb_array_length(frozen->'sources')=(SELECT count(*) FROM public.activity_scope_sources s WHERE s.activity_id=a.id)\n  AND CASE WHEN frozen->'parent'->>'kind'='learning' THEN EXISTS(\n    SELECT 1 FROM public.activity_operations o JOIN public.activity_operation_results r\n     ON r.activity_id=o.activity_id AND r.operation_id=o.operation_id\n    WHERE o.activity_id=a.id AND o.operation_id=frozen->'parent'->>'operation_id' AND o.kind='model'\n     AND o.state='received' AND o.scope_revision=a.scope_revision AND r.payload_sha256=frozen->'parent'->>'payload_sha256'\n     AND r.admission_id=o.admission_id AND r.execution_generation=o.execution_generation\n     AND r.payload::jsonb->'value'->>'profile'='learning.v1' AND r.payload::jsonb->'value'->'result'->>'kind'='answer')\n   ELSE EXISTS(SELECT 1 FROM public.teaching_heads h JOIN public.teaching_records r ON r.activity_id=h.activity_id\n    WHERE h.activity_id=a.id AND r.record_id::text=frozen->'parent'->>'record_id'\n     AND r.body_sha256=frozen->'parent'->>'body_sha256' AND r.goal_version=h.goal_version\n     AND r.scope_revision=a.scope_revision AND (r.kind='exercise' AND r.record_id=h.exercise_record_id\n       OR r.kind='feedback' AND r.record_id=h.feedback_record_id))\n    AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(frozen->'dependencies') d WHERE NOT EXISTS(\n      SELECT 1 FROM public.teaching_records r WHERE r.activity_id=a.id AND r.record_id::text=d->>'record_id'\n       AND r.body_sha256=d->>'body_sha256' AND r.scope_revision=a.scope_revision)) END\n FROM public.activities a WHERE a.id=aid),false)\n"
+    }
+  ],
+  "old_subjects_functions_memberships_unchanged": true,
+  "patch": "GRANT SELECT(id,version_id,status,page_count) ON public.pdf_review_candidates TO retrolume_html_owner;\nGRANT SELECT(candidate_id) ON public.pdf_review_pages TO retrolume_html_owner;\nGRANT SELECT(version_id) ON public.pdf_extracted_pages TO retrolume_html_owner;",
+  "status": "APPLIED_SIX_COLUMNS_ONLY",
+  "table_acl_unchanged": true
+}

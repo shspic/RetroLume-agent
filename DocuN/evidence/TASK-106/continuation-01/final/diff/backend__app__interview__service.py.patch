@@ -1,0 +1,78 @@
+--- pre/backend/app/interview/service.py
++++ post/backend/app/interview/service.py
+@@ -1,6 +1,8 @@
+ """Explicit commands only. Native SUP owns stops and budget reconciliation."""
+ from __future__ import annotations
+ import asyncio
++from datetime import datetime,timezone
++from anyio import CancelScope
+ 
+ from app.capabilities.contracts import ModelCallRequest,Message
+ from app.worker.one_call import OneCallInput,run_one_call
+@@ -20,8 +22,12 @@
+     async def read_workspace(self,aid,config):
+         view=await self.ledger.read_interview_workspace(aid)
+         layer=getattr(config,'interview_model_layer',None)
+-        available=bool(layer and layer.available and view['qualification']=='current' and view['domain']=='interview')
+-        view['capabilities'].update(model=available,model_reason=None if available else view['suppression_reason'] or (layer.reason if layer else 'interview_not_configured'))
++        budget=view['budget'];head=view['head']
++        live=budget['status'] in ('pending','running') and datetime.fromisoformat(budget['deadline_at'])>datetime.now(timezone.utc)
++        remaining=budget['requests_reserved']<budget['max_requests'] and budget['cost_reserved_microunits']+budget['reserve_cost_microunits']<=budget['max_cost_microunits']
++        available=bool(layer and layer.available and live and remaining and not view['pending'] and head and head['phase']!='ended' and view['qualification']=='current' and view['domain']=='interview')
++        reason=view['suppression_reason'] or ('cancelled' if budget['status']=='cancelled' else 'activity_expired' if not live else 'interview_budget_exhausted' if not remaining else 'interview_pending' if view['pending'] else 'interview_ended' if head and head['phase']=='ended' else (layer.reason if layer else 'interview_not_configured'))
++        view['capabilities'].update(model=available,model_reason=None if available else reason)
+         view['capabilities']['max_followups_per_round']=getattr(config,'interview_followups',None)
+         view['capabilities']['max_output_tokens']=getattr(config,'interview_output_tokens',None)
+         return view
+@@ -94,18 +100,40 @@
+         if not claim['launch_allowed']:return await self.ledger.read_interview_command(aid,command.business_key)
+         task=asyncio.create_task(asyncio.to_thread(run_one_call,self.ledger,session,aid,'local-ui',claim['operation_id'],request,service,run_tag=run_tag))
+         cancelled=False;supervision=None
+-        while True:
+-            try:
+-                supervision=await asyncio.shield(task);break
+-            except asyncio.CancelledError:
+-                cancelled=True
+-                if task.done():supervision=task.result();break
+-            except Exception:break
++        # The existing ASGI middleware also uses AnyIO level cancellation.
++        # Shield its scope while retaining explicit asyncio caller cancellation.
++        with CancelScope(shield=True):
++            while True:
++                try:
++                    supervision=await asyncio.shield(task);break
++                except asyncio.CancelledError:
++                    cancelled=True
++                    if task.done():
++                        if not task.cancelled():
++                            try:supervision=task.result()
++                            except Exception:pass
++                        break
++                except Exception:break
++            state=getattr(supervision,'state','') or ''
++            receipt_present=bool(getattr(supervision,'model_receipt',None)) or bool(getattr(supervision,'tool_receipt',None))
++            facts=dict(state=state,definitely_not_admitted=not receipt_present and state in ('not_started','budget_exhausted','startup_deadline','partial_window_too_small'))
++            # Repeated caller cancellation cannot skip/restart bounded cleanup.
++            finishing=asyncio.create_task(asyncio.wait_for(
++                self.ledger.finish_interview_supervision(aid,command.business_key,facts),timeout=15.0))
++            while True:
++                try:
++                    receipt=await asyncio.shield(finishing);break
++                except asyncio.CancelledError:
++                    cancelled=True
++                    if finishing.done():
++                        try:receipt=finishing.result()
++                        except BaseException:raise asyncio.CancelledError from None
++                        break
++                except Exception:
++                    if cancelled:raise asyncio.CancelledError from None
++                    raise
+         if cancelled:raise asyncio.CancelledError
+-        state=getattr(supervision,'state','') or ''
+-        receipt_present=bool(getattr(supervision,'model_receipt',None)) or bool(getattr(supervision,'tool_receipt',None))
+-        facts=dict(state=state,definitely_not_admitted=not receipt_present and state in ('not_started','budget_exhausted','startup_deadline','partial_window_too_small'))
+-        return await self.ledger.finish_interview_supervision(aid,command.business_key,facts)
++        return receipt
+ 
+     async def read_citation(self,aid,rid,citation_id,view_token=None):
+         first=await self.ledger.read_interview_record(aid,rid,view_token)

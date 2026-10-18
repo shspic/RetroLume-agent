@@ -1,0 +1,125 @@
+"""候选源、真实原件、累计账与精确清场核对；不承担独立审计或共享裁定。"""
+import difflib,hashlib,json,subprocess,time
+from datetime import datetime,timezone
+from pathlib import Path
+from decimal import Decimal
+from .control import ROOT,CONTINUE_ROOT,EVIDENCE,CONTINUATION,CAPS,registry_root,atomic,batch,phase,read_state,source_snapshot
+from .resources import DOCKER,shell_env
+from app.preview.process import birth,GlobalOwner
+from app.preview.description import digest
+from app.preview.host_job import job_name,valid_job_end
+
+def load(path):return json.loads(Path(path).read_text(encoding='utf-8'))
+def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+def ref(path):return dict(path=str(Path(path).resolve()),bytes=Path(path).stat().st_size,sha256=sha(path))
+def obj(value):return json.loads(value) if isinstance(value,str) else value
+
+def main():
+    out=CONTINUE_ROOT/'final';out.mkdir(exist_ok=False);phase('cleanup')
+    assert CONTINUATION=='TASK-111-G11-C07-20261012' and read_state()['active_batch'] is None
+    with batch('cleanup','C07 candidate binding and terminal exact physical metadata'):
+        rows=load(CONTINUE_ROOT/'root-20/sessions-final.json');assert len(rows)==7 and all(r['state']=='stopped' for r in rows)
+        old=load(CONTINUE_ROOT/'root-20/old-unknown-kept.json');assert old['state']=='cleanup_unconfirmed' and old['reserve_seconds']==60 and old['elapsed_seconds'] is None
+        previous=load(EVIDENCE/'continuation-06/final/exact-resources-final.json');targets={x['id']:x for x in previous['objects']};owners=[];index=[]
+        built=load(CONTINUE_ROOT/'active-build.json');context=Path(built['context']);manifest=load(context/'load-manifest.json')
+        assert sha(context/'load-manifest.json')==built['load_manifest_sha256']==sha(ROOT/'deploy/preview/load-manifest.json')
+        assert manifest['renderer_sha256']==built['renderer_sha256']=='6cc300164a6cb364d9bd0bae4897f06d3f6a65cf5d4272477d2bccde67312597'
+        for name,expected in manifest['files'].items():assert sha(context/name)==expected
+        assert manifest['files']['renderer-protocol.cjs']==sha(ROOT/'deploy/preview/renderer-protocol.cjs')
+        atomic(out/'load-manifest-verification.json',dict(image=built['image'],load_manifest=ref(context/'load-manifest.json'),files=len(manifest['files']),all_match=True,
+            fixed_renderer=built['renderer_sha256'],base_manifest=built['base_manifest'],actual_new_image=True))
+        for row in rows:
+            pid=row['preview_id'];folder=registry_root()/pid;reg=load(folder/'registry.json');kernel=load(folder/'kernel-premises.json');proof=obj(row['confirmation_receipt'])
+            recovered=(folder/'recovery-proof.json').exists();proof_path=folder/('recovery-proof.json' if recovered else 'supervisor-result.json')
+            saved=load(proof_path);saved=saved if recovered else saved['proof'];assert digest(saved)==digest(proof)
+            assert reg['complete'] and proof['tree_confirmation']=='private_pid_init_terminated' and proof['attach_eof_confirmed'] and proof['owned_reaper_ended']
+            assert proof['cid']==reg['cid'] and proof['image_id']==reg['intent']['image_id']==row['image_id']==built['image']['id'] and proof['nonce']==reg['intent']['nonce']
+            assert proof['kernel_premises_sha256']==digest(kernel) and kernel['load_manifest_sha256']==built['load_manifest_sha256'] and proof['wait']['code']==0
+            dies=[json.loads(s) for s in proof['events']['stdout'].splitlines() if s.strip()];assert any(x['Actor']['ID']==reg['cid'] and x['Action']=='die' for x in dies)
+            jobs={}
+            for role,key in [('SUP','supervisor_cli_windows_job'),('REAP','reaper_windows_job')]:
+                assert valid_job_end(proof[key],job_name(pid,reg['intent']['nonce'],role),reg['job_premises'][role]);jobs[role]=proof[key]
+            if recovered:
+                assert row['elapsed_seconds']==60 and proof['recovery_eof_observation_sha256']
+                candidate=next(p for p in CONTINUE_ROOT.glob('root-*/stderr_no_eof/natural-pipe-observation.json') if load(p)['preview_id']==pid)
+                obs=load(candidate);assert digest(obs)==proof['recovery_eof_observation_sha256'] and len(obs['pipes'])==2 and all(p['actual_eof'] is True and p['error_type'] is None for p in obs['pipes'])
+                assert obs['captured_before_trigger'] and obs['read_after_parent_exit'] and obs['extra_job_handles_held'] is False
+                eof=ref(candidate)
+            else:
+                obs=proof['pipe_observation'];assert obs['stdout_eof'] is True and obs['stderr_eof'] is True and obs['stdout_read_error'] is None and obs['stderr_read_error'] is None
+                eof=obs
+            for role,instance in [('parent',reg['parent']),('attach',dict(pid=reg['attach_pid'],birth=reg['attach_birth'])),('reaper',reg['reaper_owner']),('reaper_launcher',reg['reaper_launcher'])]:
+                now=birth(instance['pid']);assert now['state']=='exited' or now['state']=='running' and now['birth']!=instance['birth']
+                owners.append(dict(preview_id=pid,role=role,instance=instance,current=now))
+            targets[reg['cid']]=dict(id=reg['cid'],name='/'+reg['intent']['name'],image=reg['intent']['image_id'])
+            index.append(dict(preview_id=pid,activity_id=row['activity_id'],cid=reg['cid'],name=reg['intent']['name'],nonce=reg['intent']['nonce'],image=row['image_id'],
+                state=row['state'],reserve_seconds=row['reserve_seconds'],elapsed_seconds=row['elapsed_seconds'],deadline_ns=reg['deadline_ns'],deadline_at=row['deadline_at'],
+                proof=ref(proof_path),registry=ref(folder/'registry.json'),kernel=ref(folder/'kernel-premises.json'),true_dual_EOF=eof,jobs=jobs,persistent_confirmation_matches=True))
+        assert len(targets)==47
+        fmt='{"id":{{json .Id}},"image":{{json .Image}},"name":{{json .Name}},"running":{{json .State.Running}},"pid":{{json .State.Pid}},"restart_count":{{json .RestartCount}}}'
+        command=[DOCKER,'inspect','--format',fmt,*targets];started=time.monotonic_ns()
+        r=subprocess.run(command,capture_output=True,timeout=15,env=shell_env(),creationflags=subprocess.CREATE_NO_WINDOW)
+        (out/'exact-inspect.stdout.bin').write_bytes(r.stdout);(out/'exact-inspect.stderr.bin').write_bytes(r.stderr);assert r.returncode==0
+        objects=[json.loads(line) for line in r.stdout.splitlines()];assert len(objects)==47
+        for got in objects:
+            expected=targets[got['id']];assert got['name']==expected['name'] and got['image']==expected['image'] and not got['running'] and got['pid']==0 and got['restart_count']==0
+        atomic(out/'exact-inspect-command.json',dict(args=command,start_ns=started,end_ns=time.monotonic_ns(),code=r.returncode))
+        for path in CONTINUE_ROOT.glob('root-*/**/*.json'):
+            if path.name not in ('actor-owner.json','owner.json','guardian-ready.json'):continue
+            value=load(path);pid=value.get('pid');expected=value.get('birth');expected=expected.get('birth') if isinstance(expected,dict) else expected
+            now=birth(pid);assert now['state']=='exited' or now['state']=='running' and now['birth']!=expected
+            owners.append(dict(path=str(path),pid=pid,expected_birth=expected,current=now))
+        owner=GlobalOwner('Global\\RetroLumePreviewV2Task111')
+        try:assert owner.acquire()=='acquired';identity=owner.identity()
+        finally:owner.close()
+        command="$taskRows = @(Get-NetTCPConnection -State Listen -LocalPort 18111,55451 -ErrorAction SilentlyContinue); ConvertTo-Json -InputObject $taskRows -Compress; exit 0"
+        r=subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-Command',command],capture_output=True,timeout=15,creationflags=subprocess.CREATE_NO_WINDOW)
+        (out/'ports-final.stdout.bin').write_bytes(r.stdout);(out/'ports-final.stderr.bin').write_bytes(r.stderr);assert r.returncode==0
+        assert json.loads(r.stdout)==[];atomic(out/'ports-final.json',dict(command=command,ports=[],confirmed=True))
+        atomic(out/'exact-resources-final.json',dict(at_utc=datetime.now(timezone.utc).isoformat(),at_ns=time.monotonic_ns(),objects=objects,owners=owners,global_exclusive=identity,PG_and_all_registered_preview_stopped=True))
+        atomic(out/'stop-index.json',index);atomic(out/'sessions-final.json',rows);atomic(out/'old-unknown-kept.json',old)
+        final_sources=source_snapshot(out);baseline=load(EVIDENCE/'continuation-06/final/source-identity.json');changes=[]
+        allowed={'backend/app/preview/production_supervisor.py','backend/app/preview/pipe.py','deploy/preview/renderer-protocol.cjs','backend/tests/fixtures/task111/control.py','backend/tests/fixtures/task111/core.py'}
+        diffs=out/'source-diff';diffs.mkdir()
+        for row in baseline:
+            if sha(ROOT/row['path'])==row['sha256']:continue
+            assert row['path'] in allowed;before=CONTINUE_ROOT/'pre'/row['path'].replace('/','__');assert sha(before)==row['sha256']
+            after=ROOT/row['path'];text=''.join(difflib.unified_diff(before.read_text(encoding='utf-8').splitlines(keepends=True),after.read_text(encoding='utf-8').splitlines(keepends=True),fromfile='C06/'+row['path'],tofile='C07/'+row['path']))
+            (diffs/(row['path'].replace('/','__')+'.diff')).write_text(text,encoding='utf-8');changes.append(dict(path=row['path'],before=row['sha256'],after=sha(after)))
+        assert len(changes)==5
+        old_actor=CONTINUE_ROOT/'repair-01/c07_actor.before.py.bin';new_actor=ROOT/'backend/tests/fixtures/task111/c07_actor.py'
+        (diffs/'c07_actor-repair-01.diff').write_text(''.join(difflib.unified_diff(old_actor.read_text(encoding='utf-8').splitlines(keepends=True),new_actor.read_text(encoding='utf-8').splitlines(keepends=True),fromfile='C07_failed_fixture',tofile='C07_fixed_fixture')),encoding='utf-8')
+        atomic(out/'change-index.json',dict(baseline_sources=len(baseline),unmodified=len(baseline)-len(changes),changes=changes,new_c07_sources=[r for r in final_sources if '/c07' in r['path']],forbidden_source_files_unchanged=True,
+            frontend_bundle='继承C06未改，未build',schema_SQL_ACL_worker='未改，继承有效原件',rule_manifest=ref(ROOT/'DocuN/evidence/v4-migration-20260930/rules-snapshot.json')))
+        cases=[]
+        for number in (19,20):cases.extend(load(CONTINUE_ROOT/f'root-{number}/case-results.json'))
+        selected=[r for r in cases if r['exit']==0];assert len(selected)==6 and len(cases)==7
+        atomic(out/'case-index.json',dict(selected=selected,retained_failure=[r for r in cases if r['exit']!=0],all_original_records_kept=True))
+    budget=read_state();assert budget['active_batch'] is None and budget['counts']['real_batches']==20 and budget['counts']['PG_container_starts']==16
+    assert sum(x.get('issue')=='E112-01' for x in budget['execution_time_adjustments'])==1
+    for name,cap in CAPS.items():assert cap is None or budget['counts'].get(name,0)<=cap
+    events=[json.loads(s) for s in (EVIDENCE/'events.jsonl').read_text(encoding='utf-8').splitlines() if s.strip()]
+    real=[e for e in events if e['kind']=='batch_end' and e['data'].get('kind')=='real' and e['data'].get('number') in (19,20)]
+    new_real=sum(Decimal(str(e['data']['elapsed'])) for e in real);assert len(real)==2 and new_real<=2400 and abs(Decimal(str(budget['time_seconds']['real']))-Decimal('16826.566')-new_real)<Decimal('.0000001')
+    reserved={}
+    for e in events:
+        if e['kind']=='reserved':reserved[e['data']['category']]=reserved.get(e['data']['category'],0)+1
+    # 原两批事后低影响离线登记继续保留，不改历史事件制造事前登记。
+    reserved['offline_related_batches']+=2
+    assert all(reserved.get(k,0)==v for k,v in budget['counts'].items())
+    atomic(out/'budget-final.json',dict(budget=budget,original_recorded_real='14546.863',E112_01_added_real='2279.703',conservative_baseline='16826.566',historical_excess_vs_16200='626.566',
+        historical_excess_not_forgiven=True,C07_new_real_seconds=str(new_real),C07_new_real_remaining=str(Decimal('2400')-new_real),
+        cumulative_real_cap=20400,cumulative_real_remaining=str(Decimal('20400')-Decimal(str(budget['time_seconds']['real']))),roots=real,
+        all_counts_recomputed_from_original_events=reserved,remaining_counts={k:None if cap is None else cap-budget['counts'].get(k,0) for k,cap in CAPS.items()},
+        remaining_preview_names=load(CONTINUE_ROOT/'preview-name-plan.json'),real_intervals_include_PG_cleanup_no_overlap=True))
+    phase('complete');atomic(out/'timing-final.json',load(CONTINUE_ROOT/'timing.json'))
+    atomic(out/'candidate-summary.json',dict(TASK='TASK-111',R='R-105',permit=CONTINUATION,status='三项范围内修正与定向证据完成；待原112增量独立复核',
+        self_signed_G11_or_SEC003_or_STEP_or_project_or_release=False,physical_objects_stopped=47,new_lifecycles=7,selected_methods=6,
+        image=built['image']['id'],load_manifest_sha256=built['load_manifest_sha256'],renderer_sha256=built['renderer_sha256'],new_real_seconds=str(new_real),active_batch=None,
+        retained_failures=['首接收脚本根下标错误，未启动资源','offline-01跨realm夹具错误','root-19/stderr_no_eof夹具缺closed属性，已同根全R恢复'],
+        first_read_clock_gap='首两次只读工具未采钟；首次实采加保守300秒余量，未知不填0',public_input_wording='21条记录等于17个远端成功ACK加4个422拒绝'))
+    entries=[ref(p) for p in CONTINUE_ROOT.rglob('*') if p.is_file() and p!=out/'evidence-manifest.json']
+    atomic(out/'evidence-manifest.json',dict(at_utc=datetime.now(timezone.utc).isoformat(),entries=entries))
+    print(json.dumps(dict(status='C07_CANDIDATE_BOUND_AND_EXACTLY_CLEANED',objects=47,methods=6,new_real=str(new_real),counts=budget['counts']),ensure_ascii=False))
+
+if __name__=='__main__':main()

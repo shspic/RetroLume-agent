@@ -1,0 +1,77 @@
+[
+  {
+    "step": "resource-identity",
+    "ok": true,
+    "identity": {
+      "owner": "retrolume_task095_synth",
+      "role": [
+        true,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "sessions": 0
+    }
+  },
+  {
+    "step": "pg-api-retest",
+    "ok": true,
+    "returncode": 0,
+    "tail": "OK"
+  },
+  {
+    "step": "app-ready",
+    "ok": true,
+    "pid": 37180
+  },
+  {
+    "step": "browser-continue-readonly",
+    "ok": false,
+    "summary": {
+      "ok": false,
+      "console_errors": [],
+      "steps": [
+        "workspace-list-visible"
+      ],
+      "error": "TimeoutError: locator.waitFor: Timeout 15000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('.ws-op-detail pre').first() to be visible\u001b[22m\n"
+    }
+  },
+  {
+    "step": "browser-workspace",
+    "ok": true,
+    "summary": {
+      "ok": true,
+      "steps": [
+        "capabilities-layers",
+        "ui-create",
+        "lost-response-banner",
+        "409-verify-after-lost-response",
+        "explicit-same-key-retry",
+        "cancel-two-step",
+        "corrupt-ledger-gate",
+        "materials-upload-read",
+        "pdf-branch-reason"
+      ],
+      "console_errors": [],
+      "expected_network_errors": [
+        "Failed to load resource: the server responded with a status of 409 (Conflict)",
+        "Failed to load resource: net::ERR_FAILED",
+        "Failed to load resource: the server responded with a status of 404 (Not Found)",
+        "Failed to load resource: the server responded with a status of 422 (Unprocessable Entity)"
+      ],
+      "counts": {
+        "hold_flow_posts": 2,
+        "abort_flow_posts": 2
+      },
+      "page_errors": []
+    }
+  },
+  {
+    "step": "app-terminated",
+    "ok": true,
+    "pid": 37180
+  }
+]

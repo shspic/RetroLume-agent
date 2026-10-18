@@ -1,0 +1,48 @@
+--- pre/win_chain.py
++++ current/win_chain.py
+@@ -36,6 +36,7 @@
+ from app.runtime import psycopg_compatible_loop_factory
+ import app.worker.launcher as launcher
+ 
++EVIDENCE = Path(os.environ["TASK089_EVIDENCE"]).resolve()
+ DSN = os.environ.get("RETROLUME_ACTIVITY_RESULTS_TEST_DATABASE_URL", "")
+ ROLE = "retrolume_task089_synth"
+ DBNAME = "retrolume_task089_g3"
+@@ -49,7 +50,7 @@
+ def synthetic_supervisor(cls,mapping_name):
+     api=launcher._api()
+     executable=str(sys._base_executable)
+-    argv=[executable,"-B",str(Path(__file__).with_name("bootstrap.py")),"sup",mapping_name]
++    argv=[executable,"-B",str(Path(__file__).with_name("bootstrap.py")),"sup",str(EVIDENCE),mapping_name]
+     command=ctypes.create_unicode_buffer(subprocess.list2cmdline(argv))
+     env=launcher._environment_block()
+     startup=launcher._STARTUPINFOW();startup.cb=ctypes.sizeof(startup)
+@@ -143,13 +144,14 @@
+                 digest=result["payload_sha256"]
+                 check(isinstance(digest,str) and len(digest)==64 and all(c in "0123456789abcdef" for c in digest),"payload digest shape")
+                 # 单次发送与持久事实：恰好一条 received 操作与一条 results 行。
+-                account=row(DSN,"SELECT status,running_reserved_seconds,running_settled_seconds,requests_reserved,dispatch_closed FROM activities WHERE id=%s",(activity,))
++                account=row(DSN,"SELECT status,running_reserved_seconds,running_settled_seconds,requests_reserved,dispatch_closed,execution_generation FROM activities WHERE id=%s",(activity,))
+                 ops=rows(DSN,"SELECT operation_id,state,execution_generation,scope_revision FROM activity_operations WHERE activity_id=%s",(activity,))
+                 results=rows(DSN,"SELECT payload_format,payload,payload_sha256,admission_id,execution_generation,scope_revision FROM activity_operation_results WHERE activity_id=%s",(activity,))
+                 check(len(ops)==1 and ops[0]["state"]=="received","exactly one received operation")
+                 check(account["requests_reserved"]==1 and account["dispatch_closed"],"one admission and door closed")
+                 check(account["running_reserved_seconds"]==0 and account["running_settled_seconds"]==outcome.settled_seconds,"settled accounting")
+                 check(len(results)==1,"single result row")
++                check(account["execution_generation"]==ops[0]["execution_generation"]+1,"close generation increment")
+                 expected_format,expected_text,expected_sha=expected_payload(label)
+                 check(results[0]["payload_format"]==expected_format,"stored format")
+                 check(results[0]["payload"]==expected_text,"stored canonical payload")
+@@ -161,10 +163,12 @@
+                 check(str(snapshot.admission_id)==str(results[0]["admission_id"]),"read admission binding")
+                 list_page=run(ledger.list_committed_results(activity,limit=10))
+                 check(len(list_page)==1 and list_page[0].payload is None and list_page[0].payload_sha256==digest,"list metadata only")
++                emit(event="hash_binding", receipt=digest, database=results[0]["payload_sha256"], read=snapshot.payload_sha256, inner_protocol=receipt["protocol"])
+                 emit(event="scenario_result",id="chain-"+label,outcome={**data,"model_status":result["status"],"business_commit":receipt["business_commit"],"payload_sha256":digest},account=account,operations=ops)
+                 emit(event="scenario_complete",id="chain-"+label)
+             finally:
+                 cleanup(DSN,activity,source,version)
++                emit(event="case_cleanup",activity=activity,source=source,version=version)
+     emit(event="complete",scenarios=1)
+     return 0
+ 

@@ -1,0 +1,55 @@
+--- pre/backend/app/service_config.py
++++ post/backend/app/service_config.py
+@@ -57,6 +57,10 @@
+     teaching_calculation_layer: LayerState = LayerState(False, "teaching_not_configured")
+     memory_context: object | None = None
+     memory_layer: LayerState = LayerState(False,"memory_not_configured")
++    interview_local_layer: LayerState = LayerState(False,"interview_schema_probe_required")
++    interview_model_layer: LayerState = LayerState(False,"interview_not_configured")
++    interview_output_tokens: int | None = None
++    interview_followups: int | None = None
+ 
+ 
+ class _ModelIdentity(BaseModel):
+@@ -269,6 +273,27 @@
+     return LayerState(True), config
+ 
+ 
++class _InterviewInput(BaseModel):
++    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
++    profile: str = Field(pattern=r"^interview\.v1$")
++    max_output_tokens: int = Field(ge=1, le=2048)
++    max_followups_per_round: int = Field(ge=1, le=4)
++
++
++def _interview_check(data, defaults, cont, service):
++    if data.get('interview') is None:
++        return LayerState(False,'interview_not_configured'),None,None
++    try:
++        value=_InterviewInput.model_validate(data['interview'])
++    except ValidationError:
++        return LayerState(False,'interview_config_invalid'),None,None
++    if not cont.available or service is None:
++        return LayerState(False,'interview_model_unavailable'),None,None
++    if value.max_output_tokens>min(defaults.max_output_tokens,service.max_output_tokens_limit):
++        return LayerState(False,'interview_config_invalid'),None,None
++    return LayerState(True),value.max_output_tokens,value.max_followups_per_round
++
++
+ def load_activity_config(path: Path) -> ActivityConfig:
+     """读取一次本地私有配置；任何失败都按 L1/L2 分层失败关闭，不抛出。"""
+     try:
+@@ -301,6 +326,7 @@
+     continue_layer, model_service = _l2_check(data, provider, identity.model, defaults)
+     learning_layer, learning_tokens = _learning_check(data, defaults, continue_layer, model_service)
+     teaching_layer, teaching_tokens, calculation_layer = _teaching_check(data, defaults, continue_layer, model_service)
++    interview_layer,interview_tokens,interview_followups = _interview_check(data,defaults,continue_layer,model_service)
+     memory_context=None
+     memory_layer=LayerState(False,'memory_not_configured')
+     if data.get('memory_context') is not None:
+@@ -326,4 +352,5 @@
+         teaching_output_tokens=teaching_tokens,
+         teaching_calculation_layer=calculation_layer,
+         memory_context=memory_context,memory_layer=memory_layer,
++        interview_model_layer=interview_layer,interview_output_tokens=interview_tokens,interview_followups=interview_followups,
+     )

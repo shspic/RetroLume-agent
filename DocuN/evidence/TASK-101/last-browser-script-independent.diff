@@ -1,0 +1,38 @@
+--- DocuN/evidence/TASK-100/continuation-02/post-browser-fix/pre/frontend/tests/task100-browser.cjs
++++ frontend/tests/task100-browser.cjs
+@@ -14,13 +14,16 @@
+ const output=path.join(batch,main?'browser-main':controlsOnly?'browser-controls':'browser-reopen');
+ fs.mkdirSync(output,{recursive:true});
+ const timeline=[];const controls=[];
++const actualWorkspaces=[];
+ let browser,context,page;
+ const write=(name,value)=>fs.writeFileSync(path.join(output,name),JSON.stringify(value,null,2));
+ async function snapshot(name){await page.screenshot({path:path.join(output,name+'.png'),fullPage:true});}
+ async function api(url,body){
+  const session=await context.request.get(base+'/api/session');const token=(await session.json()).token;
+  const r=body?await context.request.post(base+url,{headers:{'X-RetroLume-Session':token},data:body}):await context.request.get(base+url,{headers:{'X-RetroLume-Session':token}});
+- assert.equal(r.status(),200,await r.text());return r.json();
++ assert.equal(r.status(),200,await r.text());const value=await r.json();
++ if(url.endsWith('/teaching/workspace'))actualWorkspaces.push({url,value});
++ return value;
+ }
+ async function openActivity(){
+  await page.goto(base,{waitUntil:'domcontentloaded'});
+@@ -173,7 +176,7 @@
+  const receipt=await action('提交纠错（零费）');
+  const corrected=await api(`/api/activities/${input.activity_id}/teaching/workspace`);
+  assert.equal(receipt.action,'correct');assert.deepEqual(corrected.budgets,before.budgets);
+- assert.equal(corrected.reason.kind,'correction');assert.equal(corrected.reason.text,correction);
++ assert.equal(corrected.reason.kind,'correction');assert.equal(corrected.reason.body.text,correction);
+  assert.equal(await page.evaluate(()=>window.__task100Executed),undefined);
+  assert.match(await page.getByLabel('更新或保留理由').innerText(),/用户补充/);
+  await snapshot('16-zero-fee-correction-literal-text');
+@@ -239,7 +242,7 @@
+  }
+  finally{
+   try{if(context)await context.close();}finally{if(browser)await browser.close();}
+-  write('timeline.json',timeline);write('facts.json',result);console.log(JSON.stringify(result));
++  write('timeline.json',timeline);write('api-workspaces.json',actualWorkspaces);write('facts.json',result);console.log(JSON.stringify(result));
+  }
+  process.exitCode=result.status==='pass'?0:1;
+ })();

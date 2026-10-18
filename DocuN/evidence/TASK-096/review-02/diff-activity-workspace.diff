@@ -1,0 +1,151 @@
+--- activity-workspace-pre
++++ activity-workspace-current
+@@ -142,6 +142,18 @@
+   const [lastUpdated, setLastUpdated] = useState("");
+   const selectedRef = useRef<string | null>(null);
+   selectedRef.current = selectedId;
++  // 续作01（D2）：异步响应上下文保护——切换、卸载或迟到读取不得覆盖
++  // 新的选择；轮询在途防重入；隐藏暂停、恢复只 GET、卸载清理。
++  const mountedRef = useRef(true);
++  useEffect(() => {
++    mountedRef.current = true;
++    return () => { mountedRef.current = false; };
++  }, []);
++  const pollInFlight = useRef(false);
++  const listSeq = useRef(0);
++  const detailSeq = useRef(0);
++  const openSeq = useRef(0);
++  const opsLoadSeq = useRef(0);
+ 
+   const api = useCallback(async (path: string, init: RequestInit = {}) => {
+     let response: Response;
+@@ -180,36 +192,44 @@
+   }, [api]);
+ 
+   const refreshList = useCallback(async (quiet = false, cursor?: string) => {
++    const seq = ++listSeq.current;
+     try {
+       const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
+       const data = await api(`/api/activities${query}`);
++      if (!mountedRef.current || seq !== listSeq.current) return; // 迟到响应不覆盖新读取
+       const page = (data.items as unknown as ActivityFacts[]) ?? [];
+       setItems(previous => (cursor ? [...previous, ...page] : page));
+       setListCursor(data.next_cursor as string | null);
+       setListError("");
+       setLastUpdated(new Date().toLocaleString("zh-CN", { hour12: false }));
+     } catch (reason) {
++      if (!mountedRef.current || seq !== listSeq.current) return;
+       if (!quiet) setListError(reason instanceof Error ? reason.message : "无法读取活动列表");
+     }
+   }, [api]);
+ 
+   const refreshDetail = useCallback(async (activityId: string, quiet = false) => {
++    const seq = ++detailSeq.current;
+     try {
+       const [detailData, opsData] = await Promise.all([
+         api(`/api/activities/${activityId}`),
+         api(`/api/activities/${activityId}/operations?limit=100`),
+       ]);
++      if (!mountedRef.current || seq !== detailSeq.current || selectedRef.current !== activityId) return;
+       setDetail(detailData.activity as unknown as ActivityFacts);
+       setOperations((opsData.items as unknown as OperationRow[]) ?? []);
+       setOpsCursor(opsData.next_cursor as string | null);
+       setDetailError("");
+       setLastUpdated(new Date().toLocaleString("zh-CN", { hour12: false }));
+     } catch (reason) {
++      if (!mountedRef.current || seq !== detailSeq.current || selectedRef.current !== activityId) return;
+       if (!quiet) setDetailError(reason instanceof Error ? reason.message : "无法读取活动详情");
+     }
+   }, [api]);
+ 
+   const selectActivity = useCallback(async (activityId: string) => {
++    openSeq.current += 1; // 使切换前的在途展开响应失效
++    selectedRef.current = activityId; // 渲染期同步之外的显式同步，保证本请求上下文检查正确
+     setSelectedId(activityId);
+     setOpenOperation(null);
+     setContinueFor(null);
+@@ -240,39 +260,74 @@
+ 
+   const loadMoreOperations = useCallback(async () => {
+     if (!selectedId || !opsCursor) return;
+-    try {
+-      const data = await api(`/api/activities/${selectedId}/operations?limit=100&cursor=${encodeURIComponent(opsCursor)}`);
++    const seq = ++opsLoadSeq.current;
++    const activityId = selectedId;
++    const cursor = opsCursor;
++    try {
++      const data = await api(`/api/activities/${activityId}/operations?limit=100&cursor=${encodeURIComponent(cursor)}`);
++      if (!mountedRef.current || seq !== opsLoadSeq.current || selectedRef.current !== activityId) return;
+       setOperations(previous => [...previous, ...((data.items as unknown as OperationRow[]) ?? [])]);
+       setOpsCursor(data.next_cursor as string | null);
+     } catch (reason) {
++      if (!mountedRef.current || seq !== opsLoadSeq.current || selectedRef.current !== activityId) return;
+       setDetailError(reason instanceof Error ? reason.message : "无法读取更多操作");
+     }
+   }, [api, selectedId, opsCursor]);
+ 
+   const toggleOperation = useCallback(async (row: OperationRow) => {
++    openSeq.current += 1; // 任何面板切换都使在途展开响应失效
++    const seq = openSeq.current;
+     if (openOperation?.operation_id === row.operation_id) {
+       setOpenOperation(null);
+       return;
+     }
+     setOpenOperation(row);
+-    if (!selectedRef.current) return;
++    const activityId = selectedRef.current;
++    if (!activityId) return;
+     // 列表不带正文；展开时按单操作读取补全（仅读取，不产生任何动作）。
+     try {
+-      const data = await api(`/api/activities/${selectedRef.current}/operations/${row.operation_id}`);
++      const data = await api(`/api/activities/${activityId}/operations/${row.operation_id}`);
++      if (!mountedRef.current || seq !== openSeq.current) return; // 迟到正文不覆盖新面板
+       setOpenOperation(data.operation as unknown as OperationRow);
+     } catch {
+-      /* 保持列表行信息；正文不可得时按状态说明显示 */
++      /* 保持列表行信息；正文不可得时按状态说明显示（迟到失败同样不动新面板） */
+     }
+   }, [api, openOperation?.operation_id]);
+ 
+   const anyRunning = items.some(item => item.status === "running") || detail?.status === "running";
+   useEffect(() => {
+     if (!token || !(anyRunning || intents.length > 0 || busy)) return;
+-    const timer = window.setInterval(() => {
+-      void refreshList(true);
+-      if (selectedRef.current) void refreshDetail(selectedRef.current, true);
+-    }, 3000);
+-    return () => window.clearInterval(timer);
++    let timer: number | null = null;
++    // 简单在途标志实现：上一轮未完成则跳过本次节拍，自动轮询不重叠；
++    // 读取函数自身捕获拒绝，finally 必然释放标志，单次失败不永久卡死。
++    const poll = async () => {
++      if (pollInFlight.current || document.hidden) return;
++      pollInFlight.current = true;
++      try {
++        await refreshList(true);
++        const activityId = selectedRef.current;
++        if (activityId) await refreshDetail(activityId, true);
++      } finally {
++        pollInFlight.current = false;
++      }
++    };
++    const start = () => {
++      if (timer === null) timer = window.setInterval(() => { void poll(); }, 3000);
++    };
++    const stop = () => {
++      if (timer !== null) { window.clearInterval(timer); timer = null; }
++    };
++    const onVisibility = () => {
++      // 页面隐藏暂停自动轮询；恢复显示重新调度并立即做一次只 GET 轮询。
++      if (document.hidden) stop();
++      else { start(); void poll(); }
++    };
++    start();
++    document.addEventListener("visibilitychange", onVisibility);
++    return () => {
++      stop();
++      document.removeEventListener("visibilitychange", onVisibility);
++    };
+   }, [token, anyRunning, intents.length, busy, refreshList, refreshDetail]);
+ 
+   async function reconcileCreate(intent: PendingIntent) {

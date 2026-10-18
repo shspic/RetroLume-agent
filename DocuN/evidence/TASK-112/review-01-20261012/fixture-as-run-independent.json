@@ -1,0 +1,209 @@
+{
+  "rows": [
+    {
+      "root": 19,
+      "case": "normal_bom_header",
+      "sha256": "0e14f0b5e2be619c0e07aabdc9f0384e2bb6fffd876f3147ba2bd540c9054ce8",
+      "as_run_match": true
+    },
+    {
+      "root": 19,
+      "case": "late_ready",
+      "sha256": "0e14f0b5e2be619c0e07aabdc9f0384e2bb6fffd876f3147ba2bd540c9054ce8",
+      "as_run_match": true
+    },
+    {
+      "root": 19,
+      "case": "stderr_overflow",
+      "sha256": "0e14f0b5e2be619c0e07aabdc9f0384e2bb6fffd876f3147ba2bd540c9054ce8",
+      "as_run_match": true
+    },
+    {
+      "root": 19,
+      "case": "null_init",
+      "sha256": "0e14f0b5e2be619c0e07aabdc9f0384e2bb6fffd876f3147ba2bd540c9054ce8",
+      "as_run_match": true
+    },
+    {
+      "root": 19,
+      "case": "bom_body",
+      "sha256": "0e14f0b5e2be619c0e07aabdc9f0384e2bb6fffd876f3147ba2bd540c9054ce8",
+      "as_run_match": true
+    },
+    {
+      "root": 19,
+      "case": "stderr_no_eof",
+      "sha256": "0e14f0b5e2be619c0e07aabdc9f0384e2bb6fffd876f3147ba2bd540c9054ce8",
+      "as_run_match": true
+    },
+    {
+      "root": 20,
+      "case": "stderr_no_eof",
+      "sha256": "33fdf59fa8dbf4aad9729c851f382110e04245ac7d493c027b016da544240625",
+      "as_run_match": true
+    }
+  ],
+  "checks": {
+    "before_actor_hash": true,
+    "all_as_run_snapshots": true,
+    "before_finalize_hash": true,
+    "only_known_fixture_differences": true
+  },
+  "as_run_differences": [
+    {
+      "root": 19,
+      "case": "normal_bom_header",
+      "path": "backend/tests/fixtures/task111/c07_actor.py",
+      "as_run_sha": "0e14f0b5e2be619c0e07aabdc9f0384e2bb6fffd876f3147ba2bd540c9054ce8",
+      "current_sha": "33fdf59fa8dbf4aad9729c851f382110e04245ac7d493c027b016da544240625"
+    },
+    {
+      "root": 19,
+      "case": "late_ready",
+      "path": "backend/tests/fixtures/task111/c07_actor.py",
+      "as_run_sha": "0e14f0b5e2be619c0e07aabdc9f0384e2bb6fffd876f3147ba2bd540c9054ce8",
+      "current_sha": "33fdf59fa8dbf4aad9729c851f382110e04245ac7d493c027b016da544240625"
+    },
+    {
+      "root": 19,
+      "case": "stderr_overflow",
+      "path": "backend/tests/fixtures/task111/c07_actor.py",
+      "as_run_sha": "0e14f0b5e2be619c0e07aabdc9f0384e2bb6fffd876f3147ba2bd540c9054ce8",
+      "current_sha": "33fdf59fa8dbf4aad9729c851f382110e04245ac7d493c027b016da544240625"
+    },
+    {
+      "root": 19,
+      "case": "null_init",
+      "path": "backend/tests/fixtures/task111/c07_actor.py",
+      "as_run_sha": "0e14f0b5e2be619c0e07aabdc9f0384e2bb6fffd876f3147ba2bd540c9054ce8",
+      "current_sha": "33fdf59fa8dbf4aad9729c851f382110e04245ac7d493c027b016da544240625"
+    },
+    {
+      "root": 19,
+      "case": "bom_body",
+      "path": "backend/tests/fixtures/task111/c07_actor.py",
+      "as_run_sha": "0e14f0b5e2be619c0e07aabdc9f0384e2bb6fffd876f3147ba2bd540c9054ce8",
+      "current_sha": "33fdf59fa8dbf4aad9729c851f382110e04245ac7d493c027b016da544240625"
+    },
+    {
+      "root": 19,
+      "case": "stderr_no_eof",
+      "path": "backend/tests/fixtures/task111/c07_actor.py",
+      "as_run_sha": "0e14f0b5e2be619c0e07aabdc9f0384e2bb6fffd876f3147ba2bd540c9054ce8",
+      "current_sha": "33fdf59fa8dbf4aad9729c851f382110e04245ac7d493c027b016da544240625"
+    }
+  ],
+  "actor_diff": [
+    "--- before",
+    "+++ after",
+    "@@ -48,6 +48,8 @@",
+    " class ClosedActualStderr:",
+    "     \"\"\"触发前保留真实读句柄，触发后对已关闭的同一读端执行实际read。\"\"\"",
+    "     def __init__(self,raw,c,trigger):self.raw,self.c,self.trigger=raw,c,trigger",
+    "+    @property",
+    "+    def closed(self):return self.raw.closed",
+    "     def fileno(self):return self.raw.fileno()",
+    "     def close(self):self.raw.close()",
+    "     def read(self,count):"
+  ],
+  "finalize_diff": [
+    "--- before",
+    "+++ after",
+    "@@ -1,5 +1,5 @@",
+    " \"\"\"候选源、真实原件、累计账与精确清场核对；不承担独立审计或共享裁定。\"\"\"",
+    "-import difflib,hashlib,json,subprocess,time",
+    "+import difflib,hashlib,json,subprocess,sys,time",
+    " from datetime import datetime,timezone",
+    " from pathlib import Path",
+    " from decimal import Decimal",
+    "@@ -14,8 +14,45 @@",
+    " def ref(path):return dict(path=str(Path(path).resolve()),bytes=Path(path).stat().st_size,sha256=sha(path))",
+    " def obj(value):return json.loads(value) if isinstance(value,str) else value",
+    " ",
+    "+def complete(out,built):",
+    "+    budget=read_state();assert budget['active_batch'] is None and budget['counts']['real_batches']==20 and budget['counts']['PG_container_starts']==16",
+    "+    assert sum(x.get('issue')=='E112-01' for x in budget['execution_time_adjustments'])==1",
+    "+    for name,cap in CAPS.items():assert cap is None or budget['counts'].get(name,0)<=cap",
+    "+    events=[json.loads(s) for s in (EVIDENCE/'events.jsonl').read_text(encoding='utf-8').splitlines() if s.strip()]",
+    "+    real=[e for e in events if e['kind']=='batch_end' and e['data'].get('kind')=='real' and e['data'].get('number') in (19,20)]",
+    "+    new_real=sum(Decimal(str(e['data']['elapsed'])) for e in real);assert len(real)==2 and new_real<=2400 and abs(Decimal(str(budget['time_seconds']['real']))-Decimal('16826.566')-new_real)<Decimal('.0000001')",
+    "+    reserved={}",
+    "+    for e in events:",
+    "+        if e['kind']=='reserved':reserved[e['data']['category']]=reserved.get(e['data']['category'],0)+1",
+    "+    # 原两批事后离线及三笔迟记输入继承独审原件，不伪造事前reserved事件。",
+    "+    reserved['offline_related_batches']+=2;reserved['internal_inputs']+=3",
+    "+    assert all(reserved.get(k,0)==v for k,v in budget['counts'].items())",
+    "+    atomic(out/'budget-final.json',dict(budget=budget,original_recorded_real='14546.863',E112_01_added_real='2279.703',conservative_baseline='16826.566',historical_excess_vs_16200='626.566',",
+    "+        historical_excess_not_forgiven=True,C07_new_real_seconds=str(new_real),C07_new_real_remaining=str(Decimal('2400')-new_real),",
+    "+        cumulative_real_cap=20400,cumulative_real_remaining=str(Decimal('20400')-Decimal(str(budget['time_seconds']['real']))),roots=real,",
+    "+        all_counts_recomputed_from_original_events=reserved,historical_after_fact_count_basis=ref(ROOT/'DocuN/evidence/TASK-112/audit-20261011/execution-budget-independent.json'),",
+    "+        historical_after_fact_counts=dict(offline_related_batches=2,internal_inputs=3),remaining_counts={k:None if cap is None else cap-budget['counts'].get(k,0) for k,cap in CAPS.items()},",
+    "+        remaining_preview_names=load(CONTINUE_ROOT/'preview-name-plan.json'),real_intervals_include_PG_cleanup_no_overlap=True))",
+    "+    phase('complete');atomic(out/'timing-final.json',load(CONTINUE_ROOT/'timing.json'))",
+    "+    atomic(out/'candidate-summary.json',dict(TASK='TASK-111',R='R-105',permit=CONTINUATION,status='三项范围内修正与定向证据完成；待原112增量独立复核',",
+    "+        self_signed_G11_or_SEC003_or_STEP_or_project_or_release=False,physical_objects_stopped=47,new_lifecycles=7,selected_methods=6,",
+    "+        image=built['image']['id'],load_manifest_sha256=built['load_manifest_sha256'],renderer_sha256=built['renderer_sha256'],new_real_seconds=str(new_real),active_batch=None,",
+    "+        retained_failures=['首接收脚本根下标错误，未启动资源','offline-01跨realm夹具错误','root-19/stderr_no_eof夹具缺closed属性，已同根全R恢复','finalize重算遗漏历史三笔迟记，物理核证已保存后仅补统计'],",
+    "+        first_read_clock_gap='首两次只读工具未采钟；首次实采加保守300秒余量，未知不填0',public_input_wording='21条记录等于17个远端成功ACK加4个422拒绝'))",
+    "+    entries=[ref(p) for p in CONTINUE_ROOT.rglob('*') if p.is_file() and p!=out/'evidence-manifest.json']",
+    "+    atomic(out/'evidence-manifest.json',dict(at_utc=datetime.now(timezone.utc).isoformat(),entries=entries))",
+    "+    print(json.dumps(dict(status='C07_CANDIDATE_BOUND_AND_EXACTLY_CLEANED',objects=47,methods=6,new_real=str(new_real),counts=budget['counts']),ensure_ascii=False))",
+    "+",
+    " def main():",
+    "-    out=CONTINUE_ROOT/'final';out.mkdir(exist_ok=False);phase('cleanup')",
+    "+    out=CONTINUE_ROOT/'final'",
+    "+    if len(sys.argv)>1 and sys.argv[1]=='finish_only':",
+    "+        previous=load(out/'source-identity.json')",
+    "+        for row in previous:",
+    "+            if row['path']=='backend/tests/fixtures/task111/c07_finalize.py':continue",
+    "+            assert sha(ROOT/row['path'])==row['sha256']",
+    "+        (out/'source-identity-before-accounting-completion.json').write_bytes((out/'source-identity.json').read_bytes())",
+    "+        source_snapshot(out);complete(out,load(CONTINUE_ROOT/'active-build.json'));return",
+    "+    out.mkdir(exist_ok=False);phase('cleanup')",
+    "     assert CONTINUATION=='TASK-111-G11-C07-20261012' and read_state()['active_batch'] is None",
+    "     with batch('cleanup','C07 candidate binding and terminal exact physical metadata'):",
+    "         rows=load(CONTINUE_ROOT/'root-20/sessions-final.json');assert len(rows)==7 and all(r['state']=='stopped' for r in rows)",
+    "@@ -95,31 +132,6 @@",
+    "         for number in (19,20):cases.extend(load(CONTINUE_ROOT/f'root-{number}/case-results.json'))",
+    "         selected=[r for r in cases if r['exit']==0];assert len(selected)==6 and len(cases)==7",
+    "         atomic(out/'case-index.json',dict(selected=selected,retained_failure=[r for r in cases if r['exit']!=0],all_original_records_kept=True))",
+    "-    budget=read_state();assert budget['active_batch'] is None and budget['counts']['real_batches']==20 and budget['counts']['PG_container_starts']==16",
+    "-    assert sum(x.get('issue')=='E112-01' for x in budget['execution_time_adjustments'])==1",
+    "-    for name,cap in CAPS.items():assert cap is None or budget['counts'].get(name,0)<=cap",
+    "-    events=[json.loads(s) for s in (EVIDENCE/'events.jsonl').read_text(encoding='utf-8').splitlines() if s.strip()]",
+    "-    real=[e for e in events if e['kind']=='batch_end' and e['data'].get('kind')=='real' and e['data'].get('number') in (19,20)]",
+    "-    new_real=sum(Decimal(str(e['data']['elapsed'])) for e in real);assert len(real)==2 and new_real<=2400 and abs(Decimal(str(budget['time_seconds']['real']))-Decimal('16826.566')-new_real)<Decimal('.0000001')",
+    "-    reserved={}",
+    "-    for e in events:",
+    "-        if e['kind']=='reserved':reserved[e['data']['category']]=reserved.get(e['data']['category'],0)+1",
+    "-    # 原两批事后低影响离线登记继续保留，不改历史事件制造事前登记。",
+    "-    reserved['offline_related_batches']+=2",
+    "-    assert all(reserved.get(k,0)==v for k,v in budget['counts'].items())",
+    "-    atomic(out/'budget-final.json',dict(budget=budget,original_recorded_real='14546.863',E112_01_added_real='2279.703',conservative_baseline='16826.566',historical_excess_vs_16200='626.566',",
+    "-        historical_excess_not_forgiven=True,C07_new_real_seconds=str(new_real),C07_new_real_remaining=str(Decimal('2400')-new_real),",
+    "-        cumulative_real_cap=20400,cumulative_real_remaining=str(Decimal('20400')-Decimal(str(budget['time_seconds']['real']))),roots=real,",
+    "-        all_counts_recomputed_from_original_events=reserved,remaining_counts={k:None if cap is None else cap-budget['counts'].get(k,0) for k,cap in CAPS.items()},",
+    "-        remaining_preview_names=load(CONTINUE_ROOT/'preview-name-plan.json'),real_intervals_include_PG_cleanup_no_overlap=True))",
+    "-    phase('complete');atomic(out/'timing-final.json',load(CONTINUE_ROOT/'timing.json'))",
+    "-    atomic(out/'candidate-summary.json',dict(TASK='TASK-111',R='R-105',permit=CONTINUATION,status='三项范围内修正与定向证据完成；待原112增量独立复核',",
+    "-        self_signed_G11_or_SEC003_or_STEP_or_project_or_release=False,physical_objects_stopped=47,new_lifecycles=7,selected_methods=6,",
+    "-        image=built['image']['id'],load_manifest_sha256=built['load_manifest_sha256'],renderer_sha256=built['renderer_sha256'],new_real_seconds=str(new_real),active_batch=None,",
+    "-        retained_failures=['首接收脚本根下标错误，未启动资源','offline-01跨realm夹具错误','root-19/stderr_no_eof夹具缺closed属性，已同根全R恢复'],",
+    "-        first_read_clock_gap='首两次只读工具未采钟；首次实采加保守300秒余量，未知不填0',public_input_wording='21条记录等于17个远端成功ACK加4个422拒绝'))",
+    "-    entries=[ref(p) for p in CONTINUE_ROOT.rglob('*') if p.is_file() and p!=out/'evidence-manifest.json']",
+    "-    atomic(out/'evidence-manifest.json',dict(at_utc=datetime.now(timezone.utc).isoformat(),entries=entries))",
+    "-    print(json.dumps(dict(status='C07_CANDIDATE_BOUND_AND_EXACTLY_CLEANED',objects=47,methods=6,new_real=str(new_real),counts=budget['counts']),ensure_ascii=False))",
+    "+    complete(out,built)",
+    " ",
+    " if __name__=='__main__':main()"
+  ],
+  "failures": [],
+  "summary": {
+    "actor_before_sha": "0e14f0b5e2be619c0e07aabdc9f0384e2bb6fffd876f3147ba2bd540c9054ce8",
+    "actor_after_sha": "33fdf59fa8dbf4aad9729c851f382110e04245ac7d493c027b016da544240625",
+    "accounting_before_sha": "ac789484bc38661944614c53d626485d8814c12c9da403d75312ab4f6e883e99",
+    "accounting_after_sha": "f32057b995c770bb0004405b7c5faef29510a0af3c73705c7ab79d7dd712610f",
+    "current_checked_sources": 111,
+    "note": "diff需结合人工调用路径裁定，不以hash不同机械重跑"
+  }
+}

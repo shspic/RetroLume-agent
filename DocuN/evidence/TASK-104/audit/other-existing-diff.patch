@@ -1,0 +1,31 @@
+--- a/README.md
++++ b/README.md
+@@ -73,3 +73,17 @@
+ ## 文档与历史归档
+ 
+ 正式需求、架构和唯一执行状态在 DocuS；当前任务卡、结果、证据及新实验在 DocuN。旧 docu、evidence、Ndocu、spikes 已统一归档；旧路径的对应位置、恢复方法与逐文件清单见[归档说明](D:/shspic/project_NO3_RetroLume-agent/DocuN/archives/legacy-roots-20261005/README.md)。归档不改变任务编号、历史预算或产品验收状态。
++
++
++## 学习记忆
++
++活动工作区中的学习记忆区只显示用户明确保存的记忆。用户自报、偏好、待练难点与当时有限观察分别标识；保存或修正不调用模型，不改写原始作答。教学成果旁先查看保存预览，再明确保存有限观察。
++
++新活动默认不选记忆，每次最多明确勾选四个具体版本。教学v2把背景按有限容量装配，记忆不是正确性引用、长期掌握或工具授权。缺少memory_context或模型容量配置时拒绝背景调用，存储就绪后仍可查看、保存和撤销。memory_context默认null；采用时须显式给selected_items、max_memory_bytes、max_memory_chars、model_context_tokens、max_input_tokens_estimate、protocol_reserve_tokens、reserved_output_tokens、safety_tokens、estimate_policy=utf8_bytes.v1与model_identity。UTF8字节估算不是所有供应商的精确tokenizer，真实模型容量及条款在实际采用前核实。
++
++修订、撤销、来源或原观察失效会停用旧选择活动的全部派生教学内容，继续须新活动明确重选，不自动切最新版。原始目标、作答、纠错保留历史身份。已选记忆的活动通过教学工作区使用背景，旧资料问答、普通继续或通用工具不绕行。
++
++撤销预览说明全部版本与活动影响，先提交逻辑墓碑，再清理本条在线记忆正文。清理失败仍保持停用，刷新只读核对；明确重试使用原清单。它不删除资料、原始作答、活动历史或备份，不承诺撤回远端字节或擦除所有副本。010和角色最小权限只在获准目标执行，普通app无正文DELETE/TRUNCATE或拥有者权限，不关闭009不可变事实触发器。
++
++本机IndexedDB只保存未确认动作及分身份草稿，不能代替服务端记忆。复制标签页由活跃owner互斥，修订冲突保留旧草稿，不自动改绑。刷新、轮询和重开均不重发命令或隐式清理。本次合成候选仍需编排安排稳定点独立审计；真实用户库、真实provider、部署和完整退出恢复没有因此获准。
++
+--- a/config/activity.example.json
++++ b/config/activity.example.json
+@@ -27,5 +27,7 @@
+   "learning": {
+     "profile": "learning.v1",
+     "max_output_tokens": 0
+-  }
++  },
++  "memory_context": null,
++  "_memory_context_readme": "默认关闭学习背景消费；显式配置需绑定当前模型、4项/4096字节/2048字符及有限输入估算/输出/安全预留。010与最小权限由受控迁移采用，不由启动器执行，真实用户库迁移另授权。"
+ }

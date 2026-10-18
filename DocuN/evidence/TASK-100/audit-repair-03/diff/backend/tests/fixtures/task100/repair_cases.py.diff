@@ -1,0 +1,140 @@
+--- pre/backend/tests/fixtures/task100/repair_cases.py
++++ post/backend/tests/fixtures/task100/repair_cases.py
+@@ -0,0 +1,137 @@
++"""Repair03 synthetic preconditions and actual PG transactions; never a SUP/provider substitute.
++
++All functions run only inside the finite repair runner. Rows and originals are retained.
++"""
++import json
++from unittest.mock import AsyncMock, patch
++from uuid import uuid4
++from app.capabilities.contracts import (AdmissionIntent, CallContext, Provider, LedgerOutcome,
++                                      LedgerDisposition, Message, build_business_payload)
++from app.learning.contracts import canonical, LearningProfile, request_fingerprint, normalize_result, FIRST_PREFIX
++from app.learning.evidence import load_units, validate_snapshot, assemble_catalog
++from app.learning.teaching_contracts import TeachingCallBinding, stored_teaching_result
++from app.learning.teaching_service import TeachingService
++from .seed_helpers import command, config, seed_model, ready_answer
++from .synthetic_content import MATERIAL, GOAL, output_for
++
++
++async def commit_feedback(fixture, aid, *, force_met=False):
++    ledger=fixture.ledger;head=fixture.head(aid)
++    cmd=command(head,'evaluate',{'confirmed':True,'exercise_record_id':str(head['exercise_record_id']),
++        'answer_record_id':str(head['answer_record_id']),'correction_record_id':None,'retry_of':None})
++    service=TeachingService(ledger,fixture.materials,fixture.originals)
++    frozen,identity=await service._freeze_model_context(aid,cmd,config())
++    profile=service._build_profile(aid,cmd,frozen,identity)
++    result=output_for(json.loads(frozen.messages[-1]['content']))
++    assert result['result_type']=='feedback',result
++    if force_met:
++        for observation in result['dimension_observations']: observation['observation']='met'
++        result.update(errors=[],evidence_gaps=[],cause_hypotheses=[])
++    value=stored_teaching_result(profile,result,[Message.model_validate(m) for m in frozen.messages])
++    fmt,payload,digest=build_business_payload(json_object=value)
++    await ledger.accept_teaching_command(aid,cmd,frozen)
++    decision=await ledger.claim_teaching_launch(aid,cmd.business_key,cmd.request_sha256(aid))
++    assert decision['launch_allowed'],decision
++    lease=await fixture.lease(aid,executor='repair03-pg-outcome')
++    context=CallContext(activity_id=aid,operation_id=cmd.operation_id(aid),executor_id=lease.executor_id,
++        execution_generation=lease.execution_generation,scope_revision=1)
++    binding=TeachingCallBinding(command_key=cmd.business_key,request_sha256=cmd.request_sha256(aid),
++        context_sha256=frozen.context_sha256,expected_revision=head['revision'],goal_version=head['goal_version'])
++    intent=AdmissionIntent(context,Provider.DEEPSEEK_CHAT_COMPLETIONS,'synthetic-model-100',2048,2048,(),teaching_binding=binding)
++    try:
++        permit=await ledger.admit(intent);await ledger.mark_dispatch_started(permit)
++        await ledger.record_outcome(permit,LedgerOutcome(LedgerDisposition.RECEIVED,
++            returned_model='synthetic-model-100',finish_reason='stop',prompt_tokens=128,completion_tokens=256,
++            response_bytes=len(payload.encode()),payload_format=fmt,payload=payload,payload_sha256=digest))
++    finally:
++        await ledger.begin_window_close(aid,lease.executor_id,lease.execution_generation)
++        await ledger.settle_execution_window(aid,lease.executor_id,lease.execution_generation,window_seconds=30,elapsed_seconds=0)
++    return cmd,frozen
++
++
++async def seed_g7(fixture):
++    """Fixed synthetic G7 content, using original admission/mark/007 result authority.
++
++    No SUP and no outbound transport. This prepares identity, not new G7 execution evidence.
++    """
++    source=fixture.text(MATERIAL,'task100-repair-g7-'+uuid4().hex[:8]+'.md')
++    aid=await fixture.activity([source]);ledger=fixture.ledger
++    snapshot=await ledger.read_learning_snapshot(aid);sources=validate_snapshot(snapshot)
++    identity=dict(action='first',activity_id=aid,goal=GOAL,question=None,scope_revision=1,
++        sources=[s.model_dump() for s in sources],parent_operation_id=None,parent_payload_sha256=None,max_output_tokens=256)
++    digest=request_fingerprint(**identity)
++    units=load_units(snapshot,fixture.materials,fixture.originals)
++    profile=LearningProfile(**identity,request_sha256=digest,catalog=assemble_catalog(GOAL,units,digest))
++    output={'kind':'answer','message':'固定合成G7身份前提，仅供明确沿用目标。',
++        'segments':[{'text':e.text.strip(),'citations':[e.citation_id]} for e in profile.catalog], 'questions':[]}
++    value=normalize_result(profile,output)
++    fmt,payload,payload_sha=build_business_payload(json_object=value)
++    operation_id=FIRST_PREFIX+digest
++    lease=await fixture.lease(aid,executor='repair03-g7-precondition')
++    context=CallContext(activity_id=aid,operation_id=operation_id,executor_id=lease.executor_id,
++        execution_generation=lease.execution_generation,scope_revision=1)
++    try:
++        permit=await ledger.admit(AdmissionIntent(context,Provider.DEEPSEEK_CHAT_COMPLETIONS,'synthetic-model-100',2048,256,()))
++        await ledger.mark_dispatch_started(permit)
++        await ledger.record_outcome(permit,LedgerOutcome(LedgerDisposition.RECEIVED,returned_model='synthetic-model-100',
++            finish_reason='stop',prompt_tokens=128,completion_tokens=128,response_bytes=len(payload.encode()),
++            payload_format=fmt,payload=payload,payload_sha256=payload_sha))
++    finally:
++        await ledger.begin_window_close(aid,lease.executor_id,lease.execution_generation)
++        await ledger.settle_execution_window(aid,lease.executor_id,lease.execution_generation,window_seconds=30,elapsed_seconds=0)
++    return dict(activity_id=aid,source=source,operation_id=operation_id,payload_sha256=payload_sha,goal=GOAL,
++                synthetic_precondition=True,sup_created=False,provider_sent=False)
++
++
++async def unclaimed_model(fixture, aid):
++    head=fixture.head(aid)
++    cmd=command(head,'evaluate',{'confirmed':True,'exercise_record_id':str(head['exercise_record_id']),
++        'answer_record_id':str(head['answer_record_id']),'correction_record_id':None,'retry_of':None})
++    service=TeachingService(fixture.ledger,fixture.materials,fixture.originals)
++    frozen,_=await service._freeze_model_context(aid,cmd,config())
++    receipt=await fixture.ledger.accept_teaching_command(aid,cmd,frozen)
++    assert receipt.status=='accepted'
++    return cmd,frozen
++
++
++async def unclaimed_tool(fixture, aid):
++    head=fixture.head(aid)
++    cmd=command(head,'calculate',{'confirmed':True,'exercise_record_id':str(head['exercise_record_id']),
++        'answer_record_id':str(head['answer_record_id']),'reference_point_id':'p1','retry_of':None})
++    service=TeachingService(fixture.ledger,fixture.materials,fixture.originals)
++    with patch.object(fixture.ledger,'claim_teaching_launch',AsyncMock(side_effect=RuntimeError('fixed_cut_after_accept_commit'))):
++        try: await service.submit_command(aid,cmd,config())
++        except RuntimeError as exc: assert str(exc)=='fixed_cut_after_accept_commit'
++        else: raise AssertionError('cut was not reached')
++    row=await fixture.ledger.read_teaching_command(aid,cmd.business_key)
++    assert row['command']['status']=='accepted' and row['command']['launch_claimed_at'] is None
++    return cmd,row['command']['context_sha256']
++
++
++async def ready_node(fixture, node, text, *, seed_exercise=True):
++    aid,source,eid,answer=await ready_answer(fixture)
++    if node!='n1':
++        await fixture.ledger.apply_teaching_local(aid,command(fixture.head(aid),'answer',{
++            'exercise_record_id':eid,'kind':'revision','text':'1m/s；2分钟=120秒，单位与数量级正确。','supersedes_answer_record_id':answer}))
++        await commit_feedback(fixture,aid)
++        head=fixture.head(aid)
++        retest=await seed_model(fixture,aid,'exercise',{'confirmed':True,'path_record_id':str(head['path_record_id']),
++            'node_id':'n1','purpose':'retest','parent_feedback_record_id':str(head['feedback_record_id']),'retry_of':None})
++        await fixture.ledger.apply_teaching_local(aid,command(fixture.head(aid),'answer',{
++            'exercise_record_id':retest,'kind':'initial','text':'1m/s；3分钟=180秒，先换算秒，数量级正确。','supersedes_answer_record_id':None}))
++        await commit_feedback(fixture,aid)
++        head=fixture.head(aid)
++        assert json.loads(head['projection'])['nodes']['n1']['status']=='evidence_sufficient',head
++        if node!='n2':
++            await fixture.ledger.apply_teaching_local(aid,command(head,'select_node',{'path_record_id':str(head['path_record_id']),
++                'node_id':node,'archive_current':True}))
++        head=fixture.head(aid)
++        if not seed_exercise: return aid,source,None,None
++        eid=await seed_model(fixture,aid,'exercise',{'confirmed':True,'path_record_id':str(head['path_record_id']),
++            'node_id':node,'purpose':'initial','parent_feedback_record_id':None,'retry_of':None})
++        receipt=await fixture.ledger.apply_teaching_local(aid,command(fixture.head(aid),'answer',{
++            'exercise_record_id':eid,'kind':'initial','text':text,'supersedes_answer_record_id':None}))
++    else:
++        receipt=await fixture.ledger.apply_teaching_local(aid,command(fixture.head(aid),'answer',{
++            'exercise_record_id':eid,'kind':'revision','text':text,'supersedes_answer_record_id':answer}))
++    return aid,source,eid,receipt.record_ids[0].record_id

@@ -1,0 +1,345 @@
+--- pre/backend/tests/fixtures/task083/d3_pg_windows.py
++++ backend/tests/fixtures/task083/d3_pg_windows.py
+@@ -38,6 +38,8 @@
+ 
+ 
+ def emit(record):
++    record["event_utc"] = datetime.now(timezone.utc).isoformat()
++    record["event_monotonic"] = time.monotonic()
+     print(json.dumps(record, ensure_ascii=False, default=str), flush=True)
+ 
+ 
+@@ -194,7 +196,9 @@
+     assert upper and upper.running_owner_session_id==4294967295
+     assert upper_row["status"]=="running" and upper_row["execution_generation"]==upper.execution_generation
+     assert upper_row["running_owner_session_id"]==4294967295,upper_row
+-    emit({"phase":"ledger_new_g","schema":name,"activity":activity,"old":before,"new":after,"upper_pending_claim":upper_row})
++    emit({"phase":"ledger_new_g","schema":name,"activity":activity,"old":before,"new":after,"upper_pending_claim":upper_row,
++          "old_retry_branches":["claim_previous_generation_mismatch","close_current_generation_mismatch","settle_current_window_mismatch"],
++          "recent_settled_gc_idempotency_exercised":False})
+ 
+     emit({"phase":"scenario_start","scenario":"ledger_exhausted"})
+     name, scoped=make_schema("exhaust")
+@@ -292,6 +296,7 @@
+         old_record["tree_zero"]=old.active_processes()
+     finally:
+         old.close()
++    old_record["handles_closed"]=True
+     try:
+         NamedJob.open_existing(activity,first.execution_generation)
+     except JobOpenError as exc:
+@@ -309,6 +314,7 @@
+     elapsed=time.monotonic()-start
+     final=row(scoped,"SELECT status,execution_generation,running_reserved_seconds,running_settled_seconds,running_owner_session_id,last_settled_generation,last_settled_seconds FROM activities WHERE id=%s",(activity,))
+     assert outcome.state=="settled",asdict(outcome)
++    assert outcome.active_processes_at_end==0 and not outcome.cleanup_incomplete and not outcome.cleanup_errors,asdict(outcome)
+     assert outcome.running_owner_session_id==session and outcome.generation==first.execution_generation+1
+     assert outcome.job_name==job_name(activity,outcome.generation)
+     assert outcome.pid and outcome.worker_created_100ns and outcome.manager_pid and outcome.manager_created_100ns
+--- pre/Ndocu/evidence/task-083/d3-repair-11/controlled_child.py
++++ Ndocu/evidence/task-083/d3-repair-11/controlled_child.py
+@@ -45,6 +45,10 @@
+         self.lines = queue.Queue()
+         self.readers = []
+         self._reads = []
++        self.events = []
++
++    def record(self, event, **values):
++        self.events.append({"event":event,"monotonic":time.monotonic(),**values})
+ 
+     @staticmethod
+     def _error(operation):
+@@ -117,15 +121,18 @@
+             self.created_100ns = self._creation_time()
+             if not self.created_100ns or not self.process.dwProcessId:
+                 raise OwnershipUnknown("suspended child identity unavailable")
++            self.record("suspended_identity",pid=int(self.process.dwProcessId),created_100ns=self.created_100ns)
+             if not self.api.AssignProcessToJobObject(self.job, self.process.hProcess):
+                 raise self._error("AssignProcessToJobObject")
+             self.assigned = True
+             if self.active() != 1:
+                 raise OwnershipUnknown("outer Job did not report suspended child")
++            self.record("assigned_outer_job",active_processes=1)
+             remaining(deadline, reserve=1)
+             if self.api.ResumeThread(self.process.hThread) == 0xFFFFFFFF:
+                 raise self._error("ResumeThread")
+             self.resumed = True
++            self.record("resumed")
+             for read_fd, label in self._reads:
+                 reader = threading.Thread(target=self._read_stream, args=(read_fd, label), daemon=True)
+                 reader.start()
+@@ -193,4 +200,5 @@
+         self._reads = []
+         if errors:
+             self.cleanup_confirmed = False
+-            raise OwnershipUnknown("CloseHandle failed: " + ",".join(errors))+            raise OwnershipUnknown("CloseHandle failed: " + ",".join(errors))
++        self.record("control_handles_closed",tree_zero_confirmed=self.cleanup_confirmed)
+--- pre/Ndocu/evidence/task-083/d3-repair-11/runner.py
++++ Ndocu/evidence/task-083/d3-repair-11/runner.py
+@@ -1,6 +1,7 @@
+ """Future-only D3 continuation; requires separate resource authorization. Never creates a container."""
+ from __future__ import annotations
+ import argparse
++import ast
+ from datetime import datetime, timezone
+ import hashlib
+ import json
+@@ -16,9 +17,9 @@
+ import psycopg
+ ROOT=Path(r"D:/shspic/project_NO3_RetroLume-agent")
+ sys.path.insert(0,str(ROOT/"backend"))
+-from contracts import deadline_left, parse_parts, validate_records
++from contracts import SCENARIOS, deadline_left, expected_scenarios, parse_parts, validate_records
+ from controlled_child import ControlledChild, OwnershipUnknown
+-EVID=ROOT/"Ndocu/evidence/task-083/d3-repair-11"
++EVID=ROOT/"Ndocu/evidence/task-083/d3-completion-14"
+ PY=ROOT/"backend/.venv/Scripts/python.exe"
+ FIXTURE=ROOT/"backend/tests/fixtures/task083/d3_pg_windows.py"
+ CID="85242648b70dc11839a93de29a51bc7e492390d8ad479036c141f37b26f4f6a7"
+@@ -28,11 +29,37 @@
+ DB="retrolume_task083_d3"
+ USER="task083_d3"
+ PORT=55439
++RESOURCE_LOG=None
++REDACTIONS=[]
++
++
++def utc():
++    return datetime.now(timezone.utc).isoformat()
++
++
++def safe_text(value):
++    for secret in REDACTIONS:
++        value=value.replace(secret,"[REDACTED]")
++    return value
+ 
+ 
+ def docker(args, deadlines, *, input_text=None, reserve=60, limit=30):
+     timeout=min(float(limit),deadline_left(*deadlines,reserve=reserve))
+-    return subprocess.run(["docker",*args],input=input_text,capture_output=True,text=True,timeout=timeout,check=False)
++    started=time.monotonic()
++    record={"command":["docker",*args],"start_utc":utc(),"timeout":timeout,
++            "stdin":"omitted" if input_text is not None else None}
++    try:
++        result=subprocess.run(["docker",*args],input=input_text,capture_output=True,text=True,timeout=timeout,check=False)
++        record.update(exit=result.returncode,stdout=safe_text(result.stdout),stderr=safe_text(result.stderr))
++        return result
++    except BaseException as exc:
++        record["error_type"]=type(exc).__name__
++        raise
++    finally:
++        record.update(end_utc=utc(),seconds=time.monotonic()-started)
++        if RESOURCE_LOG is not None:
++            with RESOURCE_LOG.open("a",encoding="utf-8") as stream:
++                stream.write(json.dumps(record,ensure_ascii=False)+"\n")
+ 
+ 
+ def inspect(deadlines, *, reserve=60, limit=30):
+@@ -42,17 +69,28 @@
+             "{{.HostConfig.Memory}}","{{.HostConfig.PidsLimit}}",
+             "{{.HostConfig.RestartPolicy.Name}}","{{.HostConfig.NetworkMode}}",
+             "{{json .HostConfig.PortBindings}}","{{json .HostConfig.Binds}}",
+-            "{{json .HostConfig.Mounts}}")
++            '{{json (index .HostConfig "Mounts")}}')
+     result=docker(["inspect","--format","|".join(fields),CID],deadlines,reserve=reserve,limit=limit)
+     if result.returncode!=0: raise RuntimeError(f"inspect exit={result.returncode}")
+-    pieces=result.stdout.strip().split("|")
+-    if len(pieces)!=len(fields): raise RuntimeError("selected inspect cardinality unknown")
+-    return {"id":pieces[0],"name":pieces[1],"image":pieces[2],
++    return parse_inspect(result.stdout,len(fields))
++
++
++def parse_inspect(raw,field_count=14):
++    pieces=raw.strip().split("|")
++    if len(pieces)!=field_count or field_count!=14: raise RuntimeError("selected inspect cardinality unknown")
++    if pieces[4] not in ("true","false"): raise RuntimeError("selected inspect running type unknown")
++    value={"id":pieces[0],"name":pieces[1],"image":pieces[2],
+             "labels":json.loads(pieces[3]),"running":pieces[4]=="true",
+             "mounts":json.loads(pieces[5]),"nano_cpus":int(pieces[6]),"memory":int(pieces[7]),
+             "pids":int(pieces[8]),"restart":pieces[9],"network":pieces[10],
+             "port_bindings":json.loads(pieces[11]),"binds":json.loads(pieces[12]),
+             "configured_mounts":json.loads(pieces[13])}
++    if (type(value["labels"]) is not dict or type(value["mounts"]) is not list
++        or any(type(m) is not dict for m in value["mounts"])
++        or type(value["port_bindings"]) is not dict
++        or any(value[k] is not None and type(value[k]) is not list for k in ("binds","configured_mounts"))):
++        raise RuntimeError("selected inspect JSON type unknown")
++    return value
+ 
+ def valid_identity(value):
+     labels=value["labels"] or {}; mounts=value["mounts"] or []
+@@ -65,16 +103,26 @@
+             and value["nano_cpus"]==1_000_000_000 and value["memory"]==536_870_912
+             and value["pids"]==128 and value["restart"]=="no" and value["network"]=="bridge"
+             and value["binds"] is None and value["configured_mounts"] in (None,[])
++            and set(value["port_bindings"])=={"5432/tcp"}
+             and bindings==[{"HostIp":"127.0.0.1","HostPort":str(PORT)}])
+ 
+ 
+ def local_auth_and_rotate(deadlines):
++    # 就绪检查不等同于认证；只有服务器明确未就绪才在同一期限内等待。
++    ready_deadline=min(min(deadlines)-60,time.monotonic()+30)
++    while True:
++        ready=docker(["exec","--user","postgres",CID,"pg_isready","-q","-t","1","-U",USER,"-d",DB],
++                     (*deadlines,ready_deadline),reserve=0,limit=3)
++        if ready.returncode==0: break
++        if ready.returncode not in (1,2): raise RuntimeError("local readiness command failed")
++        time.sleep(min(.2,deadline_left(*deadlines,ready_deadline)))
+     base=["exec","-i","--user","postgres",CID,"psql","-X","-qAt",
+           "-v","ON_ERROR_STOP=1","-U",USER,"-d",DB]
+     identity=docker(base,deadlines,input_text="SELECT current_user,current_database();\n")
+     if identity.returncode!=0 or identity.stdout.strip()!=f"{USER}|{DB}":
+         raise RuntimeError("local test-role auth or identity unavailable")
+     password=secrets.token_hex(32)
++    REDACTIONS.append(password)
+     result=docker(base,deadlines,input_text=f"ALTER ROLE {USER} PASSWORD '{password}';\n")
+     if result.returncode!=0: raise RuntimeError("local test-role password rotation failed")
+     dsn=f"postgresql://{USER}:{password}@127.0.0.1:{PORT}/{DB}"
+@@ -86,7 +134,36 @@
+     except BaseException:
+         raise RuntimeError("loopback new-credential authentication failed") from None
+     if row!=(USER,DB,5432): raise RuntimeError("loopback new-credential identity mismatch")
+-    return dsn,password,{"database":row[1],"user":row[0],"internal_port":row[2]}
++    return dsn,password,{"database":row[1],"user":row[0],"internal_port":row[2],
++                         "local_role_verified":True,"rotation_count":1,"verified_utc":utc()}
++
++
++def source_fingerprints(script):
++    # 分部复用只排除其他分部的函数；公共入口/导入/辅助函数及全部生产依赖仍参与 hash。
++    tree=ast.parse(script)
++    functions={"migration":{"migration_cases"},"ledger":{"ledger_cases","lock_barrier_case","observe_source_lock_wait"},
++               "windows":{"windows_case"}}
++    dependencies=sorted((ROOT/"backend/app").rglob("*.py"))+sorted((ROOT/"backend/migrations").glob("*.sql"))
++    dependency_hash=hashlib.sha256(b"".join(p.as_posix().encode()+p.read_bytes() for p in dependencies)).digest()
++    result={}
++    for part in SCENARIOS:
++        excluded=set.union(*(names for key,names in functions.items() if key!=part))
++        selected=ast.Module(body=[node for node in tree.body if getattr(node,"name",None) not in excluded],type_ignores=[])
++        result[part]=hashlib.sha256(dependency_hash+ast.dump(selected).encode()).hexdigest()
++    return result
++
++
++def reusable_parts(meta):
++    # 失败批次只复用失败点之前已完整结束的分部，不把 exit1 或缺 complete 改成 PASS。
++    if (not retry_allowed(meta) or meta["timeout"] or meta["error"] or meta["exit_code"]!=1
++        or meta["contract"]["complete_count"]!=0): return ()
++    expected=list(expected_scenarios(tuple(meta["parts"])))
++    completed=meta["contract"]["completed"]
++    starts=meta["contract"]["started"]
++    allowed={"selected scenario sequence incomplete or out of order","complete/all_pass/parts contract failed","child exit=1"}
++    if (completed!=expected[:len(completed)] or starts!=expected[:len(completed)+1]
++        or not set(meta["contract"]["errors"])<=allowed): return ()
++    return tuple(p for p in meta["parts"] if set(SCENARIOS[p])<=set(completed))
+ 
+ def run_batch(parts,number,dsn,password,run_dir,deadlines):
+     attempt=run_dir/f"attempt-{number:02d}"
+@@ -94,7 +171,13 @@
+     script=FIXTURE.read_bytes()
+     (attempt/"as-run.py").write_bytes(script)
+     (attempt/"as-run.sha256").write_text(hashlib.sha256(script).hexdigest()+"  d3_pg_windows.py\n",encoding="utf-8")
++    fingerprints=source_fingerprints(script)
++    sources=attempt/"sources"
++    sources.mkdir()
++    for path in sorted((ROOT/"backend/app").rglob("*.py"))+sorted((ROOT/"backend/migrations").glob("*.sql"))+[FIXTURE.with_name("fixture.py")]:
++        (sources/str(path.relative_to(ROOT)).replace("\\","__").replace("/","__")).write_bytes(path.read_bytes())
+     started=time.monotonic()
++    started_utc=utc()
+     batch_deadline=min(*deadlines,started+600)
+     command_deadline=min(batch_deadline-60,started+60)
+     deadline_left(command_deadline,reserve=5)
+@@ -147,6 +230,14 @@
+         except BaseException as cleanup_exc:
+             cleanup_error=f"{type(cleanup_exc).__name__}: {cleanup_exc}"
+     finally:
++        try:
++            if child.process.hProcess:
++                exit_code=child.exit_code()
++            for reader in child.readers:
++                if reader.is_alive(): reader.join(timeout=deadline_left(command_deadline))
++                if reader.is_alive(): raise OwnershipUnknown("output EOF unknown during cleanup")
++        except BaseException as cleanup_exc:
++            cleanup_error=f"{type(cleanup_exc).__name__}: {cleanup_exc}"
+         try: child.close()
+         except BaseException as cleanup_exc:
+             cleanup_error=f"{type(cleanup_exc).__name__}: {cleanup_exc}"
+@@ -164,7 +255,14 @@
+         contract["pass"]=False
+         contract["errors"].append("credential appeared in child output and was redacted")
+     if error or cleanup_error: contract["pass"]=False
++    # 队列在进程退出后才读到的开始事件同样禁止 Windows 后重试。
++    windows_started=windows_started or '"scenario": "windows_recovery"' in raw_out or any(
++        name=="windows_recovery" for name in contract["started"])
+     meta={"parts":list(parts),"identity":identity,"exit_code":exit_code,
++          "start_utc":started_utc,"end_utc":utc(),"part_fingerprints":fingerprints,
++          "command":[str(PY),"-B",str(FIXTURE)],"cwd":str(ROOT/"backend/tests"),
++          "command_deadline_monotonic":command_deadline,"handles_closed":cleanup_error is None and not child.job and not child.process.hProcess and not child.process.hThread,
++          "control_events":child.events,
+           "seconds":time.monotonic()-started,"timeout":timed_out,"windows_started":windows_started,
+           "error":error,"cleanup_error":cleanup_error,
+           "outer_tree_zero":child.cleanup_confirmed,"contract":contract}
+@@ -199,21 +297,26 @@
+         state["cleanup_error"]=f"{type(exc).__name__}: {exc}"
+ 
+ def main():
++    global RESOURCE_LOG
+     parser=argparse.ArgumentParser()
+     parser.add_argument("--authorized-reuse",action="store_true",help="future separate resource approval required")
+-    parser.add_argument("--total-seconds",type=int,default=900)
++    parser.add_argument("--total-seconds",type=int,default=600)
+     args=parser.parse_args()
+-    if not args.authorized_reuse or not 120<=args.total_seconds<=1200:
++    if not args.authorized_reuse or not 120<=args.total_seconds<=600:
+         raise SystemExit("separate reuse authorization and bounded remaining total required")
+     run_dir=EVID/("continuation-"+datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")+"-"+uuid4().hex[:8])
+     run_dir.mkdir(exist_ok=False)
+-    for source in (Path(__file__),EVID/"controlled_child.py",EVID/"contracts.py"):
++    RESOURCE_LOG=run_dir/"resource-commands.jsonl"
++    for source in (Path(__file__),Path(__file__).with_name("controlled_child.py"),Path(__file__).with_name("contracts.py")):
+         data=source.read_bytes()
+         (run_dir/(source.stem+"-as-run.py")).write_bytes(data)
+         (run_dir/(source.stem+".sha256")).write_text(hashlib.sha256(data).hexdigest()+"\n",encoding="utf-8")
+-    total_deadline=time.monotonic()+args.total_seconds
++    run_started=time.monotonic()
++    total_deadline=run_started+args.total_seconds
+     state={"resource_id":CID,"attempts":[],"cleanup_incomplete":False,
+-           "container_stopped":False,"verdict":"NOT_RUN"}
++           "container_stopped":False,"verdict":"NOT_RUN","start_utc":utc(),
++           "total_seconds_authorized":args.total_seconds,"total_deadline_monotonic":total_deadline}
++    reused=()
+     password=None; touched=False
+     try:
+         before=inspect((total_deadline,))
+@@ -238,23 +341,33 @@
+                 while not go.exists():
+                     time.sleep(min(.2,deadline_left(total_deadline,reserve=120)))
+                 parts=parse_parts(go.read_text(encoding="utf-8").strip())
++                previous=state["attempts"][0]
++                reusable=reusable_parts(previous)
++                current=source_fingerprints(FIXTURE.read_bytes())
++                reused=tuple(p for p in reusable if p not in parts and current[p]==previous["part_fingerprints"][p])
++                if set(parts)|set(reused)!=set(SCENARIOS):
++                    raise RuntimeError("correction must include missing or changed parts and all unrun successors")
++                state["reused_parts_from_attempt_01"]=list(reused)
+             meta=run_batch(parts,number,dsn,password,run_dir,(total_deadline,))
+             state["attempts"].append(meta)
+             (run_dir/"state.json").write_text(json.dumps(state,ensure_ascii=False,indent=2),encoding="utf-8")
+             if meta["contract"]["pass"]:
++                state["covered_scenarios"]=list(expected_scenarios(parse_parts(",".join(set(parts)|set(reused)))))
+                 state["verdict"]="PASS"; break
+             if not retry_allowed(meta):
+                 state["verdict"]="FAILED_STOP"; break
+             state["verdict"]="FAILED_WAITING_CORRECTION"
++            (run_dir/"state.json").write_text(json.dumps(state,ensure_ascii=False,indent=2),encoding="utf-8")
+     except BaseException as exc:
+         if not state["attempts"]: state["verdict"]="BLOCKED"
+         message=f"{type(exc).__name__}: {exc}"
+         state["error"]=message.replace(password,"[REDACTED]") if password else message
+     finally:
+         if touched: stop_exact_container((total_deadline,),state)
++        state.update(end_utc=utc(),resource_wall_seconds=time.monotonic()-run_started)
+         (run_dir/"state.json").write_text(json.dumps(state,ensure_ascii=False,indent=2),encoding="utf-8")
+     return 0 if state["verdict"]=="PASS" and state["container_stopped"] and not state["cleanup_incomplete"] else 1
+ 
+ 
+ if __name__=="__main__":
+-    sys.exit(main())+    sys.exit(main())

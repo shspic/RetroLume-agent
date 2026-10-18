@@ -1,0 +1,98 @@
+{
+  "status": "fail",
+  "segments": [
+    {
+      "name": "container",
+      "status": "pass",
+      "facts": {
+        "container_id": "80ae914138fa42a9ae72acf898d13f7e740b759ff09fc248470abb6df0c15d4d",
+        "running": true,
+        "password_not_logged": true
+      },
+      "started_at": "2026-10-04T15:16:43.304153+00:00",
+      "ended_at": "2026-10-04T15:16:49.040620+00:00",
+      "elapsed": 5.73499999998603,
+      "exit_code": 0
+    },
+    {
+      "name": "database",
+      "status": "pass",
+      "facts": {
+        "database": "retrolume_task100_g8_main",
+        "owner": "retrolume_task100_admin",
+        "runtime_role": "retrolume_task100_app",
+        "retained": true
+      },
+      "started_at": "2026-10-04T15:16:49.043207+00:00",
+      "ended_at": "2026-10-04T15:16:49.340949+00:00",
+      "elapsed": 0.29599999997299165,
+      "exit_code": 0
+    },
+    {
+      "name": "migration_scenarios",
+      "status": "pass",
+      "exit_code": 0,
+      "started_at": "2026-10-04T15:16:49.344656+00:00",
+      "ended_at": "2026-10-04T15:16:50.803426+00:00",
+      "elapsed": 1.4690000000409782,
+      "timeout": 300.0,
+      "pid": 11432
+    },
+    {
+      "name": "repository",
+      "status": "fail",
+      "tests": 26,
+      "skipped": 0,
+      "exit_code": 1,
+      "started_at": "2026-10-04T15:16:50.805955+00:00",
+      "ended_at": "2026-10-04T15:17:00.879156+00:00",
+      "elapsed": 10.077999999979511,
+      "timeout": 300.0,
+      "pid": 11528
+    },
+    {
+      "name": "application",
+      "status": "not_run",
+      "reason": "dependency_failed",
+      "dependencies": [
+        "database",
+        "repository"
+      ],
+      "elapsed": 0
+    },
+    {
+      "name": "http",
+      "status": "not_run",
+      "reason": "dependency_failed",
+      "dependencies": [
+        "application"
+      ],
+      "elapsed": 0
+    },
+    {
+      "name": "windows",
+      "status": "not_run",
+      "reason": "dependency_failed",
+      "dependencies": [
+        "http"
+      ],
+      "elapsed": 0
+    },
+    {
+      "name": "browser",
+      "status": "not_run",
+      "reason": "dependency_failed",
+      "dependencies": [
+        "windows"
+      ],
+      "elapsed": 0
+    },
+    {
+      "name": "cleanup",
+      "status": "pass",
+      "elapsed": 5.561999999976251
+    }
+  ],
+  "elapsed": 17.57799999997951,
+  "cleanup_budget_separate": true
+}

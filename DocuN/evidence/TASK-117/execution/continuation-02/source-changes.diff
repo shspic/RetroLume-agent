@@ -1,0 +1,2140 @@
+--- /dev/null
++++ S03-new/DocuN/evidence/TASK-117/execution/continuation-02/adopt.py
+@@ -0,0 +1,56 @@
++"""S03前向接收，保留旧段原件及真实计时边界。"""
++from pathlib import Path
++from datetime import datetime,timedelta,timezone
++import sys,json,time,hashlib,shutil
++N=Path(__file__).resolve().parent;E=N.parent;R=E.parents[3]
++sys.path.insert(0,str(E))
++import control as c
++
++def main():
++    assert not (N/'receipt.json').exists(),'已经接收，禁止重新立账'
++    stamp=c.sample();anchor=json.loads((N/'first-reliable-clock.json').read_text(encoding='utf-8-sig'))
++    permit=json.loads((R/'DocuN/evidence/TASK-117/orchestration-s03-20261015/continuation-permit.json').read_text(encoding='utf-8'))
++    # 前几次只读未同次采钟，使用许可发出时刻作为更早的保守下界，不冒充首工具精确点。
++    lower=datetime.fromisoformat(permit['at']).astimezone(timezone.utc)
++    start_mono=stamp['mono_ns']-int((datetime.fromisoformat(stamp['utc'])-lower).total_seconds()*1e9)
++    before={}
++    for name in ('budget.json','events.jsonl','case-index.json'):
++        raw=(E/name).read_bytes();(N/('before-'+name)).write_bytes(raw)
++        before[name]={'bytes':len(raw),'sha256':c.sha(raw)}
++    report=R/'DocuN/results/TASK-117-result.md';raw=report.read_bytes()
++    assert len(raw)==31949 and c.sha(raw)=='5f2e0a19f893dcd6634345b86149d9a35de41354cb50f2694f76a024ba1c0c8d'
++    (N/'before-result.md').write_bytes(raw)
++    entries=json.loads((E/'continuation-01/final-source-manifest.json').read_text())['entries']
++    for row in entries:
++        p=R/row['path'];post=row['post'];assert p.exists()==post['exists'],row['path']
++        if p.exists():assert c.sha(p.read_bytes())==post['sha256'],row['path']
++    rules=json.loads((R/'DocuN/evidence/v4-migration-20260930/rules-snapshot.json').read_text(encoding='utf-8-sig'))
++    for row in rules:assert c.sha(Path(row['absolute_path']).read_bytes())==row['sha256']
++    v=c.state();assert v['active_root'] is None and v['counts']==permit['counts_baseline_at_issuance']
++    stop=json.loads((N/'entry-stop.json').read_text());assert stop['all_stopped']
++    assert all(not r.get('running') for r in v['resources'] if r.get('kind')=='pg')
++    inputs={}
++    for rel in ('DocuN/tasks/TASK-117.md','DocuN/results/TASK-117-work-decision.md',
++      'DocuN/evidence/TASK-117/orchestration-s03-20261015/received.json',
++      'DocuN/evidence/TASK-117/orchestration-s03-20261015/continuation-permit.json',
++      'DocuN/evidence/TASK-117/orchestration-s03-20261015/input-manifest.json'):
++        p=R/rel;inputs[rel]={'bytes':p.stat().st_size,'sha256':c.sha(p.read_bytes())}
++    segment={'permit':permit['permit'],'status':'active','start_utc':lower.isoformat(),'start_mono_ns':start_mono,
++      'clock_domain':'S03-current-host-QPC','start_basis':'首工具漏采钟；以许可发出时刻作保守更早下界，首个可靠同步点单独保存',
++      'calendar_deadline_utc':(lower+timedelta(hours=48)).isoformat(),'activity_cap_seconds':21600,
++      'no_expansion_after_seconds':18000,'save_only_after_seconds':19800,'runtime_holding_cap_seconds':10800,
++      'offline_cap_seconds':3000,'root_business_seconds':2100,'root_cleanup_seconds':300,
++      'baseline_counts':dict(v['counts']),'baseline_cumulative_activity_seconds':54954.7049314,
++      'baseline_cumulative_runtime_seconds':21921.454,'baseline_cumulative_offline_seconds':2546.561,
++      'segment_caps':permit['new_counts_caps'],'cumulative_caps':permit['cumulative_counts_caps'],
++      'evidence_directory':str(N),'scheduling_amendments':[{'profile':'S03-staged-low-memory',
++        'S_root_cap':17,'API_cumulative_cap':19,'stages_MiB':{'base':512,'pg':512,'api':512,'browser':768,'second_pg':768,'preview':1024}}]}
++    v['segments'].append(segment);v['active_segment']=segment['permit'];v['phase']='S03_preparation'
++    c.write(E/'budget.json',v)
++    c.write(N/'receipt.json',{'sample':stamp,'first_reliable_pair':anchor,'segment':segment,'before':before,'inputs':inputs,
++      '113_current_identities_checked':len(entries),'rules_unchanged':len(rules),'actual_client':'Codex desktop / GPT-6，A+为资源标签',
++      'single_writer':'原工程窗口；未创建接续窗或子Agent','prior_gap':'S02交回至S03接收间无本窗口业务，当前完整停机证明；不计作运行',
++      'first_tool_clock_deviation':'最初只读工具未同步采钟，已保守扣许可发出至可靠点全部间隔；未追造精确首点'})
++    c.event('S03_received',permit=segment['permit'],start_basis=segment['start_basis'],receipt=str(N/'receipt.json'))
++    print(json.dumps({'permit':segment['permit'],'identities':len(entries),'all_stopped':True,'activity_elapsed':(time.monotonic_ns()-start_mono)/1e9}))
++if __name__=='__main__':main()
+--- /dev/null
++++ S03-new/DocuN/evidence/TASK-117/execution/continuation-02/as-run/root16-batch_runtime-before-compat.py
+@@ -0,0 +1,187 @@
++"""原TASK117有限批运行适配：资源启动前登记同一截止控制器。"""
++from pathlib import Path
++import sys,os,json,time,subprocess,secrets,hmac,hashlib
++C01=Path(__file__).resolve().parent;EXEC=C01.parent;ROOT=EXEC.parents[3]
++sys.path[:0]=[str(EXEC),str(ROOT/'backend'),str(ROOT/'backend/tests/fixtures/step018')]
++import control as c
++import runtime_control as rc
++from lifecycle import BoundedResources
++from app.preview.description import canonical
++from app.preview.process import birth
++
++PREVIEW_IMAGE='sha256:ec3c70c7a8a8894c647a69b08b0c296727bb052f639e487567e9cd4624766789'
++
++def preflight(label,*,preview=False):
++    rc.docker(['image','inspect',rc.PG_IMAGE]);rc.memory_gate(label+'-Docker-awake',stage='base')
++    resources=[rc.metadata(r['cid']) for r in c.state()['resources'] if r.get('cid') and r.get('kind')=='pg']
++    if any(r['running'] or r['pid']!=0 for r in resources):raise RuntimeError('own_pg_still_running')
++    for port in (*range(15481,15486),18118):rc.port_gate(port)
++    info=json.loads(rc.docker(['info','--format','{{json .}}']))
++    if info['KernelVersion']!='6.6.114.1-microsoft-standard-WSL2':raise RuntimeError('adopted_kernel_changed')
++    if preview:
++        image=json.loads(rc.docker(['image','inspect',PREVIEW_IMAGE]))[0]
++        if (image['Id'],image['Os'],image['Architecture'])!=(PREVIEW_IMAGE,'linux','amd64'):raise RuntimeError('preview_cached_identity')
++    receipt={'sample':c.sample(),'pg':resources,'kernel':info['KernelVersion'],'preview_checked':preview}
++    c.write(C01/(label+'-preflight-'+str(time.time_ns())+'.json'),receipt)
++    return receipt
++
++
++def configuration():
++    operator=C01/'operator';operator.mkdir(exist_ok=True)
++    key=secrets.token_urlsafe(48)
++    ticket={'schema':'retrolume.preview.review.v2','decision':'approved','image_id':PREVIEW_IMAGE,
++      'load_manifest_sha256':'8a047050ffe584dffa6e85222c16c8f400c0ab4db82f72a32812c2befd082b3f',
++      'renderer_sha256':'6cc300164a6cb364d9bd0bae4897f06d3f6a65cf5d4272477d2bccde67312597',
++      'result_sha256':'1dab1126aa72e335288d037baed5bc13b7cfdc1e4a386b6c04553e630f871571'}
++    ticket['signature']=hmac.new(key.encode(),canonical(ticket).encode(),hashlib.sha256).hexdigest()
++    ticket_file=operator/'preview.review.json'
++    if ticket_file.exists():
++        raw=ticket_file.read_bytes();(operator/('review.previous-'+c.sha(raw)+'.json')).write_bytes(raw)
++        c.event('S02_preview_normal_rekey',old_sha256=c.sha(raw),reason='原operator授权同一独审事实；仅部署认证key更换，不签新审核')
++    c.write(ticket_file,ticket)
++    host=json.loads((EXEC/'root04-preview-host.json').read_text())
++    c.write(operator/'preview.deployment.json',{'schema':'retrolume.preview.deployment.v2','docker':host['docker'],
++      'image_id':PREVIEW_IMAGE,'load_manifest_sha256':ticket['load_manifest_sha256'],'renderer_sha256':ticket['renderer_sha256'],
++      'kernel_release':'6.6.114.1-microsoft-standard-WSL2','review_ticket':str(ticket_file),'review_key_env':'RETROLUME_TASK117_PREVIEW_REVIEW_KEY'})
++    identity={'provider':'deepseek_chat_completions','model':'deepseek-chat'}
++    activity={'model_identity':identity,'activity_defaults':{'deadline_hours':24,'max_requests':80,'max_cost_microunits':20000000,'reserve_cost_microunits':250000,'max_request_bytes':65536,'max_output_tokens':4096,'max_running_seconds':3600,'allowed_tools':['finite_calculate'],'max_tool_calls':8},
++      'service':{'base_url':'https://api.deepseek.com','thinking':'disabled','timeout_seconds':10,'max_output_tokens_limit':4096,'max_request_bytes':65536,'max_response_bytes':65536},'api_key_env':'RETROLUME_MODEL_API_KEY',
++      'learning':{'profile':'learning.v2','max_output_tokens':256},'teaching':{'profile':'teaching.v3','max_output_tokens':2048,'enable_calculation':True},'interview':{'profile':'interview.v2','max_output_tokens':2048,'max_followups_per_round':2},'html':{'profile':'html_explanation.v2','max_output_tokens':4096},
++      'memory_context':{'selected_items':4,'max_memory_bytes':4096,'max_memory_chars':2048,'model_context_tokens':65536,'max_input_tokens_estimate':50000,'protocol_reserve_tokens':2048,'reserved_output_tokens':2048,'safety_tokens':2048,'estimate_policy':'utf8_bytes.v1','model_identity':identity}}
++    c.write(operator/'activity.json',activity)
++    c.write(operator/'integration.json',{'schema':'retrolume.integration.v1','enabled':True,'embedding':{'provider':'zhipu_embeddings','base_url':'https://open.bigmodel.cn/api/paas/v4','model':'embedding-3','dimensions':512,'returned_models':['embedding-3'],'timeout_seconds':10,'max_request_bytes':32768,'max_response_bytes':65536},'max_index_fragments':32})
++    c.write(operator/'data-exit.json',{'enabled':True,'snapshot_url_env':'RETROLUME_TASK117_SNAPSHOT','maintenance_key_env':'RETROLUME_TASK117_MAINTENANCE'})
++    env=dict(os.environ)
++    import sysconfig
++    env.update(PYTHONPATH=os.pathsep.join([str(ROOT/'backend/tests/fixtures/step018'),str(ROOT/'backend'),sysconfig.get_paths()['purelib']]),RETROLUME_TASK117_SYNTHETIC=c.state()['active_segment'],
++      RETROLUME_TASK117_TRANSPORT_LOG=str(C01/'transport.jsonl'),RETROLUME_TASK117_TRACE_PG='0',RETROLUME_DATABASE_URL=rc.dsn('source'),RETROLUME_TASK117_SNAPSHOT=rc.dsn('source','snapshot'),RETROLUME_TASK117_MAINTENANCE=rc.credentials('source')['maintenance_key'],
++      RETROLUME_TASK117_LATE_GATE=str(C01/'late-transport'),
++      RETROLUME_DATA_DIR=str(EXEC/'synthetic/source-data'),RETROLUME_BACKUP_DIR=str(EXEC/'synthetic/source-backup'),RETROLUME_CONTROL_ROOT=str(EXEC/'synthetic/source-control'),RETROLUME_RESTORE_ROOT=str(EXEC/'synthetic/source-restore'),
++      RETROLUME_DATA_EXIT_CONFIG=str(operator/'data-exit.json'),RETROLUME_ACTIVITY_CONFIG=str(operator/'activity.json'),RETROLUME_INTEGRATION_CONFIG=str(operator/'integration.json'),RETROLUME_PREVIEW_CONFIG=str(operator/'preview.deployment.json'),
++      RETROLUME_TASK117_PREVIEW_REVIEW_KEY=key,RETROLUME_MODEL_API_KEY=secrets.token_urlsafe(32),RETROLUME_EMBEDDING_API_KEY=secrets.token_urlsafe(32))
++    return env
++
++
++class Batch:
++    def __init__(self,number,label):
++        if c.state()['active_root'] is None:
++            if c.state()['counts']['roots']==number:
++                proof=max(C01.glob('root'+str(number).zfill(2)+'-stop-*.json'),key=lambda p:p.stat().st_mtime_ns)
++                c.resume_root(number,stop_evidence=proof)
++            elif c.state()['counts']['roots']+1==number:c.begin_root(label,'runtime')
++            else:raise RuntimeError('next_root_identity')
++        if c.state()['active_root']!=number:raise RuntimeError('root_identity')
++        root=next(r for r in c.state()['roots'] if r['id']==number)
++        self.number,self.label=number,'root'+str(number).zfill(2)
++        self.id=str(time.time_ns());self.api=None;self.api_log=None;self.browser=None;self.browser_log=None
++        self.marker=C01/(self.label+'-accepting')
++        self.run=BoundedResources(deadline=root['business_deadline_mono_ns']/1e9,on_close=lambda p:c.write(C01/(self.label+'-cleanup-'+self.id+'.json'),{**p,'sample':c.sample()}))
++        self.run.monitor_memory(rc.available_memory_bytes)
++        rc.bind_controller(self.run)
++    def __enter__(self):
++        self.run.__enter__();self.run.register('reject-new-mutations',self.reject,priority=100)
++        return self
++    def reject(self):
++        self.marker.unlink(missing_ok=True);return {'accepting':False}
++    def fresh_api_handle(self):
++        # Separate immutable owner object per launch; all stages share this original deadline.
++        child=object.__new__(Batch)
++        child.number,child.label,child.id=self.number,self.label,self.id+'-stage-'+str(time.time_ns())
++        child.run,child.marker=self.run,self.marker
++        child.api=child.api_log=child.browser=child.browser_log=None
++        return child
++    def start_api(self,*,launcher=False,read_only_factory=False):
++        self.run.check();rc.port_gate(18118)
++        rc.docker(['image','inspect',rc.PG_IMAGE]);rc.memory_gate('API-start',stage='api')
++        if self.api is not None:raise RuntimeError('one_api_per_launch_handle')
++        self.run.register('api-normal-lifespan-and-preview',self.close_api,priority=30)
++        env=configuration();self.marker.write_text('accepting',encoding='ascii')
++        if read_only_factory:
++            from profiles_batch import factory_profile
++            path=C01/'operator/data-exit-readonly-view.json'
++            c.write(path,{'enabled':True,'snapshot_url_env':'RETROLUME_TASK117_SNAPSHOT','maintenance_key_env':'RETROLUME_TASK117_MAINTENANCE','factory':factory_profile()})
++            env['RETROLUME_DATA_EXIT_CONFIG']=str(path)
++        self.env=env
++        c.count('api_starts');self.api_attempt=c.state()['counts']['api_starts']
++        env.update(RETROLUME_TASK117_ACCEPTING=str(self.marker),RETROLUME_TASK117_API_PROOF=str(C01/f'api-proof-{self.api_attempt}.json'))
++        self.api_log=(C01/f'api-{self.api_attempt}.log').open('wb')
++        command=[str(ROOT/'backend/.venv/Scripts/python.exe'),'-X','utf8']
++        command+=([str(ROOT/'deploy/start_local.py'),'--port','18118','--container','retrolume-step018-syn-source','--shutdown-stdin'] if launcher else ['-m','server'])
++        self.api=subprocess.Popen(command,cwd=ROOT/'backend',env=env,stdin=subprocess.PIPE,stdout=self.api_log,stderr=subprocess.STDOUT,creationflags=subprocess.CREATE_NO_WINDOW)
++        self.api_birth=birth(self.api.pid)
++        self.run.api_running=True
++        c.event('S02_api_launch',attempt=self.api_attempt,pid=self.api.pid,birth=self.api_birth,normal_launcher=launcher,hidden=True,stdin_owned=True)
++        import httpx
++        deadline=min(time.monotonic()+35,self.run.deadline)
++        while time.monotonic()<deadline:
++            self.run.check()
++            if self.api.poll() is not None:raise RuntimeError('api_exit_before_ready')
++            c.count('http')
++            try:
++                r=httpx.get('http://127.0.0.1:18118/health',timeout=1,trust_env=False)
++                if r.status_code==200:return
++            except httpx.HTTPError:pass
++            time.sleep(.3)
++        raise RuntimeError('api_not_ready')
++    def close_api(self):
++        self.reject()
++        if self.api is None:return {'not_started':True}
++        graceful=True
++        if self.api.poll() is None:
++            try:self.api.stdin.write(b'stop\n');self.api.stdin.flush();self.api.wait(timeout=self.run.remaining_cleanup(175))
++            except (OSError,ValueError,subprocess.TimeoutExpired):
++                graceful=False;self.api.terminate()
++                try:self.api.wait(timeout=self.run.remaining_cleanup(5))
++                except subprocess.TimeoutExpired:self.api.kill();self.api.wait(timeout=3)
++        self.api_log.close();self.run.api_running=False
++        proof={'pid':self.api.pid,'birth_before':self.api_birth,'birth_after':birth(self.api.pid),'exit_code':self.api.returncode,'graceful':graceful,'owned_launch_handle_waited':True,'sample':c.sample()}
++        c.write(C01/f'api-stop-{self.api_attempt}.json',proof);self.env.clear()
++        if not graceful:raise RuntimeError('api_lifespan_unconfirmed')
++        return proof
++    def start_browser(self,phase,*,resume=None):
++        self.run.check();rc.docker(['image','inspect',PREVIEW_IMAGE]);rc.memory_gate('browser-'+phase,stage='browser')
++        if self.browser is not None:raise RuntimeError('one_browser_per_handle')
++        self.run.register('browser-owned-handle',self.close_browser,priority=60)
++        c.count('browser_starts');self.browser_attempt=c.state()['counts']['browser_starts']
++        allowed={'PATH','PATHEXT','COMSPEC','SYSTEMROOT','WINDIR','TEMP','TMP','USERPROFILE','APPDATA','LOCALAPPDATA','HOMEDRIVE','HOMEPATH','PROGRAMFILES','PROGRAMFILES(X86)','PLAYWRIGHT_BROWSERS_PATH'}
++        env={k:v for k,v in os.environ.items() if k.upper() in allowed}
++        env.update(RETROLUME_TASK117_EVIDENCE=str(C01),RETROLUME_TASK117_CONTROL=str(EXEC),RETROLUME_TASK117_BROWSER_ATTEMPT=str(self.browser_attempt),RETROLUME_TASK117_BROWSER_PHASE=phase)
++        if resume:env['RETROLUME_TASK117_RESUME_PROOF']=str(resume)
++        self.browser_log=(C01/f'browser-{self.browser_attempt}.log').open('wb')
++        self.browser=subprocess.Popen(['node',str(ROOT/'frontend/tests/step018-flow.mjs')],cwd=ROOT/'frontend',env=env,stdin=subprocess.PIPE,stdout=self.browser_log,stderr=subprocess.STDOUT,creationflags=subprocess.CREATE_NO_WINDOW)
++        self.browser_birth=birth(self.browser.pid)
++        self.run.browser_running=True
++        c.event('S02_browser_launch',attempt=self.browser_attempt,pid=self.browser.pid,birth=self.browser_birth,phase=phase,hidden=True,no_service_secrets=True)
++        try:self.browser.wait(timeout=min(540,max(1,self.run.deadline-time.monotonic())))
++        except subprocess.TimeoutExpired:raise RuntimeError('browser_batch_timeout') from None
++        proof_path=C01/f'browser-{self.browser_attempt}/proof.json'
++        if self.browser.returncode!=0:raise RuntimeError('browser_failed_read_exact_log')
++        proof=json.loads(proof_path.read_text())
++        if proof.get('status')!='passed' or proof.get('browser_closed') is not True:raise RuntimeError('browser_proof_incomplete')
++        return proof
++    def close_browser(self):
++        if self.browser is None:return {'not_started':True}
++        graceful=True
++        if self.browser.poll() is None:
++            try:self.browser.stdin.write(b'stop\n');self.browser.stdin.flush();self.browser.wait(timeout=self.run.remaining_cleanup(35))
++            except (OSError,ValueError,subprocess.TimeoutExpired):
++                graceful=False;self.browser.terminate()
++                try:self.browser.wait(timeout=5)
++                except subprocess.TimeoutExpired:self.browser.kill();self.browser.wait(timeout=3)
++        self.browser_log.close();self.run.browser_running=False
++        path=C01/f'browser-{self.browser_attempt}/proof.json';body=json.loads(path.read_text()) if path.exists() else {}
++        proof={'pid':self.browser.pid,'birth_before':self.browser_birth,'birth_after':birth(self.browser.pid),'exit_code':self.browser.returncode,'owned_handle_waited':True,'browser_close_observed':body.get('browser_closed') is True,'graceful':graceful,'sample':c.sample()}
++        c.write(C01/f'browser-stop-{self.browser_attempt}.json',proof)
++        if not graceful or body.get('browser_closed') is not True:raise RuntimeError('browser_stop_unconfirmed')
++        return proof
++    def __exit__(self,kind,value,tb):
++        self.run.__exit__(kind,value,tb)
++        rows=[]
++        for r in c.state()['resources']:
++            if r.get('kind')=='pg' and r.get('cid'):rows.append(rc.metadata(r['cid']))
++        from profiles_batch import listeners
++        fixed=listeners();stopped=bool(self.run.report and self.run.report['all_confirmed']) and all(not r['running'] and r['pid']==0 for r in rows) and not fixed
++        c.write(C01/(self.label+'-stop-'+self.id+'.json'),{'sample':c.sample(),'pg':rows,'listeners':fixed,'cleanup':self.run.report,'all_stopped':stopped})
++        if stopped:c.end_root(result=self.label+(' failed, cleaned' if kind else ' completed, cleaned'))
++        else:raise RuntimeError('batch_stop_unconfirmed')
++        return False
+--- /dev/null
++++ S03-new/DocuN/evidence/TASK-117/execution/continuation-02/batch_runtime.py
+@@ -0,0 +1,192 @@
++"""原TASK117有限批运行适配：资源启动前登记同一截止控制器。"""
++from pathlib import Path
++import sys,os,json,time,subprocess,secrets,hmac,hashlib
++C01=Path(__file__).resolve().parent;EXEC=C01.parent;ROOT=EXEC.parents[3]
++sys.path[:0]=[str(EXEC),str(ROOT/'backend'),str(ROOT/'backend/tests/fixtures/step018')]
++import control as c
++import runtime_control as rc
++from lifecycle import BoundedResources
++from app.preview.description import canonical
++from app.preview.process import birth
++
++PREVIEW_IMAGE='sha256:ec3c70c7a8a8894c647a69b08b0c296727bb052f639e487567e9cd4624766789'
++
++def preflight(label,*,preview=False):
++    rc.docker(['image','inspect',rc.PG_IMAGE]);rc.memory_gate(label+'-Docker-awake',stage='base')
++    resources=[rc.metadata(r['cid']) for r in c.state()['resources'] if r.get('cid') and r.get('kind')=='pg']
++    if any(r['running'] or r['pid']!=0 for r in resources):raise RuntimeError('own_pg_still_running')
++    for port in (*range(15481,15486),18118):rc.port_gate(port)
++    info=json.loads(rc.docker(['info','--format','{{json .}}']))
++    if info['KernelVersion']!='6.6.114.1-microsoft-standard-WSL2':raise RuntimeError('adopted_kernel_changed')
++    if preview:
++        image=json.loads(rc.docker(['image','inspect',PREVIEW_IMAGE]))[0]
++        if (image['Id'],image['Os'],image['Architecture'])!=(PREVIEW_IMAGE,'linux','amd64'):raise RuntimeError('preview_cached_identity')
++    receipt={'sample':c.sample(),'pg':resources,'kernel':info['KernelVersion'],'preview_checked':preview}
++    c.write(C01/(label+'-preflight-'+str(time.time_ns())+'.json'),receipt)
++    return receipt
++
++
++def configuration():
++    operator=C01/'operator';operator.mkdir(exist_ok=True)
++    key=secrets.token_urlsafe(48)
++    ticket={'schema':'retrolume.preview.review.v2','decision':'approved','image_id':PREVIEW_IMAGE,
++      'load_manifest_sha256':'8a047050ffe584dffa6e85222c16c8f400c0ab4db82f72a32812c2befd082b3f',
++      'renderer_sha256':'6cc300164a6cb364d9bd0bae4897f06d3f6a65cf5d4272477d2bccde67312597',
++      'result_sha256':'1dab1126aa72e335288d037baed5bc13b7cfdc1e4a386b6c04553e630f871571'}
++    ticket['signature']=hmac.new(key.encode(),canonical(ticket).encode(),hashlib.sha256).hexdigest()
++    ticket_file=operator/'preview.review.json'
++    if ticket_file.exists():
++        raw=ticket_file.read_bytes();(operator/('review.previous-'+c.sha(raw)+'.json')).write_bytes(raw)
++        c.event('S02_preview_normal_rekey',old_sha256=c.sha(raw),reason='原operator授权同一独审事实；仅部署认证key更换，不签新审核')
++    c.write(ticket_file,ticket)
++    host=json.loads((EXEC/'root04-preview-host.json').read_text())
++    c.write(operator/'preview.deployment.json',{'schema':'retrolume.preview.deployment.v2','docker':host['docker'],
++      'image_id':PREVIEW_IMAGE,'load_manifest_sha256':ticket['load_manifest_sha256'],'renderer_sha256':ticket['renderer_sha256'],
++      'kernel_release':'6.6.114.1-microsoft-standard-WSL2','review_ticket':str(ticket_file),'review_key_env':'RETROLUME_TASK117_PREVIEW_REVIEW_KEY'})
++    identity={'provider':'deepseek_chat_completions','model':'deepseek-chat'}
++    activity={'model_identity':identity,'activity_defaults':{'deadline_hours':24,'max_requests':80,'max_cost_microunits':20000000,'reserve_cost_microunits':250000,'max_request_bytes':65536,'max_output_tokens':4096,'max_running_seconds':3600,'allowed_tools':['finite_calculate'],'max_tool_calls':8},
++      'service':{'base_url':'https://api.deepseek.com','thinking':'disabled','timeout_seconds':10,'max_output_tokens_limit':4096,'max_request_bytes':65536,'max_response_bytes':65536},'api_key_env':'RETROLUME_MODEL_API_KEY',
++      'learning':{'profile':'learning.v2','max_output_tokens':256},'teaching':{'profile':'teaching.v3','max_output_tokens':2048,'enable_calculation':True},'interview':{'profile':'interview.v2','max_output_tokens':2048,'max_followups_per_round':2},'html':{'profile':'html_explanation.v2','max_output_tokens':4096},
++      'memory_context':{'selected_items':4,'max_memory_bytes':4096,'max_memory_chars':2048,'model_context_tokens':65536,'max_input_tokens_estimate':50000,'protocol_reserve_tokens':2048,'reserved_output_tokens':2048,'safety_tokens':2048,'estimate_policy':'utf8_bytes.v1','model_identity':identity}}
++    c.write(operator/'activity.json',activity)
++    c.write(operator/'integration.json',{'schema':'retrolume.integration.v1','enabled':True,'embedding':{'provider':'zhipu_embeddings','base_url':'https://open.bigmodel.cn/api/paas/v4','model':'embedding-3','dimensions':512,'returned_models':['embedding-3'],'timeout_seconds':10,'max_request_bytes':32768,'max_response_bytes':65536},'max_index_fragments':32})
++    c.write(operator/'data-exit.json',{'enabled':True,'snapshot_url_env':'RETROLUME_TASK117_SNAPSHOT','maintenance_key_env':'RETROLUME_TASK117_MAINTENANCE'})
++    env=dict(os.environ)
++    import sysconfig
++    env.update(PYTHONPATH=os.pathsep.join([str(ROOT/'backend/tests/fixtures/step018'),str(ROOT/'backend'),sysconfig.get_paths()['purelib']]),RETROLUME_TASK117_SYNTHETIC=c.state()['active_segment'],
++      RETROLUME_TASK117_TRANSPORT_LOG=str(C01/'transport.jsonl'),RETROLUME_TASK117_TRACE_PG='0',RETROLUME_DATABASE_URL=rc.dsn('source'),RETROLUME_TASK117_SNAPSHOT=rc.dsn('source','snapshot'),RETROLUME_TASK117_MAINTENANCE=rc.credentials('source')['maintenance_key'],
++      RETROLUME_TASK117_LATE_GATE=str(C01/'late-transport'),
++      RETROLUME_DATA_DIR=str(EXEC/'synthetic/source-data'),RETROLUME_BACKUP_DIR=str(EXEC/'synthetic/source-backup'),RETROLUME_CONTROL_ROOT=str(EXEC/'synthetic/source-control'),RETROLUME_RESTORE_ROOT=str(EXEC/'synthetic/source-restore'),
++      RETROLUME_DATA_EXIT_CONFIG=str(operator/'data-exit.json'),RETROLUME_ACTIVITY_CONFIG=str(operator/'activity.json'),RETROLUME_INTEGRATION_CONFIG=str(operator/'integration.json'),RETROLUME_PREVIEW_CONFIG=str(operator/'preview.deployment.json'),
++      RETROLUME_TASK117_PREVIEW_REVIEW_KEY=key,RETROLUME_MODEL_API_KEY=secrets.token_urlsafe(32),RETROLUME_EMBEDDING_API_KEY=secrets.token_urlsafe(32))
++    return env
++
++
++class Batch:
++    def __init__(self,number,label):
++        if c.state()['active_root'] is None:
++            if c.state()['counts']['roots']==number:
++                proof=max(C01.glob('root'+str(number).zfill(2)+'-stop-*.json'),key=lambda p:p.stat().st_mtime_ns)
++                c.resume_root(number,stop_evidence=proof)
++            elif c.state()['counts']['roots']+1==number:c.begin_root(label,'runtime')
++            else:raise RuntimeError('next_root_identity')
++        if c.state()['active_root']!=number:raise RuntimeError('root_identity')
++        root=next(r for r in c.state()['roots'] if r['id']==number)
++        self.number,self.label=number,'root'+str(number).zfill(2)
++        self.id=str(time.time_ns());self.api=None;self.api_log=None;self.browser=None;self.browser_log=None
++        self.marker=C01/(self.label+'-accepting')
++        self.run=BoundedResources(deadline=root['business_deadline_mono_ns']/1e9,on_close=lambda p:c.write(C01/(self.label+'-cleanup-'+self.id+'.json'),{**p,'sample':c.sample()}))
++        self.run.monitor_memory(rc.available_memory_bytes)
++        rc.bind_controller(self.run)
++    def __enter__(self):
++        self.run.__enter__();self.run.register('reject-new-mutations',self.reject,priority=100)
++        return self
++    def reject(self):
++        self.marker.unlink(missing_ok=True);return {'accepting':False}
++    def fresh_api_handle(self):
++        # Separate immutable owner object per launch; all stages share this original deadline.
++        child=object.__new__(Batch)
++        child.number,child.label,child.id=self.number,self.label,self.id+'-stage-'+str(time.time_ns())
++        child.run,child.marker=self.run,self.marker
++        child.api=child.api_log=child.browser=child.browser_log=None
++        return child
++    def start_api(self,*,launcher=False,read_only_factory=False,source_slot='source'):
++        self.run.check();rc.port_gate(18118)
++        rc.docker(['image','inspect',rc.PG_IMAGE]);rc.memory_gate('API-start',stage='api')
++        if self.api is not None:raise RuntimeError('one_api_per_launch_handle')
++        self.run.register('api-normal-lifespan-and-preview',self.close_api,priority=30)
++        env=configuration();self.marker.write_text('accepting',encoding='ascii')
++        if read_only_factory:
++            from profiles_batch import factory_profile
++            path=C01/'operator/data-exit-readonly-view.json'
++            c.write(path,{'enabled':True,'snapshot_url_env':'RETROLUME_TASK117_SNAPSHOT','maintenance_key_env':'RETROLUME_TASK117_MAINTENANCE','factory':factory_profile()})
++            env['RETROLUME_DATA_EXIT_CONFIG']=str(path)
++        if source_slot!='source':
++            if source_slot!='compat' or launcher or read_only_factory:raise RuntimeError('only_exact_normal_compat_fixture_allowed')
++            restore=EXEC/'synthetic/compat-restore';restore.mkdir(exist_ok=True)
++            env.update(RETROLUME_DATABASE_URL=rc.dsn('compat'),RETROLUME_TASK117_SNAPSHOT=rc.dsn('compat','snapshot'),RETROLUME_TASK117_MAINTENANCE=rc.credentials('compat')['maintenance_key'],
++              RETROLUME_DATA_DIR=str(EXEC/'synthetic/compat-data'),RETROLUME_BACKUP_DIR=str(EXEC/'synthetic/compat-backup'),RETROLUME_CONTROL_ROOT=str(EXEC/'synthetic/compat-control'),RETROLUME_RESTORE_ROOT=str(restore))
++        self.env=env
++        c.count('api_starts');self.api_attempt=c.state()['counts']['api_starts']
++        env.update(RETROLUME_TASK117_ACCEPTING=str(self.marker),RETROLUME_TASK117_API_PROOF=str(C01/f'api-proof-{self.api_attempt}.json'))
++        self.api_log=(C01/f'api-{self.api_attempt}.log').open('wb')
++        command=[str(ROOT/'backend/.venv/Scripts/python.exe'),'-X','utf8']
++        command+=([str(ROOT/'deploy/start_local.py'),'--port','18118','--container','retrolume-step018-syn-source','--shutdown-stdin'] if launcher else ['-m','server'])
++        self.api=subprocess.Popen(command,cwd=ROOT/'backend',env=env,stdin=subprocess.PIPE,stdout=self.api_log,stderr=subprocess.STDOUT,creationflags=subprocess.CREATE_NO_WINDOW)
++        self.api_birth=birth(self.api.pid)
++        self.run.api_running=True
++        c.event('S02_api_launch',attempt=self.api_attempt,pid=self.api.pid,birth=self.api_birth,normal_launcher=launcher,hidden=True,stdin_owned=True)
++        import httpx
++        deadline=min(time.monotonic()+35,self.run.deadline)
++        while time.monotonic()<deadline:
++            self.run.check()
++            if self.api.poll() is not None:raise RuntimeError('api_exit_before_ready')
++            c.count('http')
++            try:
++                r=httpx.get('http://127.0.0.1:18118/health',timeout=1,trust_env=False)
++                if r.status_code==200:return
++            except httpx.HTTPError:pass
++            time.sleep(.3)
++        raise RuntimeError('api_not_ready')
++    def close_api(self):
++        self.reject()
++        if self.api is None:return {'not_started':True}
++        graceful=True
++        if self.api.poll() is None:
++            try:self.api.stdin.write(b'stop\n');self.api.stdin.flush();self.api.wait(timeout=self.run.remaining_cleanup(175))
++            except (OSError,ValueError,subprocess.TimeoutExpired):
++                graceful=False;self.api.terminate()
++                try:self.api.wait(timeout=self.run.remaining_cleanup(5))
++                except subprocess.TimeoutExpired:self.api.kill();self.api.wait(timeout=3)
++        self.api_log.close();self.run.api_running=False
++        proof={'pid':self.api.pid,'birth_before':self.api_birth,'birth_after':birth(self.api.pid),'exit_code':self.api.returncode,'graceful':graceful,'owned_launch_handle_waited':True,'sample':c.sample()}
++        c.write(C01/f'api-stop-{self.api_attempt}.json',proof);self.env.clear()
++        if not graceful:raise RuntimeError('api_lifespan_unconfirmed')
++        return proof
++    def start_browser(self,phase,*,resume=None):
++        self.run.check();rc.docker(['image','inspect',PREVIEW_IMAGE]);rc.memory_gate('browser-'+phase,stage='browser')
++        if self.browser is not None:raise RuntimeError('one_browser_per_handle')
++        self.run.register('browser-owned-handle',self.close_browser,priority=60)
++        c.count('browser_starts');self.browser_attempt=c.state()['counts']['browser_starts']
++        allowed={'PATH','PATHEXT','COMSPEC','SYSTEMROOT','WINDIR','TEMP','TMP','USERPROFILE','APPDATA','LOCALAPPDATA','HOMEDRIVE','HOMEPATH','PROGRAMFILES','PROGRAMFILES(X86)','PLAYWRIGHT_BROWSERS_PATH'}
++        env={k:v for k,v in os.environ.items() if k.upper() in allowed}
++        env.update(RETROLUME_TASK117_EVIDENCE=str(C01),RETROLUME_TASK117_CONTROL=str(EXEC),RETROLUME_TASK117_BROWSER_ATTEMPT=str(self.browser_attempt),RETROLUME_TASK117_BROWSER_PHASE=phase)
++        if resume:env['RETROLUME_TASK117_RESUME_PROOF']=str(resume)
++        self.browser_log=(C01/f'browser-{self.browser_attempt}.log').open('wb')
++        self.browser=subprocess.Popen(['node',str(ROOT/'frontend/tests/step018-flow.mjs')],cwd=ROOT/'frontend',env=env,stdin=subprocess.PIPE,stdout=self.browser_log,stderr=subprocess.STDOUT,creationflags=subprocess.CREATE_NO_WINDOW)
++        self.browser_birth=birth(self.browser.pid)
++        self.run.browser_running=True
++        c.event('S02_browser_launch',attempt=self.browser_attempt,pid=self.browser.pid,birth=self.browser_birth,phase=phase,hidden=True,no_service_secrets=True)
++        try:self.browser.wait(timeout=min(540,max(1,self.run.deadline-time.monotonic())))
++        except subprocess.TimeoutExpired:raise RuntimeError('browser_batch_timeout') from None
++        proof_path=C01/f'browser-{self.browser_attempt}/proof.json'
++        if self.browser.returncode!=0:raise RuntimeError('browser_failed_read_exact_log')
++        proof=json.loads(proof_path.read_text())
++        if proof.get('status')!='passed' or proof.get('browser_closed') is not True:raise RuntimeError('browser_proof_incomplete')
++        return proof
++    def close_browser(self):
++        if self.browser is None:return {'not_started':True}
++        graceful=True
++        if self.browser.poll() is None:
++            try:self.browser.stdin.write(b'stop\n');self.browser.stdin.flush();self.browser.wait(timeout=self.run.remaining_cleanup(35))
++            except (OSError,ValueError,subprocess.TimeoutExpired):
++                graceful=False;self.browser.terminate()
++                try:self.browser.wait(timeout=5)
++                except subprocess.TimeoutExpired:self.browser.kill();self.browser.wait(timeout=3)
++        self.browser_log.close();self.run.browser_running=False
++        path=C01/f'browser-{self.browser_attempt}/proof.json';body=json.loads(path.read_text()) if path.exists() else {}
++        proof={'pid':self.browser.pid,'birth_before':self.browser_birth,'birth_after':birth(self.browser.pid),'exit_code':self.browser.returncode,'owned_handle_waited':True,'browser_close_observed':body.get('browser_closed') is True,'graceful':graceful,'sample':c.sample()}
++        c.write(C01/f'browser-stop-{self.browser_attempt}.json',proof)
++        if not graceful or body.get('browser_closed') is not True:raise RuntimeError('browser_stop_unconfirmed')
++        return proof
++    def __exit__(self,kind,value,tb):
++        self.run.__exit__(kind,value,tb)
++        rows=[]
++        for r in c.state()['resources']:
++            if r.get('kind')=='pg' and r.get('cid'):rows.append(rc.metadata(r['cid']))
++        from profiles_batch import listeners
++        fixed=listeners();stopped=bool(self.run.report and self.run.report['all_confirmed']) and all(not r['running'] and r['pid']==0 for r in rows) and not fixed
++        c.write(C01/(self.label+'-stop-'+self.id+'.json'),{'sample':c.sample(),'pg':rows,'listeners':fixed,'cleanup':self.run.report,'all_stopped':stopped})
++        if stopped:c.end_root(result=self.label+(' failed, cleaned' if kind else ' completed, cleaned'))
++        else:raise RuntimeError('batch_stop_unconfirmed')
++        return False
+--- /dev/null
++++ S03-new/DocuN/evidence/TASK-117/execution/continuation-02/build_final.py
+@@ -0,0 +1,22 @@
++"""仅因面试索引先后门产品修正而构建第6次；全部自有运行资源已停。"""
++from batch_runtime import *
++
++def main():
++    c.guard()
++    if c.state()['active_root'] is not None:raise RuntimeError('build_requires_no_running_root')
++    resources=[rc.metadata(r['cid']) for r in c.state()['resources'] if r.get('kind')=='pg' and r.get('cid')]
++    assert all(not r['running'] and r['pid']==0 for r in resources)
++    from profiles_batch import listeners
++    assert not listeners()
++    for p in (ROOT/'frontend/dist').rglob('*'):
++        if p.is_file():c.pre(p.relative_to(ROOT).as_posix())
++    c.count('frontend_builds');start=c.sample()
++    result=subprocess.run(['cmd','/d','/c','npm.cmd','run','build'],cwd=ROOT/'frontend',capture_output=True,timeout=180)
++    (C01/'build-6.log').write_bytes(result.stdout+result.stderr)
++    end=c.sample();value=c.state();value['offline_intervals'].append({'root':None,'segment':value['active_segment'],'start_mono_ns':start['mono_ns'],'end_mono_ns':end['mono_ns'],'seconds':(end['mono_ns']-start['mono_ns'])/1e9,'basis':'面试持久目标未加载时拒模型动作并使用持久目标的产品修正，必要最后正式build/typecheck，全部运行资源已停止'})
++    c.write(EXEC/'budget.json',value)
++    if result.returncode:raise RuntimeError('final_build_failed_no_attempts_remaining')
++    c.write(C01/'bundle-6.json',{'attempt':6,'sample':end,'reason':'interview v2 uses verified persisted goal; model actions disabled before goal detail is ready','files':[{'path':p.relative_to(ROOT).as_posix(),'bytes':p.stat().st_size,'sha256':c.sha(p.read_bytes())} for p in sorted((ROOT/'frontend/dist').rglob('*')) if p.is_file()],'actual_browser_binding':'NOT_RUN; bundle5 historical browser evidence retained; host browser cap8 exhausted'})
++    print('Formal build6/typecheck passed; final bundle not claimed browser verified')
++
++if __name__=='__main__':main()
+--- /dev/null
++++ S03-new/DocuN/evidence/TASK-117/execution/continuation-02/business.py
+@@ -0,0 +1,80 @@
++"""根15最终bundle新场景，两域回答及UNKNOWN之后同normal库真实重开。"""
++from batch_runtime import *
++from frozen_http import FrozenFlow,SAMPLES
++from uuid import uuid4
++import traceback
++import psycopg
++from psycopg.rows import dict_row
++
++def budgets(flow,aids):
++    return {a:flow.call('GET',f'/api/activities/{a}') for a in aids}
++
++def generate(flow,aid):
++    w=flow.call('GET',f'/api/activities/{aid}/teaching/workspace');h=w['head'];rid=h['feedback_record_id']
++    record=flow.call('GET',f'/api/activities/{aid}/teaching/records/{rid}')
++    caps=flow.call('GET',f'/api/activities/{aid}/html/capabilities');assert caps['available'],caps
++    result=flow.call('POST',f'/api/activities/{aid}/html/commands',{'business_key':str(uuid4()),'parent':{'kind':'teaching','record_id':rid,'body_sha256':record['body_sha256'],'point_id':None},'focus':'分钟换秒与平均速度d/t','expected_config_sha256':caps['config_sha256'],'confirmed':True},native=1)
++    assert result['artifact_id'];return result
++
++def main():
++    preflight('S03-root15-final-bundle-business')
++    with Batch(15,'S03_new_two_domains_and_normal_reopen') as batch:
++        rc.start_pg('source');batch.start_api(launcher=True)
++        first=FrozenFlow('root15-before')
++        try:
++            binding=C01/'minimal-memory-interview-start.json'
++            if not binding.exists():
++                mapping=json.loads((C01/'frozen-source-bindings.json').read_text());memory=first.call('GET','/api/memories/'+json.loads((C01/'frozen-memory-binding.json').read_text())['memory_id'])
++                aid=first.create([mapping['R'],mapping['M']],memory)
++                c.write(C01/'minimal-memory-start-intent.json',{'activity_id':aid,'intent':'五表SELECT修补的独立零费真实回归，不替代I01'})
++                w=first.interview(aid,'start',{'goal':{'target':SAMPLES['inputs']['interview_goal'],'material_roles':[{'source_id':mapping['R']['id'],'role':'resume'},{'source_id':mapping['M']['id'],'role':'measurement'}]}})
++                assert w['head']['phase']=='ready';c.write(binding,{'activity_id':aid,'workspace':w,'Native':0,'ordinary_API_v2_start':True})
++            prior=C01/'browser-5/proof.json'
++            recovering=prior.exists() and json.loads(prior.read_text()).get('interview_activity_id')
++            if recovering and not (C01/'original-ask-explicit-recovery.json').exists():
++                saved=json.loads((prior.parent/'storage.json').read_text());drafts=[]
++                for origin in saved['origins']:
++                    for db in origin.get('indexedDB',[]):
++                        if 'interview-drafts' in db['name']:
++                            for store in db['stores']:drafts.extend(r['value'] for r in store.get('records',[]))
++                draft=next(d for d in drafts if d['command']['action']=='ask' and d['activity_id']==recovering)
++                from app.interview.contracts import parse_command
++                parsed=parse_command(draft['command']);assert parsed.request_hash(recovering)==draft['hash']
++                key=draft['key'];original=first.call('GET',f'/api/activities/{recovering}/interview/commands/{key}',expected=404)
++                c.write(C01/'original-ask-recovery-before.json',{'activity_id':recovering,'business_key':key,'request_sha256':draft['hash'],'GET_original':original,'reason':'原500发生在freeze前，未被claim；长目标词项有界修补已完成','layer':'真实HTTP显式同键重交；不恢复或冒用缺失旧tab owner'})
++                result=first.call('POST',f'/api/activities/{recovering}/interview/commands',draft['command'],native=1)
++                assert result['status']=='committed';c.write(C01/'original-ask-explicit-recovery.json',result)
++            proof=batch.start_browser('s03-recover-before' if recovering else 's03-before-restart',resume=prior if recovering else None);batch.close_browser()
++            aids=[proof['teaching_activity_id'],proof['interview_activity_id']]
++            c.write(C01/'new-business-identities.json',{'teaching_activity_id':aids[0],'interview_activity_id':aids[1],'old_expired_teaching':'b7f32142-b5b3-4a5c-b561-f927bcbe1b6d','old_deadline_unchanged':True,'old_qualification_not_inherited':True})
++            heads={'learning':first.call('GET',f'/api/activities/{aids[0]}/teaching/workspace'),'interview':first.call('GET',f'/api/activities/{aids[1]}/interview/workspace')}
++            h=heads['learning']['head'];unknown_key=str(uuid4())
++            unknown=first.call('POST',f'/api/activities/{aids[0]}/retrieval/commands',{'business_key':unknown_key,'action':'query','expected_scope_revision':1,'expected_domain_revision':h['revision'],'query':'S02合成超时','confirmed':True},native=1)
++            assert unknown['terminal_disposition']=='unknown'
++            baseline={'sample':c.sample(),'aids':aids,'heads':heads,'unknown_key':unknown_key,'unknown':unknown,'budgets':budgets(first,aids)}
++            c.write(C01/'X09-before-normal-reopen.json',baseline)
++        finally:first.close()
++        batch.close_api()
++        stopped=rc.metadata(next(r['cid'] for r in c.state()['resources'] if r.get('id')=='pg-source'));assert stopped['running']
++        # 正常启动器复用已有PG，不拥有其停机权；该PG继续由同一个根控制器持有。
++        # 本项证明正常应用停止重开同库，不声称PG进程曾重启。
++        c.write(C01/'X09-source-between-reopen.json',stopped)
++        second=batch.fresh_api_handle();second.start_api(launcher=True)
++        flow=FrozenFlow('root15-after')
++        try:
++            before=json.loads((C01/'X09-before-normal-reopen.json').read_text());aids=before['aids']
++            after={'learning':flow.call('GET',f'/api/activities/{aids[0]}/teaching/workspace'),'interview':flow.call('GET',f'/api/activities/{aids[1]}/interview/workspace')}
++            for kind in ('learning','interview'):assert before['heads'][kind]['head']==after[kind]['head']
++            unknown=flow.call('GET',f'/api/activities/{aids[0]}/retrieval/commands/{before["unknown_key"]}')
++            assert unknown['terminal_disposition']=='unknown' and unknown['business_key']==before['unknown_key']
++            c.write(C01/'X09-GET-only-after-reopen.json',{'heads':after,'unknown':unknown,'budgets':budgets(flow,aids),'POSTs_before_explicit_continue':0,'same_source_cid':stopped['cid'],'source_profile':'data_exit.v1.r02'})
++            proof2=second.start_browser('s03-resume',resume=C01/f'browser-{batch.browser_attempt}/proof.json');second.close_browser()
++            final={'teaching':flow.call('GET',f'/api/activities/{aids[0]}/teaching/workspace'),'interview':flow.call('GET',f'/api/activities/{aids[1]}/interview/workspace')}
++            assert final['teaching']['head']['phase']=='feedback_ready' and final['interview']['head']['phase']=='ended'
++            c.write(C01/'L01-L05-I01-X09-final.json',{'sample':c.sample(),'source_cid':stopped['cid'],'aids':aids,'final':final,'browser_before':batch.browser_attempt,'browser_after':second.browser_attempt,'Q':'NOT_ENABLED'})
++            artifact=generate(flow,aids[0]);c.write(C01/'L10-current-artifact.json',{'activity_id':aids[0],'artifact':artifact})
++        finally:flow.close()
++if __name__=='__main__':
++    try:main()
++    except BaseException:
++        p=C01/('root15-failure-'+str(time.time_ns())+'.txt');p.write_text(traceback.format_exc(),encoding='utf-8');c.failure('S03-root15',p.name,effect='保留已提交步骤，清场后仅从实际head接续，不整体重跑');raise
+--- /dev/null
++++ S03-new/DocuN/evidence/TASK-117/execution/continuation-02/final_restore.py
+@@ -0,0 +1,39 @@
++"""最终R02包及hash失败目标；来源停止后依次恢复，failed目标永久保留。"""
++from profiles_batch import *
++from app.data_exit.contracts import DataError
++
++def final_restore(run,*,runtime=None,keep_source=False):
++    runtime=runtime or runtime_config(run);context=runtime.context();assert context.mode=='normal'
++    scope={'mode':'all','source_ids':[],'activity_ids':[],'allow_incomplete':False}
++    with psycopg.connect(rc.dsn('source'),row_factory=dict_row) as db:
++        vectors=verify_persistent_retrieval(db)
++        facts={'vectors':vectors,'space_count':db.execute('SELECT count(*) AS n FROM retrieval_spaces').fetchone()['n'],'grant_metadata':db.execute('SELECT count(*) AS n FROM activities WHERE outbound_grant_sha256 IS NOT NULL').fetchone()['n'],'unknown':db.execute("SELECT count(*) AS n FROM activity_operations WHERE state='unknown'").fetchone()['n'],'deleted_sources':db.execute("SELECT count(*) AS n FROM data_tombstones WHERE entity_kind='source'").fetchone()['n']}
++    assert facts['space_count']>=2 and facts['grant_metadata']>=1 and facts['unknown']>=1 and facts['deleted_sources']>=1,facts
++    job=runtime.hub.create_or_get_job(DataJobCommand('restore_checkpoint',str(uuid4()),scope),context)
++    receipt=runtime.packages.capture_and_publish(job['job_id'],scope)
++    package=runtime.packages.path(receipt['package_id']);c.write(C01/'source-r02-final-package.json',{'receipt':receipt,'facts':facts})
++    with PackageReader(package) as reader:assert reader.schema_profile.name==R02 and len(reader.schema_profile.tables)==31
++    prepared=[]
++    for label in ('hash-fault','valid'):
++        upload=str(uuid4());incoming=runtime.incoming/(upload+'.rldata');shutil.copyfile(package,incoming)
++        plan=runtime.restore.prepare(upload,'respect_current_deletions',context)
++        job=runtime.hub.create_or_get_job(DataJobCommand('restore',str(uuid4()),{'plan_id':plan['plan_id'],'plan_sha256':plan['plan_sha256']}),context)
++        if label=='hash-fault':
++            with incoming.open('ab') as stream:stream.write(b'TASK117 deliberate post-plan hash fault')
++        prepared.append((label,job,plan));c.write(C01/('final-r02-'+label+'-plan.json'),{'job_id':job['job_id'],'plan':plan,'source_facts':facts})
++    if not keep_source:rc.stop_pg('source')
++    for label,job,plan in prepared:
++        if label=='hash-fault':
++            try:runtime.restore.verify(job['job_id'],plan['plan_sha256'])
++            except DataError as exc:assert exc.code=='integrity_failed',exc.code
++            else:raise RuntimeError('corrupt_package_accepted')
++            failed=runtime.hub.get(job['job_id']);assert failed['state']=='failed',failed
++            targets=[x for x in runtime.hub.state()['targets'].values() if x['job_id']==job['job_id']]
++            assert len(targets)==1 and targets[0]['slot_id']=='r02-fault' and targets[0]['state']=='failed' and targets[0]['temporary_credentials_revoked']
++            c.write(C01/'final-r02-hash-failed.json',{'receipt':failed,'target':targets[0],'selection':runtime.hub.state()['selection'],'PG':rc.metadata(targets[0]['cid'])})
++        else:
++            verified=runtime.restore.verify(job['job_id'],plan['plan_sha256'])
++            assert verified['state']=='verified' and runtime.hub.state()['targets'][verified['target_id']]['slot_id']=='r02'
++            c.write(C01/'final-r02-verified.json',{'receipt':verified,'plan':plan,'facts_before':facts,'selection':runtime.hub.state()['selection'],'application_view':'deferred to serial read-only viewer, no extra SQL restart'})
++    assert runtime.hub.state()['selection'] is None
++    return {'r02_verified':True,'failed_hash_target_preserved':True,'source_not_activated':True,'facts':facts}
+--- /dev/null
++++ S03-new/DocuN/evidence/TASK-117/execution/continuation-02/finalize_s03.py
+@@ -0,0 +1,203 @@
++"""S03时间门关闭后只保存成果与真实未闭项，不启动业务或改旧证据。"""
++from pathlib import Path
++from datetime import datetime,timezone,timedelta
++import sys,json,time,hashlib,difflib,copy
++N=Path(__file__).resolve().parent;E=N.parent;R=E.parents[3]
++sys.path[:0]=[str(E),str(R/'backend')]
++import control as c
++from app.data_exit.control import ControlHub
++
++def identity(p):
++    return {'exists':p.is_file(),'bytes':p.stat().st_size if p.is_file() else 0,'sha256':c.sha(p.read_bytes()) if p.is_file() else None}
++def link(name):return str((N/name).resolve())
++def union(intervals):
++    result=[]
++    for a,b in sorted(intervals):
++        if result and a<=result[-1][1]:result[-1][1]=max(result[-1][1],b)
++        else:result.append([a,b])
++    return {'intervals_mono_ns':result,'seconds':sum(b-a for a,b in result)/1e9}
++
++def main():
++    assert not (N/'result-save-receipt.json').exists(),'不可覆盖已交回结果'
++    stamp=c.sample();v=c.state();s=c.active_segment(v);assert s and 'S03' in s['permit'] and v['active_root'] is None
++    stop_binding=json.loads((N/'final-resource-stop-binding.json').read_text());stop_path=Path(stop_binding['path'])
++    assert c.sha(stop_path.read_bytes())==stop_binding['sha256'];stop=json.loads(stop_path.read_text());assert stop['all_stopped']
++    raw=(N/'before-result.md').read_bytes();report=R/'DocuN/results/TASK-117-result.md'
++    assert len(raw)==31949 and c.sha(raw)=='5f2e0a19f893dcd6634345b86149d9a35de41354cb50f2694f76a024ba1c0c8d'
++    assert report.read_bytes()==raw,'结果已被其他写者修改，停止覆盖'
++    rules=json.loads((R/'DocuN/evidence/v4-migration-20260930/rules-snapshot.json').read_text(encoding='utf-8-sig'))
++    assert all(c.sha(Path(x['absolute_path']).read_bytes())==x['sha256'] for x in rules)
++    receipt=json.loads((N/'receipt.json').read_text());assert c.sha((R/'DocuN/tasks/TASK-117.md').read_bytes())==receipt['inputs']['DocuN/tasks/TASK-117.md']['sha256']
++    before=json.loads((N/'before-budget.json').read_text());old_manifest=json.loads((E/'continuation-01/final-source-manifest.json').read_text())
++    changes=json.loads((N/'changes.json').read_text());paths={x['path'] for x in old_manifest['entries']}|set(changes)
++    paths.update(p.relative_to(R).as_posix() for p in N.glob('*.py'))
++    paths.update(p.relative_to(R).as_posix() for p in (N/'as-run').glob('*.py'))
++    paths.update(p.relative_to(R).as_posix() for p in (R/'frontend/dist').rglob('*') if p.is_file())
++    paths.add('backend/tests/test_step018_term_prefix.py')
++    old_rows={x['path']:x['post'] for x in old_manifest['entries']};rows=[];diff=[]
++    for relative in sorted(paths):
++        p=R/relative;post=identity(p);pre=changes.get(relative)
++        row={'path':relative,'S03_pre':pre,'S02_post':old_rows.get(relative),'post':post,'changed_from_S02':old_rows.get(relative)!=post}
++        if pre and pre.get('exists'):
++            backup=R/pre['backup'];assert identity(backup)['sha256']==pre['sha256']
++            if 'frontend/dist/' not in relative:
++                try:diff.extend(difflib.unified_diff(backup.read_text(encoding='utf-8-sig').splitlines(True),p.read_text(encoding='utf-8-sig').splitlines(True) if p.is_file() else [],fromfile='S03-pre/'+relative,tofile='S03-post/'+relative))
++                except UnicodeError:pass
++        elif relative not in old_rows:
++            row['new_file_basis']='本轮新增辅助入口或build6产物；没有旧S02对象，不追造首次pre时间'
++            if p.suffix=='.py' and p.is_file():diff.extend(difflib.unified_diff([],p.read_text(encoding='utf-8').splitlines(True),fromfile='/dev/null',tofile='S03-new/'+relative))
++        rows.append(row)
++    (N/'source-changes.diff').write_text(''.join(diff),encoding='utf-8')
++    c.write(N/'final-source-manifest.json',{'sample':stamp,'scope':'继承113项及S03必要产品/夹具/控制器/正式build6；非整仓验收','entries':rows,'source_pre_limit':'新增辅助文件没有伪造提前pre；源码和as-run以各原始回执及上轮manifest分别绑定'})
++    bundle=json.loads((N/'bundle-6.json').read_text());assert all(identity(R/x['path'])['sha256']==x['sha256'] for x in bundle['files'])
++    # 从已保存真实HTTP投影核对中性结果；原错误保留，不重发plan。
++    neutral_ids={'c430ffb3-c9de-4ff0-aa32-8ac76b95cd86':('L08','clarification'),'23e836e1-682b-4a65-8e25-c0f8166602a2':('L09-insufficient','no_evidence'),'0ed0b088-c535-48fc-83f6-d2ca82435c3e':('L09-conflict','conflict')}
++    found={}
++    for p in (N/'root16-normal').glob('*.json'):
++        if p.name=='proof.json':continue
++        obj=json.loads(p.read_text());w=obj.get('response')
++        if not isinstance(w,dict) or w.get('activity_id') not in neutral_ids or not obj.get('path','').endswith('/teaching/workspace'):continue
++        reason=w.get('reason');aid=w['activity_id']
++        if reason and reason.get('body',{}).get('result_type')==neutral_ids[aid][1]:
++            assert reason['qualification']=='current' and w['head']['path_record_id'] is None
++            found[aid]={'case':neutral_ids[aid][0],'expected':neutral_ids[aid][1],'actual_reason':reason,'head':w['head'],'original_HTTP':str(p),'sha256':c.sha(p.read_bytes()),'original_status':obj['status'],'reissued_POST':False}
++    assert len(found)==3;c.write(N/'neutral-results-readback.json',{'sample':stamp,'status':'真实原HTTP事实核对通过；原夹具错误不删除','results':list(found.values()),'L08_scope_clarification_followup':'NOT_RUN','Q':'NOT_ENABLED'})
++    hub=ControlHub(E/'synthetic/source-control');hs=hub.state()
++    assert hs['selection'] is None and hs['fence'] is None
++    targets=[{k:t.get(k) for k in ('target_id','slot_id','cid','state','temporary_credentials_revoked','job_id','schema_profile')} for t in hs['targets'].values()]
++    assert {t['slot_id']:t['state'] for t in targets}=={'r01':'sealed','r02-fault':'failed','r02':'failed'}
++    jobs=[{k:j.get(k) for k in ('job_id','kind','state','stage','error_code')} for j in hs['jobs'].values()]
++    c.write(N/'restore-final-disposition.json',{'sample':stamp,'targets':targets,'jobs':jobs,'selection':None,'fence':None,'failed_targets_never_reused':True,'source_activation_attempted':False,'R01_application_GET':'NOT_RUN','R02_success_roundtrip':'FAILED_component_timeout_30s','diagnostic_limit':'准确失败位置为restore._load组件内逐行INSERT后30秒检查；617行包，不推断某个SQL或根因已确定'})
++    c.write(N/'metadata-corrections.json',{'sample':stamp,'items':[{'path':link('preview-recheck-intent.json'),'original_sha256':c.sha((N/'preview-recheck-intent.json').read_bytes()),'error':'复制入口时reason残留已选R02/compat文案','correct':'本次实际启动source原CID；R02此前装载失败，selector/fence均空；没有启动compat或激活R01/R02。原文件保留。'},{'paths':['preview_source_and_r01.py','remaining.py'],'error':'夹具将公开DataContext.current_mode误读为mode，API18首个会话检查KeyError','correct':'该动作未创建父成果/预览或激活；后续代码未执行。源码未冒动态通过。'},{'paths':['L08-ambiguity-error.txt','L09-insufficient-error.txt','L09-conflict-error.txt'],'error':'中性plan保存在reason投影；夹具误读proposal=None','correct':'只从原HTTP回执核对reason.body.result_type及current；不重新POST，不抹去原失败。'},{'paths':['root14','root15','root16'],'error':'S03复制夹具的部分事件名/schema仍含S02','correct':'实际执行段由主budget、原根ID、S03receipt及continuation-02路径唯一绑定；不追改事件。'}]})
++    c.write(N/'PDF-unclosed.json',{'sample':stamp,'status':'BLOCKED_NO_NEW_CAUSE_NOT_RETRIED','original_HTTP_failures':2,'third_HTTP_attempt':False,'prior_isolated_probe':link('../continuation-01/pdf-launch-diagnosis.json'),'observation':'原API环境TRACE_PG=1；孤立worker成功不等同HTTP。现夹具排除PDFworker自动安装，仍无足够证据把超时唯一归因trace，按卡冻结PDF依赖。','security_limits_unchanged':True})
++    # 只记录可证的离线工作，明确排除资源全停的用户中断间隔。
++    rollout=Path('C:/Users/28432/.codex/sessions/2026/10/12/rollout-2026-10-12T01-41-26-01a12c0e-22b8-7e71-849b-0163931d12c7.jsonl')
++    prior_last=None
++    for line in rollout.open(encoding='utf-8'):
++        item=json.loads(line);pay=item.get('payload',{})
++        ts=item.get('timestamp','')
++        if '2026-10-15T14:19:00'<=ts<'2026-10-15T20:00:00' and item.get('type')=='response_item' and pay.get('type') in ('function_call','custom_tool_call'):
++            prior_last=ts
++    assert prior_last is not None
++    plan_stamp=json.loads((N/'root16-plan-and-as-run.json').read_text())['sample']
++    utc_stamp=datetime.fromisoformat(stamp['utc'])
++    old_end=stamp['mono_ns']-int((utc_stamp-datetime.fromisoformat(prior_last)).total_seconds()*1e9)
++    spans=sorted((max(plan_stamp['mono_ns'],x['start_mono_ns']),min(old_end,x['end_mono_ns'])) for key in ('runtime_intervals','offline_intervals') for x in v[key] if x.get('segment')==s['permit'] and x['end_mono_ns']>=plan_stamp['mono_ns'] and x['start_mono_ns']<=old_end)
++    point=plan_stamp['mono_ns'];new_offline=[]
++    for a,b in spans+[(old_end,old_end)]:
++        if a>point:new_offline.append({'root':None,'segment':s['permit'],'start_mono_ns':point,'end_mono_ns':a,'seconds':(a-point)/1e9,'basis':'上一段可证的非运行准备/保存空档保守计入；排除之后等待用户接续间隔'})
++        point=max(point,b)
++    resume_pair={'utc':'2026-10-15T21:44:34.188106+00:00','mono_ns':33574156000000}
++    new_offline.append({'root':None,'segment':s['permit'],'start_mono_ns':resume_pair['mono_ns'],'end_mono_ns':stamp['mono_ns'],'seconds':(stamp['mono_ns']-resume_pair['mono_ns'])/1e9,'basis':'新用户接续后只读断点/清场/保存；业务门早已关闭，超额如实登记'})
++    v['offline_intervals'].extend(new_offline)
++    runtime=sum(x['seconds'] for x in v['runtime_intervals'] if x.get('segment')==s['permit'])
++    offline=sum(x['seconds'] for x in v['offline_intervals'] if x.get('segment')==s['permit'])
++    elapsed=(stamp['mono_ns']-s['start_mono_ns'])/1e9
++    pg=[]
++    for resource in v['resources']:
++        for span in resource.get('holding_intervals',[]):
++            if span.get('segment')==s['permit']:pg.append((span['start']['mono_ns'],span['end']['mono_ns']))
++    budget={'sample':stamp,'S01':{'activity_seconds':37651.0027854,'runtime_conservative_seconds':16219.360,'offline_seconds':1724.875,'old_overruns_preserved':True},'S02':{'activity_seconds_at_return':17303.702146,'runtime_conservative_seconds':5702.094,'offline_seconds':821.686},'S03':{'permit':s['permit'],'activity_clock_elapsed_seconds':elapsed,'activity_cap_seconds':21600,'activity_clock_overrun_seconds':max(0,elapsed-21600),'runtime_conservative_seconds':runtime,'runtime_cap_seconds':10800,'offline_recorded_seconds':offline,'offline_cap_seconds':3000,'offline_overrun_seconds':max(0,offline-3000),'PG_CID_union':union(pg),'new_roots':[14,15,16],'new_root_cap':4,'original_start_and_deadlines_preserved':True,'counts':v['counts'],'counts_added':{k:v['counts'][k]-s['baseline_counts'][k] for k in v['counts']},'caps':s['cumulative_caps']},'cumulative':{'activity_clock_seconds':54954.7049314+elapsed,'runtime_conservative_seconds':21921.454+runtime,'offline_seconds':2546.561+offline,'offline_all_task_cap':7200},'interruption':{'last_prior_tool_utc':prior_last,'resume_pair':resume_pair,'resources_were_stopped':True,'gap_is_not_runtime_or_offline':True,'activity_guard':'原S03 elapsed门未重置，因此接续时已关闭；未把等待间隔冒PG持有'},'provider_calls_actual':0,'fee_actual':0,'Q':'NOT_ENABLED'}
++    c.write(N/'final-budget-observed.json',budget)
++    old_index=json.loads((N/'before-case-index.json').read_text());cases=[]
++    facts={
++      'L01':('S_PG_HTTP_NATIVE_COMPLETE_U_PARTIAL','新N两域教学错答/针对/曝光/360与240新实例、末评价/理由已持久；旧过期活动不追续','最终bundle6 U缺；进度最后节点理由需区分无后继与不足',['L01-L05-I01-X09-final.json','browser-5/proof.json','browser-8/proof.json']),
++      'L02':('S_DETERMINISTIC_INHERITED_Q_OPEN','复用未变确定换算与v3有限输入协议；当前主链有1/2/3/4m/s事实','完整等价正例真实供应商语义待Q',[]),
++      'L03':('S_DETERMINISTIC_INHERITED_Q_OPEN','主链真实单位错答及既有反例/量纲检查有效','开放解释语义待Q',[]),
++      'L04':('S_DETERMINISTIC_INHERITED_Q_OPEN','既有否定/不确定parser保守unchecked及v3合成协议有效','实际供应商语义待Q',[]),
++      'L05':('S_COUNTS_VERIFIED_REASON_REVIEW_REQUIRED','实际两个独立实例、一辅助，evidence_sufficient；本次单节点path无后继，保留n1','reason仍沿用不足/辅助文案；不冒实际推进及完整冻结场景PASS',['L01-L05-I01-X09-final.json']),
++      'L06':('S_REAL_HTTP_PG_NATIVE_PASS_Q_OPEN','C正/反/部分三答均真实持久，profile/citation/policy层已覆盖','语义质量仍需Q',['L06-concept-three-answers.json']),
++      'L07':('S_REAL_HTTP_PG_NATIVE_PASS_Q_OPEN','P正/反两答真实持久，只阅读推理未执行用户代码','语义质量仍需Q',['L07-program-two-answers.json']),
++      'L08':('S_CLARIFICATION_PERSISTED_PARTIAL','两Java范围真实中性plan澄清保存在reason投影；夹具失败通过原回执核对','范围再确认仅J-CODE及最终U/Q未完成',['neutral-results-readback.json']),
++      'L09':('S_NEUTRAL_RESULTS_PERSISTED_Q_OPEN','火星不足/双源冲突真实中性结果已提交，原夹具错误保留','供应商逐项支持与开放语义待Q',['neutral-results-readback.json']),
++      'L10':('BLOCKED_REAL_HOST_NOT_STARTED','HTML资格目录新增ACL投影已修并通过真实普通PG指纹；初始503保留','复检夹具错读current_mode导致API18退出；无真实artifact/ACK/PNG/StopProof，时间门关闭',['L10-current-artifact-error.txt','HTML-catalog-real-PG-check.json','preview-recheck-failure-1792075142549409000.txt']),
++      'I01':('S_REAL_HTTP_PG_NATIVE_FINISHED_U_PARTIAL','R+M选记忆场次有问题/必要probe/支持回答/反馈/finish；原ask GET404后精确HTTP同键续交','最终bundle6 U与Q语义仍缺',['I01-after-normal-reopen.json','original-ask-explicit-recovery.json','browser-7/proof.json']),
++      'I02':('S_CONTRACT_INHERITED_Q_NOT_RUN','已有范围/用途非证据协议继承','仅R缺M和自报的真实语义待Q，未冒新动态完整通过',[]),
++      'I03':('S_CITATION_BOUNDARY_INHERITED_Q_NOT_RUN','既有范围/位置校验继承，记忆不作履历证据','利润/收益无据与位置不等于语义支持仍待Q',[]),
++      'X01':('PARTIAL_PDF_BLOCKED','坏UTF8/MD与已有替换部分继承；原两次HTTP PDF422仍失败','孤立worker成功不替代HTTP，未取得稳定新根因，未裸重试第三次',['PDF-unclosed.json']),
++      'X02':('S_REAL_HTTP_PG_NATIVE_LATE_INVALIDATION_PASS_U_PARTIAL','学习及v2面试dispatch后分别真实revise/revoke，晚到invalidated/current=false，rev3 purge done','独立第三次delete及最终前端晚到门未完成',['X02-late-memory.json']),
++      'X03':('S_REAL_PG_SUBSET_PASS_U_PARTIAL','原X03-X07 PG同键并发/异文拒绝/一次claim证据复用','最终U及其它新域/index语义竞争的完整矩阵未完成',[]),
++      'X04':('S_BACKEND_LATE_INVALIDATION_PASS_U_NOT_RUN','真实dispatch之后记忆依赖变更使旧query不当前，持久事实保留','最终bundle6旧view/owner响应抑制未实际浏览器验证',['X02-late-memory.json']),
++      'X05':('S_PROTOCOL_AND_PG_INHERITED','既有v4容量/维度/provider映射/发送前失败关闭及workflow预算证明有效','未新增实际Windows故障集合完整通过声明',[]),
++      'X06':('S_REAL_UNKNOWN_PRESERVED','旧95a0原键保留不重发；新同库重开前显式合成timeout留unknown/预留','全部新kind故障族与最终U未完成',['actual-checkpoint.json','X09-before-normal-reopen.json','X09-GET-only-after-reopen.json']),
++      'X07':('S_REAL_PG_WORKFLOW_GATE_PASS_U_PARTIAL','一request但query+model整步不足在INSERT前拒；旧真实PG四账证明复用','最终bundle6预算前端门未新增U验证',[]),
++      'X08':('PARTIAL_REFRESH_GET_ONLY','Browser7实际reload GET不自动POST，原ask key404精确核对后合法同键继续','索引/query、answer、feedback三类COMMIT丢HTTP正文故障未完成',['browser-7/proof.json','original-ask-recovery-before.json']),
++      'X09':('S_NORMAL_APP_REOPEN_PASS_U_PARTIAL','保存两域回答与unknown后，原正常stdin/句柄关闭并同CID库重开，GET无POST，后续新反馈已保存','PG由原控制器连续持有，未声称PG重启；最终bundle6完整U缺',['X09-GET-only-after-reopen.json','L01-L05-I01-X09-final.json']),
++      'X10':('S_REAL_DELETE_AND_PACKAGE_PASS_ROUNDTRIP_BLOCKED','已索引/query/007的N-CONFLICT经真实服务提交墓碑，chunks/embedding正文删除；53received=42正文+11已删','R02成功往返未完成，非全场景通过',['X10-real-deletion-overlay.json','source-r02-final-package.json']),
++      'X11':('S_REAL_ISOLATION_AND_CLEANUP_PASS_WITH_LIMITS','S02低压自动清场继承；S03所有根/attempt精确关闭，无外部进程/端口被处理','S03时间门已到；原8次Browser上限保持',['final-resource-stop-binding.json','final-budget-observed.json']),
++      'X12':('S_CONTRACT_BOUNDARY_INHERITED_Q_OFF','既有能力/源白名单/跨kind消费/空间隔离有限断言继承；Q roster未创建','全局外发预算实际PG并发与完整新U覆盖未验证',[]),
++      'P01':('S_NONEMPTY_UPGRADE_AND_REPAIR_REAL_PG_PASS','继承非空014升级；source/compat最小SQL后完整受信目录及全业务行不变，选记忆start/实际删源通过','不外推用户库迁移或项目独审',['SQL-repair-summary.json','source-SQL-before.json','source-SQL-after.json','compat-SQL-before.json','compat-SQL-after.json','minimal-memory-interview-start.json','X10-real-deletion-overlay.json']),
++      'P02':('S_OLD_R01_SEAL_INHERITED_NEW_APP_NOT_RUN','原R01真实装载/seal/UPDATE42501原件复用，无014改写','新reader应用GET及拒POST未完成，没有激活R01',['restore-final-disposition.json']),
++      'P03':('FAILED_VALID_R02_COMPONENT_TIMEOUT','实际R02包617行/101文件/两space/22向量/unknown/删源overlay；hash-fault隔离失败正确','有效目标component30秒超时，已failed/撤凭据/停止；5对象满，两个失败目标不能清空复用',['source-r02-final-package.json','final-r02-hash-failed.json','root16-failure-1792074903576023600.txt','restore-final-disposition.json'])
++    }
++    for old in old_index['cases']:
++        key=old['id'];status,scope,remaining,evidence=facts[key]
++        cases.append({'id':key,'S_status':status,'scope':scope,'remaining':remaining,'new_evidence':[link(x) for x in evidence],'inherited_evidence':old.get('new_evidence',[]),'Q_status':'NOT_ENABLED_NOT_RUN','frozen_scenario_passed':False,'history_S02':old})
++    assert len(cases)==28;c.write(E/'case-index.json',{'schema':'TASK117.case-index.v3','sample':stamp,'S_candidate':'INCOMPLETE_WITH_LOCATED_PRODUCT_AND_VERIFICATION_BLOCKERS','Q':'NOT_ENABLED','passed_frozen_scenarios':0,'full_pass_count_meaning':'所有冻结层全部满足的计数；不把0解释为各S层无成果，逐例S_status分层','cases':cases})
++    c.write(N/'final-case-index.json',json.loads((E/'case-index.json').read_text()))
++    c.write(N/'validation-summary.json',{'sample':stamp,'new_tests':{'TermPrefixTests':{'executed':2,'passed':2,'layer':'纯词项范围与容量；未增加24词上限、未改变完整向量查询'},'HTML_catalog':{'layer':'实际普通PG目录指纹及未知ACL拒绝','evidence':'HTML-catalog-real-PG-check.json'}},'build6':{'typecheck_and_build':'passed','HTTP_exact_bytes':'passed','Browser':'NOT_RUN'},'old_tests':'未变算法/协议按原具体证据继承，没有整批重跑','new_rule_hashes_checked':len(rules),'source_identity_count':len(rows)})
++    local=datetime.now(timezone(timedelta(hours=8))).isoformat()
++    countline='、'.join(f'{k} {val}' for k,val in v['counts'].items())
++    prefix=f'''# TASK-117 / R-111 S03 结果：部分交付，完整S未完成
++
++保存于 {local}。两库SQL修补、持久两域及多项传播已完成；R02有效包恢复失败，固定预览、R01新reader应用查看及最终bundle6 U未完成，不能提交为稳定完整S或STEP通过。
++
++## 已完成及证据边界
++
++source和compat原CID串行应用批准的五表SELECT与retrieval_chunk_guard别名修补。完整旧受信目录先核，新shape为5b7dc68a94101307bcbd63a16607c5b2ee79906b5f32669d764853a55172dc12，014字节为3a919b2562ded5765de132519b841c1d1439c65c001795cfbd608cbc03586e78。真实管理员/角色/owner/SECURITY DEFINER/search_path、无写权与全部业务行/预算/原UNKNOWN不变已核。没有重跑001—014，没有改001—013、R01或用户库。首次compat目录拒绝由CRLF存入prosrc造成，原失败保留，按同一批准函数文本LF修正后通过。
++
++新检索诊断对照经正常入口、真实Windows监督/PG获得received；它不是原95a0b55e-b5fb-45d7-ad6e-310f3bc4b572的重试。旧UNKNOWN及预留只读保留。移除高成本诊断trace后本次正常提交成功，仍不把trace认定为旧UNKNOWN唯一根因。
++
++旧教学b7f32142-b5b3-4a5c-b561-f927bcbe1b6d实测已过deadline，保持revision16，不改期限或追造资格。明确新场景93852e50-f648-4cb1-a2e8-5f8283975567完成错答、针对练习/参考曝光、360及240新实例、末评价和理由，最终revision17；实际独立两份、辅助一份、evidence_sufficient。单节点路径无后继仍保留n1，现有理由却沿用“独立实例不足/辅助”文案，该矛盾单列待核，不冒实际推进或长期掌握。
++
++R+M选记忆面试06c8a779-a936-423d-9554-010f9ebcfb8e完成问题、一次probe、支持回答、反馈和finish，revision7/ended。先本地start再确认索引已真实执行。原长中文目标超过24词项令catalog返回500，已使混合词项通道只取既定24词前缀，完整已绑定向量查询不改；严格旧词项入口继续拒超限。原未claim提问按保存正文hash及GET404由真实HTTP显式同键续交，没有冒用旧tab owner。
++
++两域回答/probe及一笔显式合成unknown保存后，按原正常启动器stdin/句柄停止应用，同source CID/卷/profile重新启动，GET原事实未自动POST，后续教学反馈及面试反馈已保存。PG在两次API之间由同一根控制器持续持有；本证据不冒PG进程重启。两域有UI和HTTP混合证据，未签完整最终U。
++
++C三类答案、P两类答案实际经HTTP/PG/Native持久；没有执行用户代码。Java歧义、火星不足和双源冲突实际提交在reason中，夹具误读proposal=None的失败保留，已从原HTTP回执核对，不重新POST。L08后续只选J-CODE的范围修订尚未完成。学习及v2面试真实dispatch后分别修订/撤销记忆，晚到query均invalidated/current=false；revision3正文purge done。独立第三次delete及最终前端晚到门仍缺。N-CONFLICT实际墓碑/清理已提交，chunk/embedding正文删除而调用及unknown费用元数据保留。
++
++## 实际修补与验证范围
++
++前端重开时，持久head先就绪而目标正文尚未载入，曾发空query并被后端400拒绝。现改为使用核过的持久目标，目标未就绪时禁ask/review/next。正式build6及typecheck通过，JS为index-BhHp87aG.js / 7df2e239f2a9f49b00fc25b70e45db678ec765b361af6fafcdf7835fcb98a2b1；真实HTTP核过全部4项字节。Browser5—8实际加载的是bundle5，不能移花到bundle6。Browser累计8已到门，本轮没有第9次。
++
++HTML资格ACL投影漏掉qualification_column_acls，曾导致capabilities503。只补批准SELECT的同一精确投影，真实普通PG HTML指纹及未知ACL拒绝通过；未放宽受信schema。随后正常API18复检在夹具错读DataContext.current_mode前退出，父feedback、artifact和真实宿主均未产生。preview create/start仍0，无本轮ACK/PNG/StopProof，不能写L10通过。
++
++新增两项词项边界断言通过；其它充分且未变的确定算法/旧协议验证直接继承，没有整批重跑。预览renderer、验签器、Job与退款主体及依赖锁未改。源码pre/diff/post、历史as-run差异和最终bundle身份分别见[最终manifest]({link('final-source-manifest.json')})、[差异]({link('source-changes.diff')})及[验证摘要]({link('validation-summary.json')})。新增辅助文件没有追造首次pre时间；复制夹具的旧S02命名、错误预览说明及字段错误在[纠正记录]({link('metadata-corrections.json')})如实分列，未改旧失败。
++
++## 恢复及当前真实阻断
++
++R02包真实发布，3938960字节、617行、101文件；含两个space、22份512维向量、53份received embedding，其中42份当前007与11份已删正文对应，两个unknown、非执行grant元数据和已删源overlay。向量SQL/Python float32摘要一致。这是源包事实，不是往返成功。
++
++hash-fault目标3728af48-e602-4960-a70c-75f315abb2bc按预期integrity_failed；有效目标8e7a206c-54cd-46de-a0ab-bb448f2bb7a1在restore._load组件逐行INSERT后超过30秒，operation_timeout。两者均failed、临时凭据撤销且精确停止，永久保留，不清空复用。实际慢SQL/组件根因未完全定位，不扩大30秒时限或拆事务假通过。PG物理对象/卷各5已满；成功往返还需先定位修正装载阻断，并由主控明确新的独立目标安排。
++
++R01目标05abc665-bbf9-4d41-abf0-7fc607049bf8继续保持旧链封印和原UPDATE42501事实，新reader应用GET/拒POST未完成。当前source的selector与fence均空，未激活R01/R02，源数据没有切成恢复副本。PDF原两次HTTP422及孤立两页成功原件保留；尚无足够新根因，不裸重试第三次，X01仍缺。
++
++28场景的S/PG/Native/HTTP/U及Q边界逐项见[唯一case-index]({str((E/'case-index.json').resolve())})。有真实T层成功及继承层成果，完整冻结场景/最终S仍未通过。Q未启用，本段真实供应商调用和实际费用均0；原AP2条件许可及历史费用账不改变。独立集中审计未执行，本人不自签。
++
++## 资源、时间与累计账
++
++本段新增真实根14、15、16，根内续作保留原首点/截止及每次失败；没有开根17或重跑旧root09/11/12/13。累计 {countline}。Native计数含原保守预记，未退款；当前各段数/上限、PG并集及实际超额见[最终账观察]({link('final-budget-observed.json')})，唯一主账仍原budget.json/events.jsonl。
++
++S01活动37651.0027854/持有16219.360/offline1724.875及原超额保留；S02交回活动17303.702146/持有5702.094/offline821.686保留。S03本次观察elapsed {elapsed:.3f}秒，对21600门超{max(0,elapsed-21600):.3f}秒；保守持有{runtime:.3f}秒，已登记offline {offline:.3f}秒，对3000门超{max(0,offline-3000):.3f}秒。中断时所有资源已停，用户接续间隔不冒真实运行或离线投入；原elapsed门未重置，所以恢复后仅保存/核查，没有再启业务。S03最初首工具漏同步采钟，已从本线程记录恢复首工具UTC，可靠QPC另存；更早许可时刻的保守活动下界不退款，不冒严格满足首采要求。
++
++最新独立只读停止核查核过五只PG均Running=false/Pid0、全部S02/S03注册API/Node原birth已退出、完整{stop['complete_Win32_Process_inventory']['rows']}项进程清单无cached Chromium/子孙、固定15481—15485及18118无监听。所有旧数据、卷、失败、原始报告保留，无在途资源。确切CID/birth/端口及原件sha见[停止绑定]({link('final-resource-stop-binding.json')})。当前没有因平台自动审批额度遭拒的动作，不把未完归为Sol账号问题。
++
++交回主控的最小待决为R02装载阻断与新独立目标、最终bundle6 U与固定宿主/PDF/R01应用补证的定向安排；不建议整批重跑或再单纯增加入口。共享DocuS/任务卡/裁定及Git未写，正式进度/缺陷严重度和最终裁定留主控同步。
++
++## 以下完整保留S02及S01原件
++
++'''
++    report.write_bytes(prefix.encode('utf-8')+raw)
++    result_id=identity(report);assert report.read_bytes().endswith(raw)
++    disposition={'sample':c.sample(),'permit':s['permit'],'result':str(report),'result_identity':result_id,'status':'partial_returned_time_gate_closed','stable_S':False,'all_resources_stopped':True,'business_authorization_returned':True,'old31949_bytes_suffix_preserved':True}
++    v['phase']='S03_returned_partial';v['s03_return_disposition']=disposition
++    for segment in v['segments']:
++        if segment['permit']==s['permit']:segment['return_disposition']=disposition
++    c.write(E/'budget.json',v);c.event('S03_returned_partial',result=str(report),sha256=result_id['sha256'],all_stopped=True,business_restarted_after_time_gate=False)
++    c.write(N/'result-save-receipt.json',disposition)
++    c.write(N/'final-binding.json',{'sample':c.sample(),'result':result_id,'source_manifest':identity(N/'final-source-manifest.json'),'case_index':identity(E/'case-index.json'),'budget':identity(E/'budget.json'),'stop':stop_binding,'Q':'NOT_ENABLED'})
++    for row in rows:assert identity(R/row['path'])==row['post'],row['path']
++    assert report.read_bytes()[-31949:]==raw
++    c.write(N/'final-readback.json',{'sample':c.sample(),'report':str(report),'report_identity':identity(report),'old_result_suffix_exact':True,'source_identities_checked':len(rows),'case_count':28,'bundle6_files':len(bundle['files']),'all_stopped':True,'public_locked_rules':len(rules),'stable_S':False})
++    print(json.dumps({'result':str(report),'bytes':result_id['bytes'],'sha256':result_id['sha256'],'source_identities':len(rows),'case_count':28,'all_stopped':True,'stable_S':False,'S03_offline':offline},ensure_ascii=False))
++if __name__=='__main__':main()
+--- /dev/null
++++ S03-new/DocuN/evidence/TASK-117/execution/continuation-02/frozen_http.py
+@@ -0,0 +1,106 @@
++"""冻结合成输入的真实HTTP适配；不替换服务端响应，不自动重交已COMMIT动作。"""
++from pathlib import Path
++import sys,json,hashlib,time
++from uuid import uuid4
++C01=Path(__file__).resolve().parent;EXEC=C01.parent;ROOT=EXEC.parents[3]
++sys.path.insert(0,str(EXEC))
++import control as c
++import httpx
++SAMPLES=json.loads((ROOT/'DocuN/evidence/TASK-116/design/sample-inputs.json').read_text(encoding='utf-8'))
++
++
++def two_page_pdf():
++    texts=[SAMPLES['pdf_definition'][k] for k in ('page1_text','page2_text')]
++    objects=[b'<< /Type /Catalog /Pages 2 0 R >>',b'<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>']
++    for i,text in enumerate(texts):
++        objects.append(f'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> /Contents {4+2*i} 0 R >>'.encode())
++        stream=('BT /F1 12 Tf 50 700 Td ('+text.replace('\\','\\\\').replace('(','\\(').replace(')','\\)')+') Tj ET').encode('ascii')
++        objects.append(f'<< /Length {len(stream)} >>\nstream\n'.encode()+stream+b'\nendstream')
++    objects.append(b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>')
++    data=bytearray(b'%PDF-1.4\n');offsets=[0]
++    for i,obj in enumerate(objects,1):offsets.append(len(data));data.extend(f'{i} 0 obj\n'.encode()+obj+b'\nendobj\n')
++    xref=len(data);data.extend(f'xref\n0 {len(objects)+1}\n0000000000 65535 f \n'.encode())
++    for n in offsets[1:]:data.extend(f'{n:010d} 00000 n \n'.encode())
++    data.extend(f'trailer\n<< /Size {len(objects)+1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n'.encode())
++    return bytes(data)
++
++
++class FrozenFlow:
++    def __init__(self,label):
++        self.label=label;self.folder=C01/label;self.folder.mkdir(exist_ok=True)
++        if (self.folder/'proof.json').exists():
++            (self.folder/('proof-before-'+str(time.time_ns())+'.json')).write_bytes((self.folder/'proof.json').read_bytes())
++        self.client=httpx.Client(base_url='http://127.0.0.1:18118',timeout=105,trust_env=False)
++        self.proof={'schema':'TASK117.S02.http.v1','label':label,'commands':[],'checks':[],'real_provider_calls':0,'actual_fee':0,'Q':'NOT_ENABLED'}
++        session=self.call('GET','/api/session');self.client.headers['X-RetroLume-Session']=session['token']
++        self.client.headers['X-RetroLume-Data-Context']=json.dumps(session['data_context'],ensure_ascii=False,sort_keys=True,separators=(',',':'))
++    def save(self):c.write(self.folder/'proof.json',self.proof)
++    def close(self):self.save();self.client.close()
++    def call(self,method,path,body=None,*,expected=200,native=0,content=None):
++        c.guard();c.count('http')
++        if native:c.count('native_windows',native)
++        r=self.client.request(method,path,json=body) if content is None else self.client.request(method,path,content=content)
++        try:value=r.json()
++        except ValueError:value={'bytes':len(r.content),'sha256':c.sha(r.content)}
++        logged_body={**body,'input_owner_key':'<ephemeral-not-persisted>'} if isinstance(body,dict) and 'input_owner_key' in body else body
++        if path!='/api/session':c.write(self.folder/(str(time.time_ns())+'.json'),{'method':method,'path':path,'request':logged_body,'content_sha256':c.sha(content) if content is not None else None,'status':r.status_code,'response':value})
++        if r.status_code!=expected:raise RuntimeError(f'HTTP_{r.status_code}:{path}:{str(value)[:250]}')
++        return value
++    def prepare(self,*,pdf=False):
++        identities=[{'alias':s['alias'],'filename':s['filename'],'bytes':len(s['text'].encode()),'sha256':c.sha(s['text'].encode())} for s in SAMPLES['sources']]
++        raw=two_page_pdf();(self.folder/'PDF-2.pdf').write_bytes(raw)
++        identities.append({'alias':'PDF-2','filename':SAMPLES['pdf_definition']['filename'],'bytes':len(raw),'sha256':c.sha(raw)})
++        identity_file=self.folder/'inputs-before-upload.json'
++        if identity_file.exists():assert json.loads(identity_file.read_text())['inputs']==identities
++        else:c.write(identity_file,{'sample':c.sample(),'inputs':identities})
++        rows=self.call('GET','/api/materials')['items'];mapping={}
++        from urllib.parse import quote
++        for source,identity in zip(SAMPLES['sources'],identities):
++            existing=next((r for r in rows if r['sha256']==identity['sha256'] and r['title']==source['filename']),None)
++            mapping[source['alias']]=existing or self.call('POST','/api/materials?filename='+quote(source['filename']),content=source['text'].encode())['material']
++        prior_invalid=any(json.loads(p.read_text()).get('path')=='/api/materials?filename=invalid-utf8.md' and json.loads(p.read_text()).get('status')==422 for p in self.folder.glob('*.json') if p.name not in ('proof.json','inputs-before-upload.json'))
++        if not prior_invalid:self.call('POST','/api/materials?filename=invalid-utf8.md',content=b'\xff\xfe',expected=422)
++        if pdf:
++            c.count('native_windows')
++            candidate=self.call('POST','/api/materials?filename='+quote(SAMPLES['pdf_definition']['filename']),content=raw)['candidate']
++            cid=candidate['candidate_id'];vid=candidate['version_id']
++            self.call('POST',f'/api/pdf-candidates/{cid}/confirm',{'version_id':vid,'pages':[{'physical_page':1,'reviewed':True},{'physical_page':2,'reviewed':False}]},expected=422)
++            mapping['PDF-2']=self.call('POST',f'/api/pdf-candidates/{cid}/confirm',{'version_id':vid,'pages':[{'physical_page':1,'reviewed':True},{'physical_page':2,'reviewed':True,'supplement':'用户独立补充：本页分钟须换秒，不代替原页。'}]})['material']
++        else:self.proof['checks'].append({'case':'X01/PDF-2','status':'UNRESOLVED','reason':'两次真实HTTP解析失败保留；当前补充不修复/不重试PDF，独立MD继续'})
++        self.proof['sources']=mapping;c.write(C01/'frozen-source-bindings.json',mapping)
++        if (C01/'frozen-memory-binding.json').exists():return mapping,self.call('GET','/api/memories/'+json.loads((C01/'frozen-memory-binding.json').read_text())['memory_id'])
++        mid=str(uuid4());key=str(uuid4())
++        self.call('POST','/api/memories/commands',{'business_key':key,'memory_id':mid,'expected_revision':0,'action':'save','body':{'kind':'preference','title':'S02偏好','text':SAMPLES['inputs']['memory_body']}})
++        memory=self.call('GET','/api/memories/'+mid)
++        self.proof['memory']=memory;c.write(C01/'frozen-memory-binding.json',memory);self.save()
++        return mapping,memory
++    def create(self,sources,memory=None):
++        body={'activity_id':str(uuid4()),'source_ids':[r['id'] for r in sources],'expected_sources':[{'source_id':r['id'],'version_id':r['version_id'],'revision':r['revision']} for r in sources]}
++        if memory:body['memory_selection']={'confirmed':True,'entries':[{k:memory[k] for k in ('memory_id','version','revision','body_sha256')}]}
++        self.call('POST','/api/activities',body);return body['activity_id']
++    def index(self,aid):
++        status=self.call('GET',f'/api/activities/{aid}/retrieval/status')
++        if not status.get('ready'):
++            receipt=self.call('POST',f'/api/activities/{aid}/retrieval/commands',{'business_key':str(uuid4()),'action':'source_index','expected_scope_revision':status['scope_revision'],'expected_domain_revision':status['domain_revision'],'confirmed':True},native=status['index_batches'])
++            assert receipt['terminal_disposition'] in ('received','cache_ready'),receipt
++    def query(self,aid,head,query):
++        value=self.call('POST',f'/api/activities/{aid}/retrieval/commands',{'business_key':str(uuid4()),'action':'query','expected_scope_revision':head.get('scope_revision',1),'expected_domain_revision':head['revision'],'query':query,'confirmed':True},native=1)
++        assert value.get('current') and value['terminal_disposition']=='received',value
++        return value['retrieval_ref']
++    def teaching(self,aid,action,body,*,query='平均速度 分钟换秒 米每秒'):
++        workspace=self.call('GET',f'/api/activities/{aid}/teaching/workspace');h=workspace['head']
++        scope=self.call('GET',f'/api/activities/{aid}')['activity']['scope_revision'];h={**h,'scope_revision':scope}
++        command={'business_key':str(uuid4()),'expected_revision':h['revision'],'expected_goal_version':h['goal_version'],'expected_scope_revision':scope,'action':action,'body':body}
++        if action in ('plan','exercise','evaluate'):command['retrieval_ref']=self.query(aid,h,query)
++        receipt=self.call('POST',f'/api/activities/{aid}/teaching/commands',command,native=int(action in ('plan','exercise','evaluate','calculate')))
++        self.proof['commands'].append({'activity_id':aid,'domain':'teaching','command':command,'receipt':receipt});self.save()
++        assert receipt['status']=='committed',receipt
++        return self.call('GET',f'/api/activities/{aid}/teaching/workspace')
++    def interview(self,aid,action,body):
++        workspace=self.call('GET',f'/api/activities/{aid}/interview/workspace');h=workspace.get('head') or {}
++        command={'schema':'interview.command.v2','business_key':str(uuid4()),'expected_head_revision':h.get('revision',0),'expected_goal_version':h.get('goal_version',0),'expected_scope_revision':h.get('scope_revision',1),'action':action,'body':body,'retrieval_ref':None}
++        if action in ('ask','review'):command['retrieval_ref']=self.query(aid,h,'虚构接口 缓存路径 个人分工 合成测量 耗时')
++        receipt=self.call('POST',f'/api/activities/{aid}/interview/commands',command,native=int(action in ('ask','review')))
++        self.proof['commands'].append({'activity_id':aid,'domain':'interview','command':command,'receipt':receipt});self.save()
++        assert receipt['status']=='committed',receipt
++        return self.call('GET',f'/api/activities/{aid}/interview/workspace')
+--- /dev/null
++++ S03-new/DocuN/evidence/TASK-117/execution/continuation-02/html_catalog_check.py
+@@ -0,0 +1,30 @@
++"""只读核当前根16 source的HTML目录投影，不启资源或执行模型。"""
++from batch_runtime import *
++import asyncio,copy
++import psycopg
++from psycopg.rows import dict_row
++from app.activities.repository import PostgresAdmissionLedger
++from app.runtime import psycopg_compatible_loop_factory
++from app.data_exit.schema_checks import legacy_business_shape,normalize_html_qualification
++from app.data_exit.contracts import DataError
++
++async def check():
++    ledger=PostgresAdmissionLedger(rc.dsn('source'));ledger.data_enabled=True
++    async with await psycopg.AsyncConnection.connect(rc.dsn('source'),connect_timeout=3,row_factory=dict_row) as db:
++        await db.execute("BEGIN READ ONLY");await db.execute("SET LOCAL statement_timeout='3s'")
++        shape=await ledger.html_schema_shape(db)
++        c.write(C01/'HTML-actual-catalog.json',shape)
++        await ledger._html_assert_schema(db)
++        # 非批准写权必须仍失败，不把新授权自动学成基线。
++        forged=copy.deepcopy(shape);row=forged['qualification_column_acls'][0]
++        row['table_acl']=row['table_acl'][:-1]+',retrolume_interview_owner=w/unknown}'
++        cursor=await db.execute("SELECT c.relname,r.rolname AS owner FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_roles r ON r.oid=c.relowner WHERE n.nspname='public' AND c.relname IN ('pdf_review_candidates','pdf_review_pages','pdf_extracted_pages')")
++        owners={r['relname']:r['owner'] for r in await cursor.fetchall()}
++        normalize_html_qualification(legacy_business_shape(shape),owners)
++        try:normalize_html_qualification(legacy_business_shape(forged),owners)
++        except DataError:closed=True
++        else:raise AssertionError('未知ACL不能通过')
++        c.write(C01/'HTML-catalog-real-PG-check.json',{'sample':c.sample(),'normal_app_role':True,'exact_trusted_HTML_fingerprint':True,'unknown_write_grant_rejected':closed,'new_R02_shape_unchanged':True,'HTTP_host':'NOT_RUN for this code; running API holds older module','resources_started':0})
++        print('Actual PG HTML fingerprint passed; unknown ACL rejected; no execution resources started')
++if __name__=='__main__':
++    with asyncio.Runner(loop_factory=psycopg_compatible_loop_factory) as runner:runner.run(check())
+--- /dev/null
++++ S03-new/DocuN/evidence/TASK-117/execution/continuation-02/http_remaining.py
+@@ -0,0 +1,144 @@
++"""冻结S余项，只调用真实API/PG；输入与结果保存，合成回复不冒Q语义。"""
++from batch_runtime import *
++from frozen_http import SAMPLES
++from uuid import uuid4
++from datetime import datetime,timedelta,timezone
++from concurrent.futures import ThreadPoolExecutor
++import traceback
++
++def case(name,operation,*,layer='real_HTTP_PG_Windows_with_lowest_synthetic_transport'):
++    c.guard()
++    try:
++        value=operation();c.write(C01/(name+'.json'),{'sample':c.sample(),'status':'passed_at_stated_layer','layer':layer,'Q':'NOT_RUN','result':value});return value
++    except Exception as exc:
++        c.failure('S02-'+name,type(exc).__name__+':'+str(exc)[:250],effect='保存实际输入/回执；停止该受影响例，不重发已提交步骤')
++        (C01/(name+'-error.txt')).write_text(traceback.format_exc(),encoding='utf-8');return None
++
++def evaluate(flow,aid):
++    h=flow.call('GET',f'/api/activities/{aid}/teaching/workspace')['head']
++    return flow.teaching(aid,'evaluate',{'confirmed':True,'exercise_record_id':h['exercise_record_id'],'answer_record_id':h['answer_record_id']})
++
++def interview_before(flow,mapping,memory,aid=None):
++    marker=C01/'interview-before-normal-reopen.json'
++    if marker.exists():return json.loads(marker.read_text())['activity_id']
++    if aid is None:aid=flow.create([mapping['R'],mapping['M']],memory)
++    w=flow.call('GET',f'/api/activities/{aid}/interview/workspace')
++    if not w.get('head'):w=flow.interview(aid,'start',{'goal':{'target':SAMPLES['inputs']['interview_goal'],'focus':None,'clarifications':[],'material_roles':[{'source_id':mapping['R']['id'],'role':'resume'},{'source_id':mapping['M']['id'],'role':'measurement'}]}})
++    flow.index(aid)
++    if w['head']['phase']=='ready':w=flow.interview(aid,'ask',{'mode':'first'})
++    if w['head']['phase']=='question_ready' and w['head']['probe_depth']==0:w=flow.interview(aid,'answer',{'question_record_id':w['head']['current_question_id'],'text':SAMPLES['inputs']['interview_incomplete_answer']})
++    if w['head']['phase']=='answer_ready' and w['head']['probe_depth']==0:w=flow.interview(aid,'review',{'question_record_id':w['head']['current_question_id'],'answer_record_id':w['head']['current_answer_id']})
++    assert w['head']['probe_depth']<=2
++    if w['head']['phase']=='question_ready':w=flow.interview(aid,'answer',{'question_record_id':w['head']['current_question_id'],'text':SAMPLES['inputs']['interview_supported_answer']})
++    c.write(marker,{'activity_id':aid,'workspace':w,'memory_id':memory['memory_id']});return aid
++
++def interview_after(flow,aid):
++    w=flow.call('GET',f'/api/activities/{aid}/interview/workspace')
++    w=flow.interview(aid,'review',{'question_record_id':w['head']['current_question_id'],'answer_record_id':w['head']['current_answer_id']})
++    w=flow.interview(aid,'finish',{})
++    assert w['head']['phase']=='ended';return w
++
++def setup_teaching(flow,sources,goal):
++    aid=flow.create(sources);flow.index(aid)
++    w=flow.teaching(aid,'goal',{'goal':goal});w=flow.teaching(aid,'plan',{'confirmed':True},query=goal)
++    return aid,w
++
++def variants(flow,mapping,alias,goal,answers):
++    aid,w=setup_teaching(flow,[mapping[alias]],goal)
++    w=flow.teaching(aid,'accept_path',{'proposal_record_id':w['proposal']['record_id']})
++    w=flow.teaching(aid,'select_node',{'path_record_id':w['head']['path_record_id'],'node_id':'n1'})
++    w=flow.teaching(aid,'exercise',{'confirmed':True,'path_record_id':w['head']['path_record_id'],'node_id':'n1','purpose':'initial'},query=goal)
++    results=[]
++    for answer in answers:
++        h=w['head'];body={'exercise_record_id':h['exercise_record_id'],'kind':'initial' if not results else 'revision','text':answer}
++        if results:body['supersedes_answer_record_id']=h['answer_record_id']
++        w=flow.teaching(aid,'answer',body);w=evaluate(flow,aid)
++        assert w['feedback']['qualification']=='current'
++        results.append({'answer':answer,'answer_id':w['head']['answer_record_id'],'feedback':w['feedback'],'reason':w.get('reason')})
++    return {'activity_id':aid,'alias':alias,'answers':results,'open_semantics':'Q_NOT_RUN','program_execution':False}
++
++def neutral(flow,mapping,aliases,goal,expected):
++    aid,w=setup_teaching(flow,[mapping[a] for a in aliases],goal)
++    assert w['proposal']['result_type']==expected,w['proposal']
++    return {'activity_id':aid,'workspace':w,'expected':expected}
++
++def raw_post(flow,path,body):
++    c.count('http');r=flow.client.post(path,json=body);value=r.json()
++    c.write(flow.folder/(str(time.time_ns())+'.json'),{'method':'POST','path':path,'request':body,'status':r.status_code,'response':value})
++    return r.status_code,value
++
++def budget_and_keys(flow,mapping):
++    import asyncio,psycopg
++    from psycopg.rows import dict_row
++    from app.activities.repository import ActivitySpec,SourceSnapshot,PostgresAdmissionLedger
++    from app.runtime import psycopg_compatible_loop_factory
++    from app.retrieval.contracts import space_identity
++    aid=str(uuid4());source=mapping['N'];metadata_grant=c.sha(b'TASK117 S02 non-executable grant metadata; Q never enabled')
++    spec=ActivitySpec(activity_id=aid,sources=(SourceSnapshot(source['id'],source['version_id'],source['revision']),),deadline_at=datetime.now(timezone.utc)+timedelta(hours=2),max_requests=1,max_cost_microunits=250000,reserve_cost_microunits=250000,max_request_bytes=65536,max_output_tokens=2048,max_running_seconds=3600,allowed_models=(('deepseek_chat_completions','deepseek-chat'),),outbound_grant_sha256=metadata_grant)
++    with asyncio.Runner(loop_factory=psycopg_compatible_loop_factory) as runner:runner.run(PostgresAdmissionLedger(rc.dsn('source')).create_activity(spec))
++    # A second isolated space is metadata only, never configured as an external capability.
++    with psycopg.connect(rc.dsn('source'),row_factory=dict_row) as db:
++        second=space_identity('zhipu_embeddings','S02-unused-metadata')
++        db.execute("INSERT INTO retrieval_spaces(space_id,provider,configured_model,dimensions,normalization,chunk_recipe) VALUES(%s,'zhipu_embeddings','S02-unused-metadata',512,'l2.v1','lossless-line-2048cp.v1') ON CONFLICT DO NOTHING",(second,))
++    path=f'/api/activities/{aid}/teaching/commands';body={'business_key':str(uuid4()),'expected_revision':0,'expected_goal_version':0,'expected_scope_revision':1,'action':'goal','body':{'goal':'平均速度的分钟换秒'}}
++    c.count('http',2)
++    def post():
++        r=flow.client.post(path,json=body);return {'status':r.status_code,'body':r.json()}
++    with ThreadPoolExecutor(max_workers=2) as pool:concurrent=list(pool.map(lambda _:post(),range(2)))
++    assert all(r['status']==200 and r['body']['status']=='committed' for r in concurrent),concurrent
++    code,conflict=raw_post(flow,path,{**body,'body':{'goal':'同键异文应拒绝'}});assert code==409
++    status=flow.call('GET',f'/api/activities/{aid}/retrieval/status');flow.index(aid)
++    code,refusal=raw_post(flow,f'/api/activities/{aid}/retrieval/commands',{'business_key':str(uuid4()),'action':'query','expected_scope_revision':1,'expected_domain_revision':status['domain_revision'],'query':'平均速度','confirmed':True});assert code==409 and 'retrieval_workflow_budget_insufficient' in str(refusal)
++    with psycopg.connect(rc.dsn('source'),row_factory=dict_row) as db:
++        row=db.execute('SELECT requests_reserved,cost_reserved_microunits,outbound_grant_sha256 FROM activities WHERE id=%s',(aid,)).fetchone()
++        assert row['requests_reserved']==row['cost_reserved_microunits']==0
++        assert db.execute("SELECT count(*) AS n FROM retrieval_commands WHERE activity_id=%s AND action='query'",(aid,)).fetchone()['n']==0
++        assert db.execute("SELECT count(*) AS n FROM teaching_records WHERE activity_id=%s AND kind='goal'",(aid,)).fetchone()['n']==1
++    return {'activity_id':aid,'same_key_concurrent':concurrent,'different_body':conflict,'query_then_model_refusal':refusal,'budget_after':row,'second_space_id':second,'grant_metadata_only':True,'Q_roster_created':0}
++
++def late_memory(flow,mapping,memory,learning_aid):
++    mid=memory['memory_id'];gates=C01/'late-transport';gates.mkdir(exist_ok=True);results=[]
++    for action in ('revise','revoke'):
++        current=flow.call('GET','/api/memories/'+mid)
++        if action=='revise':aid=learning_aid
++        else:
++            aid=flow.create([mapping['R'],mapping['M']],current)
++            flow.interview(aid,'start',{'goal':{'target':SAMPLES['inputs']['interview_goal'],'material_roles':[{'source_id':mapping['R']['id'],'role':'resume'},{'source_id':mapping['M']['id'],'role':'measurement'}]}})
++            flow.index(aid)
++        status=flow.call('GET',f'/api/activities/{aid}/retrieval/status')
++        for path in (gates/'ready.json',gates/'release'):path.unlink(missing_ok=True)
++        command={'business_key':str(uuid4()),'action':'query','expected_scope_revision':status['scope_revision'],'expected_domain_revision':status['domain_revision'],'query':'S02晚到记忆','confirmed':True}
++        c.count('http');c.count('native_windows')
++        with ThreadPoolExecutor(max_workers=1) as pool:
++            future=pool.submit(flow.client.post,f'/api/activities/{aid}/retrieval/commands',json=command)
++            try:
++                end=time.monotonic()+28
++                while not(gates/'ready.json').exists():
++                    if future.done() or time.monotonic()>=end:raise RuntimeError('late_transport_did_not_reach_dispatch')
++                    time.sleep(.05)
++                impact=flow.call('GET',f"/api/memories/{mid}/impact?expected_revision={current['revision']}&action={action}")
++                body={'title':'S02偏好','kind':'preference','text':SAMPLES['inputs']['memory_revised_body'],'base_body_sha256':current['body_sha256'],'impact_token':impact['impact_token']} if action=='revise' else {'impact_token':impact['impact_token'],'confirm_revoke':True,'purge_memory_content':True}
++                changed=flow.call('POST','/api/memories/commands',{'business_key':str(uuid4()),'memory_id':mid,'expected_revision':current['revision'],'action':action,'body':body})
++            finally:(gates/'release').write_text('release',encoding='ascii')
++            r=future.result(timeout=105);response=r.json()
++        assert not response.get('current'),response
++        selection=flow.call('GET',f'/api/activities/{aid}/memory-selection');assert not selection['eligible']
++        after=flow.call('GET','/api/memories/'+mid)
++        if action=='revoke':assert after['body'] is None and after['purge_state']=='done'
++        results.append({'action':action,'activity_id':aid,'query':command,'HTTP':r.status_code,'late_receipt':response,'change':changed,'selection':selection,'memory_after':after})
++        c.write(C01/'X02-late-memory-progress.json',results)
++    return results
++
++def delete_auxiliary(flow):
++    import psycopg
++    from psycopg.rows import dict_row
++    unknown=json.loads((C01/'unknown-before-normal-reopen.json').read_text());sid=unknown['source_id']
++    material=next(x for x in flow.call('GET','/api/materials')['items'] if x['id']==sid)
++    impact=flow.call('POST',f'/api/data/materials/{sid}/deletion-preview',{'expected_revision':material['revision']})
++    deleted=flow.call('POST',f'/api/data/materials/{sid}/deletions',{'expected_revision':material['revision'],'impact_sha256':impact['impact_sha256'],'business_key':str(uuid4()),'confirm':True})
++    with psycopg.connect(rc.dsn('source'),row_factory=dict_row) as db:
++        chunks=db.execute('SELECT count(*) AS n FROM retrieval_chunks WHERE source_id=%s',(sid,)).fetchone()['n']
++        bodies=db.execute("SELECT count(*) AS n FROM activity_operation_results r JOIN activity_operations o USING(activity_id,operation_id) WHERE o.kind='embedding' AND o.activity_id=%s",(unknown['activity_id'],)).fetchone()['n']
++        tombstones=db.execute('SELECT count(*) AS n FROM data_tombstones WHERE entity_kind=\'source\' AND entity_id=%s',(sid,)).fetchone()['n']
++        assert chunks==bodies==0 and tombstones>=1
++    return {'source_id':sid,'impact':impact,'receipt':deleted,'remaining_chunks':chunks,'remaining_embedding_007':bodies,'tombstones':tombstones,'unknown_and_reserved_metadata_retained':True}
+--- /dev/null
++++ S03-new/DocuN/evidence/TASK-117/execution/continuation-02/inspect_catalog.py
+@@ -0,0 +1,21 @@
++"""根14同截止内只读定位实际已提交目录与批准派生目录的差异。"""
++from sql_and_commit import *
++def main():
++    preflight('root14-catalog-readback')
++    with Batch(14,'S03_SQL_catalog_readback'):
++        rc.start_pg('compat')
++        with psycopg.connect(rc.dsn('compat','admin'),row_factory=dict_row) as db:
++            shape={k:db.execute(q).fetchall() for k,q in extra_shape_queries().items()}
++            actual=normalized_extra_shape(shape)
++            expected=json.loads((OLD/'ordinary-db-fixes/derived-shape.json').read_text())
++            c.write(C01/'compat-actual-after-first-commit.json',{'sample':c.sample(),'shape':shape,'hash':c.sha(canonical(actual).encode())})
++            differences=[]
++            for k in sorted(set(actual)|set(expected)):
++                if actual.get(k)!=expected.get(k):
++                    a=actual.get(k);b=expected.get(k)
++                    differences.append({'section':k,'actual':a,'expected':b})
++            c.write(C01/'catalog-exact-differences.json',differences)
++            before=json.loads((C01/'compat-SQL-before.json').read_text())
++            assert snapshot(db)==before['data']
++            print(json.dumps({'actual':c.sha(canonical(actual).encode()),'expected':c.sha(canonical(expected).encode()),'different_sections':[x['section'] for x in differences],'business_unchanged':True}))
++if __name__=='__main__':main()
+--- /dev/null
++++ S03-new/DocuN/evidence/TASK-117/execution/continuation-02/inspect_entry.py
+@@ -0,0 +1,42 @@
++"""仅当前停止核查；不启动业务，不改历史回执，不从空PID查询推整树。"""
++from pathlib import Path
++import sys,json,subprocess,time
++N=Path(__file__).resolve().parent;EXEC=N.parent;C01=EXEC/'continuation-01';ROOT=EXEC.parents[3]
++sys.path[:0]=[str(EXEC),str(ROOT/'backend')]
++import control as c,runtime_control as rc
++from app.preview.process import birth
++
++def main(final=False):
++    # Public API resolves the cached browser root; inventory covers Chrome and headless shell.
++    code="console.log(JSON.stringify([require('playwright').chromium.executablePath()]))"
++    resolved=subprocess.run(['node','-e',code],cwd=ROOT/'frontend',capture_output=True,timeout=10,check=True)
++    programs=json.loads(resolved.stdout);assert len(programs)==1 and all(programs)
++    cache_root=str(Path(programs[0]).parents[2]).lower()
++    command="$ErrorActionPreference='Stop'; $rows=@(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,ExecutablePath); [pscustomobject]@{complete=$true;count=$rows.Count;rows=$rows} | ConvertTo-Json -Depth 4 -Compress"
++    result=subprocess.run(['powershell','-NoProfile','-Command',command],capture_output=True,timeout=30,check=True)
++    inventory=json.loads(result.stdout.decode('utf-8-sig'));assert inventory['complete'] and inventory['count']>20
++    browser_rows=[r for r in inventory['rows'] if (r.get('ExecutablePath') or '').lower().startswith(cache_root+'\\') and Path(r.get('ExecutablePath') or '').name.lower() in ('chrome.exe','chrome-headless-shell.exe','headless_shell.exe')]
++    descendants=[];parents={json.loads(p.read_text())['pid'] for p in C01.glob('browser-stop-*.json')} if final else {11104}
++    for _ in range(12):
++        new=[r for r in inventory['rows'] if r['ParentProcessId'] in parents and r['ProcessId'] not in parents]
++        if not new:break
++        descendants.extend(new);parents.update(r['ProcessId'] for r in new)
++    pg=[rc.metadata(r['cid']) for r in c.state()['resources'] if r.get('kind')=='pg' and r.get('cid')]
++    raw=subprocess.run(['powershell','-NoProfile','-Command',"$ErrorActionPreference='Stop'; @(Get-NetTCPConnection -State Listen | Where-Object {$_.LocalPort -in 15481,15482,15483,15484,15485,18118} | Select-Object LocalAddress,LocalPort,OwningProcess) | ConvertTo-Json -Compress"],capture_output=True,timeout=20,check=True).stdout.decode('utf-8-sig').strip()
++    listeners=json.loads(raw) if raw else []
++    originals=[]
++    for path in [*C01.glob('api-stop-*.json'),*C01.glob('browser-stop-*.json')]:
++        value=json.loads(path.read_text());originals.append({'pid':value['pid'],'birth_before':value['birth_before'],'evidence':str(path.relative_to(ROOT))})
++    if not final:originals=[r for r in originals if r['pid'] in (11104,4180)]
++    births={str(r['pid']):birth(r['pid']) for r in originals}
++    original_ended=all(births[str(r['pid'])]['state']=='exited' or (births[str(r['pid'])]['state']=='running' and type(births[str(r['pid'])].get('birth')) is int and births[str(r['pid'])]['birth']!=r['birth_before'].get('birth')) for r in originals)
++    stopped=original_ended and not descendants and not browser_rows and not listeners and all(not r['running'] and r['pid']==0 for r in pg)
++    proof={'sample':c.sample(),'all_stopped':stopped,'known_launch_births_now':births,'complete_Win32_Process_inventory':{'success':True,'rows':inventory['count'],'method':'successful full enumeration, adopted cached Chromium root and registered Node ancestry','chromium_paths':programs,'cache_root':cache_root,'matching_browser_processes':browser_rows,'node_descendants':descendants},'pg':pg,'listeners':listeners,'historical_browser_closed':'NOT_PROVED; original FAIL untouched','historical_cleanup':'UNCONFIRMED; original FAIL untouched','current_scope':'current absence of cached Chromium/Headless executables plus registered Node/API and full ancestry; does not reconstruct past close time','task_resources_started':0}
++    proof['original_launch_receipts']=originals
++    destination=N/'entry-stop.json'
++    if destination.exists():raise RuntimeError('preserve_existing_stop_evidence')
++    c.write(destination,proof)
++    print(json.dumps({'all_stopped':stopped,'process_inventory_rows':inventory['count'],'chromium_matches':len(browser_rows),'descendants':len(descendants),'births':births,'pg_running':[r['name'] for r in pg if r['running']],'fixed_listeners':listeners},ensure_ascii=False))
++    if not stopped:raise RuntimeError('current_stop_not_confirmed_read_exact_evidence')
++
++if __name__=='__main__':main(final='--final' in sys.argv)
+--- /dev/null
++++ S03-new/DocuN/evidence/TASK-117/execution/continuation-02/inspect_final.py
+@@ -0,0 +1,43 @@
++"""仅当前停止核查；不启动业务，不改历史回执，不从空PID查询推整树。"""
++from pathlib import Path
++import sys,json,subprocess,time
++N=Path(__file__).resolve().parent;EXEC=N.parent;C01=EXEC/'continuation-01';ROOT=EXEC.parents[3]
++sys.path[:0]=[str(EXEC),str(ROOT/'backend')]
++import control as c,runtime_control as rc
++from app.preview.process import birth
++
++def main(final=False):
++    # Public API resolves the cached browser root; inventory covers Chrome and headless shell.
++    code="console.log(JSON.stringify([require('playwright').chromium.executablePath()]))"
++    resolved=subprocess.run(['node','-e',code],cwd=ROOT/'frontend',capture_output=True,timeout=10,check=True)
++    programs=json.loads(resolved.stdout);assert len(programs)==1 and all(programs)
++    cache_root=str(Path(programs[0]).parents[2]).lower()
++    command="$ErrorActionPreference='Stop'; $rows=@(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,ExecutablePath); [pscustomobject]@{complete=$true;count=$rows.Count;rows=$rows} | ConvertTo-Json -Depth 4 -Compress"
++    result=subprocess.run(['powershell','-NoProfile','-Command',command],capture_output=True,timeout=30,check=True)
++    inventory=json.loads(result.stdout.decode('utf-8-sig'));assert inventory['complete'] and inventory['count']>20
++    browser_rows=[r for r in inventory['rows'] if (r.get('ExecutablePath') or '').lower().startswith(cache_root+'\\') and Path(r.get('ExecutablePath') or '').name.lower() in ('chrome.exe','chrome-headless-shell.exe','headless_shell.exe')]
++    descendants=[];parents={json.loads(p.read_text())['pid'] for base in (C01,N) for p in base.glob('browser-stop-*.json')} if final else {11104}
++    for _ in range(12):
++        new=[r for r in inventory['rows'] if r['ParentProcessId'] in parents and r['ProcessId'] not in parents]
++        if not new:break
++        descendants.extend(new);parents.update(r['ProcessId'] for r in new)
++    pg=[rc.metadata(r['cid']) for r in c.state()['resources'] if r.get('kind')=='pg' and r.get('cid')]
++    raw=subprocess.run(['powershell','-NoProfile','-Command',"$ErrorActionPreference='Stop'; @(Get-NetTCPConnection -State Listen | Where-Object {$_.LocalPort -in 15481,15482,15483,15484,15485,18118} | Select-Object LocalAddress,LocalPort,OwningProcess) | ConvertTo-Json -Compress"],capture_output=True,timeout=20,check=True).stdout.decode('utf-8-sig').strip()
++    listeners=json.loads(raw) if raw else []
++    originals=[]
++    for path in [p for base in (C01,N) for pattern in ('api-stop-*.json','browser-stop-*.json') for p in base.glob(pattern)]:
++        value=json.loads(path.read_text());originals.append({'pid':value['pid'],'birth_before':value['birth_before'],'evidence':str(path.relative_to(ROOT))})
++    if not final:originals=[r for r in originals if r['pid'] in (11104,4180)]
++    births={str(r['pid']):birth(r['pid']) for r in originals}
++    original_ended=all(births[str(r['pid'])]['state']=='exited' or (births[str(r['pid'])]['state']=='running' and type(births[str(r['pid'])].get('birth')) is int and births[str(r['pid'])]['birth']!=r['birth_before'].get('birth')) for r in originals)
++    stopped=original_ended and not descendants and not browser_rows and not listeners and all(not r['running'] and r['pid']==0 for r in pg)
++    proof={'sample':c.sample(),'all_stopped':stopped,'known_launch_births_now':births,'complete_Win32_Process_inventory':{'success':True,'rows':inventory['count'],'method':'successful full enumeration, adopted cached Chromium root and registered Node ancestry','chromium_paths':programs,'cache_root':cache_root,'matching_browser_processes':browser_rows,'node_descendants':descendants},'pg':pg,'listeners':listeners,'historical_browser_closed':'NOT_PROVED; original FAIL untouched','historical_cleanup':'UNCONFIRMED; original FAIL untouched','current_scope':'current absence of cached Chromium/Headless executables plus registered Node/API and full ancestry; does not reconstruct past close time','task_resources_started':0}
++    proof['original_launch_receipts']=originals
++    destination=N/('final-stop-'+str(time.time_ns())+'.json')
++    if destination.exists():raise RuntimeError('preserve_existing_stop_evidence')
++    c.write(destination,proof)
++    c.write(N/'final-resource-stop-binding.json',{'sample':c.sample(),'path':str(destination),'sha256':c.sha(destination.read_bytes()),'all_stopped':stopped})
++    print(json.dumps({'all_stopped':stopped,'process_inventory_rows':inventory['count'],'chromium_matches':len(browser_rows),'descendants':len(descendants),'births':births,'pg_running':[r['name'] for r in pg if r['running']],'fixed_listeners':listeners},ensure_ascii=False))
++    if not stopped:raise RuntimeError('current_stop_not_confirmed_read_exact_evidence')
++
++if __name__=='__main__':main(final='--final' in sys.argv)
+--- /dev/null
++++ S03-new/DocuN/evidence/TASK-117/execution/continuation-02/pg_remaining.py
+@@ -0,0 +1,81 @@
++"""不启动API/Browser/Native的真实普通角色PG定向余项；不冒HTTP或迟到门。"""
++from profiles_batch import *
++import asyncio,dataclasses
++from app.activities.repository import ActivitySpec,SourceSnapshot
++from app.learning.teaching_contracts import TeachingCommandInput,TeachingRefusal
++from app.retrieval.contracts import RetrievalCommandInput,RetrievalRefusal,space_identity
++from app.memory.contracts import MemorySelectionInput,MemoryCommandInput
++from app.memory.service import MemoryService
++from app.interview.contracts import parse_command
++from app.runtime import psycopg_compatible_loop_factory
++from datetime import datetime,timedelta,timezone
++
++def activity(mapping,aliases,*,one=False):
++    return ActivitySpec(activity_id=str(uuid4()),sources=tuple(SourceSnapshot(mapping[a]['id'],mapping[a]['version_id'],mapping[a]['revision']) for a in aliases),deadline_at=datetime.now(timezone.utc)+timedelta(hours=2),max_requests=1 if one else 80,max_cost_microunits=250000 if one else 20000000,reserve_cost_microunits=250000,max_request_bytes=65536,max_output_tokens=2048,max_running_seconds=3600,allowed_models=(('deepseek_chat_completions','deepseek-chat'),),outbound_grant_sha256=c.sha(b'S02 metadata only, never activated') if one else None)
++
++async def budget_keys(runtime,mapping):
++    ledger=runtime.app.state.activities_ledger;spec=activity(mapping,['N'],one=True)
++    await ledger.create_activity(spec)
++    command=TeachingCommandInput(business_key=str(uuid4()),expected_revision=0,expected_goal_version=0,expected_scope_revision=1,action='goal',body={'goal':'平均速度的分钟换秒'})
++    receipts=await asyncio.gather(*(ledger.apply_teaching_local(spec.activity_id,command) for _ in range(2)))
++    assert all(r.status=='committed' for r in receipts)
++    try:await ledger.apply_teaching_local(spec.activity_id,command.model_copy(update={'body':{'goal':'同键异文必须拒绝'}}))
++    except TeachingRefusal as exc:assert exc.code=='command_key_conflict'
++    else:raise AssertionError('different body accepted')
++    context=await ledger.retrieval_context(spec.activity_id)
++    query=RetrievalCommandInput(business_key=str(uuid4()),action='query',expected_scope_revision=1,expected_domain_revision=context['domain_revision'],query='平均速度',confirmed=True)
++    source=mapping['N'];refs=[{'source_id':source['id'],'source_version_id':source['version_id'],'source_revision':source['revision']}]
++    body={k:context[k] for k in ('domain','parent_refs','memory_selection_sha256','memory_dependency_sha256')}
++    try:await ledger.retrieval_freeze(spec.activity_id,query,body,{'space_id':space_identity('zhipu_embeddings','embedding-3'),'provider':'zhipu_embeddings','configured_model':'embedding-3'},[],1,refs,c.sha('平均速度'.encode()))
++    except RetrievalRefusal as exc:assert exc.code=='retrieval_workflow_budget_insufficient'
++    else:raise AssertionError('query then model admitted with one request')
++    with psycopg.connect(rc.dsn('source'),row_factory=dict_row) as db:
++        row=db.execute('SELECT requests_reserved,cost_reserved_microunits,outbound_grant_sha256 FROM activities WHERE id=%s',(spec.activity_id,)).fetchone()
++        assert row['requests_reserved']==row['cost_reserved_microunits']==0
++        assert db.execute("SELECT count(*) AS n FROM teaching_records WHERE activity_id=%s AND kind='goal'",(spec.activity_id,)).fetchone()['n']==1
++        assert db.execute('SELECT count(*) AS n FROM retrieval_commands WHERE activity_id=%s',(spec.activity_id,)).fetchone()['n']==0
++        db.execute('SELECT public.data_mutation_enter()')
++        second=space_identity('zhipu_embeddings','S02-unused-metadata')
++        db.execute("INSERT INTO retrieval_spaces(space_id,provider,configured_model,dimensions,normalization,chunk_recipe) VALUES(%s,'zhipu_embeddings','S02-unused-metadata',512,'l2.v1','lossless-line-2048cp.v1') ON CONFLICT DO NOTHING",(second,))
++    from app.retrieval.repository import plain
++    return {'activity_id':spec.activity_id,'same_key_concurrent_receipts':[plain(dataclasses.asdict(r)) if dataclasses.is_dataclass(r) else r.model_dump(mode='json') for r in receipts],'budget':row,'retrieval_commands_inserted':0,'second_space':second,'metadata_only_grant':True,'Q_roster_created':0,'Native_windows':0,'layer':'real PG, no HTTP/UI/concurrency claim for global paid roster'}
++
++async def memory_changes(runtime,mapping):
++    ledger=runtime.app.state.activities_ledger;service=MemoryService(ledger)
++    mid=json.loads((C01/'frozen-memory-binding.json').read_text())['memory_id']
++    learning=json.loads((C01/'memory-teaching-before-reopen.json').read_text())['activity_id'];results=[]
++    for action in ('revise','revoke'):
++        memory=await ledger.read_memory_snapshot(mid)
++        spec=activity(mapping,['R','M'])
++        selection=MemorySelectionInput(confirmed=True,entries=[{k:memory[k] for k in ('memory_id','version','revision','body_sha256')}])
++        await ledger.create_activity(spec,memory_selection=selection)
++        start=parse_command({'schema':'interview.command.v2','business_key':str(uuid4()),'expected_head_revision':0,'expected_goal_version':0,'expected_scope_revision':1,'action':'start','body':{'goal':{'target':'冻结合成R+M面试的本地记忆资格','material_roles':[{'source_id':mapping['R']['id'],'role':'resume'},{'source_id':mapping['M']['id'],'role':'measurement'}]}},'retrieval_ref':None})
++        await ledger.apply_interview_local(spec.activity_id,start)
++        assert (await ledger.retrieval_context(spec.activity_id))['current']
++        impact=await ledger.preview_memory_change(mid,memory['revision'],action)
++        if action=='revise':
++            samples=json.loads((ROOT/'DocuN/evidence/TASK-116/design/sample-inputs.json').read_text())
++            body={'kind':'preference','title':'S02偏好','text':samples['inputs']['memory_revised_body'],'base_body_sha256':memory['body_sha256'],'impact_token':impact['impact_token']}
++        else:body={'impact_token':impact['impact_token'],'confirm_revoke':True,'purge_memory_content':True}
++        receipt=await service.submit_command(MemoryCommandInput(business_key=str(uuid4()),memory_id=mid,expected_revision=memory['revision'],action=action,body=body))
++        contexts={aid:await ledger.retrieval_context(aid) for aid in (learning,spec.activity_id)}
++        assert all(not r['current'] for r in contexts.values())
++        after=await ledger.read_memory_snapshot(mid)
++        if action=='revoke':assert after['body'] is None and after['purge_state']=='done'
++        results.append({'action':action,'memory_before':memory,'interview_id':spec.activity_id,'receipt':receipt,'contexts':contexts,'memory_after':after,'late_dispatch':'NOT_RUN; no Native launched','HTTP_browser':'NOT_RUN'})
++    return results
++
++async def delete_source(runtime):
++    unknown=json.loads((C01/'unknown-before-normal-reopen.json').read_text());sid=unknown['source_id']
++    with psycopg.connect(rc.dsn('source'),row_factory=dict_row) as db:revision=db.execute('SELECT revision FROM material_sources WHERE id=%s',(sid,)).fetchone()['revision']
++    impact=runtime.deletions.preview(sid,revision)
++    receipt=await runtime.deletions.confirm(sid,revision,impact['impact_sha256'],str(uuid4()))
++    with psycopg.connect(rc.dsn('source'),row_factory=dict_row) as db:
++        chunks=db.execute('SELECT count(*) AS n FROM retrieval_chunks WHERE source_id=%s',(sid,)).fetchone()['n']
++        bodies=db.execute("SELECT count(*) AS n FROM activity_operation_results r JOIN activity_operations o USING(activity_id,operation_id) WHERE o.kind='embedding' AND o.activity_id=%s",(unknown['activity_id'],)).fetchone()['n']
++        tombstones=db.execute("SELECT count(*) AS n FROM data_tombstones WHERE entity_kind='source' AND entity_id=%s",(sid,)).fetchone()['n']
++        assert chunks==bodies==0 and tombstones>=1
++    return {'source_id':sid,'impact':impact,'receipt':receipt,'remaining_chunks':chunks,'remaining_embedding_007':bodies,'tombstones':tombstones,'layer':'original product deletion service and actual PG, no HTTP/UI claim'}
++
++def run_async(operation):
++    with asyncio.Runner(loop_factory=psycopg_compatible_loop_factory) as runner:return runner.run(operation)
+--- /dev/null
++++ S03-new/DocuN/evidence/TASK-117/execution/continuation-02/preview_case.py
+@@ -0,0 +1,69 @@
++"""L10固定宿主分时实证；沿正常API、ACK/PNG及原StopProof，无新渲染权限。"""
++from batch_runtime import *
++from uuid import uuid4
++from app.preview.description import digest
++
++def run_preview(batch,flow,aid,artifact_id):
++    batch.close_browser()
++    rc.docker(['image','inspect',PREVIEW_IMAGE]);rc.memory_gate('L10-fixed-preview',stage='preview')
++    artifact=flow.call('GET',f'/api/activities/{aid}/html/artifacts/{artifact_id}')
++    holder={};folder=C01/'L10';folder.mkdir(exist_ok=True)
++    def proof():
++        pid=holder.get('preview_id')
++        if not pid:raise RuntimeError('preview_open_receipt_missing')
++        origin=EXEC/'synthetic/source-data/preview-control'/pid
++        source=origin/'supervisor-result.json'
++        if not source.exists():raise RuntimeError('preview_StopProof_not_published')
++        value=json.loads(source.read_text());p=value.get('proof') or {}
++        assert value['confirmed'] is True and p['tree_confirmation'] in ('private_pid_init_terminated','never_started')
++        assert p['owned_reaper_ended']
++        if p['tree_confirmation']=='private_pid_init_terminated':assert p['pipe_observation']['stdout_eof'] and p['pipe_observation']['stderr_eof']
++        for f in origin.glob('*.json'):
++            if f.name in ('registry.json','current.json'):continue
++            if f.name.startswith(('supervisor-result','supervisor-job-final','reaper-job-final','ready','kernel-premises','engine-observation')):
++                (folder/f.name).write_bytes(f.read_bytes())
++        batch.run.preview_running=False
++        return {'preview_id':pid,'StopProof_sha256':c.sha(source.read_bytes()),'cid':p['cid'],'confirmed':True}
++    # API lifespan owns the original preview controller; it stops it even on pressure/deadline.
++    batch.run.register('preview-owned-api-lifespan',batch.close_api,priority=50)
++    batch.run.register('preview-original-stop-proof',proof,priority=49)
++    owner=secrets.token_hex(32);flow.client.headers['X-RetroLume-Preview-Owner']=owner
++    c.count('preview_creates');c.count('preview_starts');batch.run.preview_running=True
++    opened=flow.call('POST',f'/api/activities/{aid}/html/artifacts/{artifact_id}/previews',{'start_key':str(uuid4()),'expected_artifact_sha256':artifact['artifact_sha256'],'input_owner_key':owner,'confirmed':True})
++    pid=opened['preview_id'];holder['preview_id']=pid;generation=opened['generation'];base=f'/api/activities/{aid}/html/previews/{pid}'
++    observations=[]
++    try:
++        deadline=min(time.monotonic()+32,batch.run.deadline)
++        while True:
++            status=flow.call('GET',base)
++            if status['state'] in ('ready','running'):break
++            if status['state'] in ('stopped','failed_unstarted','cleanup_unconfirmed') or time.monotonic()>=deadline:raise RuntimeError('preview_not_ready:'+status['state'])
++            time.sleep(.15)
++        def send(seq,event,expected=200):
++            result=flow.call('POST',base+'/inputs',{'preview_generation':generation,'seq':seq,'payload_sha256':digest(event),'event':event},expected=expected)
++            observations.append({'seq':seq,'event':event,'http':expected,'ack':result});return result
++        def speed(ack,value):
++            assert ack['accepted'] is True and next(r['value'] for r in ack['readouts'] if r['id']=='hout_speed')==value,ack
++        speed(send(1,{'type':'set_number','control_id':'hctl_time','value':'120'}),'1')
++        speed(send(2,{'type':'set_number','control_id':'hctl_time','value':'240'}),'0.5')
++        send(3,{'type':'set_number','control_id':'hctl_time','value':'0'},422)
++        send(3,{'type':'set_number','control_id':'hctl_undefined','value':'1'},422)
++        speed(send(3,{'type':'activate','action_id':'hact_reset'}),'1')
++        c.count('http');frame=flow.client.get(base+'/frames',params={'generation':generation,'after_seq':0})
++        assert frame.status_code==200 and frame.content.startswith(b'\x89PNG\r\n\x1a\n')
++        assert c.sha(frame.content)==frame.headers['X-Frame-Sha256']
++        (folder/'actual-frame.png').write_bytes(frame.content)
++        c.write(folder/'input-acks.json',{'activity_id':aid,'artifact_id':artifact_id,'artifact_sha256':artifact['artifact_sha256'],'parent':artifact['parent'],'observations':observations,'PNG_sha256':c.sha(frame.content),'sample':c.sample()})
++    finally:
++        try:
++            flow.call('POST',base+'/stop',{'generation':generation,'stop_key':str(uuid4()),'reason':'user'})
++            deadline=min(time.monotonic()+25,batch.run.deadline)
++            while time.monotonic()<deadline:
++                status=flow.call('GET',base)
++                if status['state']=='stopped':break
++                if status['state']=='cleanup_unconfirmed':raise RuntimeError('preview_cleanup_unconfirmed')
++                time.sleep(.15)
++            else:raise RuntimeError('preview_stop_unconfirmed')
++            proof()
++        finally:flow.client.headers.pop('X-RetroLume-Preview-Owner',None)
++
+--- /dev/null
++++ S03-new/DocuN/evidence/TASK-117/execution/continuation-02/preview_compat.py
+@@ -0,0 +1,37 @@
++"""根16原截止内修复后定向宿主验证，复用已获准且仍normal的compat原CID。"""
++from batch_runtime import *
++from frozen_http import FrozenFlow,SAMPLES
++from business import generate
++from preview_case import run_preview
++from uuid import uuid4
++from urllib.parse import quote
++import traceback
++
++def main():
++    preflight('root16-preview-ordinary-fix-recheck',preview=True)
++    c.write(C01/'preview-recheck-intent.json',{'sample':c.sample(),'root':16,'source_slot':'compat','reason':'HTML资格ACL投影遗漏已通过真实普通PG指纹修复。source已完成不可逆R02选择，不能回normal；复用本卡已修补且保留normal的原compat库建立独立纯合成N父反馈','inherited_L01_performance':False,'scope':'普通产品app、既有normal合成库、冻结N、一个新合法父feedback及固定宿主；不改R01/R02或旧迁移/旧业务行','API_remaining':19-c.state()['counts']['api_starts'],'PG_remaining':28-c.state()['counts']['pg_starts'],'Browser_started':0})
++    with Batch(16,'S03_root16_preview_after_catalog_repair') as batch:
++        rc.start_pg('compat');batch.start_api(source_slot='compat')
++        flow=FrozenFlow('root16-preview-compat')
++        try:
++            session=flow.call('GET','/api/session');assert session['data_context']['mode']=='normal'
++            source=next(s for s in SAMPLES['sources'] if s['alias']=='N')
++            rows=flow.call('GET','/api/materials')['items'];wanted=c.sha(source['text'].encode())
++            material=next((r for r in rows if r['sha256']==wanted and r['title']==source['filename']),None)
++            if material is None:material=flow.call('POST','/api/materials?filename='+quote(source['filename']),content=source['text'].encode())['material']
++            aid=flow.create([material]);c.write(C01/'preview-dedicated-parent-intent.json',{'activity_id':aid,'source_slot':'compat','source_id':material['id'],'purpose':'独立明确的固定预览合成父成果，不追认原L01资格','memory':None})
++            flow.index(aid);w=flow.teaching(aid,'goal',{'goal':'根据速度.md核对平均速度的分钟换秒。'})
++            w=flow.teaching(aid,'plan',{'confirmed':True})
++            w=flow.teaching(aid,'accept_path',{'proposal_record_id':w['proposal']['record_id']})
++            w=flow.teaching(aid,'select_node',{'path_record_id':w['head']['path_record_id'],'node_id':'n1'})
++            w=flow.teaching(aid,'exercise',{'confirmed':True,'path_record_id':w['head']['path_record_id'],'node_id':'n1','purpose':'initial'})
++            w=flow.teaching(aid,'answer',{'exercise_record_id':w['head']['exercise_record_id'],'kind':'initial','text':'1米每秒；2分钟是120秒，120米除以120秒。'})
++            w=flow.teaching(aid,'evaluate',{'confirmed':True,'exercise_record_id':w['head']['exercise_record_id'],'answer_record_id':w['head']['answer_record_id']})
++            artifact=generate(flow,aid);c.write(C01/'L10-repaired-parent-artifact.json',{'activity_id':aid,'feedback':w,'artifact':artifact,'normal_slot':'compat'})
++            run_preview(batch,flow,aid,artifact['artifact_id'])
++            c.write(C01/'L10-real-fixed-host-complete.json',{'sample':c.sample(),'activity_id':aid,'artifact_id':artifact['artifact_id'],'normal_slot':'compat','S_fixed_host':True,'U_application_browser':'NOT_RUN; cap8','Q':'NOT_ENABLED'})
++        finally:flow.close()
++if __name__=='__main__':
++    try:main()
++    except BaseException:
++        p=C01/('preview-recheck-failure-'+str(time.time_ns())+'.txt');p.write_text(traceback.format_exc(),encoding='utf-8');c.failure('S03-preview-recheck',p.name,effect='保存真实失败和自动清场，不换名重复运行');raise
+--- /dev/null
++++ S03-new/DocuN/evidence/TASK-117/execution/continuation-02/preview_source_and_r01.py
+@@ -0,0 +1,54 @@
++"""根16原截止内修复后定向宿主验证，复用仍normal的source原CID，最后查看既有R01。"""
++from batch_runtime import *
++from frozen_http import FrozenFlow,SAMPLES
++from business import generate
++from preview_case import run_preview
++from uuid import uuid4
++from urllib.parse import quote
++import traceback
++
++def main():
++    preflight('root16-preview-ordinary-fix-recheck',preview=True)
++    c.write(C01/'preview-recheck-intent.json',{'sample':c.sample(),'root':16,'source_slot':'source','reason':'HTML资格ACL投影遗漏已通过真实普通PG指纹修复。source已完成不可逆R02选择，不能回normal；复用本卡已修补且保留normal的原compat库建立独立纯合成N父反馈','inherited_L01_performance':False,'scope':'普通产品app、既有normal合成库、冻结N、一个新合法父feedback及固定宿主；不改R01/R02或旧迁移/旧业务行','API_remaining':19-c.state()['counts']['api_starts'],'PG_remaining':28-c.state()['counts']['pg_starts'],'Browser_started':0})
++    with Batch(16,'S03_root16_preview_after_catalog_repair') as batch:
++        rc.start_pg('source');batch.start_api(launcher=True)
++        flow=FrozenFlow('root16-preview-source')
++        try:
++            session=flow.call('GET','/api/session');assert session['data_context']['mode']=='normal'
++            source=next(s for s in SAMPLES['sources'] if s['alias']=='N')
++            rows=flow.call('GET','/api/materials')['items'];wanted=c.sha(source['text'].encode())
++            material=next((r for r in rows if r['sha256']==wanted and r['title']==source['filename']),None)
++            if material is None:material=flow.call('POST','/api/materials?filename='+quote(source['filename']),content=source['text'].encode())['material']
++            aid=flow.create([material]);c.write(C01/'preview-dedicated-parent-intent.json',{'activity_id':aid,'source_slot':'source','source_id':material['id'],'purpose':'独立明确的固定预览合成父成果，不追认原L01资格','memory':None})
++            flow.index(aid);w=flow.teaching(aid,'goal',{'goal':'根据速度.md核对平均速度的分钟换秒。'})
++            w=flow.teaching(aid,'plan',{'confirmed':True})
++            w=flow.teaching(aid,'accept_path',{'proposal_record_id':w['proposal']['record_id']})
++            w=flow.teaching(aid,'select_node',{'path_record_id':w['head']['path_record_id'],'node_id':'n1'})
++            w=flow.teaching(aid,'exercise',{'confirmed':True,'path_record_id':w['head']['path_record_id'],'node_id':'n1','purpose':'initial'})
++            w=flow.teaching(aid,'answer',{'exercise_record_id':w['head']['exercise_record_id'],'kind':'initial','text':'1米每秒；2分钟是120秒，120米除以120秒。'})
++            w=flow.teaching(aid,'evaluate',{'confirmed':True,'exercise_record_id':w['head']['exercise_record_id'],'answer_record_id':w['head']['answer_record_id']})
++            artifact=generate(flow,aid);c.write(C01/'L10-repaired-parent-artifact.json',{'activity_id':aid,'feedback':w,'artifact':artifact,'normal_slot':'source'})
++            run_preview(batch,flow,aid,artifact['artifact_id'])
++            c.write(C01/'L10-real-fixed-host-complete.json',{'sample':c.sample(),'activity_id':aid,'artifact_id':artifact['artifact_id'],'normal_slot':'source','S_fixed_host':True,'U_application_browser':'NOT_RUN; cap8','Q':'NOT_ENABLED'})
++        finally:flow.close()
++        batch.close_api()
++        from profiles_batch import runtime_config
++        from remaining import readonly_view
++        from app.runtime import psycopg_compatible_loop_factory
++        import asyncio
++        runtime=runtime_config(batch.run)
++        saved=json.loads((C01.parent/'continuation-01/restore-r01-receipt.json').read_text())
++        plan=runtime.restore.plan(saved['plan_id'],saved['plan_sha256'])
++        assert plan['deletion_policy']=='snapshot_only_readonly'
++        with asyncio.Runner(loop_factory=psycopg_compatible_loop_factory) as runner:
++            selected=runner.run(runtime.restore.activate_readonly(saved['job_id'],saved['plan_sha256'],str(uuid4()),0))
++        assert selected['state']=='active_readonly';c.write(C01/'R01-real-selector-activation.json',selected)
++        rc.stop_pg('source')
++        reader=batch.fresh_api_handle();reader.start_api(read_only_factory=True)
++        view=FrozenFlow('root16-R01-readonly')
++        try:c.write(C01/'P02-application-readonly.json',{'sample':c.sample(),'status':'passed_at_stated_layer','result':readonly_view(view),'R01_migrations_unchanged':True,'R02_failed_never_activated':True})
++        finally:view.close()
++if __name__=='__main__':
++    try:main()
++    except BaseException:
++        p=C01/('preview-recheck-failure-'+str(time.time_ns())+'.txt');p.write_text(traceback.format_exc(),encoding='utf-8');c.failure('S03-preview-recheck',p.name,effect='保存真实失败和自动清场，不换名重复运行');raise
+--- /dev/null
++++ S03-new/DocuN/evidence/TASK-117/execution/continuation-02/profiles_batch.py
+@@ -0,0 +1,227 @@
++"""S02首次真实批：所有自有PG先登记截止闭包；不启动API或浏览器。"""
++from pathlib import Path
++import sys, os, json, shutil, time, subprocess, traceback
++from types import SimpleNamespace
++from uuid import uuid4
++C01=Path(__file__).resolve().parent
++EXEC=C01.parent
++ROOT=EXEC.parents[3]
++sys.path[:0]=[str(EXEC),str(ROOT/'backend'),str(ROOT/'backend/tests'),str(ROOT/'backend/tests/fixtures/step018')]
++import control as c
++import runtime_control as rc
++from lifecycle import BoundedResources
++import psycopg
++from psycopg.rows import dict_row
++from app.activities.repository import PostgresAdmissionLedger
++from app.materials.repository import PostgresMaterials
++from app.storage.originals import OriginalStore
++from app.data_exit.config import DataRuntime
++from app.data_exit.contracts import DataJobCommand, PROFILE, canonical
++from app.data_exit.schema_profiles import R02, extra_shape_queries, check_extra_shape, normalized_extra_shape
++from app.data_exit.schema_checks import assert_data_schema_sync
++from app.data_exit.packages import PackageReader
++from test_step018_profiles_pg import verify_readonly_target
++from test_step018_retrieval_pg import verify_persistent_retrieval
++
++
++def listeners():
++    raw=subprocess.run(['powershell','-NoProfile','-Command',
++      "Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object {$_.LocalPort -in 15481,15482,15483,15484,15485,18118} | Select-Object LocalAddress,LocalPort,OwningProcess | ConvertTo-Json -Compress"],capture_output=True,timeout=15).stdout.decode('utf-8','replace').strip()
++    return json.loads(raw) if raw else []
++
++
++class Hooks:
++    def __init__(self,run,factory):self.run,self.factory,self.targets=run,factory,{}
++    def before_create(self,slot):
++        self.run.check()
++        sid=slot['id']
++        # 登记在create前。即使create已经生效却未返回，仍按精确名字+工厂持久意图核身份。
++        self.run.register('restore-'+sid,lambda:self.close_slot(slot),priority=0)
++        rc.pg_memory_gate('restore-create-'+sid);rc.port_gate(slot['port'])
++        c.count('pg_create_attempts');c.count('volumes')
++        rc.save_resource({'id':'pg-'+sid,'kind':'pg','slot':sid,'name':slot['name'],'volume':slot['volume'],'port':slot['port'],'database':slot['database'],'image':rc.PG_IMAGE,'intent':c.sample(),'cid':None,'running':False})
++    def close_slot(self,slot):
++        target=self.targets.get(slot['id'])
++        if target is not None:
++            self.factory.stop(target)
++            proof=rc.metadata(target.cid)
++        else:
++            cid=rc.docker(['ps','-aq','--filter','name=^/'+slot['name']+'$'])
++            if not cid:return {'not_created':True,'name':slot['name']}
++            proof=rc.metadata(cid)
++            intent=next((t for t in self.factory.hub.state()['targets'].values() if t['slot_id']==slot['id']),None)
++            if (not intent or proof['name']!=slot['name'] or proof['image']!=rc.PG_IMAGE
++              or proof['labels'].get('retrolume.data.job')!=intent['job_id']
++              or proof['labels'].get('retrolume.data.profile')!=self.factory.profile['id']
++              or proof['labels'].get('retrolume.data.target')!=intent['target_id']):raise RuntimeError('partial_target_identity_unknown')
++            if proof['running']:rc.docker(['stop','--time','10',cid],timeout=20)
++            proof=rc.metadata(cid)
++        if proof['running'] or proof['pid']!=0:raise RuntimeError('target_stop_unknown')
++        return proof
++    def created(self,target,identity):
++        sid=target.name.removeprefix('retrolume-step018-syn-');self.targets[sid]=target
++        c.count('pg_objects')
++        row=next(r for r in c.state()['resources'] if r['id']=='pg-'+sid)
++        row.update(cid=target.cid,created=c.sample(),factory_job_id=target.job_id,factory_profile_id=target.profile_id)
++        rc.save_resource(row);c.event('restore_target_created',identity=rc.metadata(target.cid))
++    def before_start(self,target):
++        self.run.check();rc.pg_memory_gate('restore-start-'+target.name);rc.port_gate(target.port);c.count('pg_starts')
++        row=next(r for r in c.state()['resources'] if r.get('cid')==target.cid)
++        row.update(running=True,holding_start=c.sample());rc.save_resource(row)
++    def started(self,target,identity):c.event('restore_target_started',identity=rc.metadata(target.cid))
++    def stopped(self,target,identity):
++        row=next(r for r in c.state()['resources'] if r.get('cid')==target.cid);stamp=c.sample()
++        if row.get('running'):row.setdefault('holding_intervals',[]).append({'start':row['holding_start'],'end':stamp,'segment':c.state()['active_segment']})
++        row.update(running=False,stopped=stamp);rc.save_resource(row)
++        c.event('restore_target_stopped',identity=rc.metadata(target.cid))
++
++
++def compat_repair():
++    proof={}
++    for slot in ('source','compat'):
++        rc.start_pg(slot)
++        with psycopg.connect(rc.dsn(slot,'admin'),row_factory=dict_row) as db:
++            before=db.execute("SELECT has_table_privilege('retrolume_interview_owner','public.teaching_commands','SELECT') AS read,has_table_privilege('retrolume_interview_owner','public.teaching_commands','INSERT,UPDATE,DELETE') AS write").fetchone()
++            old=db.execute('SELECT operation_id,kind,request_bytes,max_output_tokens,reserved_cost_microunits,state,disposition FROM public.activity_operations ORDER BY operation_id').fetchall()
++            funcs=db.execute("SELECT p.proname,p.prosrc,p.prosecdef,p.provolatile,p.proconfig FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.proname IN('interview_head_guard','interview_record_insert_guard','interview_result_eligible') ORDER BY p.proname").fetchall()
++            if before['write']:raise RuntimeError('unexpected_invoker_write_privilege')
++            if slot=='compat' and not before['read']:db.execute('GRANT SELECT ON public.teaching_commands TO retrolume_interview_owner')
++            after=db.execute("SELECT has_table_privilege('retrolume_interview_owner','public.teaching_commands','SELECT') AS read,has_table_privilege('retrolume_interview_owner','public.teaching_commands','INSERT,UPDATE,DELETE') AS write").fetchone()
++            assert after=={'read':True,'write':False}
++            assert old==db.execute('SELECT operation_id,kind,request_bytes,max_output_tokens,reserved_cost_microunits,state,disposition FROM public.activity_operations ORDER BY operation_id').fetchall()
++            assert_data_schema_sync(db)
++            shape={k:db.execute(q).fetchall() for k,q in extra_shape_queries().items()};check_extra_shape(shape)
++            proof[slot]={'cid':next(x['cid'] for x in c.state()['resources'] if x['id']=='pg-'+slot),'before':before,'after':after,'legacy_operations':old,'functions':funcs,'extra_shape_sha':c.sha(canonical(normalized_extra_shape(shape)).encode()),'exact_schema':True,'migrations_rerun':0}
++        rc.stop_pg(slot)
++    assert proof['source']['functions']==proof['compat']['functions']
++    baseline=json.loads((EXEC/'compat-catalog-before014.json').read_text(encoding='utf-8'))
++    assert proof['compat']['legacy_operations']==baseline['legacy']
++    c.write(C01/'compat-final-forward-repair.json',proof)
++
++
++def factory_profile():
++    return {'id':'TASK117-S02-fixed-restores','image_id':rc.PG_IMAGE,'login_prefix':'step018_','pg_major':17,'source_name':'retrolume-step018-syn-source','slots':[{'id':s,'name':'retrolume-step018-syn-'+s,'volume':'retrolume-step018-syn-'+s+'-data','port':rc.SLOTS[s][0],'database':rc.SLOTS[s][1],'schema_profile':p} for s,p in [('r01',PROFILE),('r02-fault',R02),('r02',R02)]]}
++
++def runtime_config(run):
++    base=EXEC/'synthetic/source-data';backup=EXEC/'synthetic/source-backup'
++    os.environ.update(RETROLUME_CONTROL_ROOT=str(EXEC/'synthetic/source-control'),RETROLUME_RESTORE_ROOT=str(EXEC/'synthetic/source-restore'),RETROLUME_DATABASE_URL=rc.dsn('source'),RETROLUME_TASK117_SNAPSHOT=rc.dsn('source','snapshot'),RETROLUME_TASK117_MAINTENANCE=rc.credentials('source')['maintenance_key'])
++    app=SimpleNamespace(state=SimpleNamespace(activities_ledger=PostgresAdmissionLedger(rc.dsn('source')),materials=PostgresMaterials(rc.dsn('source')),originals=OriginalStore(base/'originals'),preview_controller=None,preview_policy=None))
++    profile=factory_profile()
++    runtime=DataRuntime(app,SimpleNamespace(data_dir=base,backup_dir=backup),{'maintenance_key_env':'RETROLUME_TASK117_MAINTENANCE','snapshot_url_env':'RETROLUME_TASK117_SNAPSHOT','factory':profile})
++    run.register('source-original-lease',runtime.references.lease.close,priority=1)
++    runtime.factory.hooks=Hooks(run,runtime.factory)
++    return runtime
++
++
++def profiles(run,*,r02=False):
++    runtime=runtime_config(run);context=runtime.context()
++    assert context.mode=='normal' and runtime.hub.state()['selection'] is None
++    with psycopg.connect(rc.dsn('source'),row_factory=dict_row) as db:before_vectors=verify_persistent_retrieval(db)
++    c.write(C01/('source-before-restore-vectors-r02.json' if r02 else 'source-before-restore-vectors.json'),before_vectors)
++    scope={'mode':'all','source_ids':[],'activity_ids':[],'allow_incomplete':False}
++    if (C01/'source-r02-package-receipt.json').exists():raise RuntimeError('prior_package_review_required')
++    r01=json.loads((EXEC/'compat-r01-package-receipt.json').read_text())
++    if r02:
++        job=runtime.hub.create_or_get_job(DataJobCommand('restore_checkpoint',str(uuid4()),scope),context)
++        receipt=runtime.packages.capture_and_publish(job['job_id'],scope);c.write(C01/'source-r02-package-receipt.json',receipt)
++        inputs=[(R02,runtime.packages.path(receipt['package_id']))]
++    else:inputs=[(PROFILE,EXEC/'synthetic/compat-backup/packages'/f"{r01['package_id']}.rldata")]
++    proof=[];prepared=[]
++    for profile,package in inputs:
++        run.check()
++        if any(t.get('schema_profile',PROFILE)==profile for t in runtime.hub.state()['targets'].values()):raise RuntimeError('prior_target_must_not_be_reused')
++        with PackageReader(package) as reader:
++            assert reader.schema_profile.name==profile
++            c.event('restore_package_preflight',profile=profile,root_sha=reader.manifest['root_sha256'],tables=len(reader.schema_profile.tables))
++        upload=str(uuid4());shutil.copyfile(package,runtime.incoming/(upload+'.rldata'))
++        plan=runtime.restore.prepare(upload,'snapshot_only_readonly' if profile==PROFILE else 'respect_current_deletions',context)
++        job=runtime.hub.create_or_get_job(DataJobCommand('restore',str(uuid4()),{'plan_id':plan['plan_id'],'plan_sha256':plan['plan_sha256']}),context)
++        c.write(C01/('restore-'+profile.rsplit('.',1)[-1]+'-plan.json'),{'plan':plan,'job_id':job['job_id']})
++        prepared.append((profile,job,plan))
++    rc.stop_pg('source')
++    for profile,job,plan in prepared:
++        result=runtime.restore.verify(job['job_id'],plan['plan_sha256']);c.write(C01/('restore-'+profile.rsplit('.',1)[-1]+'-receipt.json'),result)
++        target=runtime.factory.target(result['target_id']);runtime.factory.start(target)
++        try:
++            credential=runtime.factory.readonly_credentials(target.target_id);runtime.factory._wait_pg(credential['readonly_dsn'])
++            with psycopg.connect(credential['readonly_dsn'],row_factory=dict_row) as db:
++                item=verify_readonly_target(db,profile)
++                if profile==R02:
++                    item['vectors']=verify_persistent_retrieval(db);assert item['vectors']==before_vectors
++                try:db.execute('UPDATE public.activities SET requests_reserved=requests_reserved')
++                except psycopg.Error as exc:
++                    item['write_refused_sqlstate']=exc.sqlstate;db.rollback();assert exc.sqlstate=='42501'
++                else:raise RuntimeError('sealed_target_accepted_write')
++            item.update(target_id=target.target_id,cid=target.cid,receipt=result);proof.append(item);c.write(C01/('restores-'+profile.rsplit('.',1)[-1]+'.json'),proof)
++        finally:runtime.factory.stop(target)
++    assert runtime.context().mode=='normal' and runtime.hub.state()['selection'] is None
++    c.write(C01/'source-remains-normal.json',{'mode':'normal','selection':None,'targets':runtime.hub.state()['targets']})
++
++
++def read_verified_r01(run):
++    """verify已COMMIT并封印，仅续做先前因TIME_WAIT未启动的readonly回读。"""
++    from app.data_exit.control import ControlHub
++    from app.data_exit.restore import TargetFactory
++    receipt=json.loads((C01/'restore-r01-receipt.json').read_text())
++    if receipt['state']!='verified':raise RuntimeError('unverified_target_must_not_resume')
++    hub=ControlHub(EXEC/'synthetic/source-control')
++    profile={'id':'TASK117-S02-fixed-restores','image_id':rc.PG_IMAGE,'login_prefix':'step018_','pg_major':17,'source_name':'retrolume-step018-syn-source','slots':[{'id':s,'name':'retrolume-step018-syn-'+s,'volume':'retrolume-step018-syn-'+s+'-data','port':rc.SLOTS[s][0],'database':rc.SLOTS[s][1],'schema_profile':p} for s,p in [('r01',PROFILE),('r02',R02)]]}
++    factory=TargetFactory(hub,EXEC/'synthetic/source-restore',profile)
++    target=factory.target(receipt['target_id'])
++    if hub.state()['targets'][target.target_id]['state']!='sealed':raise RuntimeError('unsealed_target_must_not_resume')
++    hooks=Hooks(run,factory);factory.hooks=hooks;hooks.targets['r01']=target
++    run.register('verified-r01-readback',lambda:hooks.close_slot(profile['slots'][0]),priority=0)
++    factory.start(target)
++    credential=factory.readonly_credentials(target.target_id);factory._wait_pg(credential['readonly_dsn'])
++    with psycopg.connect(credential['readonly_dsn'],row_factory=dict_row) as db:
++        item=verify_readonly_target(db,PROFILE)
++        try:db.execute('UPDATE public.activities SET requests_reserved=requests_reserved')
++        except psycopg.Error as exc:
++            item['write_refused_sqlstate']=exc.sqlstate;db.rollback();assert exc.sqlstate=='42501'
++        else:raise RuntimeError('sealed_target_accepted_write')
++    item.update(target_id=target.target_id,cid=target.cid,receipt=receipt,restore_not_replayed=True)
++    c.write(C01/'restores-r01.json',[item]);factory.stop(target)
++
++
++def main():
++    expected=int(sys.argv[1]) if len(sys.argv)>1 else 7
++    if expected!=7:raise RuntimeError('S02_next_authorized_root_is_7')
++    rc.docker(['image','inspect',rc.PG_IMAGE]);rc.memory_gate('ROOT07-resume-entry')
++    if c.state()['active_root'] is None:
++        if c.state()['counts']['roots']==7:c.resume_root(7,stop_evidence=C01/'root07-final-stop.json')
++        else:c.begin_root('ROOT07-S02可信014对账及R01/R02隔离恢复','runtime')
++    if c.state()['active_root']!=expected:raise RuntimeError('root_identity')
++    root=next(r for r in c.state()['roots'] if r['id']==expected)
++    prefix='root'+str(expected).zfill(2)
++    run=BoundedResources(deadline=root['business_deadline_mono_ns']/1e9,on_close=lambda p:c.write(C01/(prefix+'-cleanup.json'),{**p,'sample':c.sample()}))
++    rc.bind_controller(run)
++    outcome='failed'
++    try:
++        with run:
++            # 唤醒后重新实采，不使用昨天的停机证。
++            rc.docker(['image','inspect',rc.PG_IMAGE]);rc.memory_gate(prefix+'-entry-Docker-awake')
++            before=[rc.metadata(r['cid']) for r in c.state()['resources'] if r.get('cid') and r.get('kind')=='pg']
++            if any(r['running'] or r['pid']!=0 for r in before):raise RuntimeError('unexpected_running_pg_on_entry')
++            c.write(C01/(prefix+'-resource-entry.json'),{'pg':before,'listeners':listeners(),'sample':c.sample()})
++            for port in (*range(15481,15486),18118):rc.port_gate(port)
++            if (C01/'restore-r01-receipt.json').exists():read_verified_r01(run)
++            else:compat_repair();rc.start_pg('source');profiles(run)
++            outcome='passed_R01_R02_deferred_until_final_facts'
++    except BaseException as exc:
++        c.failure('S02-'+prefix+'-profiles',type(exc).__name__+':'+str(exc)[:400],effect='全部截止回调已登记；failed目标不复用、数据和原卷保留')
++        (C01/(prefix+'-error.txt')).write_text(traceback.format_exc(),encoding='utf-8')
++        raise
++    finally:
++        pg=[];inspect_errors=[]
++        for row in c.state()['resources']:
++            if row.get('cid') and row.get('kind')=='pg':
++                try:pg.append(rc.metadata(row['cid']))
++                except Exception as exc:inspect_errors.append({'cid':row['cid'],'error_type':type(exc).__name__,'error':str(exc)[:100]})
++        proof={'outcome':outcome,'cleanup':run.report,'pg':pg,'inspect_errors':inspect_errors,'listeners':listeners(),'sample':c.sample(),'API_started':False,'browser_started':False}
++        stopped=bool(run.report and run.report['all_confirmed']) and not inspect_errors and all(not p['running'] and p['pid']==0 for p in proof['pg']) and not proof['listeners']
++        proof['all_stopped']=stopped;c.write(C01/(prefix+'-final-stop.json'),proof)
++        if stopped:c.end_root(result='S02 '+prefix+' '+outcome+'; exact PG stop/Pid0/no fixed listeners; no API or browser')
++        else:raise RuntimeError('cleanup_unconfirmed_do_not_open_next_root')
++    print(prefix+': exact 014/legacy preserved; R01 sealed readonly and stopped; R02 deferred')
++
++if __name__=='__main__':main()
+--- /dev/null
++++ S03-new/DocuN/evidence/TASK-117/execution/continuation-02/remaining.py
+@@ -0,0 +1,72 @@
++"""根16合并余项：持久业务、固定预览、传播与最终隔离恢复，串行消费者。"""
++from batch_runtime import *
++from frozen_http import FrozenFlow,SAMPLES
++from http_remaining import case,interview_after,variants,neutral,late_memory,delete_auxiliary
++from business import generate
++from profiles_batch import runtime_config
++from final_restore import final_restore
++from preview_case import run_preview
++from uuid import uuid4
++import asyncio,traceback
++from app.runtime import psycopg_compatible_loop_factory
++
++def readonly_view(flow):
++    session=flow.call('GET','/api/session');assert session['data_context']['mode']=='restored_readonly'
++    caps=flow.call('GET','/api/data/capabilities');records={}
++    for category in ('activities','teaching','interview','learning','memories'):
++        records[category]=flow.call('GET','/api/data/saved-records?category='+category)
++    refused=[]
++    for path,body in (('/api/activities',{}),('/api/materials?filename=forbidden.md',{}),('/api/memories/commands',{})):
++        value=flow.call('POST',path,body,expected=409);assert 'data_readonly' in str(value);refused.append({'path':path,'response':value})
++    return {'session':{k:v for k,v in session.items() if k!='token'},'caps':caps,'records':records,'writes_refused':refused,'fallback_source':False}
++
++def main():
++    preflight('S03-root16-remaining-merged',preview=True)
++    with Batch(16,'S03_remaining_business_preview_propagation_and_restores') as batch:
++        rc.start_pg('source');batch.start_api(launcher=True)
++        flow=FrozenFlow('root16-normal')
++        aids=json.loads((C01/'X09-before-normal-reopen.json').read_text())['aids']
++        try:
++            # HTTP对正式bundle的真实加载只证明字节，不冒浏览器验证。
++            bundle=json.loads((C01/'bundle-6.json').read_text());loaded=[]
++            for row in bundle['files']:
++                url='/'+row['path'].removeprefix('frontend/dist/');c.count('http');r=flow.client.get(url);assert r.status_code==200 and c.sha(r.content)==row['sha256'];loaded.append({'url':url,'sha256':c.sha(r.content)})
++            c.write(C01/'bundle-6-actual-HTTP.json',{'sample':c.sample(),'files':loaded,'Browser':'NOT_RUN; cumulative cap8 reached'})
++            result=case('I01-after-normal-reopen',lambda:interview_after(flow,aids[1]))
++            teaching=flow.call('GET',f'/api/activities/{aids[0]}/teaching/workspace')
++            assert teaching['head']['phase']=='feedback_ready'
++            c.write(C01/'L01-L05-I01-X09-final.json',{'sample':c.sample(),'aids':aids,'teaching':teaching,'interview':result,'U_scope':'bundle5教学末评价及面试probe回答；原ask恢复及最终面试反馈为HTTP，bundle6没有新Browser证','normal_reopen':'原stdin/句柄关闭应用并同normal库重开；PG由原根控制器连续持有，没有声称PG重启'})
++            artifact=case('L10-current-artifact',lambda:generate(flow,aids[0]))
++            if artifact:
++                c.write(C01/'L10-current-artifact.json',{'activity_id':aids[0],'artifact':artifact})
++                case('L10-fixed-host',lambda:run_preview(batch,flow,aids[0],artifact['artifact_id']))
++            mapping=json.loads((C01/'frozen-source-bindings.json').read_text())
++            case('L06-concept-three-answers',lambda:variants(flow,mapping,'C',SAMPLES['inputs']['concept_goal'],[SAMPLES['inputs'][k] for k in ('concept_positive','concept_negative','concept_partial')]))
++            case('L07-program-two-answers',lambda:variants(flow,mapping,'P','阅读range循环，逐步推理累加结果，不执行代码。',[SAMPLES['inputs'][k] for k in ('program_positive','program_negative')]))
++            for name,aliases,goal,expected in [('L08-ambiguity',['J-CODE','J-COFFEE'],SAMPLES['inputs']['ambiguous_goal'],'clarification'),('L09-insufficient',['N'],SAMPLES['inputs']['no_evidence_query'],'no_evidence'),('L09-conflict',['N','N-CONFLICT'],SAMPLES['inputs']['conflict_query'],'conflict')]:
++                case(name,lambda aliases=aliases,goal=goal,expected=expected:neutral(flow,mapping,aliases,goal,expected))
++            memory=flow.call('GET','/api/memories/'+json.loads((C01/'frozen-memory-binding.json').read_text())['memory_id'])
++            # 先固定预览，再修订被两域选中的背景；不破坏尚待预览的父来源。
++            learning=json.loads((C01.parent/'continuation-01/memory-teaching-before-reopen.json').read_text())['activity_id']
++            case('X02-late-memory',lambda:late_memory(flow,mapping,memory,learning))
++            deletion=case('X10-real-deletion-overlay',lambda:delete_auxiliary(flow));assert deletion is not None
++        finally:flow.close()
++        batch.close_api()
++        runtime=runtime_config(batch.run)
++        restored=final_restore(batch.run,runtime=runtime,keep_source=True)
++        c.write(C01/'P03-real-roundtrip.json',restored)
++        verified=json.loads((C01/'final-r02-verified.json').read_text());receipt=verified['receipt'];plan=verified['plan']
++        with asyncio.Runner(loop_factory=psycopg_compatible_loop_factory) as runner:
++            activated=runner.run(runtime.restore.activate_readonly(receipt['job_id'],plan['plan_sha256'],str(uuid4()),0))
++        assert activated['state']=='active_readonly';c.write(C01/'R02-real-selector-activation.json',activated)
++        # 选择已发布，关闭源PG；应用启动只能绑定封印目标，不能回退source。
++        rc.stop_pg('source')
++        reader=batch.fresh_api_handle();reader.start_api(read_only_factory=True)
++        view=FrozenFlow('root16-R02-readonly')
++        try:case('P03-application-readonly',lambda:readonly_view(view))
++        finally:view.close()
++
++if __name__=='__main__':
++    try:main()
++    except BaseException:
++        p=C01/('root16-failure-'+str(time.time_ns())+'.txt');p.write_text(traceback.format_exc(),encoding='utf-8');c.failure('S03-root16',p.name,effect='保留所有已提交事实，清场；独立部分按精确断点继续，不重建目标');raise
+--- /dev/null
++++ S03-new/DocuN/evidence/TASK-117/execution/continuation-02/sql_and_commit.py
+@@ -0,0 +1,113 @@
++"""根14，精确双库修补与一次有区别的正常提交对照。"""
++from batch_runtime import *
++from profiles_batch import runtime_config
++import importlib.util,re,traceback,asyncio
++import psycopg
++from psycopg.rows import dict_row
++from psycopg import sql
++from app.data_exit.schema_checks import assert_data_schema_sync,check_data_shape,FUNCTION_QUERY,ROLE_QUERY,TRIGGER_QUERY,CONSTRAINT_QUERY,DATA_ROLES
++from app.data_exit.schema import DATA_FUNCTIONS
++from app.data_exit.schema_profiles import extra_shape_queries,normalized_extra_shape,check_extra_shape,R02
++from app.data_exit.contracts import canonical
++
++OLD=C01.parent/'continuation-01'
++spec=importlib.util.spec_from_file_location('app.data_exit._s03_trusted_old',OLD/'ordinary-db-fixes/pre/backend/app/data_exit/schema_profiles.py')
++legacy=importlib.util.module_from_spec(spec);sys.modules[spec.name]=legacy;spec.loader.exec_module(legacy)
++
++def snapshot(db):
++    names=[r['relname'] for r in db.execute("SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='r' ORDER BY c.relname").fetchall()]
++    result={}
++    for name in names:
++        rows=db.execute(sql.SQL('SELECT to_jsonb(t)::text AS body FROM public.{} t ORDER BY to_jsonb(t)::text').format(sql.Identifier(name))).fetchall()
++        result[name]={'count':len(rows),'sha256':c.sha('\n'.join(x['body'] for x in rows).encode())}
++    return result
++
++def apply(slot):
++    rc.start_pg(slot)
++    row=next(r for r in c.state()['resources'] if r.get('id')=='pg-'+slot);meta=rc.metadata(row['cid'])
++    assert meta['name']==row['name'] and meta['image']==rc.PG_IMAGE
++    assert meta['memory']==512*1024**2 and meta['nano_cpus']==1000000000 and meta['pids_limit']==128
++    assert meta['port_bindings']=={'5432/tcp':[{'HostIp':'127.0.0.1','HostPort':str(row['port'])}]}
++    assert len(meta['mounts'])==1 and meta['mounts'][0]['Name']==row['volume'] and meta['mounts'][0]['Destination']=='/var/lib/postgresql/data'
++    before={};after={}
++    with psycopg.connect(rc.dsn(slot,'admin'),row_factory=dict_row,autocommit=True) as db:
++        who=db.execute('SELECT current_user,current_database() AS database').fetchone()
++        assert who=={'current_user':rc.credentials(slot)['admin_user'],'database':row['database']}
++        control=db.execute('SELECT schema_profile,mode_observed FROM data_export_control_v1').fetchone();assert control=={'schema_profile':R02,'mode_observed':'normal'}
++        role=db.execute("SELECT rolname,rolcanlogin,rolsuper,rolcreatedb,rolcreaterole,rolreplication,rolbypassrls FROM pg_roles WHERE rolname='retrolume_interview_owner'").fetchone()
++        assert role and not any(v for k,v in role.items() if k!='rolname')
++        shape={k:db.execute(q).fetchall() for k,q in legacy.extra_shape_queries().items()}
++        current_new={k:db.execute(q).fetchall() for k,q in extra_shape_queries().items()}
++        expected=json.loads((OLD/'ordinary-db-fixes/derived-shape.json').read_text())['shape']
++        projected=normalized_extra_shape(current_new)
++        for item in projected['functions']:
++            if item['proname']=='retrieval_chunk_guard':item['prosrc']=item['prosrc'].replace('\r\n','\n')
++        already_increment=projected==normalized_extra_shape(expected)
++        if not already_increment:legacy.check_extra_shape(shape)
++        check_data_shape(db.execute(FUNCTION_QUERY,(list(DATA_FUNCTIONS),)).fetchall(),db.execute(ROLE_QUERY,(DATA_ROLES,)).fetchall(),db.execute(TRIGGER_QUERY).fetchall(),db.execute(CONSTRAINT_QUERY).fetchall(),R02)
++        fn=next(x for x in shape['functions'] if x['proname']=='retrieval_chunk_guard')
++        assert c.sha(re.sub(r'\s+','',fn['prosrc']).encode())==('2b8801abe7c42eaaa8c2ffc5e4117e251c459c593110c16faf0016d696431bab' if already_increment else '4efdb6c4b774ef67c00534c26e7c1b9963d4341b6113a7d1c9ce339e0aaddf55')
++        data_before=snapshot(db)
++        before={'who':who,'mode':control,'role':role,'shape':shape,'data':data_before}
++        before_path=C01/(slot+'-SQL-before.json')
++        if before_path.exists():
++            assert json.loads(before_path.read_text())['data']==data_before
++            before_path=C01/(slot+'-SQL-before-readback-'+str(time.time_ns())+'.json')
++        c.write(before_path,before)
++        repair=(OLD/'ordinary-db-fixes/pending-forward-repair.sql').read_bytes()
++        assert c.sha(repair)=='c8d84e69876572c4b00236cacc78ac127918b7ddb6e61b4269d18eb5a1632abe'
++        # 受信派生DDL通过文本模式产生LF；执行也采用同一行尾，原批准文件字节不改。
++        # 首次compat的CRLF存入prosrc导致精确目录拒绝；仅行尾差已按完整目录精确解释。
++        try:db.execute(repair.decode().replace('\r\n','\n'),prepare=False)
++        except BaseException:db.execute('ROLLBACK');raise
++        assert_data_schema_sync(db)
++        new={k:db.execute(q).fetchall() for k,q in extra_shape_queries().items()};check_extra_shape(new)
++        assert data_before==snapshot(db),'修补不得更改业务行、四账或UNKNOWN'
++        new_fn=next(x for x in new['functions'] if x['proname']=='retrieval_chunk_guard')
++        assert {k:v for k,v in fn.items() if k!='prosrc'}=={k:v for k,v in new_fn.items() if k!='prosrc'}
++        assert c.sha(re.sub(r'\s+','',new_fn['prosrc']).encode())=='2b8801abe7c42eaaa8c2ffc5e4117e251c459c593110c16faf0016d696431bab'
++        after={'shape':new,'data_unchanged':True,'shape_sha256':c.sha(canonical(normalized_extra_shape(new)).encode()),'migration_014':c.sha((ROOT/'backend/migrations/014_step018_retrieval.sql').read_bytes()),'scope':'仅批准GRANT SELECT及函数别名；没有重跑迁移链'}
++        c.write(C01/(slot+'-SQL-after.json'),after)
++    if slot!='source':rc.stop_pg(slot)
++    return {'slot':slot,'cid':row['cid'],'passed':True,'old_shape':legacy.R02_EXTRA_SHAPE_SHA,'new_shape':after['shape_sha256']}
++
++def rollback_trigger():
++    proof={}
++    with psycopg.connect(rc.dsn('source','admin'),row_factory=dict_row) as db:
++        db.execute('SELECT public.data_mutation_enter()')
++        found=db.execute('SELECT space_id,evidence_id FROM retrieval_chunks ORDER BY evidence_id LIMIT 1').fetchone();assert found
++        try:db.execute('DELETE FROM retrieval_chunks WHERE space_id=%s AND evidence_id=%s',(found['space_id'],found['evidence_id']))
++        except psycopg.Error as exc:
++            assert exc.sqlstate=='P0001' and 'retrieval_purge_not_authorized' in str(exc)
++            proof={'actual_DELETE_branch':True,'sqlstate':exc.sqlstate,'expected_refusal':'retrieval_purge_not_authorized','rollback':True,'alias_ambiguity_absent':True}
++        else:raise AssertionError('未授权删除必须被拒')
++        db.rollback()
++    c.write(C01/'guard-rollback-regression.json',proof)
++
++def checkpoint():
++    with psycopg.connect(rc.dsn('source','admin'),row_factory=dict_row) as db:
++        heads=db.execute("SELECT a.id,a.deadline_at,a.status,a.requests_reserved,a.cost_reserved_microunits,a.running_reserved_seconds,a.execution_generation,h.revision,h.phase,h.answer_record_id FROM activities a LEFT JOIN teaching_heads h ON h.activity_id=a.id WHERE a.id=ANY(%s) ORDER BY a.id",(['b7f32142-b5b3-4a5c-b561-f927bcbe1b6d','bbe0617f-0417-4490-8a8f-354ab0e10ae3'],)).fetchall()
++        unknown=db.execute('SELECT * FROM retrieval_commands WHERE business_key=%s',('95a0b55e-b5fb-45d7-ad6e-310f3bc4b572',)).fetchone()
++        orphan=db.execute("SELECT a.id,a.deadline_at,a.status FROM activities a WHERE NOT EXISTS(SELECT 1 FROM interview_heads h WHERE h.activity_id=a.id) AND EXISTS(SELECT 1 FROM activity_scope_sources s WHERE s.activity_id=a.id AND s.source_id=%s) AND EXISTS(SELECT 1 FROM activity_memory_choices m WHERE m.activity_id=a.id) ORDER BY a.created_at DESC LIMIT 5",(json.loads((C01/'frozen-source-bindings.json').read_text())['R']['id'],)).fetchall()
++        c.write(C01/'actual-checkpoint.json',{'sample':c.sample(),'teaching':json.loads(json.dumps(heads,default=str)),'unknown_original_key':json.loads(json.dumps(unknown,default=str)),'unstarted_R_memory':json.loads(json.dumps(orphan,default=str))})
++
++def main():
++    preflight('S03-root14-SQL-and-minimal-commit')
++    with Batch(14,'S03_SQL_and_new_intent_control') as run:
++        repaired=[apply(s) for s in ('compat','source')]
++        c.write(C01/'SQL-repair-summary.json',{'sample':c.sample(),'targets':repaired,'R01_untouched':True})
++        rollback_trigger();checkpoint()
++        run.start_api(launcher=True)
++        from frozen_http import FrozenFlow
++        flow=FrozenFlow('minimal-diagnostic-commit')
++        try:
++            mapping=json.loads((C01/'frozen-source-bindings.json').read_text())
++            aid=flow.create([mapping['N']]);c.write(C01/'new-diagnostic-intent.json',{'activity_id':aid,'intent':'S03移除高成本trace后的独立正常提交对照；不是原UNKNOWN重试','original_unknown_key':'95a0b55e-b5fb-45d7-ad6e-310f3bc4b572','original_unknown_reposted':False})
++            flow.index(aid);w=flow.teaching(aid,'goal',{'goal':'S03诊断对照：平均速度的分钟换秒'})
++            ref=flow.query(aid,{**w['head'],'scope_revision':1},'平均速度 分钟换秒')
++            c.write(C01/'minimal-commit-received.json',{'activity_id':aid,'ref':ref,'trace':'off','definitive_root_cause':'未确定；本次为有区别对照'})
++        finally:flow.close()
++if __name__=='__main__':
++    try:main()
++    except BaseException:
++        p=C01/('root14-failure-'+str(time.time_ns())+'.txt');p.write_text(traceback.format_exc(),encoding='utf-8');c.failure('S03-root14',p.name,effect='保留失败，按共享控制器清场；仅修正已定位原因');raise
+--- S03-pre/DocuN/evidence/TASK-117/execution/control.py
++++ S03-post/DocuN/evidence/TASK-117/execution/control.py
+@@ -40,7 +40,7 @@
+     value=state();segment=active_segment(value)
+     if segment is not None:
+         elapsed=(time.monotonic_ns()-segment['start_mono_ns'])/1e9
+-        if elapsed<0:raise RuntimeError('S02_host_clock_domain_changed')
++        if elapsed<0:raise RuntimeError('active_segment_host_clock_domain_changed')
+         if elapsed>=segment['save_only_after_seconds']:raise RuntimeError('S02仅保存清场')
+         if datetime.now(timezone.utc)>=datetime.fromisoformat(segment['calendar_deadline_utc']):raise RuntimeError('S02日历门已到')
+         for kind,cap in (('runtime',segment['runtime_holding_cap_seconds']),('offline',segment['offline_cap_seconds'])):
+@@ -51,6 +51,7 @@
+                 if root['category']==kind:used+=(time.monotonic_ns()-root['start']['mono_ns'])/1e9
+                 if time.monotonic_ns()>=root['business_deadline_mono_ns']:raise RuntimeError('本根仅允许清场')
+             if used>=cap:raise RuntimeError('S02_'+kind+'_time_cap')
++        if sum(x['seconds'] for x in value['offline_intervals'])>=7200:raise RuntimeError('all_task_offline_time_cap')
+         return value
+     elapsed=(time.monotonic_ns()-value['start_mono_ns'])/1e9
+     if elapsed>=27000:raise RuntimeError('本卡已进入1800秒保存清场段，不再开业务动作')
+@@ -72,7 +73,7 @@
+     effective_cap=root_cap if name=='roots' else amendments[-1].get('API_cumulative_cap',limits.get(name)) if name=='api_starts' and amendments else limits.get(name)
+     if name not in limits or number<1 or value['counts'][name]+number>effective_cap:raise RuntimeError('次数门关闭：'+name)
+     scheduling_override=bool(amendments and (name=='roots' or name=='api_starts' and 'API_cumulative_cap' in amendments[-1]))
+-    if segment and name in segment['segment_caps'] and not scheduling_override and value['counts'][name]+number-segment['baseline_counts'][name]>segment['segment_caps'][name]:raise RuntimeError('S02段次数门关闭：'+name)
++    if segment and name in segment['segment_caps'] and (not scheduling_override or 'S03' in segment['permit']) and value['counts'][name]+number-segment['baseline_counts'][name]>segment['segment_caps'][name]:raise RuntimeError('当前段次数门关闭：'+name)
+     value['counts'][name]+=number;write(HERE/'budget.json',value);event('attempt_reserved',counter=name,number=number,total=value['counts'][name])
+ 
+ 
+@@ -80,7 +81,7 @@
+     guard();path=(ROOT/relative).resolve();path.relative_to(ROOT)
+     if any(part in ('.git','private') for part in path.parts) or '.local.' in path.name:
+         raise RuntimeError('不读取旧私配或Git内部')
+-    segment=active_segment(state());base=HERE/'continuation-01' if segment else HERE
++    segment=active_segment(state());base=Path(segment.get('evidence_directory',str(HERE/'continuation-01'))) if segment else HERE
+     index_path=base/'changes.json';index=json.loads(index_path.read_text(encoding='utf-8')) if index_path.exists() else {}
+     relative=path.relative_to(ROOT).as_posix()
+     if relative in index:return index[relative]
+--- S03-pre/README.md
++++ S03-post/README.md
+@@ -2,7 +2,9 @@
+ 
+ 本目录为 RetroLume 本地工程，提供资料、学习、文字面试、低信任记忆和隔离只读恢复入口。STEP018 的混合检索集成仍在 TASK117 合成候选收口中；实际验收状态以 [执行动态文档](DocuS/执行动态文档.MD) 为准。合成传输与真实供应商语义分别验证。
+ 
+-TASK117 S02 当前为部分交付，尚未形成稳定 S 候选，真实供应商调用仍关闭。面试须先开始场次，再明确确认资料索引。最新 014 源码已修正记忆资格的传递只读授权及删源触发器别名；本轮合成 source/compat 尚未应用该前向增量，后续获准接续须先核对并应用最小事务，再验证目录指纹，不能跳过检查启动。具体结果与待应用 SQL 见 [TASK117 结果](DocuN/results/TASK-117-result.md) 和 [最小前向修正](DocuN/evidence/TASK-117/execution/continuation-01/ordinary-db-fixes/pending-forward-repair.sql)。这不授权自动迁移用户库。
++TASK117 S03 当前仍为部分交付，尚未形成稳定 S 候选，真实供应商调用保持关闭。面试须先开始场次，再明确确认资料索引；模型动作等待持久目标正文核对就绪，并使用该版本的目标构造查询。合成 source/compat 已应用记忆资格的传递只读授权及删源触发器别名修补，通过受信目录与业务行不变检查。该事实只适用于本次两个合成库，不授权自动迁移用户库。
++
++本次已完成两域的持久业务余项、同库应用重开及记忆／删源传播。正式 bundle6 已构建并经 HTTP 核字节，尚缺该版本的浏览器验证；PDF、固定预览、R01 新 reader 的应用查看及 R02 成功往返仍有缺口。R02 有效包装载触发 component 时间上限，两个失败目标保留且均未激活，不能清空复用。具体输入、源码身份、失败及资源停止证明见 [TASK117 结果](DocuN/results/TASK-117-result.md)；不要执行历史 runner 或按旧 key 重发未知调用。
+ 
+ ## 环境与依赖恢复
+ 
+--- S03-pre/backend/app/data_exit/schema_profiles.py
++++ S03-post/backend/app/data_exit/schema_profiles.py
+@@ -115,7 +115,7 @@
+     # 新授予interview owner的记忆只读/资格执行，逐项精确校验后回投旧形状。
+     readable={'learning_memories','learning_memory_revisions','learning_memory_bodies','learning_memory_dependencies','learning_memory_commands','activity_memory_choices','teaching_commands','material_versions','pdf_review_candidates','pdf_review_pages','pdf_extracted_pages','teaching_records'}
+     functions={'memory_revision_readable','memory_revision_eligible','activity_memory_eligible','memory_dependency_line','memory_dependency_digest','memory_scope_digest','memory_choice_digest'}
+-    for section in ('columns','table_acl','functions'):
++    for section in ('columns','table_acl','functions','qualification_column_acls'):
+         for row in result.get(section,[]):
+             for field in ('acl','table_acl','column_acl'):
+                 text=row.get(field)
+--- S03-pre/backend/app/retrieval/evidence.py
++++ S03-post/backend/app/retrieval/evidence.py
+@@ -98,7 +98,7 @@
+         return False
+ 
+ 
+-def rank_term_candidates(query: str, fragments: tuple[EvidenceFragment, ...], *, allowed_versions: frozenset[tuple[str, str]], top_k: int = 10) -> tuple[RetrievalCandidate, ...]:
++def rank_term_candidates(query: str, fragments: tuple[EvidenceFragment, ...], *, allowed_versions: frozenset[tuple[str, str]], top_k: int = 10, truncate_terms: bool = False) -> tuple[RetrievalCandidate, ...]:
+     """范围先过滤的中英词项候选排序；空结果代表本通道没有证据。"""
+     if not isinstance(query, str):
+         raise ValueError("查询必须是文字")
+@@ -109,7 +109,9 @@
+         raise ValueError("允许范围必须是来源和版本的冻结集合")
+     terms = _terms(query)
+     if len(terms) > MAX_QUERY_TERMS:
+-        raise ValueError("查询词项数量超过上限")
++        if not truncate_terms:raise ValueError("查询词项数量超过上限")
++        # 混合检索仅本通道使用确定前缀，完整原查询仍用于已绑定的向量检索。
++        terms = terms[:MAX_QUERY_TERMS]
+     ranked: list[RetrievalCandidate] = []
+     for fragment in fragments:
+         if (fragment.source_id, fragment.version_id) not in allowed_versions:
+--- S03-pre/backend/app/retrieval/service.py
++++ S03-post/backend/app/retrieval/service.py
+@@ -208,7 +208,7 @@
+         body=json.loads(row['request_body']);query=body['command']['query'].strip()
+         snapshot,fragments=await self._sources(activity_id)
+         if body['coverage_sha256']!=digest([fragment_manifest(*fragments[k]) for k in sorted(fragments)]):raise RetrievalRefusal('retrieval_source_invalid')
+-        term=rank_term_candidates(query,tuple(f[0] for f in fragments.values()),allowed_versions=frozenset((r['source_id'],r['version_id']) for r in snapshot['sources']),top_k=32)
++        term=rank_term_candidates(query,tuple(f[0] for f in fragments.values()),allowed_versions=frozenset((r['source_id'],r['version_id']) for r in snapshot['sources']),top_k=32,truncate_terms=True)
+         vectors=await self.ledger.retrieval_vector_ranks(activity_id,ref.business_key,list(fragments))
+         ids=fused_rank([c.fragment.evidence_id for c in term],vectors,top_k=top_k)
+         if not ids:raise RetrievalRefusal('no_evidence')
+--- S03-pre/backend/tests/fixtures/step018/runtime_fixture.py
++++ S03-post/backend/tests/fixtures/step018/runtime_fixture.py
+@@ -11,7 +11,7 @@
+ def install():
+     if os.environ.get('RETROLUME_TASK117_SYNTHETIC') not in (
+         'TASK-117-STEP018-INTEGRATION-S01-20261014',
+-        'TASK-117-STEP018-INTEGRATION-S02-20261015',
++        'TASK-117-STEP018-INTEGRATION-S02-20261015','TASK-117-STEP018-INTEGRATION-S03-20261015',
+     ):return False
+     from app.capabilities.transport import HttpxModelTransport,TransportResponse
+     async def send(self,*,endpoint,api_key,payload,timeout_seconds,max_response_bytes):
+--- S03-pre/backend/tests/fixtures/step018/sitecustomize.py
++++ S03-post/backend/tests/fixtures/step018/sitecustomize.py
+@@ -1,6 +1,6 @@
+ """只有本卡显式合成env才加载有限传输，产品默认路径不会包含此目录。"""
+ import os,sys
+-if (os.environ.get('RETROLUME_TASK117_SYNTHETIC') in ('TASK-117-STEP018-INTEGRATION-S01-20261014','TASK-117-STEP018-INTEGRATION-S02-20261015')
++if (os.environ.get('RETROLUME_TASK117_SYNTHETIC') in ('TASK-117-STEP018-INTEGRATION-S01-20261014','TASK-117-STEP018-INTEGRATION-S02-20261015','TASK-117-STEP018-INTEGRATION-S03-20261015')
+         and 'app.pdf_import.worker' not in sys.orig_argv):
+     from runtime_fixture import install
+     install()
+--- /dev/null
++++ S03-new/backend/tests/test_step018_term_prefix.py
+@@ -0,0 +1,19 @@
++"""长中文目标的有限词项通道，完整查询与范围不被改写。"""
++import unittest
++from app.retrieval.evidence import SourceTextUnit,build_fragments,rank_term_candidates,MAX_QUERY_TERMS
++
++class TermPrefixTests(unittest.TestCase):
++    def test_frozen_interview_goal_keeps_bounded_channel_and_scope(self):
++        query='围绕这份虚构接口项目资料，练习技术面试，重点是个人分工与测量口径。'
++        good=build_fragments(SourceTextUnit('source-R','version-R',1,None,'original','虚构接口项目资料中，我参与缓存路径改造。',True))
++        outside=build_fragments(SourceTextUnit('source-M','version-M',1,None,'original','虚构接口项目资料的测量口径。',True))
++        with self.assertRaisesRegex(ValueError,'词项数量'):rank_term_candidates(query,good,allowed_versions=frozenset({('source-R','version-R')}))
++        ranked=rank_term_candidates(query,good+outside,allowed_versions=frozenset({('source-R','version-R')}),truncate_terms=True)
++        self.assertTrue(ranked)
++        self.assertTrue(all(x.fragment.source_id=='source-R' and len(x.matched_terms)<=MAX_QUERY_TERMS for x in ranked))
++
++    def test_byte_limit_and_empty_channel_remain_closed(self):
++        with self.assertRaisesRegex(ValueError,'16 KiB'):rank_term_candidates('长'*6000,(),allowed_versions=frozenset(),truncate_terms=True)
++        self.assertEqual(rank_term_candidates('none',(),allowed_versions=frozenset(),truncate_terms=True),())
++
++if __name__=='__main__':unittest.main()
+--- S03-pre/frontend/src/activities/InterviewWorkspace.tsx
++++ S03-post/frontend/src/activities/InterviewWorkspace.tsx
+@@ -66,10 +66,12 @@
+     const expectedOwner=owner,stamp=panel.current,aid=activityId,expectedView=view.view_token;
+     let command=makeInterviewCommand(action,view.head,view.head?.scope_revision??scopeRevision,body,recovered?String(recovered.domain_input.business_key):crypto.randomUUID(),view.head?view.profile==='interview.v2':retrievalMode==='hybrid');
+     if(command.schema==='interview.command.v2'&&['ask','review'].includes(action)){
++      const currentGoal=view.head?.goal_record_id?details[view.head.goal_record_id]?.body?.value.goal:null;
++      if(!currentGoal?.target?.trim()){setError('当前目标正文尚未核对完成，请等待读取后再明确提交');return;}
+       setBusy(true);setError('');
+       try{
+         if(recovered&&requestText(aid,command)!==requestText(aid,recovered.domain_input as InterviewCommand))throw new Error('原动作版本不同，不能改绑');
+-        const result=await retrieveForCommand(token,aid,expectedOwner,'interview',command as unknown as Record<string,unknown>,view.head?.scope_revision??scopeRevision,view.head?.revision??0,[target,focus].filter(Boolean).join(' ').slice(0,1024),()=>alive(stamp,aid)&&active.current.owner===expectedOwner&&active.current.viewToken===expectedView,recovered);
++        const result=await retrieveForCommand(token,aid,expectedOwner,'interview',command as unknown as Record<string,unknown>,view.head?.scope_revision??scopeRevision,view.head?.revision??0,[currentGoal.target,currentGoal.focus].filter(Boolean).join(' ').slice(0,1024),()=>alive(stamp,aid)&&active.current.owner===expectedOwner&&active.current.viewToken===expectedView,recovered);
+         if(!result.ref||!alive(stamp,aid)||active.current.owner!==expectedOwner||active.current.viewToken!==expectedView)return;
+         command={...command,retrieval_ref:result.ref};
+       }catch(e){if(alive(stamp,aid))setError((e as Error).message);return;}
+@@ -168,6 +170,7 @@
+   async function moreHistory(){if(!history?.next_before_seq||!view)return;const stamp=panel.current,expected=view.view_token,c=controller();try{const next=await getInterviewHistory(token,activityId,expected,history.next_before_seq,c.signal,()=>alive(stamp)&&active.current.viewToken===expected);if(alive(stamp)&&active.current.viewToken===expected)setHistory({...next,records:[...history.records,...next.records]});}catch(reason){if(alive(stamp)&&!c.signal.aborted)setError(reason instanceof Error?reason.message:"历史游标已变化，请重新读取");}finally{controllers.current.delete(c);}}
+ 
+   const head=view?.head,question=head?.current_question_id?details[head.current_question_id]:null,savedAnswer=head?.current_answer_id?details[head.current_answer_id]:null,feedback=head?.current_feedback_id?details[head.current_feedback_id]:null;
++  const modelGoalReady=view?.profile!=='interview.v2'||Boolean(head?.goal_record_id&&details[head.goal_record_id]?.body?.value.goal?.target?.trim());
+   const finished=head?.phase==="ended",pending=Boolean(view?.pending),activityClosed=view&&(view.budget.status==="cancelled"||Date.parse(String(view.budget.deadline_at))<=Date.now()),writeDisabled=busy||!owner||finished||Boolean(activityClosed);
+   function detailCard(item:InterviewDetail|null|undefined){
+     if(!item)return null;const value=item.body?.value;
+@@ -196,9 +199,9 @@
+       {!view.capabilities.model&&<p>模型动作未开放：{view.capabilities.model_reason}；本地答案与只读核对仍按当前资格可用。</p>}
+       {detailCard(question)}{detailCard(savedAnswer)}{(head.phase==="question_ready"||head.phase==="answer_ready"||head.phase==="feedback_ready")&&<section><label>{head.phase==="question_ready"?"你的回答":"修改当前回答（另存新版本）"}<textarea aria-label="面试回答" value={answer} maxLength={4096} disabled={writeDisabled} onChange={e=>setAnswer(e.target.value)}/></label><button type="button" disabled={writeDisabled||!answer.trim()||(!head.current_question_id)} onClick={()=>void submit(head.current_answer_id?"correct_answer":"answer",head.current_answer_id?{answer_record_id:head.current_answer_id,expected_answer_version:savedAnswer?.record.answer_version??1,text:answer}:{question_record_id:head.current_question_id,text:answer})}>保存回答{head.current_answer_id?"新版本":""}（不调用模型）</button></section>}
+       {detailCard(feedback)}<div className="interview-actions">
+-        {head.phase==="ready"&&<button type="button" disabled={writeDisabled||pending} onClick={()=>void submit("ask",{mode:"first"})}>开始提问</button>}
+-        {head.phase==="answer_ready"&&<button type="button" disabled={writeDisabled||pending} onClick={()=>void submit("review",{question_record_id:head.current_question_id,answer_record_id:head.current_answer_id})}>获取必要追问或反馈</button>}
+-        {head.phase==="feedback_ready"&&<button type="button" disabled={writeDisabled||pending} onClick={()=>void submit("ask",{mode:"next",parent_feedback_id:head.current_feedback_id})}>继续下一题（显式调用）</button>}
++        {head.phase==="ready"&&<button type="button" disabled={writeDisabled||pending||!modelGoalReady} onClick={()=>void submit("ask",{mode:"first"})}>开始提问</button>}
++        {head.phase==="answer_ready"&&<button type="button" disabled={writeDisabled||pending||!modelGoalReady} onClick={()=>void submit("review",{question_record_id:head.current_question_id,answer_record_id:head.current_answer_id})}>获取必要追问或反馈</button>}
++        {head.phase==="feedback_ready"&&<button type="button" disabled={writeDisabled||pending||!modelGoalReady} onClick={()=>void submit("ask",{mode:"next",parent_feedback_id:head.current_feedback_id})}>继续下一题（显式调用）</button>}
+         {pending&&<button type="button" disabled={writeDisabled} onClick={()=>void submit("abandon",{pending_key:head.pending_key})}>显式放弃原意图（不退款／不重发）</button>}
+         {!finished&&<button type="button" disabled={writeDisabled||pending} onClick={()=>void submit("finish",{})}>结束本场次</button>}
+       </div></>}
+--- S03-pre/frontend/tests/step018-flow.mjs
++++ S03-post/frontend/tests/step018-flow.mjs
+@@ -9,13 +9,18 @@
+ const control=process.env.RETROLUME_TASK117_CONTROL??evidence;
+ const root=path.resolve(control,'../../../..');
+ const attempt=process.env.RETROLUME_TASK117_BROWSER_ATTEMPT??'1';
+-const phase=process.env.RETROLUME_TASK117_BROWSER_PHASE??'complete';
++const requestedPhase=process.env.RETROLUME_TASK117_BROWSER_PHASE??'complete';
++const phase=requestedPhase.replace(/^s03-/,'');
+ const resumeProof=process.env.RETROLUME_TASK117_RESUME_PROOF;
+-const resume=['resume','continue-root09','interview-only'].includes(phase)&&resumeProof?JSON.parse(fs.readFileSync(resumeProof,'utf8')):null;
++const resume=['resume','continue-root09','interview-only','recover-before'].includes(phase)&&resumeProof?JSON.parse(fs.readFileSync(resumeProof,'utf8')):null;
+ const dir=path.join(evidence,`browser-${attempt}`);fs.mkdirSync(dir,{recursive:false});
+ const browser=await chromium.launch({headless:true});
+ process.stdin.on('data',()=>{void browser.close();});process.stdin.on('end',()=>{void browser.close();});process.stdin.resume();
+ const context=await browser.newContext({viewport:{width:1440,height:1000},...(resumeProof?{storageState:path.join(path.dirname(resumeProof),'storage.json')}:{})});
++if(resumeProof&&fs.existsSync(path.join(path.dirname(resumeProof),'session-storage.json'))){
++  const previous=JSON.parse(fs.readFileSync(path.join(path.dirname(resumeProof),'session-storage.json'),'utf8'));
++  await context.addInitScript(saved=>{if(location.origin==='http://127.0.0.1:18118')for(const [key,value] of Object.entries(saved))sessionStorage.setItem(key,value);},previous);
++}
+ const page=await context.newPage();
+ const indexBatches=new Map();
+ const proof={attempt,origin:'http://127.0.0.1:18118',official_bundle:true,vite:false,errors:[],receipts:[],requests:0,screenshots:[],semantic_quality:'NOT_RUN_SYNTHETIC_TRANSPORT'};
+@@ -23,7 +28,8 @@
+ const observations=new Set();let closing=false;
+ function observe(kind,work){const pending=Promise.resolve().then(work).catch(error=>{proof.observation_errors??=[];proof.observation_errors.push({kind,closing,error:String(error)});if(!closing)proof.errors.push('observation:'+kind+':'+String(error));save();}).finally(()=>observations.delete(pending));observations.add(pending);}
+ const priorPath=path.join(control,'browser-2','proof.json');
+-const prior=Number(attempt)>2&&fs.existsSync(priorPath)?JSON.parse(fs.readFileSync(priorPath,'utf8')):null;
++const prior=!requestedPhase.startsWith('s03-')&&Number(attempt)>2&&fs.existsSync(priorPath)?JSON.parse(fs.readFileSync(priorPath,'utf8')):null;
++proof.scenario=requestedPhase.startsWith('s03-')?'S03新合成场景；旧活动已过deadline，资格与独立表现不继承':null;
+ if(prior?.teaching_activity_id){proof.teaching_activity_id=prior.teaching_activity_id;proof.inherited_receipts=prior.receipts;proof.inherited_from='browser-2/proof.json';}
+ function count(name,n=1){if(!n)return;const script="import sys;sys.path.insert(0,sys.argv[1]);from control import count;count(sys.argv[2],int(sys.argv[3]))";const r=spawnSync('python',['-X','utf8','-c',script,control,name,String(n)],{cwd:root,encoding:'utf8'});if(r.status)throw new Error('counter_failed:'+name+':'+r.stderr);}
+ function save(){fs.writeFileSync(path.join(dir,'proof.json'),JSON.stringify(proof,null,2));}
+@@ -65,6 +71,8 @@
+   await snapshot(domain+'-scope');
+   if(domain==='interview'){
+     await page.locator('label.ws-pick-row').filter({hasText:'合成测量.md'}).locator('input').check();
++  }
++  if(domain==='interview'||requestedPhase.startsWith('s03-')){
+     const memory=page.getByLabel('选用记忆 S02偏好',{exact:true});
+     // choose()核对GET当前记忆后才提交受控checked状态；一次真实点击，再核异步结果。
+     await memory.click();
+@@ -91,7 +99,19 @@
+ try{
+   await page.goto('http://127.0.0.1:18118',{waitUntil:'networkidle'});await snapshot('materials');
+   let work;
+-  if(resume){
++  if(resume&&phase==='recover-before'){
++    proof.teaching_activity_id=resume.teaching_activity_id;proof.interview_activity_id=resume.interview_activity_id;
++    await page.getByRole('navigation').getByRole('button',{name:/模拟面试/}).click();
++    await page.locator(`[data-activity-id="${proof.interview_activity_id}"]`).click();work=page.locator('.interview-workspace');await work.waitFor();
++    // 原Browser5的sessionStorage未采集，新tab不能冒用旧owner；原未领取key由工程HTTP精确核对后显式续交。
++    // 本段只从已经持久化的问题继续，不能声称UI完成了原提问的重交。
++    await snapshot('durable-original-question-after-explicit-HTTP-recovery');
++    await work.getByLabel('面试回答',{exact:true}).fill('我做了优化，效果很好。');
++    await command('interview','answer',work.getByRole('button',{name:'保存回答（不调用模型）',exact:true}));
++    await command('interview','review',work.getByRole('button',{name:'获取必要追问或反馈',exact:true}));
++    await work.getByLabel('面试回答',{exact:true}).fill('在练习设定中，我参与缓存路径改造。合成测量给的是同环境各1000次，平均耗时100毫秒降到80毫秒，耗时下降20%；不能据此说吞吐或费用提高20%。');
++    await command('interview','answer',work.getByRole('button',{name:'保存回答（不调用模型）',exact:true}));await snapshot('probe-answer-before-normal-reopen');
++  }else if(resume){
+     proof.teaching_activity_id=resume.teaching_activity_id;proof.interview_activity_id=resume.interview_activity_id;
+     if(phase!=='interview-only'){
+     await page.getByRole('navigation').getByRole('button',{name:/学习活动/}).click();
+@@ -124,7 +144,7 @@
+       await work.getByLabel('面试回答',{exact:true}).fill('在练习设定中，我参与缓存路径改造。合成测量给的是同环境各1000次，平均耗时100毫秒降到80毫秒，耗时下降20%；不能据此说吞吐或费用提高20%。');
+       await command('interview','answer',work.getByRole('button',{name:'保存回答（不调用模型）',exact:true}));await snapshot('interview-answer-before-normal-reopen');
+     }else{
+-    await page.getByRole('button',{name:'模拟面试',exact:true}).click();await page.locator(`[data-activity-id="${proof.interview_activity_id}"]`).click();work=page.locator('.interview-workspace');await work.waitFor();
++    await page.getByRole('navigation').getByRole('button',{name:/模拟面试/}).click();await page.locator(`[data-activity-id="${proof.interview_activity_id}"]`).click();work=page.locator('.interview-workspace');await work.waitFor();
+     await command('interview','review',work.getByRole('button',{name:'获取必要追问或反馈',exact:true}));
+     await command('interview','finish',work.getByRole('button',{name:'结束本场次',exact:true}));await snapshot('normal-reopen-interview-finished');
+     }
+@@ -135,6 +155,7 @@
+   if(!prior?.teaching_activity_id){
+   await work.locator('#teaching-goal').fill('根据速度.md，学习平均速度与分钟换秒，说明单位并独立复测。');
+   await command('teaching','goal',work.getByRole('button',{name:'保存目标（不调用模型）',exact:true}));
++  await index(work);
+   await command('teaching','plan',work.getByRole('button',{name:'生成/重订路径（1 次模型）',exact:true}));
+   await command('teaching','accept_path',work.getByRole('button',{name:'接受当前路径（零费）',exact:true}));
+   }
+@@ -185,6 +206,7 @@
+   closing=true;page.removeAllListeners('response');
+   let drainTimer;const drained=await Promise.race([Promise.allSettled([...observations]).then(()=>true),new Promise(resolve=>{drainTimer=setTimeout(()=>resolve(false),5000);})]);clearTimeout(drainTimer);
+   proof.observations_drained_before_close=drained;
++  try{fs.writeFileSync(path.join(dir,'session-storage.json'),JSON.stringify(await page.evaluate(()=>Object.fromEntries(Object.entries(sessionStorage)))));}catch(e){proof.session_storage_save_failure=String(e);}
+   try{await context.storageState({path:path.join(dir,'storage.json'),indexedDB:true});}catch(e){proof.storage_save_failure=String(e);}
+   try{await browser.close();proof.browser_closed=true;}catch(e){proof.browser_close_failure=String(e);}
+   await Promise.allSettled([...observations]);save();process.stdin.removeAllListeners();process.stdin.pause();process.stdin.unref?.();

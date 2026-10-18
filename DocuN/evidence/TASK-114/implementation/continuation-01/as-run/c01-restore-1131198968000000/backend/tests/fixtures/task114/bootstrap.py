@@ -1,0 +1,79 @@
+"""保存本卡接收锚点和工程原件，不读取私有配置或环境秘密。"""
+import hashlib
+import json
+import shutil
+import subprocess
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[4]
+EVIDENCE = ROOT / "DocuN/evidence/TASK-114/implementation"
+
+
+def main():
+    control = EVIDENCE / "control"
+    control.mkdir(parents=True, exist_ok=True)
+    receipt = control / "receipt.json"
+    if not receipt.exists():
+        receipt.write_text(json.dumps({
+            "permit": "TASK-114-STEP017-IMPLEMENT-20261012",
+            "received_utc": "2026-10-12T08:31:24.422001+00:00",
+            "received_monotonic_ns": 1065347750000000,
+            "recorded_utc": datetime.now(timezone.utc).isoformat(),
+            "recorded_monotonic_ns": time.monotonic_ns(),
+            "limits": {"total_seconds": 28800, "offline_seconds": 7200,
+                       "holding_seconds": 10800, "holding_business_seconds": 9600,
+                       "cleanup_reserve_seconds": 1200, "real_roots": 12,
+                       "pg_create": 12, "pg_success": 9, "pg_start": 32,
+                       "preview_create": 2, "preview_start": 2, "api_start": 8,
+                       "vite_start": 8, "browser_start": 6, "windows_start": 12,
+                       "frontend_build": 6, "running_containers": 2},
+            "counts": {}, "resources": [], "offline_seconds": 0,
+            "real_holding_seconds": 0, "provider_calls": 0, "fees": 0,
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+    baseline = EVIDENCE / "before"
+    manifest_path = control / "before-manifest.json"
+    if manifest_path.exists():
+        print("原件已存在，未覆盖")
+        return
+    files = []
+    for directory in ("backend/app", "backend/migrations", "frontend/src"):
+        files.extend(p for p in (ROOT / directory).rglob("*")
+                     if p.is_file() and "__pycache__" not in p.parts)
+    files.extend(ROOT / p for p in ("README.md", ".gitignore", "deploy/start_local.py"))
+    manifest = []
+    for path in sorted(set(files)):
+        relative = path.relative_to(ROOT)
+        if not path.exists():
+            manifest.append({"path": relative.as_posix(), "exists": False})
+            continue
+        target = baseline / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(path, target)
+        data = path.read_bytes()
+        manifest.append({"path": relative.as_posix(), "exists": True,
+                         "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()})
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    status = subprocess.run(["git", "status", "--porcelain=v1"], cwd=ROOT,
+                            capture_output=True, check=False)
+    (control / "git-status-before.txt").write_bytes(status.stdout)
+    pins = json.loads((ROOT / "DocuN/evidence/v4-migration-20260930/rules-snapshot.json").read_text(encoding="utf-8-sig"))
+    verification = []
+    for pin in pins:
+        digest = hashlib.sha256(Path(pin["absolute_path"]).read_bytes()).hexdigest()
+        verification.append({"path": pin["absolute_path"], "expected": pin["sha256"],
+                             "actual": digest, "match": digest == pin["sha256"]})
+    for relative, expected in (
+        ("DocuN/evidence/TASK-113/design/revision-01/current-contract.md", "8a56ebf3c1715895e3ee7a0dcf1f621b591335400e9898aa00df8cb2b7a61aaa"),
+        ("DocuN/results/TASK-113-result.md", "37ba578fa653f778ab60f38b008c3c570e1e106a9237d55829cd21b5f47e19d0"),
+    ):
+        digest = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
+        verification.append({"path": relative, "expected": expected, "actual": digest,
+                             "match": digest == expected})
+    (control / "rule-contract-verification.json").write_text(json.dumps(verification, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps({"baseline_files": len(manifest), "pins_match": all(p["match"] for p in verification)}, ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    main()

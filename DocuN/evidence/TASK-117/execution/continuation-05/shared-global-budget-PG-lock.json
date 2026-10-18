@@ -1,0 +1,48 @@
+{
+  "sample": {
+    "utc": "2026-10-16T15:40:52.437476+00:00",
+    "mono_ns": 98151109000000
+  },
+  "layer": "real PG transaction advisory lock with isolated in-memory S budget/manifest/grant/transport; not real outbound admission or PG business/Q rows",
+  "same_unchanged_production_gate": true,
+  "production_sha256": "13665a40bcce0c99b574b14df89a953806252f5e36e47e348c23f8eb2de17952",
+  "results": [
+    {
+      "provider": "deepseek_chat_completions",
+      "admitted": true,
+      "synthetic_transport_calls": 1,
+      "backend_pid": 34
+    },
+    {
+      "provider": "zhipu_embeddings",
+      "admitted": false,
+      "reason": "outbound_grant_exhausted",
+      "synthetic_transport_calls": 0,
+      "backend_pid": 35
+    }
+  ],
+  "budget": {
+    "requests": 80,
+    "cost": 20000000
+  },
+  "locks": [
+    {
+      "backend_pid": 34,
+      "sql": "SELECT pg_advisory_xact_lock(hashtextextended('retrolume.outbound-roster.v1',0))",
+      "begin_ns": 98151000000000,
+      "acquired_ns": 98151000000000
+    },
+    {
+      "backend_pid": 35,
+      "sql": "SELECT pg_advisory_xact_lock(hashtextextended('retrolume.outbound-roster.v1',0))",
+      "begin_ns": 98151000000000,
+      "acquired_ns": 98151109000000
+    }
+  ],
+  "real_PG_connections": 2,
+  "read_only_transactions": true,
+  "target_SQL_writes": 0,
+  "Q_roster_rows_created": 0,
+  "real_provider_calls": 0,
+  "actual_fee": 0
+}

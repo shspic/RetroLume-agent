@@ -1,0 +1,94 @@
+[
+  {
+    "args": [
+      "ps",
+      "-a",
+      "--filter",
+      "name=^retrolume-task-109-g11-preview-01$",
+      "--format",
+      "{{.Names}}"
+    ],
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "elapsed_seconds": 0.219
+  },
+  {
+    "args": [
+      "image",
+      "inspect",
+      "--format",
+      "{\"id\":{{json .Id}},\"descriptor\":{{json .Descriptor}},\"user\":{{json .Config.User}},\"entrypoint\":{{json .Config.Entrypoint}},\"os\":{{json .Os}},\"architecture\":{{json .Architecture}},\"labels\":{{json .Config.Labels}}}",
+      "sha256:aa824fa25eb0aae09cee50c10372fb218a7d86ffb10124b46074a5c1e977cc66"
+    ],
+    "code": 0,
+    "stdout": "{\"id\":\"sha256:aa824fa25eb0aae09cee50c10372fb218a7d86ffb10124b46074a5c1e977cc66\",\"descriptor\":{\"annotations\":{\"config.digest\":\"sha256:e881d12c9e682de7e535386b9db353bfc95838c3bcea04332bcdffd9cc30e6ea\"},\"digest\":\"sha256:aa824fa25eb0aae09cee50c10372fb218a7d86ffb10124b46074a5c1e977cc66\",\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"size\":2403},\"user\":\"10001:10001\",\"entrypoint\":[\"node\",\"/opt/preview/h0-counter.cjs\"],\"os\":\"linux\",\"architecture\":\"amd64\",\"labels\":{\"org.opencontainers.image.version\":\"24.04\",\"retrolume.action-permit\":\"TASK-109-G11-C01-20261009\",\"retrolume.permit\":\"TASK-109-G11-20261009\",\"retrolume.task\":\"TASK-109\"}}\n",
+    "stderr": "",
+    "elapsed_seconds": 0.187
+  },
+  {
+    "args": [
+      "create",
+      "--pull=never",
+      "--name",
+      "retrolume-task-109-g11-preview-01",
+      "--label",
+      "retrolume.task=TASK-109",
+      "--label",
+      "retrolume.permit=TASK-109-G11-20261009",
+      "--label",
+      "retrolume.synthetic=true",
+      "--label",
+      "retrolume.phase=H0-C02",
+      "--label",
+      "retrolume.action-permit=TASK-109-G11-C02-20261009",
+      "--label",
+      "retrolume.nonce=e2851bf6716dec09e611c5a2fe7de2c0",
+      "--network=none",
+      "--user=10001:10001",
+      "--cap-drop=ALL",
+      "--security-opt",
+      "no-new-privileges",
+      "--security-opt",
+      "seccomp=D:\\shspic\\project_NO3_RetroLume-agent\\deploy\\preview\\seccomp.json",
+      "--read-only",
+      "--restart=no",
+      "--init",
+      "--cpus=1",
+      "--memory=768m",
+      "--memory-swap=768m",
+      "--pids-limit=128",
+      "--ipc=private",
+      "--shm-size=64m",
+      "--tmpfs",
+      "/tmp:rw,nosuid,nodev,noexec,size=128m",
+      "--tmpfs",
+      "/home/preview:rw,nosuid,nodev,noexec,size=32m",
+      "sha256:aa824fa25eb0aae09cee50c10372fb218a7d86ffb10124b46074a5c1e977cc66"
+    ],
+    "code": 0,
+    "stdout": "5bd9e24d2a8ba06403f4daf4120aedcd7fe0ef4f0e3ae5f162b723918f189059\n",
+    "stderr": "",
+    "elapsed_seconds": 0.219
+  },
+  {
+    "args": [
+      "kill",
+      "5bd9e24d2a8ba06403f4daf4120aedcd7fe0ef4f0e3ae5f162b723918f189059"
+    ],
+    "code": 0,
+    "stdout": "5bd9e24d2a8ba06403f4daf4120aedcd7fe0ef4f0e3ae5f162b723918f189059\n",
+    "stderr": "",
+    "elapsed_seconds": 0.219
+  },
+  {
+    "args": [
+      "wait",
+      "5bd9e24d2a8ba06403f4daf4120aedcd7fe0ef4f0e3ae5f162b723918f189059"
+    ],
+    "code": 0,
+    "stdout": "137\n",
+    "stderr": "",
+    "elapsed_seconds": 0.172
+  }
+]

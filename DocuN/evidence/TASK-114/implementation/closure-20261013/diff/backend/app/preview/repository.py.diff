@@ -1,0 +1,21 @@
+--- before/backend/app/preview/repository.py
++++ final/backend/app/preview/repository.py
+@@ -57,8 +57,16 @@
+ 
+     async def _html_assert_schema(self, connection):
+         try:
+-            expected = json.loads(SCHEMA_FILE.read_text(encoding="utf-8"))["sha256"]
+-            if len(expected) != 64 or digest(await self.html_schema_shape(connection)) != expected:
++            profiles = json.loads(SCHEMA_FILE.read_text(encoding="utf-8"))
++            expected=profiles['sha256']
++            shape=await self.html_schema_shape(connection)
++            if getattr(self,'data_enabled',False):
++                from app.data_exit.schema_checks import schema_mode,legacy_business_shape,html_qualification_profile
++                await schema_mode(connection)
++                shape=legacy_business_shape(shape)
++                shape=await html_qualification_profile(connection,shape)
++                expected=profiles['data_exit_013_sha256']
++            if len(expected) != 64 or digest(shape) != expected:
+                 raise HtmlRefusal("html_schema_not_ready", status=503)
+         except (OSError, ValueError, KeyError):
+             raise HtmlRefusal("html_schema_not_ready", status=503) from None

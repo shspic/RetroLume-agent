@@ -1,0 +1,45 @@
+--- as-run/backend/app/data_exit/operations.py
++++ final/backend/app/data_exit/operations.py
+@@ -78,7 +78,7 @@
+         self.deadline_ns = now + int(seconds * 1e9)
+         self.admission = None
+         def begin(job):
+-            if job.get('execution_protocol') != 2 or job.get('execution') is not None:
++            if job.get('execution_protocol') != 2 or job.get('completion_protocol') != 1 or job.get('execution') is not None:
+                 raise DataError('operation_authority_unknown')
+             if job['state'] in ('cancel_requested', 'cancelled'):
+                 raise DataError('operation_cancelled')
+@@ -154,6 +154,18 @@
+         receipt = self.hub.update_job(self.job_id, self.revision, expected_states=('committing',),
+             validate=self.validate_admission, state=state, stage=stage or state, **changes)
+         self.revision = receipt['revision']
++        # 成功帧的真实COMMIT返回也在同D内；未确认前GET仅显示实际未确认事实。
++        confirmed_ns = time.monotonic_ns()
++        self.remaining()
++        def confirm(job):
++            execution=job.get('execution',{})
++            if (execution.get('clock_domain')!=CLOCK_DOMAIN or execution.get('actor_id')!=self.actor
++                or execution.get('deadline_ns')!=self.deadline_ns or job['state']!=state):
++                raise DataError('operation_authority_unknown')
++            self.remaining()
++        receipt=self.hub.update_job(self.job_id,self.revision,expected_states=(state,),validate=confirm,
++                                   completion_confirmed_ns=confirmed_ns)
++        self.revision=receipt['revision']
+         return receipt
+ 
+     def fail(self, error, *, cleanup_complete, state='failed', **facts):
+@@ -161,9 +173,13 @@
+             execution = job.get('execution', {})
+             if execution.get('actor_id') != self.actor or execution.get('clock_domain') != CLOCK_DOMAIN:
+                 raise DataError('operation_authority_unknown')
+-            if job['state'] in TERMINAL: return None
++            pending_success=job.get('completion_protocol')==1 and job['state'] in ('published','received','verified','active_readonly','deleted','deleted_pending') and job.get('completion_confirmed_ns') is None
++            if job['state'] in TERMINAL and not pending_success: return None
+             if job['state'] == 'cancel_requested':
+                 outcome = 'cancelled' if cleanup_complete and execution.get('admission') is None else 'cleanup_unconfirmed'
++            elif pending_success:
++                outcome={'portable_export':'published_unconfirmed','restore_checkpoint':'published_unconfirmed','upload':'upload_unconfirmed',
++                         'restore':'restore_unconfirmed','activate':'activation_unconfirmed','source_delete':'deletion_unconfirmed'}[job['kind']]
+             else: outcome = state
+             return {**facts, 'state': outcome, 'stage': outcome,
+                     'error_code': error.code if isinstance(error, DataError) else 'storage_unavailable'}

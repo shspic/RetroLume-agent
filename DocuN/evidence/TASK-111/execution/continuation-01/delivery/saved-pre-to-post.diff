@@ -1,0 +1,361 @@
+--- saved-pre/backend/app/preview/process.py
++++ post/backend/app/preview/process.py
+@@ -89,6 +89,8 @@
+ 
+ class GlobalOwner:
+     def __init__(self,name):
++        if not name.startswith("Global\\RetroLumePreviewV2"):raise OwnershipUnknown("owner_namespace")
++        self.name=name
+         self.api=ctypes.WinDLL("kernel32",use_last_error=True)
+         self.api.CreateMutexW.argtypes=(ctypes.c_void_p,wintypes.BOOL,wintypes.LPCWSTR);self.api.CreateMutexW.restype=wintypes.HANDLE
+         self.api.WaitForSingleObject.argtypes=(wintypes.HANDLE,wintypes.DWORD);self.api.ReleaseMutex.argtypes=(wintypes.HANDLE,);self.api.CloseHandle.argtypes=(wintypes.HANDLE,)
+@@ -106,3 +108,17 @@
+     def close(self):
+         self.release()
+         if self.handle:self.api.CloseHandle(self.handle);self.handle=None
++
++    def identity(self):
++        """核真实内核对象路径，不用传入Global字样代替作用域证据。"""
++        class Unicode(ctypes.Structure):
++            _fields_=[("length",wintypes.USHORT),("maximum",wintypes.USHORT),("buffer",ctypes.c_void_p)]
++        api=ctypes.WinDLL("ntdll");fn=api.NtQueryObject
++        fn.argtypes=(wintypes.HANDLE,wintypes.ULONG,ctypes.c_void_p,wintypes.ULONG,ctypes.POINTER(wintypes.ULONG));fn.restype=ctypes.c_long
++        data=ctypes.create_string_buffer(4096);needed=wintypes.ULONG()
++        if fn(self.handle,1,data,len(data),ctypes.byref(needed))<0:raise OwnershipUnknown("owner_object_path_unknown")
++        value=Unicode.from_buffer(data)
++        if value.length>4000 or not value.buffer:raise OwnershipUnknown("owner_object_path_unknown")
++        name=ctypes.wstring_at(value.buffer,value.length//2)
++        if name!="\\BaseNamedObjects\\"+self.name.removeprefix("Global\\"):raise OwnershipUnknown("owner_scope_mismatch")
++        return {"requested_name":self.name,"kernel_object_path":name,"held":self.held,"scope":"same trusted deployment owner, global kernel namespace"}
+--- saved-pre/backend/app/preview/host_policy.py
++++ post/backend/app/preview/host_policy.py
+@@ -20,7 +20,7 @@
+     docker: str
+     registry_dir: Path
+     authorization: str
+-    owner_name: str = "Local\\RetroLumePreviewV2"
++    owner_name: str = "Global\\RetroLumePreviewV2"
+ 
+     def __post_init__(self):
+         if not re.fullmatch(r"sha256:[0-9a-f]{64}",self.image_id) or not re.fullmatch(r"[0-9a-f]{64}",self.load_manifest_sha256):
+@@ -29,6 +29,7 @@
+             raise ValueError("invalid_host_policy")
+         if self.authorization not in ("reviewed.v2","TASK-111-G11-P110-20261010") or self.kernel_release != "6.6.114.1-microsoft-standard-WSL2":
+             raise ValueError("host_policy_unconfirmed")
++        if self.owner_name not in ("Global\\RetroLumePreviewV2","Global\\RetroLumePreviewV2Task111"):raise ValueError("deployment_owner_scope")
+ 
+ 
+ def load_host_policy(path, registry_dir):
+--- saved-pre/backend/app/preview/docker_control.py
++++ post/backend/app/preview/docker_control.py
+@@ -6,6 +6,9 @@
+ import subprocess
+ import time
+ import hashlib
++import secrets
++from uuid import uuid4
++from .host_job import HostJob,JobChild,current_job,job_name
+ from .description import canonical
+ 
+ SAFE_ENV=("SystemRoot","WINDIR","PATH","TEMP","TMP","LOCALAPPDATA","USERPROFILE","PROGRAMFILES","PROGRAMFILES(X86)")
+@@ -20,13 +23,22 @@
+ 
+ def call(docker,args,timeout=2):
+     started=time.monotonic_ns()
++    job=current_job();owned=job is None;child=None
++    if owned:job=HostJob(job_name(str(uuid4()),secrets.token_hex(32),"CALL"))
+     try:
+-        value=subprocess.run([docker,*args],capture_output=True,timeout=timeout,env=clean_env(),creationflags=subprocess.CREATE_NO_WINDOW)
++        child=JobChild([docker,*args],job,env=clean_env())
++        stdout,stderr=child.communicate(timeout=timeout);code=child.poll()
+         # 这些固定调用不接密码/DSN或Config.Env；输出仍有硬上界。
+-        if len(value.stdout)>65536 or len(value.stderr)>8192:raise DockerUnknown("docker_output_limit")
+-        return {"args":args,"code":value.returncode,"stdout":value.stdout.decode("utf-8","replace"),
+-                "stderr":value.stderr.decode("utf-8","replace"),"start_ns":started,"end_ns":time.monotonic_ns()}
++        if len(stdout)>65536 or len(stderr)>8192:raise DockerUnknown("docker_output_limit")
++        proof=job.finish() if owned else {"name":job.name,"primary_exit":code,"primary_pid":child.pid,"birth":child.birth["birth"]}
++        return {"args":args,"code":code,"stdout":stdout.decode("utf-8","replace"),
++                "stderr":stderr.decode("utf-8","replace"),"start_ns":started,"end_ns":time.monotonic_ns(),"windows_job":proof}
+     except (OSError,subprocess.TimeoutExpired):raise DockerUnknown("docker_control_unavailable") from None
++    finally:
++        if child:
++            if child.poll() is None:child.terminate();child.wait(2)
++            child.close()
++        if owned:job.close()
+ 
+ 
+ def inspect_owned(docker,cid,intent):
+@@ -90,12 +102,14 @@
+     own=next((r for r in rows if r.get("pid")==facts.get("own_pid")),None)
+     errors=facts.get("errors",[])
+     if (facts.get("kernel")!=intent["kernel_release"] or facts.get("own_uid")!=10001 or facts.get("own_gid")!=10001
+-        or facts.get("own_namespace")!=facts.get("init_namespace") or not init or not own
++        or not isinstance(facts.get("own_namespace"),str) or not facts["own_namespace"].startswith("pid:[") or not facts["own_namespace"].endswith("]")
++        or not facts["own_namespace"][5:-1].isdigit() or facts.get("own_namespace")!=facts.get("init_namespace") or not init or not own
+         or init.get("NSpid")!="1" or not init.get("birth_ticks") or own.get("NoNewPrivs")!="1"
+         or own.get("CapEff")!="0000000000000000" or any(e.get("code")!="ENOENT" for e in errors)):
+         return False
+     # 消失的/proc项保留errno；不把未读取的任务计作0。内核init证明对整个本namespace及子树适用。
+-    return all(row.get("NSpid") and row["NSpid"].split()[0]==str(row["pid"]) and row.get("birth_ticks") for row in rows)
++    return (init.get("pid_namespace")==facts["init_namespace"] and own.get("pid_namespace")==facts["own_namespace"]
++        and all(row.get("NSpid") and row["NSpid"].split()[0]==str(row["pid"]) and row.get("birth_ticks") and row.get("pid_namespace") for row in rows))
+ 
+ 
+ def stop_owned(docker,cid,intent,ready,*,attach_ended=False,diagnostic_deadline_ns=None):
+--- saved-pre/backend/app/preview/production_supervisor.py
++++ post/backend/app/preview/production_supervisor.py
+@@ -22,6 +22,7 @@
+ from .host_policy import policy_config_sha256
+ from .pipe import send_packet,read_packet
+ from .process import atomic_json,birth,GlobalOwner,OwnershipUnknown,protect_control_key,unprotect_control_key,terminate_owned
++from .host_job import HostJob,JobChild,scope,job_name
+ 
+ BACKEND=Path(__file__).resolve().parents[2]
+ PREVIEW_ROOT=BACKEND.parent/"deploy"/"preview"
+@@ -37,6 +38,7 @@
+         acquired=self._owner.acquire()
+         if acquired=="busy":self.available=False;self.blocked=True
+         self.root=policy.registry_dir;self.root.mkdir(parents=True,exist_ok=True)
++        if acquired!="busy":atomic_json(self.root/("owner-"+self.boot_id+".json"),self._owner.identity())
+         self.current_file=self.root/"current.json"
+         if acquired=="abandoned" or self.current_file.exists():
+             # 重启必须先救援和核对，不靠旧monotonic时间或租约直接抢占。
+@@ -201,6 +203,11 @@
+         (c["folder"]/"container-stderr.bin").write_bytes(data)
+ 
+     def _run(self,c):
++        with HostJob(job_name(c["preview_id"],c["nonce"],"SUP")) as job:
++            c["host_job"]=job;c["reaper_job"]=None
++            with scope(job):self._run_owned(c)
++
++    def _run_owned(self,c):
+         proof=None;started=False;registry=c["folder"]/"registry.json"
+         try:
+             reaper=subprocess.Popen([str(BACKEND/".venv"/"Scripts"/"python.exe"),"-B","-m","app.preview.production_reaper",str(registry)],
+@@ -209,6 +216,10 @@
+             while not (c["folder"]/"reaper-ready.json").exists():
+                 if reaper.poll() is not None or time.monotonic_ns()>c["t0_ns"]+1000000000:raise OwnershipUnknown("reaper_not_ready")
+                 time.sleep(.02)
++            ready_owner=json.loads((c["folder"]/"reaper-ready.json").read_text(encoding="utf-8"))
++            expected_job=job_name(c["preview_id"],c["nonce"],"REAP")
++            if ready_owner["pid"]!=reaper.pid or ready_owner.get("job_name")!=expected_job:raise OwnershipUnknown("reaper_job_identity")
++            c["reaper_job"]=HostJob(expected_job,existing=True)
+             c["registry"]["create_requested_ns"]=time.monotonic_ns();self._registry(c)
+             existing=find_intent(self.policy.docker,c["intent"])
+             if existing is not None:raise OwnershipUnknown("name_conflict")
+@@ -229,8 +240,7 @@
+             if bound["cid"]!=cid or bound["deadline_ns"]!=c["deadline_ns"]:raise OwnershipUnknown("reaper_bind_identity")
+             self._transition(c,"start_requested");c["registry"]["start_requested_ns"]=time.monotonic_ns();self._registry(c)
+             self._event("start_attempt",{"preview_id":c["preview_id"],"cid":cid})
+-            attach=subprocess.Popen([self.policy.docker,"start","-a","-i",cid],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+-                env=clean_env(),creationflags=subprocess.CREATE_NO_WINDOW)
++            attach=JobChild([self.policy.docker,"start","-a","-i",cid],c["host_job"],env=clean_env())
+             c["attach"]=attach;started=True
+             born=birth(attach.pid)
+             if born["state"]!="running":raise OwnershipUnknown("attach_birth_unconfirmed")
+@@ -250,7 +260,8 @@
+                 if reaper.poll() is not None:c["error_code"]="reaper_lost";break
+                 row=self._db(self.ledger.read_html_preview(c["aid"],c["preview_id"]))
+                 if not row["eligible"]:c["error_code"]="source_invalid";break
+-        except Exception:
++        except Exception as exc:
++            atomic_json(c["folder"]/"failure.json",{"type":type(exc).__name__,"code":str(exc) if isinstance(exc,(OwnershipUnknown,DockerUnknown)) else "bounded_supervision_error","at_ns":time.monotonic_ns()})
+             c["error_code"]=c["error_code"] or "supervision_unconfirmed"
+         finally:
+             c["stop"].set();diagnostic=c["deadline_ns"]+15000000000
+@@ -286,8 +297,11 @@
+                     if c["reaper"] and c["reaper"].poll() is None:
+                         c["reaper"].terminate();c["reaper"].wait(timeout=2)
+                     proof["owned_reaper_ended"]=c["reaper"] is not None and c["reaper"].poll() is not None
++                    if c["reaper_job"] is None:raise OwnershipUnknown("reaper_job_unknown")
++                    proof["reaper_windows_job"]=c["reaper_job"].finish()
++                    proof["supervisor_cli_windows_job"]=c["host_job"].finish()
+                     if not proof["owned_reaper_ended"]:proof["tree_confirmation"]="unconfirmed"
+-                except (OSError,subprocess.TimeoutExpired):proof["tree_confirmation"]="unconfirmed"
++                except (OSError,subprocess.TimeoutExpired,OwnershipUnknown):proof["tree_confirmation"]="unconfirmed"
+             confirmed=proof is not None and proof["tree_confirmation"] in ("private_pid_init_terminated","never_started") and time.monotonic_ns()<=c["deadline_ns"]
+             if confirmed:
+                 elapsed=min(c["reserve_seconds"],math.ceil((time.monotonic_ns()-c["t0_ns"])/1e9))
+@@ -302,6 +316,13 @@
+             if c["reaper"]:
+                 try:c["reaper"].wait(timeout=2)
+                 except subprocess.TimeoutExpired:c["reaper"].terminate();c["reaper"].wait(timeout=2)
++            if c["reaper_job"]:
++                try:atomic_json(c["folder"]/"reaper-job-final.json",c["reaper_job"].finish())
++                except Exception:self.blocked=True
++                finally:c["reaper_job"].close()
++            try:atomic_json(c["folder"]/"supervisor-job-final.json",c["host_job"].finish())
++            except Exception:self.blocked=True
++            if c["attach"]:c["attach"].close()
+             atomic_json(c["folder"]/"supervisor-result.json",{"preview_id":c["preview_id"],"state":c["state"],"confirmed":confirmed,
+                          "error_code":c["error_code"],"proof":proof,"at_ns":time.monotonic_ns()})
+             self._event("finished",{"preview_id":c["preview_id"],"state":c["state"],"confirmed":confirmed,"error_code":c["error_code"]})
+--- saved-pre/backend/app/preview/production_reaper.py
++++ post/backend/app/preview/production_reaper.py
+@@ -7,16 +7,24 @@
+ import time
+ from .process import atomic_json,birth
+ from .docker_control import find_intent,inspect_owned,stop_owned,DockerUnknown
++from .host_job import HostJob,scope,job_name
+ 
+ 
+ def main():
++    if len(sys.argv)!=2:return 2
++    path=Path(sys.argv[1]).resolve();value=json.loads(path.read_text(encoding="utf-8"))
++    with HostJob(job_name(value["preview_id"],value["intent"]["nonce"],"REAP")) as job:
++        with scope(job):return run(job)
++
++
++def run(job):
+     if len(sys.argv)!=2:return 2
+     registry=Path(sys.argv[1]).resolve();initial=json.loads(registry.read_text(encoding="utf-8"))
+     deadline=initial["deadline_ns"];parent=initial["parent"];fixed=initial["intent"]
+     ready=registry.with_name("reaper-ready.json");bound=registry.with_name("reaper-bound.json");receipt_path=registry.with_name("reaper-receipt.json")
+     own=birth(os.getpid())
+     if own["state"]!="running":return 2
+-    atomic_json(ready,{"pid":os.getpid(),"birth":own["birth"],"deadline_ns":deadline})
++    atomic_json(ready,{"pid":os.getpid(),"birth":own["birth"],"deadline_ns":deadline,"job_name":job.name})
+     cid=None;last=initial
+     while time.monotonic_ns()<deadline+15000000000:
+         try:
+--- saved-pre/backend/tests/fixtures/task111/control.py
++++ post/backend/tests/fixtures/task111/control.py
+@@ -17,6 +17,12 @@
+  "PG_container_starts":6,"API_listener_starts":4,"main_browser_starts":3,"model_synthetic_requests":6,
+  "Windows_OneCall_sessions":8,"frontend_typecheck_build_batches":3,"offline_related_batches":6,"HTTP_total":5000,
+  "public_PNG_gets_subset":3000,"public_inputs_subset":300,"internal_inputs":500,"preview_reaper_validation_batches":2}
++CONTINUATION="TASK-111-G11-C01-20261010"
++CONTINUE_ROOT=EVIDENCE/"continuation-01"
++if (CONTINUE_ROOT/"timing.json").is_file():
++    _continuation=json.loads((CONTINUE_ROOT/"timing.json").read_text(encoding="utf-8"))
++    if _continuation["permit"]!=CONTINUATION or _continuation["original_deadline_ns"]!=902913370092600:raise RuntimeError("continuation identity")
++    CAPS.update({key:_continuation["caps_after"][key] for key in CAPS})
+ 
+ 
+ def atomic(path,value):
+@@ -49,6 +55,19 @@
+         deadline=int(initial["deadline_tick"]*1000000000//initial["host_monotonic_frequency"])
+         value={"permit":PERMIT,"deadline_ns":deadline,"counts":{key:0 for key in CAPS},"time_seconds":{"offline":0,"real":0,"cleanup":0},"active_batch":None,"events":0}
+     if value["permit"]!=PERMIT or time.monotonic_ns()>=value["deadline_ns"]:raise RuntimeError("TASK111 fixed window ended")
++    return value
++
++
++def phase(kind):
++    """续作前向段不重叠记账；PG持有段另覆盖真实租约，不重复加总。"""
++    if kind not in {"metadata","implementation_offline","real","cleanup","complete"}:raise RuntimeError("invalid continuation phase")
++    path=CONTINUE_ROOT/"timing.json";value=json.loads(path.read_text(encoding="utf-8"));now=time.monotonic_ns()
++    previous=value["phase"];elapsed=(now-value["phase_start_ns"])/1e9
++    if previous in value["used_seconds"]:value["used_seconds"][previous]+=elapsed
++    with (CONTINUE_ROOT/"phase-events.jsonl").open("a",encoding="utf-8") as stream:
++        stream.write(json.dumps({"phase":previous,"start_ns":value["phase_start_ns"],"end_ns":now,"seconds":elapsed,"next":kind})+"\n")
++    value["phase"]=kind;value["phase_start_ns"]=now;atomic(path,value)
++    if now>=value["original_deadline_ns"] or any(value["used_seconds"][key]>limit for key,limit in value["caps_seconds"].items()):raise RuntimeError("continuation timing exhausted")
+     return value
+ 
+ 
+@@ -90,7 +109,7 @@
+         if budget["active_batch"] is not None:raise RuntimeError("TASK111 overlapping root batch")
+         remaining=limits[kind]-budget["time_seconds"][kind]
+         if remaining<=0:raise RuntimeError("TASK111 category time exhausted: "+kind)
+-        maximum=min(maximum,remaining,1800 if kind=="cleanup" else 3600)
++        maximum=min(maximum,remaining,1800 if kind=="cleanup" else 3500 if (CONTINUE_ROOT/"timing.json").is_file() and kind=="real" else 3600)
+         budget["active_batch"]={"kind":kind,"number":number,"name":name,"start_ns":start,"deadline_ns":min(start+int(maximum*1000000000),budget["deadline_ns"])}
+         atomic(EVIDENCE/"budget.json",budget)
+     try:yield budget["active_batch"]
+--- saved-pre/backend/tests/fixtures/task111/core.py
++++ post/backend/tests/fixtures/task111/core.py
+@@ -37,8 +37,8 @@
+         self.data=EVIDENCE/"synthetic/data";self.data.mkdir(parents=True,exist_ok=True)
+         (self.data/"originals").mkdir(exist_ok=True);self.originals=OriginalStore(self.data/"originals")
+         self.policy=HostPolicy(image_id=built["image"]["id"],load_manifest_sha256=built["load_manifest_sha256"],renderer_sha256=built["renderer_sha256"],
+-          kernel_release=resource["platform"]["kernel"],docker=resources.DOCKER,registry_dir=(EVIDENCE/"synthetic/control").resolve(),authorization=PERMIT,
+-          owner_name="Local\\RetroLumePreviewV2Task111")
++          kernel_release=resource["platform"]["kernel"],docker=resources.DOCKER,registry_dir=(EVIDENCE/"synthetic/http-control").resolve(),authorization=PERMIT,
++          owner_name="Global\\RetroLumePreviewV2Task111")
+         def name(pid,generation):
+             count=reserve("preview_creates",{"preview_id":pid});return "retrolume-task-111-g11-preview-"+str(count).zfill(2)
+         def observer(kind,data):
+--- saved-pre/backend/tests/fixtures/task111/server.py
++++ post/backend/tests/fixtures/task111/server.py
+@@ -5,6 +5,7 @@
+ import os
+ from pathlib import Path
+ import secrets
++import sys,threading,time
+ from pydantic import SecretStr
+ import uvicorn
+ from .control import ROOT,EVIDENCE,PERMIT,reserve,event
+@@ -32,13 +33,16 @@
+       model_service=ModelServiceConfig(provider="deepseek_chat_completions",base_url="https://api.deepseek.com",model="task111-synthetic",
+         api_key=SecretStr(secrets.token_urlsafe(32)),timeout_seconds=1.0,max_request_bytes=65536,max_response_bytes=65536,max_output_tokens_limit=4096),
+       create_layer=LayerState(True),continue_layer=LayerState(True),html_generation_layer=LayerState(True),html_output_tokens=4096)
+-    policy=HostPolicy(**policy_data,registry_dir=(EVIDENCE/"synthetic/http-control").resolve(),authorization=PERMIT,owner_name="Local\\RetroLumePreviewV2Task111")
++    policy=HostPolicy(**policy_data,registry_dir=(EVIDENCE/"synthetic/http-control").resolve(),authorization=PERMIT,owner_name="Global\\RetroLumePreviewV2Task111")
+     def name(pid,generation):
+         count=reserve("preview_creates",{"preview_id":pid});return "retrolume-task-111-g11-preview-"+str(count).zfill(2)
+     def observer(kind,data):
+         if kind=="start_attempt":reserve("preview_starts",data)
+         event("preview_"+kind,data)
+     app.state.preview_controller=PreviewController(app.state.activities_ledger,policy,name_supplier=name,event_sink=observer)
++    if (EVIDENCE/"continuation-01/timing.json").is_file():
++        from .c01_fault_control import read_commands
++        threading.Thread(target=read_commands,args=(app,sys.stdin),daemon=True,name="task111-fixture-control").start()
+     @app.middleware("http")
+     async def count(request,call_next):
+         reserve("HTTP_total",{"path":request.url.path,"method":request.method})
+--- saved-pre/backend/tests/fixtures/task111/http_matrix.py
++++ post/backend/tests/fixtures/task111/http_matrix.py
+@@ -28,8 +28,10 @@
+            RETROLUME_TASK111_SESSION=self.token,RETROLUME_TASK111_POLICY=json.dumps(policy),PYTHONPATH=str(ROOT/"backend/tests/fixtures/task111/bootstrap")+os.pathsep+str(ROOT/"backend"))
+         reserve("API_listener_starts",{"port":18111})
+         self.stdout=(self.folder/"api.stdout.bin").open("wb");self.stderr=(self.folder/"api.stderr.bin").open("wb")
+-        self.process=subprocess.Popen([sys.executable,"-B","-m","tests.fixtures.task111.server"],cwd=ROOT/"backend",env=env,stdin=subprocess.DEVNULL,
++        self.process=subprocess.Popen([sys.executable,"-B","-m","tests.fixtures.task111.server"],cwd=ROOT/"backend",env=env,stdin=subprocess.PIPE,
+                                       stdout=self.stdout,stderr=self.stderr,creationflags=subprocess.CREATE_NO_WINDOW)
++        from app.preview.process import birth
++        atomic(self.folder/"api-owner.json",{"pid":self.process.pid,"birth":birth(self.process.pid),"port":18111})
+         until=time.monotonic()+20
+         while True:
+             if self.process.poll() is not None:raise RuntimeError("TASK111 API process ended")
+@@ -38,6 +40,10 @@
+             except httpx.Error:pass
+             if time.monotonic()>until:raise RuntimeError("TASK111 API ready timeout")
+             time.sleep(.2)
++
++    def fixture_command(self,value):
++        if set(value)!={"scenario","activity_id","preview_id","generation"}:raise RuntimeError("fixture control fields")
++        self.process.stdin.write((json.dumps(value,sort_keys=True)+"\n").encode());self.process.stdin.flush()
+ 
+     def request(self,method,path,body=None,expected=200,headers=None):
+         response=self.client.request(method,path,json=body,headers=headers)
+--- saved-pre/frontend/tests/task111/browser.cjs
++++ post/frontend/tests/task111/browser.cjs
+@@ -11,8 +11,13 @@
+    await page.goto(input.base,{waitUntil:'domcontentloaded'});
+    await page.getByRole('button',{name:/学习活动/}).first().click().catch(()=>{});
+    await page.locator('[data-activity-id="'+item.activity_id+'"]').click();
+-   await page.locator('.ws-op').filter({hasText:item.operation_id}).first().click().catch(async()=>{await page.locator('.ws-op').last().click();});
+-   await page.getByRole('button',{name:'交互解释此答案段'}).first().click();
++   if(item.parent?.kind==='teaching'){
++     await page.getByRole('region',{name:'教学工作区',exact:true}).waitFor();
++     await page.getByRole('button',{name:item.kind==='energy'?'交互解释当前练习':'交互解释当前反馈'}).click();
++   }else{
++     await page.locator('.ws-op').filter({hasText:item.operation_id}).first().click();
++     await page.getByRole('button',{name:'交互解释此答案段'}).first().click();
++   }
+    const panel=page.getByRole('region',{name:'交互解释',exact:true});
+    // 打开已有真实生成成果，刷新不触发POST模型或容器。
+    await panel.getByRole('button',{name:'读取已保存解释'}).first().click();
+@@ -21,7 +26,11 @@
+    await page.screenshot({path:path.join(input.out,'ui-'+item.kind+'-ready.png'),fullPage:true});
+    for(const step of item.steps){
+     const field=panel.getByRole('spinbutton',{name:step.label});
+-    if(await field.count())await field.fill(step.value);else await panel.getByRole('slider',{name:step.label}).fill(step.value);
++    if(await field.count())await field.fill(step.value);else {
++      const slider=panel.getByRole('slider',{name:step.label});await slider.focus();await slider.press('Home');
++      const minimum=Number(await slider.getAttribute('min')),increment=Number(await slider.getAttribute('step'));
++      for(let i=0;i<Math.round((Number(step.value)-minimum)/increment);i++)await slider.press('ArrowRight');
++    }
+     await panel.getByRole('button',{name:'应用'+step.label,exact:true}).press('Enter');
+     await panel.getByText(new RegExp(step.expect.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'))).first().waitFor({timeout:5000});
+     await page.waitForTimeout(2000);

@@ -1,0 +1,50 @@
+--- first-audit/frontend/src/activities/teachingIntents.ts
++++ current/frontend/src/activities/teachingIntents.ts
+@@ -15,7 +15,10 @@
+ let editorOwner: Promise<string | null> | null = null;
+ 
+ export function teachingEditorOwner(): Promise<string | null> {
+-  if (editorOwner) return editorOwner;
++  if (editorOwner) return editorOwner.then(id=>{
++    // 会话存储身份被更换时不能把原链自动改绑给新owner。
++    try{return id&&sessionStorage.getItem(EDITOR_OWNER_KEY())===id?id:null;}catch{return null;}
++  });
+   editorOwner = new Promise(resolve => {
+     if (!navigator.locks || !crypto.randomUUID) { resolve(null); return; }
+     void (async () => {
+@@ -63,6 +66,9 @@
+   state: "pending" | "submitted" | "committed" | "unconfirmed" | "refused";
+   last_code?: string;
+   last_message?: string;
++  editor_owner_id?: string;
++  view_token?: string;
++  namespace?: string;
+ };
+ 
+ function isSummary(value: unknown): value is TeachingIntentSummary {
+@@ -103,19 +109,21 @@
+   }
+ }
+ 
+-async function mutateSummaries(change: (items: TeachingIntentSummary[]) => TeachingIntentSummary[]): Promise<boolean> {
++async function mutateSummaries(change: (items: TeachingIntentSummary[]) => TeachingIntentSummary[],guard=()=>true): Promise<boolean> {
+   // 回环原生浏览器具有 Web Locks；缺失时保持零 POST，不退回竞态写入。
+   if (!navigator.locks) return false;
+   try {
+-    return await navigator.locks.request(SUMMARY_KEY(), () => {
++    const storageKey=SUMMARY_KEY();
++    return await navigator.locks.request(storageKey, () => {
++      if(!guard()||storageKey!==SUMMARY_KEY())return false;
+       const current = loadTeachingIntents();
+       return current.ok && saveTeachingIntents(change(current.items));
+     });
+   } catch { return false; }
+ }
+ 
+-export function appendTeachingIntent(summary: TeachingIntentSummary): Promise<boolean> {
+-  return mutateSummaries(items => [summary, ...items.filter(item => item.key !== summary.key)]);
++export function appendTeachingIntent(summary: TeachingIntentSummary,guard=()=>true): Promise<boolean> {
++  return mutateSummaries(items => [summary, ...items.filter(item => item.key !== summary.key)],guard);
+ }
+ 
+ export function updateTeachingIntent(key: string, patch: Partial<TeachingIntentSummary>): Promise<boolean> {

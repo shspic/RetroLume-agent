@@ -1,0 +1,11 @@
+--- pre/backend/app/worker/launcher.py
++++ final/backend/app/worker/launcher.py
+@@ -184,6 +184,8 @@
+         if type(one_call) is not OneCallInput:
+             raise ValueError("one_call requires explicit input")
+         validate_identity(activity_id, executor_id, one_call.operation_id, run_tag)
++        if one_call.request.input_result is not None and one_call.request.input_result.activity_id != activity_id:
++            raise ValueError("input result activity mismatch")
+         if one_call.service.timeout_seconds > config.request_timeout_seconds:
+             raise ValueError("model timeout exceeds session")
+     elif one_call is not None:

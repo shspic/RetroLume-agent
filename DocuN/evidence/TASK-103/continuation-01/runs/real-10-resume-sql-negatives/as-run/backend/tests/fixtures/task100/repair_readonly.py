@@ -1,0 +1,149 @@
+"""Final UI inputs: bounded native PG GET projections, then labelled snapshot replay.
+
+No FastAPI application, router dispatch, HTTP server, listener, POST, SUP or writes
+are created here. The request context is a synthetic, explicitly labelled object;
+it cannot provide a new HTTP/authentication/dispatch proof.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import time
+from pathlib import Path
+from types import SimpleNamespace
+
+from fastapi.encoders import jsonable_encoder
+from starlette.requests import Request
+
+from app.activities import api as activity_api
+from app.learning import teaching_api
+from app.runtime import psycopg_compatible_loop_factory
+from .control import EVIDENCE, PERMIT, ControlRefusal, atomic_json
+from .seed_helpers import config
+from .support import DSN, Fixture
+
+SOURCE_BATCH = '2026-10-05T103020.095611-0000-repair-combo'
+READ_TOKEN = 'task100-labelled-readonly-snapshot-context'
+
+
+def archived_inputs():
+    prior = EVIDENCE / SOURCE_BATCH
+    inputs = json.loads((prior / 'repair-browser-input.json').read_text('utf-8'))
+    timeline = json.loads((prior / 'repair-browser/timeline.json').read_text('utf-8'))
+    aid = inputs['ui']['activity_id']
+    snapshots = [r['value'] for r in timeline if r.get('kind') == 'actual_api'
+                 and r.get('method') == 'GET' and r.get('url') == f'/api/activities/{aid}/teaching/workspace']
+    a2 = snapshots[-1]
+    a1 = next(s for s in reversed(snapshots) if s['head']['answer_record_id'] != a2['head']['answer_record_id'])
+    if a1['head']['exercise_record_id'] != a2['head']['exercise_record_id']:
+        raise ControlRefusal('replay_not_same_exercise')
+    return inputs, a1, a2
+
+
+async def collect():
+    if os.environ.get('RETROLUME_TASK100_FIXTURE') != PERMIT or not DSN:
+        raise ControlRefusal('readonly_controlled_entry_required')
+    deadline = float(os.environ['RETROLUME_TASK100_DEADLINE'])
+    fixture = Fixture(DSN, Path(os.environ['RETROLUME_TASK100_ORIGINALS_DIR']))
+    inputs, a1, a2 = archived_inputs()
+    aid, seed_aid = inputs['ui']['activity_id'], inputs['seed']['activity_id']
+    state = SimpleNamespace(activities_ledger=fixture.ledger, activity_config=config(),
+                            materials=fixture.materials, originals=fixture.originals, session_token=READ_TOKEN)
+    # Only the state accessed by the existing readonly functions. This is not an app.
+    context = SimpleNamespace(state=state)
+    routes, raw = {}, []
+
+    def request(url):
+        return Request({'type':'http', 'method':'GET', 'scheme':'http', 'path':url,
+                        'query_string':b'', 'server':('127.0.0.1',18100), 'client':('127.0.0.1',0),
+                        'headers':[(b'x-retrolume-session', READ_TOKEN.encode())], 'app':context})
+
+    async def get(url, fn, *args, **kwargs):
+        if time.monotonic() >= deadline:
+            raise ControlRefusal('readonly_snapshot_deadline')
+        value = await fn(request(url), *args, **kwargs)
+        if hasattr(value, 'body'):
+            body = json.loads(value.body)
+        else:
+            body = jsonable_encoder(value)
+        routes[url] = body
+        raw.append({'method':'GET', 'path':url, 'projection_function':fn.__module__+'.'+fn.__name__,
+                    'value':body, 'grade':'native_PG_projection_synthetic_request_context_no_HTTP'})
+        return body
+
+    def counters():
+        return jsonable_encoder(fixture.rows(
+            'SELECT a.id AS activity_id,a.requests_reserved,a.cost_reserved_microunits,a.tools_reserved,'
+            'a.running_settled_seconds,(SELECT count(*) FROM teaching_records t WHERE t.activity_id=a.id) AS records,'
+            '(SELECT count(*) FROM teaching_commands c WHERE c.activity_id=a.id) AS commands,'
+            '(SELECT count(*) FROM activity_operations o WHERE o.activity_id=a.id) AS operations '
+            'FROM activities a WHERE a.id IN (%s,%s) ORDER BY a.id', (aid,seed_aid)))
+
+    before = counters()
+    await get('/api/activities/capabilities', activity_api.capabilities)
+    activities = []
+    for current in (aid, seed_aid):
+        detail = await get(f'/api/activities/{current}', activity_api.read_activity, current)
+        activities.append(detail['activity'])
+        await get(f'/api/activities/{current}/operations', activity_api.list_operations, current, limit=100)
+        await get(f'/api/activities/{current}/teaching/workspace', teaching_api.read_teaching_workspace, current)
+    routes['/api/activities'] = {'items':activities, 'next_cursor':None}
+    routes['/api/materials'] = {'items':[fixture.materials.get(s['source_id']) for s in a2['sources']], 'next_offset':None}
+    routes['/api/pdf-candidates'] = {'items':[]}
+    current = routes[f'/api/activities/{aid}/teaching/workspace']
+    if current['head'] != a2['head']:
+        raise ControlRefusal('archived_current_head_drift')
+    await get(f'/api/activities/{seed_aid}/operations/{inputs["seed"]["operation_id"]}',
+              activity_api.read_operation, seed_aid, inputs['seed']['operation_id'])
+    await get(f'/api/activities/{seed_aid}/teaching/seeds/{inputs["seed"]["operation_id"]}',
+              teaching_api.read_teaching_seed, seed_aid, inputs['seed']['operation_id'])
+    records = fixture.rows('SELECT record_id,kind,seq FROM teaching_records WHERE activity_id=%s ORDER BY seq', (aid,))
+    for record in records:
+        rid = str(record['record_id'])
+        await get(f'/api/activities/{aid}/teaching/records/{rid}', teaching_api.read_teaching_record, aid, rid)
+    pages = {}
+    # Replay pagination is explicitly based on native before_seq reads. It does not
+    # pretend that an obsolete cursor was accepted by the current native HTTP API.
+    for label, snap in (('A1',a1), ('A2',a2)):
+        page = await get(f'/native-history/{label}', teaching_api.read_teaching_history, aid,
+                         limit=50, before_seq=snap['history'][-1]['seq'])
+        pages[label] = {**page, 'view_token':snap['view_token'], 'next_cursor':None,
+                        'watermark_last_seq':max(r['seq'] for r in snap['history'])}
+    for rid in (a1['head']['path_record_id'], a1['head']['exercise_record_id'], a1['head']['feedback_record_id']):
+        if not rid:
+            continue
+        record = routes[f'/api/activities/{aid}/teaching/records/{rid}']
+        def citations(value):
+            if isinstance(value,dict):
+                for key,item in value.items():
+                    if key=='citations':
+                        yield from item
+                    else:
+                        yield from citations(item)
+            elif isinstance(value,list):
+                for item in value:
+                    yield from citations(item)
+        for cid in sorted(set(citations(record['public_body']))):
+            await get(f'/api/activities/{aid}/teaching/records/{rid}/citations/{cid}',
+                      teaching_api.read_teaching_citation, aid, rid, cid)
+    after = counters()
+    if before != after:
+        raise ControlRefusal('readonly_projection_had_business_effects')
+    result = {'status':'pass','source_batch':SOURCE_BATCH,'ui':inputs['ui'],'seed':inputs['seed'],
+              'records':jsonable_encoder(records),'workspace_A1':a1,'workspace_A2':a2,
+              'history_pages':pages,'routes':routes,'pg_before':before,'pg_after':after,
+              'projection_grade':'native_PG_readonly_functions_app_role_synthetic_request_context',
+              'browser_grade':'final_dist_native_browser_IDB_WebLocks_recorded_and_labelled_readonly_snapshots',
+              'no_new_HTTP_auth_proof':True,'application_starts':0,'SUP_calls':0,'business_writes':0,
+              'snapshot_controls':['A1_A2_archived_actual_HTTP','before_seq_history_replay_with_labelled_token_rebinding',
+                                   'two_activity_list_filter','empty_pdf_candidate_display_list','synthetic_session_token']}
+    directory = Path(os.environ['RETROLUME_TASK100_BATCH_DIR'])
+    atomic_json(directory/'readonly-projection-raw.json',raw)
+    atomic_json(directory/'readonly-browser-input.json',result)
+    print('READONLY_SNAPSHOTS',json.dumps({'status':'pass','PG_projection_reads':len(raw),'business_writes':0,'app_starts':0}))
+
+
+if __name__ == '__main__':
+    with asyncio.Runner(loop_factory=psycopg_compatible_loop_factory) as runner:
+        runner.run(collect())

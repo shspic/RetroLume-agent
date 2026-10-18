@@ -1,0 +1,40 @@
+Traceback (most recent call last):
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task106\control.py", line 75, in batch
+    yield folder
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task106\closure.py", line 298, in main
+    admin=start(1);app,denied=runtime(admin);h=Harness(admin,app,out);asyncio.run(normal(h));http_cut(app,out)
+                                                                      ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 195, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task106\closure.py", line 217, in normal
+    aid,q=await concurrency(h);await citation_cutoffs(h,aid,q);await budgets_retry_capacity(h)
+          ^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task106\closure.py", line 103, in concurrency
+    code=await refused(lambda:h.ledger.apply_teaching_local(aid,teaching),{'interview_domain_conflict'})
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task106\closure.py", line 29, in refused
+    try:await fn()
+        ^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\activities\teaching_repository.py", line 537, in apply_teaching_local
+    return await self._transaction(operation)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\activities\repository.py", line 338, in _transaction
+    return await operation(connection)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\activities\teaching_repository.py", line 473, in operation
+    locked = await self._teaching_lock_command(connection, activity_id, command.business_key,
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\activities\teaching_repository.py", line 150, in _teaching_lock_command
+    locked = await self._teaching_lock(connection, activity_id, original_record_id=original_record_id)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\activities\teaching_repository.py", line 136, in _teaching_lock
+    except InterviewRefusal as exc: raise TeachingRefusal('stage_conflict','此活动属于面试域或其资格不可靠') from None
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+app.learning.teaching_contracts.TeachingRefusal: stage_conflict

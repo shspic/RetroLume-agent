@@ -1,0 +1,31 @@
+{
+  "kind": "只读增量审计的代码判断，不是新产品运行",
+  "DEF034_F01": {
+    "recommendation": "原取消覆盖成功的根因可关闭",
+    "basis": "Operation固定actor/revision/admission；request_cancel与不可逆准入短CAS；真实PG撤权停止及文件/ASGI两顺序证据；最终协议强化不重开取消门"
+  },
+  "DEF035_F02": {
+    "recommendation": "暂不关闭，完整D仍有明确未贯通路径",
+    "severity": "沿用P1",
+    "code_path": "RestoreController._load -> LoadingReferencePin.__init__ -> psycopg.connect(connect_timeout=3) -> SELECT data_loading_allowed/data_state",
+    "source_locations": ["backend/app/data_exit/restore.py:445", "backend/app/data_exit/reference.py:45", "backend/app/data_exit/reference.py:48"],
+    "gap": "未传Operation；连接固定3秒，查询没有该job剩余statement_timeout，后续check不能中断尚未返回的同步PG调用",
+    "runtime_claim": "未新增运行，未声称真实发生挂死；B级完整截止传参缺陷",
+    "additional_evidence_limit": "真实PG 2秒方法日志只有reading到failed，耗时2.047秒小于publication延迟2.1秒；并未达到声明的capture后发布注入"
+  },
+  "DEF036_F03": {
+    "recommendation": "原capabilities反序回退已修；计划/选择生命周期仍不闭合",
+    "severity": "删除策略计划沿用P1；范围核对迟到为同修复传播观察",
+    "code_path": "DataWorkspace.upload捕获旧policy，policy change仅setPolicy/setPlan(null)，请求checkpoint只绑定dataset lifetime，旧restore-plan回来仍setPlan；verify不校plan.deletion_policy与当前policy",
+    "source_locations": ["frontend/src/data/DataWorkspace.tsx:47", "frontend/src/data/DataWorkspace.tsx:55", "frontend/src/data/DataWorkspace.tsx:57", "frontend/src/data/DataWorkspace.tsx:74"],
+    "trigger": "snapshot_only已确认上传中切为respect_current，旧响应可把snapshot_only plan恢复到显示respect_current的页面，后续按旧plan/hash验证",
+    "scope_preview": "选择改变仅setScopePreview(null)，旧scope-preview仍可回来重填；backend expected_closure_sha阻止错误导出但UI仍陈旧",
+    "runtime_claim": "B级静态反例，未启动Browser；现有Browser测的是两次refresh的GET plan反序，不覆盖上传中更换删除policy或选择集合"
+  },
+  "DEF037_F04": {
+    "recommendation": "原正文资格缺陷可关闭",
+    "basis": "同RR/库身份、memory_revision_readable和墓碑谱系、历史refs/选定memory检查；真实PG正例/失效/头与bodyhash保留，真实TCP和sealed只读bundle原件"
+  },
+  "remaining_resource_request": "不在本轮运行；主控合并原DEF035/036最小修正和定向补证，复用既有PG/SUP/DDL正常链，不要求全仓/旧G11重跑",
+  "master_acceptance": "未填写"
+}

@@ -1,0 +1,148 @@
+diff --git a/Ndocu/evidence/task-071/test_activity_recovery.py.pre-task071 b/backend/tests/test_activity_recovery.py
+index 7e0ee92..225c050 100644
+--- a/Ndocu/evidence/task-071/test_activity_recovery.py.pre-task071
++++ b/backend/tests/test_activity_recovery.py
+@@ -340,43 +340,143 @@ class ActivityRecoveryPostgresTests(PsycopgLoopIsolatedAsyncioTestCase):
+             await self.ledger.record_outcome(
+                 permit,
+                 LedgerOutcome(
+                     LedgerDisposition.RECEIVED,
+                     returned_model="synthetic-model",
+                     finish_reason="stop",
+                     prompt_tokens=1,
+                     completion_tokens=1,
+                     response_bytes=10,
+                 ),
+             )
+         with self.assertRaises(AdmissionDenied):
+             await self.ledger.record_outcome(
+                 permit, LedgerOutcome(LedgerDisposition.UNKNOWN, error_code="late_note")
+             )
+         await self.ledger.record_outcome(
+             permit, LedgerOutcome(LedgerDisposition.UNKNOWN, error_code="executor_lost")
+         )
+         row = await self.db_row(
+             """SELECT state, disposition, error_code, prompt_tokens, completion_tokens, response_bytes
+                    FROM activity_operations WHERE admission_id = %s""",
+             (permit.admission_id,),
+         )
+         self.assertEqual(
+             row,
+             {
+                 "state": "unknown",
+                 "disposition": "unknown",
+                 "error_code": "executor_lost",
+                 "prompt_tokens": None,
+                 "completion_tokens": None,
+                 "response_bytes": None,
+             },
+         )
+         budget = await self.db_row(
+             "SELECT requests_reserved, cost_reserved_microunits FROM activities WHERE id = %s",
+             (spec.activity_id,),
+         )
+         self.assertEqual(budget, {"requests_reserved": 1, "cost_reserved_microunits": 100})
+ 
++    async def test_06_bounded_single_batch_converges_incrementally(self) -> None:
++        """TASK-071：limit=2 连续收敛 5 个旧未决项得到 2/2/1/0，逐批只动已选行。
++
++        当前代次操作、活动代次与预算在整个收敛过程中保持不变；
++        末尾补 recover_obsolete_operations 自身 limit 参数的非法拒绝。
++        """
++        spec, lease, _ = await self.build_activity()
++        old_ids = [f"old-op-{index:02d}" for index in range(5)]
++        for operation_id in old_ids:
++            await self.ledger.admit(self.intent(spec, lease, operation_id))
++        new_lease = await self.reclaim_next_generation(spec)
++        await self.ledger.admit(self.intent(spec, new_lease, "cur-op-1"))
++
++        async def operation_states() -> dict[str, str]:
++            rows = await self.db_rows(
++                "SELECT operation_id, state FROM activity_operations WHERE activity_id = %s",
++                (spec.activity_id,),
++            )
++            return {row["operation_id"]: row["state"] for row in rows}
++
++        async def assert_invariants(expected: dict[str, str]) -> None:
++            self.assertEqual(await operation_states(), expected)
++            # 当后代次/预算不变：代次仍为 2，6 次 admit 的预留不因收敛退还。
++            snapshot = await self.db_row(
++                "SELECT execution_generation, requests_reserved, cost_reserved_microunits"
++                " FROM activities WHERE id = %s",
++                (spec.activity_id,),
++            )
++            self.assertEqual(
++                snapshot,
++                {"execution_generation": 2, "requests_reserved": 6, "cost_reserved_microunits": 600},
++            )
++
++        # 批 1：limit=2 只收敛排序最前的 old-op-00/old-op-01。
++        self.assertEqual(await self.ledger.recover_obsolete_operations(spec.activity_id, limit=2), 2)
++        await assert_invariants(
++            {
++                "old-op-00": "unknown",
++                "old-op-01": "unknown",
++                "old-op-02": "reserved",
++                "old-op-03": "reserved",
++                "old-op-04": "reserved",
++                "cur-op-1": "reserved",
++            }
++        )
++
++        # 批 2：继续收敛 old-op-02/old-op-03。
++        self.assertEqual(await self.ledger.recover_obsolete_operations(spec.activity_id, limit=2), 2)
++        await assert_invariants(
++            {
++                "old-op-00": "unknown",
++                "old-op-01": "unknown",
++                "old-op-02": "unknown",
++                "old-op-03": "unknown",
++                "old-op-04": "reserved",
++                "cur-op-1": "reserved",
++            }
++        )
++
++        # 批 3：只剩 old-op-04，返回 1 而不是 limit。
++        self.assertEqual(await self.ledger.recover_obsolete_operations(spec.activity_id, limit=2), 1)
++        await assert_invariants(
++            {
++                "old-op-00": "unknown",
++                "old-op-01": "unknown",
++                "old-op-02": "unknown",
++                "old-op-03": "unknown",
++                "old-op-04": "unknown",
++                "cur-op-1": "reserved",
++            }
++        )
++
++        # 批 4：返回 0 表示本批无匹配，不产生任何写入。
++        self.assertEqual(await self.ledger.recover_obsolete_operations(spec.activity_id, limit=2), 0)
++        rows = {
++            row["operation_id"]: row
++            for row in await self.db_rows(
++                "SELECT operation_id, state, disposition, error_code, recorded_at"
++                " FROM activity_operations WHERE activity_id = %s",
++                (spec.activity_id,),
++            )
++        }
++        for operation_id in old_ids:
++            self.assertEqual(rows[operation_id]["state"], "unknown")
++            self.assertEqual(rows[operation_id]["disposition"], "unknown")
++            self.assertEqual(rows[operation_id]["error_code"], "executor_lost")
++            self.assertIsNotNone(rows[operation_id]["recorded_at"])
++        self.assertEqual(rows["cur-op-1"]["state"], "reserved")
++        self.assertIsNone(rows["cur-op-1"]["error_code"])
++        self.assertIsNone(rows["cur-op-1"]["recorded_at"])
++        self.assertEqual(
++            [item.operation_id for item in await self.ledger.list_unresolved_operations(spec.activity_id)],
++            ["cur-op-1"],
++        )
++
++        # limit 参数校验：bool/0/201/非 int 一律 ValueError，不静默截断。
++        for bad_limit in (0, 201, True, "2"):
++            with self.assertRaises(ValueError):
++                await self.ledger.recover_obsolete_operations(spec.activity_id, limit=bad_limit)
++
+ 
+ if __name__ == "__main__":
+     unittest.main(verbosity=2)

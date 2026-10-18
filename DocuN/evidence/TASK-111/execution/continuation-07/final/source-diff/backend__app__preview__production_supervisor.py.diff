@@ -1,0 +1,178 @@
+--- C06/backend/app/preview/production_supervisor.py
++++ C07/backend/app/preview/production_supervisor.py
+@@ -20,7 +20,7 @@
+ from .description import canonical,digest,control_value
+ from .docker_control import call,clean_env,creation_args,find_intent,inspect_owned,stop_owned,local_create_rejection,DockerUnknown
+ from .host_policy import policy_config_sha256
+-from .pipe import send_packet,read_packet
++from .pipe import send_packet,read_packet,PipeReadError
+ from .process import atomic_json,birth,GlobalOwner,OwnershipUnknown,protect_control_key,unprotect_control_key,terminate_owned
+ from .host_job import HostJob,JobChild,scope,job_name,child_lineage,observe_job_end,valid_job_end
+ 
+@@ -238,7 +238,10 @@
+            "folder":folder,"stop":threading.Event(),"ready":threading.Event(),"ack":threading.Event(),"frame":None,
+            "frame_seq":0,"input_seq":0,"last_ack":None,"last_payload_sha256":None,"state":"reserved","cid":None,
+            "identity":identity,"name":name,"attach":None,"reader":None,"stderr_reader":None,"reaper":None,
+-           "kernel_ready":None,"received_ready":None,"pipe_eof":False,"error_code":None,"last_contact_ns":now,"reaper_owner":None}
++           "kernel_ready":None,"received_ready":None,"ready_received_ns":None,"ready_accepted_ns":None,
++           "pipe_eof":False,"stderr_eof":False,"stdout_read_error":None,"stderr_read_error":None,
++           "stderr_observed_bytes":0,"stderr_captured_bytes":0,"stderr_overflow":False,
++           "error_code":None,"last_contact_ns":now,"reaper_owner":None}
+         current["input_times"]=deque();current["rate_exceeded_since"]=None
+         current["intent"]={"name":name,"image_id":self.policy.image_id,"nonce":identity["nonce"],"docker":self.policy.docker,
+           "kernel_release":self.policy.kernel_release,"created_unix":str(int(time.time())-1),
+@@ -280,16 +283,62 @@
+         self._db(self.ledger.update_html_preview(c["preview_id"],c["control_key"],state,**fields));c["state"]=state
+         self._observe(c,"state",{"preview_id":c["preview_id"],"state":state,"at_ns":time.monotonic_ns()})
+ 
++    def _wait_ready(self,c):
++        """完整接收与提交资格分开；成功wait也必须核原时窗和停止门。"""
++        deadline=min(c["t0_ns"]+8000000000,c["deadline_ns"]-10000000000)
++        while not c["ready"].wait(.02):
++            if c["stop"].is_set() or time.monotonic_ns()>=deadline:raise OwnershipUnknown("ready_unconfirmed")
++        now=time.monotonic_ns();received=c.get("ready_received_ns")
++        accepted=type(received) is int and c["t0_ns"]<=received<deadline and now<deadline and not c["stop"].is_set()
++        self._save_observation(c,c["folder"]/"ready-decision.json",{"t0_ns":c["t0_ns"],"deadline_ns":c["deadline_ns"],
++            "ready_deadline_ns":deadline,"complete_packet_received_ns":received,"decision_ns":now,"accepted":accepted,"stop_set":c["stop"].is_set()})
++        check_ns=time.monotonic_ns()
++        if not accepted or c["stop"].is_set() or check_ns>=deadline:
++            self._save_observation(c,c["folder"]/"ready-decision.json",{"t0_ns":c["t0_ns"],"deadline_ns":c["deadline_ns"],
++                "ready_deadline_ns":deadline,"complete_packet_received_ns":received,"decision_ns":now,"final_check_ns":check_ns,
++                "accepted":False,"stop_set":c["stop"].is_set()})
++            raise OwnershipUnknown("ready_unconfirmed")
++        c["ready_accepted_ns"]=check_ns
++
++    def _pipe_observation(self,c):
++        return {"schema":"retrolume.preview.pipe_observation.v1","stdout_eof":c.get("pipe_eof") is True,
++            "stderr_eof":c.get("stderr_eof") is True,"stdout_read_error":c.get("stdout_read_error"),
++            "stderr_read_error":c.get("stderr_read_error"),"stderr_observed_bytes":c.get("stderr_observed_bytes",0),
++            "stderr_captured_bytes":c.get("stderr_captured_bytes",0),"stderr_overflow":c.get("stderr_overflow") is True}
++
++    def _attach_ended(self,c):
++        return (c.get("pipe_eof") is True and c.get("stderr_eof") is True
++            and c.get("stdout_read_error") is None and c.get("stderr_read_error") is None
++            and c.get("attach") is not None and c["attach"].poll() is not None
++            and all(c.get(key) is not None and not c[key].is_alive() for key in ("reader","stderr_reader")))
++
++    def _settle_stop(self,c,proof,started):
++        """持久结算前再核真实双EOF；缺证保持预留，不能靠线程退出退款。"""
++        confirmed=(proof is not None and proof["tree_confirmation"] in ("private_pid_init_terminated","never_started")
++            and time.monotonic_ns()<=c["deadline_ns"] and (not started or self._attach_ended(c)))
++        if confirmed:
++            elapsed=min(c["reserve_seconds"],math.ceil((time.monotonic_ns()-c["t0_ns"])/1e9))
++            try:
++                if not started and c["state"]=="start_requested":self._transition(c,"cleanup_unconfirmed",first_receipt=proof)
++                self._transition(c,"stopped" if started else "failed_unstarted",first_receipt=proof,confirmation=proof,elapsed=elapsed)
++            except Exception:confirmed=False
++        return confirmed
++
+     def _read(self,c):
+         try:
+             while True:
+                 head,body=read_packet(c["attach"].stdout,c)
++                received_ns=time.monotonic_ns()
+                 kind=head["type"]
+                 if kind=="ready":
+                     if head["seq"]!=0 or c["received_ready"] is not None or body.get("load_manifest_sha256")!=self.policy.load_manifest_sha256 or body.get("renderer_sha256")!=self.policy.renderer_sha256 or body.get("description_sha256")!=digest(c["description"]):
+                         raise ValueError("ready_identity")
+-                    c["received_ready"]=body;c["kernel_ready"]=body
+-                    for filename,value in (("ready.json",body),("ready-packet.json",{"header":head,"body":body}),("kernel-premises.json",body)):
++                    c["received_ready"]=body;c["kernel_ready"]=body;c["ready_received_ns"]=received_ns
++                    deadline=min(c["t0_ns"]+8000000000,c["deadline_ns"]-10000000000)
++                    if received_ns>=deadline:c["error_code"]=c["error_code"] or "ready_late";c["stop"].set()
++                    for filename,value in (("ready.json",body),("ready-packet.json",{"header":head,"body":body,"complete_packet_received_ns":received_ns}),
++                        ("kernel-premises.json",body),("ready-reception.json",{"t0_ns":c["t0_ns"],"deadline_ns":c["deadline_ns"],"ready_deadline_ns":deadline,
++                         "complete_packet_received_ns":received_ns,"packet_within_window":c["t0_ns"]<=received_ns<deadline,"stop_set":c["stop"].is_set()})):
+                         self._save_observation(c,c["folder"]/filename,value)
+                     c["ready"].set()
+                 elif kind=="frame":
+@@ -306,23 +355,32 @@
+                     elif body.get("state")=="stopping":c["error_code"]=c["error_code"] or body.get("reason_code");c["stop"].set()
+                 self._observe(c,"packet",{"preview_id":c["preview_id"],"type":kind,"seq":head["seq"],"body_bytes":head["body_bytes"],"body_sha256":head["body_sha256"]})
+         except EOFError:c["pipe_eof"]=True;c["stop"].set()
+-        except Exception:
++        except Exception as error:
+             c["error_code"]="protocol_unconfirmed";c["stop"].set()
++            if isinstance(error,(OSError,PipeReadError)):c["stdout_read_error"]=type(error).__name__
+             # 协议已拒绝，仍排空同一个匿名管道直至真实EOF。
+             try:
+-                while c["attach"].stdout.read(4096):pass
+-                c["pipe_eof"]=True
+-            except OSError:pass
++                while time.monotonic_ns()<c["deadline_ns"]+15000000000:
++                    if not c["attach"].stdout.read(4096):c["pipe_eof"]=True;break
++            except (OSError,ValueError) as drain_error:c["stdout_read_error"]=type(drain_error).__name__
+ 
+     def _stderr(self,c):
+         data=bytearray()
+-        while True:
+-            chunk=c["attach"].stderr.read(1024)
+-            if not chunk:break
+-            if len(data)+len(chunk)>8192:c["error_code"]="stderr_limit";c["stop"].set();break
+-            data.extend(chunk)
++        try:
++            while time.monotonic_ns()<c["deadline_ns"]+15000000000:
++                chunk=c["attach"].stderr.read(1024)
++                if not chunk:c["stderr_eof"]=True;break
++                c["stderr_observed_bytes"]+=len(chunk)
++                data.extend(chunk[:max(0,8192-len(data))])
++                if c["stderr_observed_bytes"]>8192:
++                    c["stderr_overflow"]=True;c["error_code"]=c["error_code"] or "stderr_limit";c["stop"].set()
++        except (OSError,ValueError) as error:
++            c["stderr_read_error"]=type(error).__name__;c["error_code"]=c["error_code"] or "stderr_read_unconfirmed";c["stop"].set()
++        c["stderr_captured_bytes"]=len(data)
++        if not c["stderr_eof"]:c["stop"].set()
+         try:(c["folder"]/"container-stderr.bin").write_bytes(data)
+         except OSError as error:self._diagnose(c,"stderr_publish",error,"container-stderr.bin")
++        self._save_observation(c,c["folder"]/"stderr-observation.json",{**self._pipe_observation(c),"at_ns":time.monotonic_ns()})
+ 
+     def _run(self,c):
+         with HostJob(job_name(c["preview_id"],c["nonce"],"SUP")) as job:
+@@ -386,9 +444,7 @@
+             stage="attach_resume";attach.resume();started=True;stage="init_send"
+             with self._writer:send_packet(attach.stdin,c,"init",0,{"schema":"retrolume.preview.init.v2","description":c["description"],
+               "description_sha256":digest(c["description"]),"renderer_sha256":self.policy.renderer_sha256,"viewport":{"width":640,"height":480}})
+-            ready_deadline=min(c["t0_ns"]+8000000000,c["deadline_ns"]-10000000000)
+-            while not c["ready"].wait(.02):
+-                if c["stop"].is_set() or time.monotonic_ns()>=ready_deadline:raise OwnershipUnknown("ready_unconfirmed")
++            self._wait_ready(c)
+             stage="ready_transition";self._transition(c,"ready");stage="running"
+             while not c["stop"].wait(.05):
+                 now=time.monotonic_ns()
+@@ -419,8 +475,9 @@
+                         if c["reader"]:c["reader"].join(timeout=2)
+                         if c["stderr_reader"]:c["stderr_reader"].join(timeout=2)
+                         proof=stop_owned(self.policy.docker,c["cid"],c["intent"],c["kernel_ready"],
+-                            attach_ended=c["pipe_eof"] and c["attach"].poll() is not None and c["reader"] is not None and c["stderr_reader"] is not None and not c["reader"].is_alive() and not c["stderr_reader"].is_alive(),
++                            attach_ended=self._attach_ended(c),
+                             diagnostic_deadline_ns=diagnostic)
++                        proof["pipe_observation"]=self._pipe_observation(c)
+                         proof["first_stop_observation"]=initial
+                 elif c["cid"]:
+                     if c["attach"]:
+@@ -445,13 +502,7 @@
+                     proof["supervisor_cli_windows_job"]=c["host_job"].finish()
+                     if not proof["owned_reaper_ended"]:proof["tree_confirmation"]="unconfirmed"
+                 except (OSError,subprocess.TimeoutExpired,OwnershipUnknown):proof["tree_confirmation"]="unconfirmed"
+-            confirmed=proof is not None and proof["tree_confirmation"] in ("private_pid_init_terminated","never_started") and time.monotonic_ns()<=c["deadline_ns"]
+-            if confirmed:
+-                elapsed=min(c["reserve_seconds"],math.ceil((time.monotonic_ns()-c["t0_ns"])/1e9))
+-                try:
+-                    if not started and c["state"]=="start_requested":self._transition(c,"cleanup_unconfirmed",first_receipt=proof)
+-                    self._transition(c,"stopped" if started else "failed_unstarted",first_receipt=proof,confirmation=proof,elapsed=elapsed)
+-                except Exception:confirmed=False
++            confirmed=self._settle_stop(c,proof,started)
+             if not confirmed:
+                 self.blocked=True
+                 try:self._transition(c,"cleanup_unconfirmed",first_receipt=proof or {"tree_confirmation":"unconfirmed","error_code":c["error_code"]})
+@@ -471,7 +522,9 @@
+             except Exception:self.blocked=True
+             if c["attach"]:c["attach"].close()
+             published=self._save_observation(c,c["folder"]/"supervisor-result.json",{"preview_id":c["preview_id"],"state":c["state"],"confirmed":confirmed,
+-                         "error_code":c["error_code"],"diagnostics":c.get("diagnostics",[]),"proof":proof,"at_ns":time.monotonic_ns()})
++                         "error_code":c["error_code"],"diagnostics":c.get("diagnostics",[]),"proof":proof,
++                         "ready_received_ns":c.get("ready_received_ns"),"ready_accepted_ns":c.get("ready_accepted_ns"),
++                         "pipe_observation":self._pipe_observation(c),"at_ns":time.monotonic_ns()})
+             self._observe(c,"finished",{"preview_id":c["preview_id"],"state":c["state"],"confirmed":confirmed,"error_code":c["error_code"]})
+             if not published:self.blocked=True;confirmed=False
+             if confirmed:

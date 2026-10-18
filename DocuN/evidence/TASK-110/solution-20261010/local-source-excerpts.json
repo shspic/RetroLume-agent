@@ -1,0 +1,601 @@
+{
+  "task": "TASK-110",
+  "kind": "有限原件源码摘录，不执行",
+  "metadata_correction": "初次摘录脚本将单个数值范围意外展开，出现6次参数类型错误；本次改成显式from/to对象重写，未运行产品，未重算历史对象",
+  "excerpts": [
+    {
+      "path": "D:/shspic/project_NO3_RetroLume-agent/deploy/preview/host.cjs",
+      "input_sha256": "30d9c49f290e9968a1ad48b6fcdb0d2d66e4ec2ff82c5215875c6847b65b01bf",
+      "excerpts": [
+        {
+          "from": 1,
+          "to": 5,
+          "lines": [
+            {
+              "line": 1,
+              "text": "\"use strict\";"
+            },
+            {
+              "line": 2,
+              "text": "// 本模块仅承载关口反例，未实现或声明全协议导航否决器。"
+            },
+            {
+              "line": 3,
+              "text": "const fs = require(\"node:fs\");"
+            },
+            {
+              "line": 4,
+              "text": "const crypto = require(\"node:crypto\");"
+            },
+            {
+              "line": 5,
+              "text": "const pw = require(\"./vendor/playwright-core\");"
+            }
+          ]
+        },
+        {
+          "from": 76,
+          "to": 82,
+          "lines": [
+            {
+              "line": 76,
+              "text": "      const prefix = \"TASK109_SIGNAL:\";"
+            },
+            {
+              "line": 77,
+              "text": "      if (!text.startsWith(prefix)) return;"
+            },
+            {
+              "line": 78,
+              "text": "      if (pageSignals.length >= 256 || text.length > 1024) throw new Error(\"固定页手势观测超限\");"
+            },
+            {
+              "line": 79,
+              "text": "      const data = JSON.parse(text.slice(prefix.length));"
+            },
+            {
+              "line": 80,
+              "text": "      pageSignals.push({ ...data, source: \"固定fixture真实console事件\", location: message.location(), page_url: page.url().slice(0, 256) });"
+            },
+            {
+              "line": 81,
+              "text": "    });"
+            },
+            {
+              "line": 82,
+              "text": "    const pending = value.newCDPSession(page).then(async session => {"
+            }
+          ]
+        },
+        {
+          "from": 134,
+          "to": 149,
+          "lines": [
+            {
+              "line": 134,
+              "text": "    const session = await observerReady(page);"
+            },
+            {
+              "line": 135,
+              "text": "    const tree = await session.send(\"Page.getFrameTree\");"
+            },
+            {
+              "line": 136,
+              "text": "    const frames = [];"
+            },
+            {
+              "line": 137,
+              "text": "    function collect(row) {"
+            },
+            {
+              "line": 138,
+              "text": "      frames.push({ id: row.frame.id, parent: row.frame.parentId ?? null, loaderId: row.frame.loaderId, url: row.frame.url.slice(0, 256) });"
+            },
+            {
+              "line": 139,
+              "text": "      for (const child of row.childFrames ?? []) collect(child);"
+            },
+            {
+              "line": 140,
+              "text": "    }"
+            },
+            {
+              "line": 141,
+              "text": "    collect(tree.frameTree);"
+            },
+            {
+              "line": 142,
+              "text": "    const dom = await session.send(\"DOMSnapshot.captureSnapshot\", { computedStyles: [] });"
+            },
+            {
+              "line": 143,
+              "text": "    if (!Array.isArray(dom.documents) || !Array.isArray(dom.strings)) throw new Error(\"DOMSnapshot真实字段结构不符\");"
+            },
+            {
+              "line": 144,
+              "text": "    const documents = dom.documents.map(doc => ({ frameId: dom.strings[doc.frameId], url: dom.strings[doc.documentURL], backendNodeId: doc.nodes.backendNodeId[0] }));"
+            },
+            {
+              "line": 145,
+              "text": "    pages.push({ url: page.url().slice(0, 256), frames, documents });"
+            },
+            {
+              "line": 146,
+              "text": "  }"
+            },
+            {
+              "line": 147,
+              "text": "  return { targets, pages };"
+            },
+            {
+              "line": 148,
+              "text": "}"
+            },
+            {
+              "line": 149,
+              "text": "async function trustedClick(page, frame, id) {"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "D:/shspic/project_NO3_RetroLume-agent/deploy/preview/wrapper.html",
+      "input_sha256": "571f356e150eecdac85b1af06068040c071c63a007a086b7c9cfef73abab4fac",
+      "excerpts": [
+        {
+          "from": 1,
+          "to": 3,
+          "lines": [
+            {
+              "line": 1,
+              "text": "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
+            },
+            {
+              "line": 2,
+              "text": "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; frame-src 'none'; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'; worker-src 'none'\">"
+            },
+            {
+              "line": 3,
+              "text": "<style>html,body{margin:0;width:640px;height:480px}iframe{border:0;width:640px;height:480px}</style></head><body></body></html>"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "D:/shspic/project_NO3_RetroLume-agent/backend/tests/fixtures/task109/navigation-tail.cjs",
+      "input_sha256": "fa2d405c4ee34a965554b0349ca7f690726d7ed64f9d8ddea3668cee5a9b3bc3",
+      "excerpts": [
+        {
+          "from": 12,
+          "to": 17,
+          "lines": [
+            {
+              "line": 12,
+              "text": "document.getElementById('h0_data').onclick=()=>{h0_handler('h0_data');location.href='data:text/html,<p id=\"h0_nav_marker\">H0_DATA_COMMITTED</p>'};"
+            },
+            {
+              "line": 13,
+              "text": "document.getElementById('h0_blob').onclick=()=>{h0_handler('h0_blob');location.href=URL.createObjectURL(new Blob(['<p id=\"h0_nav_marker\">H0_BLOB_COMMITTED</p>'],{type:'text/html'}))};"
+            },
+            {
+              "line": 14,
+              "text": "document.getElementById('h0_hash').onclick=()=>{h0_handler('h0_hash');location.hash='H0_SAME_DOCUMENT_COMMITTED'};"
+            },
+            {
+              "line": 15,
+              "text": "document.getElementById('h0_child').onclick=()=>{h0_handler('h0_child');const f=document.createElement('iframe');f.id='H0_NEW_CHILD';document.body.appendChild(f)};"
+            },
+            {
+              "line": 16,
+              "text": "</script></body></html>`;"
+            },
+            {
+              "line": 17,
+              "text": "const order = [\"h0_hash\", \"h0_child\", \"h0_blob\", \"h0_data\"];"
+            }
+          ]
+        },
+        {
+          "from": 177,
+          "to": 190,
+          "lines": [
+            {
+              "line": 177,
+              "text": "function violation(before, after, delta, targets) {"
+            },
+            {
+              "line": 178,
+              "text": "  const previous = flatten(before.child.frameTree).find(row => row.id === binding.frameId);"
+            },
+            {
+              "line": 179,
+              "text": "  const current = after ? flatten(after.child.frameTree).find(row => row.id === binding.frameId) : null;"
+            },
+            {
+              "line": 180,
+              "text": "  const frameIds = new Set([...flatten(before.root.frameTree), ...flatten(before.child.frameTree)].map(row => row.id));"
+            },
+            {
+              "line": 181,
+              "text": "  const targetIds = new Set(before.targets.map(row => row.id));"
+            },
+            {
+              "line": 182,
+              "text": "  const commit = delta.find(row => row.frameId === binding.frameId && [\"Page.frameNavigated\", \"Page.navigatedWithinDocument\"].includes(row.name) && row.url && row.url !== previous.url);"
+            },
+            {
+              "line": 183,
+              "text": "  const newFrame = delta.find(row => row.name === \"Page.frameAttached\" && row.frameId && !frameIds.has(row.frameId));"
+            },
+            {
+              "line": 184,
+              "text": "  const newTarget = targets.find(row => row.kind === \"created\" && [\"page\", \"iframe\"].includes(row.type) && !targetIds.has(row.id));"
+            },
+            {
+              "line": 185,
+              "text": "  const newFrameAfter = after ? [...flatten(after.root.frameTree), ...flatten(after.child.frameTree)].find(row => !frameIds.has(row.id)) : null;"
+            },
+            {
+              "line": 186,
+              "text": "  const beforeDocument = before.child.documents.find(row => row.frameId === binding.frameId);"
+            },
+            {
+              "line": 187,
+              "text": "  const afterDocument = after?.child.documents.find(row => row.frameId === binding.frameId);"
+            },
+            {
+              "line": 188,
+              "text": "  const documentChanged = Boolean(afterDocument && beforeDocument && afterDocument.backendNodeId !== beforeDocument.backendNodeId);"
+            },
+            {
+              "line": 189,
+              "text": "  const urlChanged = Boolean(current && current.url !== previous.url);"
+            },
+            {
+              "line": 190,
+              "text": "  const loaderChanged = Boolean(current && current.loaderId !== previous.loaderId);"
+            }
+          ]
+        },
+        {
+          "from": 227,
+          "to": 235,
+          "lines": [
+            {
+              "line": 227,
+              "text": "    const acknowledged = retained.some(row => row.context_matches_subject && row.data.kind === \"gesture\" && row.data.id === id && row.data.trusted === true && row.data.active === true) && retained.some(row => row.context_matches_subject && row.data.kind === \"handler\" && row.data.id === id);"
+            },
+            {
+              "line": 228,
+              "text": "    const delta = events.slice(eventIndex);"
+            },
+            {
+              "line": 229,
+              "text": "    const targetDelta = targetEvents.slice(targetIndex);"
+            },
+            {
+              "line": 230,
+              "text": "    const evidence = violation(before, after, delta, targetDelta);"
+            },
+            {
+              "line": 231,
+              "text": "    const elapsed = Number(process.hrtime.bigint() - started) / 1000000000;"
+            },
+            {
+              "line": 232,
+              "text": "    const verdict = acknowledged && evidence.found ? \"FAIL\" : !acknowledged || fault || callError || captureError || elapsed < 2 ? \"UNCONFIRMED\" : \"BLOCKED_IN_THIS_PROBE\";"
+            },
+            {
+              "line": 233,
+              "text": "    host.emit(\"H0_NAVIGATION\", { id, verdict, acknowledged, actual_observation_seconds: elapsed, before, after, events: delta, target_events: targetDelta, retained_signals: retained, violation: evidence, engine_fault: fault, call_error: callError, capture_error: captureError });"
+            },
+            {
+              "line": 234,
+              "text": "    if (verdict === \"FAIL\") return { verdict: \"FAIL\", blocking: id, stop_remaining: true, security_axis: \"可裁导航或新frame反证\", engine_axis: fault ? \"另有异常\" : \"未见异常\", gate: \"NOT_FULL_H0\" };"
+            },
+            {
+              "line": 235,
+              "text": "    if (verdict === \"UNCONFIRMED\") return { verdict: \"ERROR\", blocking: id, stop_remaining: true, security_axis: \"未确认\", engine_axis: fault ?? callError ?? captureError ?? \"ACK或完整观察不足\", gate: \"NOT_FULL_H0\" };"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "D:/shspic/project_NO3_RetroLume-agent/backend/app/preview/contracts.py",
+      "input_sha256": "0eef6211ab267854f7fef211aa99927dfb9b926173410e7b614b06c1b6895eee",
+      "excerpts": [
+        {
+          "from": 8,
+          "to": 29,
+          "lines": [
+            {
+              "line": 8,
+              "text": "    prefix = stream.read(4)"
+            },
+            {
+              "line": 9,
+              "text": "    if not prefix:"
+            },
+            {
+              "line": 10,
+              "text": "        return None"
+            },
+            {
+              "line": 11,
+              "text": "    if len(prefix) != 4:"
+            },
+            {
+              "line": 12,
+              "text": "        raise ValueError(\"关口封包头不完整\")"
+            },
+            {
+              "line": 13,
+              "text": "    length = struct.unpack(\"!I\", prefix)[0]"
+            },
+            {
+              "line": 14,
+              "text": "    if not 1 <= length <= 2048:"
+            },
+            {
+              "line": 15,
+              "text": "        raise ValueError(\"关口封包头超限\")"
+            },
+            {
+              "line": 16,
+              "text": "    raw = stream.read(length)"
+            },
+            {
+              "line": 17,
+              "text": "    if len(raw) != length:"
+            },
+            {
+              "line": 18,
+              "text": "        raise ValueError(\"关口封包头截断\")"
+            },
+            {
+              "line": 19,
+              "text": "    head = json.loads(raw)"
+            },
+            {
+              "line": 20,
+              "text": "    if set(head) != {\"protocol\", \"type\", \"seq\", \"body_bytes\", \"body_sha256\"}:"
+            },
+            {
+              "line": 21,
+              "text": "        raise ValueError(\"关口封包字段不符\")"
+            },
+            {
+              "line": 22,
+              "text": "    if head[\"protocol\"] != \"retrolume.preview.h0.v1\" or head[\"type\"] != \"observation\" or type(head[\"seq\"]) is not int or head[\"seq\"] != expected_sequence:"
+            },
+            {
+              "line": 23,
+              "text": "        raise ValueError(\"关口封包身份或序号不符\")"
+            },
+            {
+              "line": 24,
+              "text": "    if type(head[\"body_bytes\"]) is not int or not 1 <= head[\"body_bytes\"] <= 4096:"
+            },
+            {
+              "line": 25,
+              "text": "        raise ValueError(\"关口观测超限\")"
+            },
+            {
+              "line": 26,
+              "text": "    body = stream.read(head[\"body_bytes\"])"
+            },
+            {
+              "line": 27,
+              "text": "    if len(body) != head[\"body_bytes\"] or hashlib.sha256(body).hexdigest() != head[\"body_sha256\"]:"
+            },
+            {
+              "line": 28,
+              "text": "        raise ValueError(\"关口正文身份不符\")"
+            },
+            {
+              "line": 29,
+              "text": "    return json.loads(body)"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "D:/shspic/project_NO3_RetroLume-agent/backend/app/preview/supervisor.py",
+      "input_sha256": "2adbc0ca12c2ab3d7babc871963c0f44cc6640f9976bc2fee775a71b78ce3876",
+      "excerpts": [
+        {
+          "from": 11,
+          "to": 13,
+          "lines": [
+            {
+              "line": 11,
+              "text": "INSPECT_FORMAT = '{\"id\":{{json .Id}},\"image\":{{json .Image}},\"labels\":{{json .Config.Labels}},\"user\":{{json .Config.User}},\"state\":{{json .State}},\"host\":{{json .HostConfig}},\"mounts\":{{json .Mounts}},\"ports\":{{json .NetworkSettings.Ports}}}'"
+            },
+            {
+              "line": 12,
+              "text": ""
+            },
+            {
+              "line": 13,
+              "text": ""
+            }
+          ]
+        },
+        {
+          "from": 60,
+          "to": 74,
+          "lines": [
+            {
+              "line": 60,
+              "text": "    for option in value[\"host\"][\"SecurityOpt\"] or []:"
+            },
+            {
+              "line": 61,
+              "text": "        if option.startswith(\"seccomp=\"):"
+            },
+            {
+              "line": 62,
+              "text": "            content = option[len(\"seccomp=\"):]"
+            },
+            {
+              "line": 63,
+              "text": "            options.append({\"type\": \"seccomp\", \"value_sha256\": hashlib.sha256(content.encode(\"utf-8\")).hexdigest()})"
+            },
+            {
+              "line": 64,
+              "text": "        else:"
+            },
+            {
+              "line": 65,
+              "text": "            options.append(option)"
+            },
+            {
+              "line": 66,
+              "text": "    value[\"host\"][\"SecurityOpt\"] = options"
+            },
+            {
+              "line": 67,
+              "text": "    return value"
+            },
+            {
+              "line": 68,
+              "text": ""
+            },
+            {
+              "line": 69,
+              "text": ""
+            },
+            {
+              "line": 70,
+              "text": "def atomic_json(path, value):"
+            },
+            {
+              "line": 71,
+              "text": "    temporary = path.with_suffix(\".new.json\")"
+            },
+            {
+              "line": 72,
+              "text": "    with temporary.open(\"w\", encoding=\"utf-8\") as stream:"
+            },
+            {
+              "line": 73,
+              "text": "        json.dump(value, stream, ensure_ascii=False, indent=2)"
+            },
+            {
+              "line": 74,
+              "text": "        stream.flush()"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "D:/shspic/project_NO3_RetroLume-agent/backend/app/preview/reaper.py",
+      "input_sha256": "f167fb585673593bece6146385b5de3d12df139e7098c6121698cab2d0fc0384",
+      "excerpts": [
+        {
+          "from": 25,
+          "to": 47,
+          "lines": [
+            {
+              "line": 25,
+              "text": "            return"
+            },
+            {
+              "line": 26,
+              "text": "        cid = current.get(\"cid\")"
+            },
+            {
+              "line": 27,
+              "text": "        if cid and cid != bound_cid:"
+            },
+            {
+              "line": 28,
+              "text": "            inspect_owned(data[\"docker\"], cid, current[\"image\"], data[\"nonce\"])"
+            },
+            {
+              "line": 29,
+              "text": "            bound_cid = cid"
+            },
+            {
+              "line": 30,
+              "text": "            atomic_json(registry.with_name(\"reaper-bound.json\"), {\"cid\": cid, \"image\": current[\"image\"], \"runtime_deadline_ns\": current[\"runtime_deadline_ns\"]})"
+            },
+            {
+              "line": 31,
+              "text": "        expired = time.monotonic_ns() >= current.get(\"runtime_deadline_ns\", fixed_deadline)"
+            },
+            {
+              "line": 32,
+              "text": "        parent_lost = process_birth(data[\"parent_pid\"]) != data[\"parent_birth\"]"
+            },
+            {
+              "line": 33,
+              "text": "        if cid and (expired or parent_lost):"
+            },
+            {
+              "line": 34,
+              "text": "            try:"
+            },
+            {
+              "line": 35,
+              "text": "                before = inspect_owned(data[\"docker\"], cid, current[\"image\"], data[\"nonce\"])"
+            },
+            {
+              "line": 36,
+              "text": "                killed = docker_call(data[\"docker\"], [\"kill\", cid]) if before[\"state\"][\"Running\"] else None"
+            },
+            {
+              "line": 37,
+              "text": "                after = inspect_owned(data[\"docker\"], cid, current[\"image\"], data[\"nonce\"])"
+            },
+            {
+              "line": 38,
+              "text": "                atomic_json(result_path, {\"state\": \"救援已执行\", \"reason\": \"截止\" if expired else \"控制器身份丢失\", \"before\": before[\"state\"], \"kill\": killed, \"after\": after[\"state\"], \"tree_confirmation\": \"仍需原件核对\"})"
+            },
+            {
+              "line": 39,
+              "text": "            except Exception as error:"
+            },
+            {
+              "line": 40,
+              "text": "                atomic_json(result_path, {\"state\": \"停止未确认\", \"error\": str(error)[:2000]})"
+            },
+            {
+              "line": 41,
+              "text": "            return"
+            },
+            {
+              "line": 42,
+              "text": "        time.sleep(0.1)"
+            },
+            {
+              "line": 43,
+              "text": "    atomic_json(result_path, {\"state\": \"独立总截止到达\", \"cid\": current.get(\"cid\"), \"tree_confirmation\": \"未确认\"})"
+            },
+            {
+              "line": 44,
+              "text": ""
+            },
+            {
+              "line": 45,
+              "text": ""
+            },
+            {
+              "line": 46,
+              "text": "if __name__ == \"__main__\":"
+            },
+            {
+              "line": 47,
+              "text": "    main()"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

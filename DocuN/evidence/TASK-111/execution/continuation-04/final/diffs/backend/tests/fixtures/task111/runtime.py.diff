@@ -1,0 +1,10 @@
+--- C04-pre/backend/tests/fixtures/task111/runtime.py
++++ backend/tests/fixtures/task111/runtime.py
+@@ -21,6 +21,7 @@
+     if "UNKNOWN" in context["focus"]:raise DeliveryUnknown("declared TASK111 transport uncertainty")
+     citation=context["catalog"][0]["citation_id"]
+     description=binomial(citation) if "二项" in context["focus"] else energy(citation)
++    if "C04 机械能" in context["focus"]:description["inputs"][0]["kind"]="range"
+     if any(marker in context["focus"] for marker in ("C01 边界","C03 边界")) and "二项" in context["focus"]:
+         description["inputs"][0].update(min="0",max="20");description["inputs"][1].update(max="20")
+         description["calculation_notes"][0]["domain"]="n整数0到20，k整数0到n，p在0到1"

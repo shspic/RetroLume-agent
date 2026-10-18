@@ -1,0 +1,29 @@
+# TASK-070 差异证据完备性核验: 用提供的 diff 反向重建生产对象
+# 方法: 复制 pre-task068 副本 → 用 patch 应用原始 diff → 比对 SHA256
+# 命令:
+#   cp Ndocu/evidence/task-068/repository.py.pre-task068 /tmp/audit070/f.py
+#   patch f.py < Ndocu/evidence/task-068/repository.diff
+#   sha256sum f.py
+
+$ patch f.py < Ndocu/evidence/task-068/repository.diff
+(Stripping trailing CRs from patch; use --binary to disable.)
+patching file f.py
+$ patch g.py < Ndocu/evidence/task-068/init.diff
+(Stripping trailing CRs from patch; use --binary to disable.)
+patching file g.py
+
+重建产物 SHA256:
+  f.py  cc7fddd4e685e1d3af859c7b402d0734354cef5675ed72f2f8acb83c92e6dcc7
+  g.py  31d0b60cfc644c797a04fb31e9c3a4da242969abbe0e5b54648b1d18f19f1d2a
+生产对象 SHA256:
+  backend/app/activities/repository.py  cc7fddd4e685e1d3af859c7b402d0734354cef5675ed72f2f8acb83c92e6dcc7
+  backend/app/activities/__init__.py    31d0b60cfc644c797a04fb31e9c3a4da242969abbe0e5b54648b1d18f19f1d2a
+判定: 逐字节一致 → 原始 diff 完备且未隐藏改动
+
+# 权威 diff -u 统计 (pre 副本 → 生产对象):
+  删除行=0  新增行=92  hunk=2  (hunk 头: @@ -63,6 +63,19 @@ / @@ -350,6 +363,95 @@)
+  提供的 repository.diff hunk 头: @@ -61,6 +61,19 @@ / @@ -350,6 +363,95 @@
+  说明: 首个 hunk 起始行差 2 行属上下文窗口截取差异, 反重建哈希一致已排除实质差异
+
+# 编译证据链: Ndocu/evidence/task-068/compile-check-and-hashes.txt 记录 compile OK
+#   且其 post-change sha256 与本卡实测冻结值一致 → 编译结论绑定到当前字节

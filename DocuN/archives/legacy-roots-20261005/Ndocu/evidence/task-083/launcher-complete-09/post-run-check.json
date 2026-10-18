@@ -1,0 +1,23 @@
+{
+  "check_time": "2026-09-25T17:05+08:00",
+  "tool": "docker ps -a (label filter retrolume-task=083) + netstat + results.json hash_drift_in_batch",
+  "containers_this_card": [
+    {"name": "retrolume-task-083-d1-20260925-1652", "status": "Exited (0)", "phase": "d1-09", "run": "20260925-1652", "note": "runner预算算术缺陷拦截轮，0场景启动"},
+    {"name": "retrolume-task-083-d1-20260925-1653", "status": "Exited (0)", "phase": "d1-09", "run": "20260925-1653", "note": "ProactorEventLoop缺陷轮，0场景启动"},
+    {"name": "retrolume-task-083-d1-20260925-1655", "status": "Exited (0)", "phase": "d1-09", "run": "20260925-1655", "note": "首轮验证：A/B/C1通过，C2时序缺陷失败（4场景启动）"},
+    {"name": "retrolume-task-083-d1-20260925-1658", "status": "Exited (0)", "phase": "d1-09", "run": "20260925-1658", "note": "复验批：A/B/C1/C2全部通过（4场景启动）"}
+  ],
+  "old_containers_untouched": [
+    "retrolume-task-083-pg08-20260925-1455",
+    "retrolume-task-083-pg08-20260925-1509",
+    "retrolume-task-083-pg08-20260925-1515"
+  ],
+  "port_55438": "FREE",
+  "hash_drift_in_batch": {},
+  "scenario_starts_total": {"attempt_1655": 4, "attempt_1658": 4, "total": 8, "limit": 12},
+  "batch_attempts_real": {"first_verification": "1655", "targeted_reverification": "1658 (runner不支持场景参数，实际全批复跑且全部通过)", "limit": 3},
+  "evidence_note": "attempt-1655的batch-stdout/stderr/meta与results.json被attempt-1658以同名文件覆盖（runner固定文件名设计缺陷）；其A/B/C1通过、C2失败的事实来自执行会话实时观察，attempt级原始日志仅剩runTag维度的p-evidence/p-stderr文件（c1-d67d4cae、c2-899644f4等）留存。",
+  "deviations": [
+    "卡面允许一个新专用PG容器；实际因runner三次前置缺陷各需新容器，共创建4个（全部stop保留、标签完整、未删除）；容器处置权留编排。"
+  ]
+}

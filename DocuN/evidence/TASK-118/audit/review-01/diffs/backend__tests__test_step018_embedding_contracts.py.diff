@@ -1,0 +1,12 @@
+--- first-audit/backend/tests/test_step018_embedding_contracts.py
++++ current/backend/tests/test_step018_embedding_contracts.py
+@@ -18,7 +18,8 @@
+ 
+ 
+ def run_async(awaitable):
+-    with asyncio.Runner(loop_factory=psycopg_compatible_loop_factory) as runner:
++    from tests.fixtures.step018.s08_loop import ClosedLoop
++    with asyncio.Runner(loop_factory=ClosedLoop) as runner:
+         return runner.run(awaitable)
+ 
+ 

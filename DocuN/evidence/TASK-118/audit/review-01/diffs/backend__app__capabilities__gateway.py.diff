@@ -1,0 +1,215 @@
+--- first-audit/backend/app/capabilities/gateway.py
++++ current/backend/app/capabilities/gateway.py
+@@ -97,14 +97,23 @@
+         self._transport = transport or HttpxModelTransport()
+         self._tools = tools or ToolRegistry()
+ 
+-    async def call(self, context: CallContext, request: ModelCallRequest) -> ModelCallResult:
+-        if context.operation_id.startswith("html11m.") and request.html_profile is None:
+-            return self._result(context, CallStatus.REJECTED, "html_profile_required")
+-        if request.html_profile is not None:
+-            from app.preview.model_policy import validate_request
+-            code = await validate_request(context, request, self._ledger)
+-            if code is not None:
+-                return self._result(context, CallStatus.REJECTED, code)
++    async def call(self, context: CallContext, request: ModelCallRequest) -> ModelCallResult:
++        # 冻结原请求及服务端配置；await不能把已核正文换成新正文。
++        original_request = request
++        request = request.model_copy(deep=True)
++        config = self._config.model_copy(deep=True)
++        request_snapshot = json.dumps(request.model_dump(mode='json'),sort_keys=True,separators=(',',':'),allow_nan=False)
++        config_snapshot = json.dumps(config.model_dump(mode='json'),sort_keys=True,separators=(',',':'),allow_nan=False)
++        def original_scope_unchanged():
++            return (json.dumps(original_request.model_dump(mode='json'),sort_keys=True,separators=(',',':'),allow_nan=False)==request_snapshot
++                and json.dumps(self._config.model_dump(mode='json'),sort_keys=True,separators=(',',':'),allow_nan=False)==config_snapshot)
++        if context.operation_id.startswith("html11m.") and request.html_profile is None:
++            return self._result(context, CallStatus.REJECTED, "html_profile_required")
++        if request.html_profile is not None:
++            from app.preview.model_policy import validate_request
++            code = await validate_request(context, request, self._ledger)
++            if code is not None:
++                return self._result(context, CallStatus.REJECTED, code)
+         if request.learning_profile is None and request.teaching_profile is None \
+                 and context.operation_id.startswith(("learn-first-v1.", "learn-next-v1.")):
+             return self._result(context, CallStatus.REJECTED, "invalid_learning_profile")
+@@ -134,28 +143,29 @@
+             or request.allowed_tools
+         ):
+             return self._result(context, CallStatus.REJECTED, "invalid_input")
+-        if request.max_output_tokens > self._config.max_output_tokens_limit:
++        if request.max_output_tokens > config.max_output_tokens_limit:
+             return self._result(context, CallStatus.REJECTED, "output_token_limit")
+         try:
+-            payload = self._build_payload(request)
++            payload = self._build_payload(request, config=config)
+             encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+         except (ToolValidationError, ValueError, TypeError):
+             return self._result(context, CallStatus.REJECTED, "invalid_request")
+-        if len(encoded) > self._config.max_request_bytes:
++        if len(encoded) > config.max_request_bytes:
+             return self._result(context, CallStatus.REJECTED, "context_limit")
+ 
+         approved_grant = None
+         approved_manifest=None
+-        if getattr(self._transport, 'is_external', True) or self._config.outbound_grant is not None:
++        if getattr(self._transport, 'is_external', True) or config.outbound_grant is not None:
+             from .embedding import OutboundGrant,OutboundSourceManifest
+-            if self._config.outbound_grant is None:
++            if config.outbound_grant is None:
+                 return self._result(context, CallStatus.REJECTED, 'outbound_not_authorized')
+             try:
+-                grant = OutboundGrant.from_wire(self._config.outbound_grant)
+-                grant.check(context.activity_id,self._config.provider.value,self._config.model,len(encoded),request.max_output_tokens)
+-                manifest=OutboundSourceManifest.from_wire(self._config.outbound_source_manifest)
++                grant = OutboundGrant.from_wire(config.outbound_grant)
++                grant.check(context.activity_id,config.provider.value,config.model,len(encoded),request.max_output_tokens)
++                manifest=OutboundSourceManifest.from_wire(config.outbound_source_manifest)
+                 if manifest.sha256!=grant.source_manifest_sha256:raise AdmissionDenied('outbound_manifest_mismatch')
+-                manifest.check_model(request)
++                if not original_scope_unchanged():raise AdmissionDenied('outbound_scope_changed')
++                manifest.check_model(request,payload)
+                 approved_grant = grant.model_dump(mode='json')
+                 approved_manifest=manifest.model_dump(mode='json')
+             except (ValueError,AdmissionDenied):
+@@ -163,8 +173,8 @@
+ 
+         intent = AdmissionIntent(
+             context=context,
+-            provider=self._config.provider,
+-            configured_model=self._config.model,
++            provider=config.provider,
++            configured_model=config.model,
+             request_bytes=len(encoded),
+             max_output_tokens=request.max_output_tokens,
+             tool_names=tuple(sorted(request.allowed_tools)),
+@@ -179,36 +189,49 @@
+                 **({'memory_dependency_sha256':request.teaching_profile.memory_dependency_sha256,'retrieval_ref':request.teaching_profile.retrieval_ref} if request.teaching_profile.profile=='teaching.v3' else {}),
+             ) if request.teaching_profile is not None else None),
+         )
+-        if request.interview_profile is not None:
++        if request.interview_profile is not None:
+             from app.interview.contracts import InterviewCallBinding,InterviewHybridCallBinding
+             p=request.interview_profile
+             intent=AdmissionIntent(context=intent.context,provider=intent.provider,configured_model=intent.configured_model,request_bytes=intent.request_bytes,
+                 max_output_tokens=intent.max_output_tokens,tool_names=intent.tool_names,interview_binding=(InterviewHybridCallBinding if p.schema_id=='interview.v2' else InterviewCallBinding)(
+                     business_key=p.business_key,request_sha256=p.request_sha256,context_sha256=p.context_sha256,expected_head_revision=p.expected_head_revision,goal_version=p.goal_version,
+                     **({'retrieval_ref':p.retrieval_ref,'memory_selection_sha256':p.memory_selection_sha256,'memory_dependency_sha256':p.memory_dependency_sha256} if p.schema_id=='interview.v2' else {})))
+-        if request.html_profile is not None:
+-            from app.preview.business_contracts import HtmlCallBinding
+-            from app.preview.description import load_json
+-            p = request.html_profile
+-            frozen = load_json(p.context_json)
+-            intent = AdmissionIntent(context=intent.context, provider=intent.provider, configured_model=intent.configured_model,
+-                request_bytes=intent.request_bytes, max_output_tokens=intent.max_output_tokens, tool_names=intent.tool_names,
+-                html_binding=HtmlCallBinding(business_key=p.business_key, request_sha256=p.request_sha256,
+-                    context_sha256=p.context_sha256, renderer_sha256=p.renderer_sha256,
+-                    memory_selection_sha256=frozen.get("memory_selection_sha256")))
++        if request.html_profile is not None:
++            from app.preview.business_contracts import HtmlCallBinding
++            from app.preview.description import load_json
++            p = request.html_profile
++            frozen = load_json(p.context_json)
++            intent = AdmissionIntent(context=intent.context, provider=intent.provider, configured_model=intent.configured_model,
++                request_bytes=intent.request_bytes, max_output_tokens=intent.max_output_tokens, tool_names=intent.tool_names,
++                html_binding=HtmlCallBinding(business_key=p.business_key, request_sha256=p.request_sha256,
++                    context_sha256=p.context_sha256, renderer_sha256=p.renderer_sha256,
++                    memory_selection_sha256=frozen.get("memory_selection_sha256")))
+         intent = replace(intent,retrieval_ref=request.retrieval_ref,outbound_grant=approved_grant,outbound_source_manifest=approved_manifest)
++        approved_wire = json.dumps([approved_grant,approved_manifest],sort_keys=True,separators=(',',':'))
++        def check_approved_scope():
++            if approved_grant is None:return
++            if not original_scope_unchanged() or json.dumps([intent.outbound_grant,intent.outbound_source_manifest],sort_keys=True,separators=(',',':'))!=approved_wire:
++                raise AdmissionDenied('outbound_scope_changed')
++            grant.check(context.activity_id,config.provider.value,config.model,len(encoded),request.max_output_tokens)
++            manifest.check_model(request,json.loads(encoded))
+         stage = "admit"
+         try:
++            check_approved_scope()
+             permit = await self._ledger.admit(intent)
+             stage = "permit_check"
+             self._validate_permit(permit, context)
+             stage = "mark_dispatch"
+-            if approved_grant is not None:grant.check(context.activity_id,self._config.provider.value,self._config.model,len(encoded),request.max_output_tokens)
++            check_approved_scope()
+             if request.retrieval_ref is not None:await self._ledger.mark_dispatch_started(permit,retrieval_ref=request.retrieval_ref)
+             else:await self._ledger.mark_dispatch_started(permit)
++            stage = "dispatch_scope_check"
++            check_approved_scope()
+         except AdmissionDenied as exc:
+             code = str(exc)
+-            if not code.startswith("interview_") and code not in {"scope_conflict","source_invalid","result_invalidated","cancelled","budget_exhausted","integrity_error","invalid_input"}:
++            if stage=="dispatch_scope_check":
++                # 已预扣/登记dispatch但尚未调用transport，明确未发送且不退款。
++                return await self._finish(permit,context,LedgerOutcome(LedgerDisposition.NOT_SENT,error_code='outbound_scope_changed'),CallStatus.NOT_SENT)
++            if not code.startswith("interview_") and code not in {"scope_conflict","source_invalid","result_invalidated","cancelled","budget_exhausted","integrity_error","invalid_input","outbound_scope_changed"}:
+                 code = "admission_denied"
+             return self._result(context, CallStatus.REJECTED, code)
+         except AdmissionUnavailable:
+@@ -225,13 +248,13 @@
+             return self._result(context, CallStatus.REJECTED, "admission_internal_error")
+ 
+         try:
+-            async with asyncio.timeout(self._config.timeout_seconds):
++            async with asyncio.timeout(config.timeout_seconds):
+                 response = await self._transport.send(
+-                    endpoint=f"{self._config.base_url}/chat/completions",
+-                    api_key=self._config.api_key.get_secret_value(),
+-                    payload=payload,
+-                    timeout_seconds=self._config.timeout_seconds,
+-                    max_response_bytes=self._config.max_response_bytes,
++                    endpoint=f"{config.base_url}/chat/completions",
++                    api_key=config.api_key.get_secret_value(),
++                    payload=json.loads(encoded),
++                    timeout_seconds=config.timeout_seconds,
++                    max_response_bytes=config.max_response_bytes,
+                 )
+         except RequestNotSent:
+             outcome = LedgerOutcome(LedgerDisposition.NOT_SENT, error_code="request_not_sent")
+@@ -251,14 +274,15 @@
+ 
+         return await self._handle_response(permit, context, request, response)
+ 
+-    def _build_payload(self, request: ModelCallRequest) -> dict[str, Any]:
++    def _build_payload(self, request: ModelCallRequest, *, config: ModelServiceConfig | None = None) -> dict[str, Any]:
++        config = config or self._config
+         self._validate_conversation(request)
+         payload: dict[str, Any] = {
+-            "model": self._config.model,
++            "model": config.model,
+             "messages": [message.model_dump(exclude_none=True) for message in request.messages],
+             "max_tokens": request.max_output_tokens,
+             "stream": False,
+-            "thinking": {"type": self._config.thinking.value},
++            "thinking": {"type": config.thinking.value},
+         }
+         if request.response_mode == ResponseMode.JSON_OBJECT:
+             payload["response_format"] = {"type": "json_object"}
+@@ -464,17 +488,17 @@
+                 raise ResponseValidationError("invalid_output_json") from exc
+             if not isinstance(value, dict):
+                 raise ResponseValidationError("invalid_output_json")
+-            _validate_json_shape(value, max_depth=64 if request.html_profile is not None else 12,
+-                                 max_nodes=5000 if request.html_profile is not None else 2000)
+-            if request.html_profile is not None:
+-                from app.preview.model_policy import stored_result
+-                try:
+-                    if completion_tokens > request.max_output_tokens:
+-                        raise ValueError("invalid_interactive_output")
+-                    value = stored_result(content, request.html_profile)
+-                except (ValueError, TypeError, KeyError, RecursionError, UnicodeError):
+-                    raise ResponseValidationError("invalid_interactive_output") from None
+-            elif request.interview_profile is not None:
++            _validate_json_shape(value, max_depth=64 if request.html_profile is not None else 12,
++                                 max_nodes=5000 if request.html_profile is not None else 2000)
++            if request.html_profile is not None:
++                from app.preview.model_policy import stored_result
++                try:
++                    if completion_tokens > request.max_output_tokens:
++                        raise ValueError("invalid_interactive_output")
++                    value = stored_result(content, request.html_profile)
++                except (ValueError, TypeError, KeyError, RecursionError, UnicodeError):
++                    raise ResponseValidationError("invalid_interactive_output") from None
++            elif request.interview_profile is not None:
+                 from app.interview.policy import stored_result
+                 try:
+                     if completion_tokens > request.max_output_tokens: raise ValueError("invalid_interview_output")

@@ -1,0 +1,290 @@
+{
+  "attempt": 6,
+  "phase": "continuation_03_e2",
+  "utc": "2026-09-30T19:51:00.022270+00:00",
+  "cid": "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4",
+  "authorization": "TASK-092续作03 E2回退条款：real-06一次入口+原容器一次启动；总尝试与启动上限6；业务180秒+收尾120秒、总截止300秒；仅工具库与task092_synth；Windows会话0；费用0。",
+  "reason_frozen": "real-01旧夹具原件未存档且哈希仲裁重建未果；对最终版冻结11个缺证方法定向复跑，c7/c9已由real-03最终版通过故排除；4项旧model回归文件hash一致直接复用",
+  "targets_frozen": [
+    "tests.test_activity_tools.ToolPostgresTests.test_c1_tool_operation_conditional_constraints",
+    "tests.test_activity_tools.ToolPostgresTests.test_c1_budget_check_rejections_and_repeat_008_rollback",
+    "tests.test_activity_tools.ToolPostgresTests.test_c2_mark_and_record_reject_wrong_identity",
+    "tests.test_activity_tools.ToolPostgresTests.test_c3_rejected_admit_leaves_no_trace_and_no_refund_of_unknown",
+    "tests.test_activity_tools.ToolPostgresTests.test_c3_whitelist_null_zero_and_exhaustion",
+    "tests.test_activity_tools.ToolPostgresTests.test_c4_model_key_occupied_and_winner_crash_zero_execution",
+    "tests.test_activity_tools.ToolPostgresTests.test_c4_same_key_two_connections_single_permit_and_execution",
+    "tests.test_activity_tools.ToolPostgresTests.test_c5_read_list_typed_and_parent_isolation",
+    "tests.test_activity_tools.ToolPostgresTests.test_c6_admit_and_mark_commit_boundaries",
+    "tests.test_activity_tools.ToolPostgresTests.test_c8_committed_record_response_loss_and_write_free_confirmation",
+    "tests.test_activity_tools.ToolPostgresTests.test_c12_settle_and_close_facts_with_tool_budget"
+  ],
+  "cumulative_before": {
+    "real_used_seconds": 61.45200000000477,
+    "real_attempts": 5,
+    "container_starts": 5,
+    "windows_sessions": 7,
+    "offline_used_seconds": 7.514000000002852
+  },
+  "business_seconds_budget": 180,
+  "cleanup_seconds_budget": 120,
+  "total_seconds_budget": 300,
+  "commands": [
+    {
+      "args": [
+        "inspect",
+        "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4"
+      ],
+      "started_utc": "2026-09-30T19:51:00.056145+00:00",
+      "exit": 0,
+      "seconds": 0.26600000000325963
+    },
+    {
+      "args": [
+        "start",
+        "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4"
+      ],
+      "started_utc": "2026-09-30T19:51:00.323291+00:00",
+      "exit": 0,
+      "seconds": 5.078000000008615
+    },
+    {
+      "args": [
+        "inspect",
+        "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4"
+      ],
+      "started_utc": "2026-09-30T19:51:05.407675+00:00",
+      "exit": 0,
+      "seconds": 0.17199999999138527
+    },
+    {
+      "args": [
+        "exec",
+        "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4",
+        "pg_isready",
+        "-U",
+        "psql(...)"
+      ],
+      "started_utc": "2026-09-30T19:51:05.583624+00:00",
+      "exit": 0,
+      "seconds": 0.26600000000325963
+    },
+    {
+      "args": [
+        "exec",
+        "-i",
+        "-e",
+        "PGOPTIONS=-c statement_timeout=10000 -c lock_timeout=2000",
+        "psql(...)"
+      ],
+      "started_utc": "2026-09-30T19:51:05.839528+00:00",
+      "exit": 0,
+      "seconds": 0.25
+    },
+    {
+      "args": [
+        "exec",
+        "-i",
+        "-e",
+        "PGOPTIONS=-c statement_timeout=10000 -c lock_timeout=2000",
+        "psql(...)"
+      ],
+      "started_utc": "2026-09-30T19:51:06.111432+00:00",
+      "exit": 0,
+      "seconds": 0.23500000000058208
+    },
+    {
+      "args": [
+        "stop",
+        "--time",
+        "10",
+        "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4"
+      ],
+      "started_utc": "2026-09-30T19:51:12.064997+00:00",
+      "exit": 0,
+      "seconds": 0.46900000001187436
+    },
+    {
+      "args": [
+        "inspect",
+        "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4"
+      ],
+      "started_utc": "2026-09-30T19:51:12.537299+00:00",
+      "exit": 0,
+      "seconds": 0.17199999999138527
+    }
+  ],
+  "cleanup_incomplete": false,
+  "exit": 0,
+  "new_containers": 0,
+  "new_volumes": 0,
+  "windows_sessions": 0,
+  "credential_lifecycle": "task role password rotated via psql stdin; never argv/log; no Env read",
+  "preflight": {
+    "Id": "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4",
+    "Name": "/retrolume-task-088-g3-w1",
+    "Image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+    "State": {
+      "Running": false,
+      "Pid": 0,
+      "StartedAt": "2026-09-30T17:28:51.677082116Z"
+    },
+    "HostConfig": {
+      "NanoCpus": 1000000000,
+      "Memory": 536870912,
+      "PidsLimit": 128,
+      "Privileged": false,
+      "PortBindings": {
+        "5432/tcp": [
+          {
+            "HostIp": "127.0.0.1",
+            "HostPort": "55441"
+          }
+        ]
+      }
+    },
+    "RestartPolicyName": "no",
+    "Mounts": [
+      {
+        "Type": "volume",
+        "Name": "retrolume-task-088-g3-w1-data",
+        "Destination": "/var/lib/postgresql/data",
+        "RW": true
+      }
+    ]
+  },
+  "started": {
+    "Id": "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4",
+    "Name": "/retrolume-task-088-g3-w1",
+    "Image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+    "State": {
+      "Running": true,
+      "Pid": 400,
+      "StartedAt": "2026-09-30T19:51:05.120365075Z"
+    },
+    "HostConfig": {
+      "NanoCpus": 1000000000,
+      "Memory": 536870912,
+      "PidsLimit": 128,
+      "Privileged": false,
+      "PortBindings": {
+        "5432/tcp": [
+          {
+            "HostIp": "127.0.0.1",
+            "HostPort": "55441"
+          }
+        ]
+      }
+    },
+    "RestartPolicyName": "no",
+    "Mounts": [
+      {
+        "Type": "volume",
+        "Name": "retrolume-task-088-g3-w1-data",
+        "Destination": "/var/lib/postgresql/data",
+        "RW": true
+      }
+    ]
+  },
+  "database_preflight": {
+    "tools_owner": "retrolume_task092_synth",
+    "role": [
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ],
+    "sessions": 0,
+    "memberships": 0
+  },
+  "credential_rotated_once": true,
+  "children": [
+    {
+      "label": "e2_child",
+      "exit": 0,
+      "cleanup_confirmed": true,
+      "process": {
+        "pid": 37524,
+        "created_100ns": 134352714664596651
+      }
+    }
+  ],
+  "process": {
+    "pid": 37524,
+    "created_100ns": 134352714664596651
+  },
+  "outer_tree_zero": true,
+  "outer_handles_closed": true,
+  "child_finalized": {
+    "e2_child": {
+      "clean": true,
+      "stdout_lines": 2
+    }
+  },
+  "process_events": [
+    {
+      "event": "suspended_identity",
+      "monotonic": 69344.0,
+      "pid": 37524,
+      "created_100ns": 134352714664596651
+    },
+    {
+      "event": "assigned_outer_job",
+      "monotonic": 69344.0,
+      "active_processes": 1
+    },
+    {
+      "event": "resumed",
+      "monotonic": 69344.0
+    },
+    {
+      "event": "control_handles_closed",
+      "monotonic": 69349.593,
+      "tree_zero_confirmed": true
+    }
+  ],
+  "final_resource": {
+    "Id": "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4",
+    "Name": "/retrolume-task-088-g3-w1",
+    "Image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+    "State": {
+      "Running": false,
+      "Pid": 0,
+      "StartedAt": "2026-09-30T19:51:05.120365075Z"
+    },
+    "HostConfig": {
+      "NanoCpus": 1000000000,
+      "Memory": 536870912,
+      "PidsLimit": 128,
+      "Privileged": false,
+      "PortBindings": {
+        "5432/tcp": [
+          {
+            "HostIp": "127.0.0.1",
+            "HostPort": "55441"
+          }
+        ]
+      }
+    },
+    "RestartPolicyName": "no",
+    "Mounts": [
+      {
+        "Type": "volume",
+        "Name": "retrolume-task-088-g3-w1-data",
+        "Destination": "/var/lib/postgresql/data",
+        "RW": true
+      }
+    ]
+  },
+  "container_stopped": true,
+  "seconds": 12.703999999997905,
+  "end_utc": "2026-09-30T19:51:12.724251+00:00",
+  "cumulative_after": {
+    "real_used_seconds": 74.15600000000268,
+    "real_attempts": 6,
+    "container_starts": 6,
+    "windows_sessions": 7
+  }
+}

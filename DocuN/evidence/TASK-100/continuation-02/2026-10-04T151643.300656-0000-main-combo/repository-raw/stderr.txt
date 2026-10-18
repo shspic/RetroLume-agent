@@ -1,0 +1,310 @@
+test_command_identity_guard_blocks_status_rewrite (tests.test_teaching_repository.TeachingLedgerPGTests.test_command_identity_guard_blocks_status_rewrite)
+命令身份守卫：已 committed 命令不得被改成别的收据身份。 ... ok
+test_goal_version_zero_only_for_first_goal (tests.test_teaching_repository.TeachingLedgerPGTests.test_goal_version_zero_only_for_first_goal)
+expected_goal_version=0 只允许首次 goal。 ... ok
+test_head_projection_is_rebuildable_and_never_claims_mastered (tests.test_teaching_repository.TeachingLedgerPGTests.test_head_projection_is_rebuildable_and_never_claims_mastered)
+投影只允许 099 封闭枚举，且永不含 mastered。 ... ok
+test_identical_replay_is_idempotent_and_conflict_is_refused (tests.test_teaching_repository.TeachingLedgerPGTests.test_identical_replay_is_idempotent_and_conflict_is_refused)
+同键同文重放幂等返回原回执；同键异文必须拒且保留原意图。 ... ok
+test_local_command_commits_head_and_record_atomically (tests.test_teaching_repository.TeachingLedgerPGTests.test_local_command_commits_head_and_record_atomically)
+T-local：O01 一次提交同时写 command/head/record，无半状态。 ... ok
+test_revision_cas_blocks_stale_head (tests.test_teaching_repository.TeachingLedgerPGTests.test_revision_cas_blocks_stale_head)
+expected_revision 陈旧必须拒，不能覆盖已推进的 head。 ... ok
+test_semantic_slot_ignores_business_key_and_retry (tests.test_teaching_repository.TeachingLedgerPGTests.test_semantic_slot_ignores_business_key_and_retry)
+语义槽只含动作/范围/父实体身份：换 business_key 不换槽，同槽异文拒。 ... ok
+test_teaching_records_are_immutable_at_database_level (tests.test_teaching_repository.TeachingLedgerPGTests.test_teaching_records_are_immutable_at_database_level)
+正文、身份及效果投影全列不可改写或删除。 ... ok
+test_workspace_read_requires_goal_before_plan_actions (tests.test_teaching_repository.TeachingLedgerPGTests.test_workspace_read_requires_goal_before_plan_actions)
+工作区读出真实阶段；needs_plan 阶段 plan 之外命令被阶段门拦住。 ... ok
+test_cancelled_without_receipt_stays_unknown_and_keeps_slot (tests.test_teaching_recovery.RecoveryPgTests.test_cancelled_without_receipt_stays_unknown_and_keeps_slot) ... ok
+test_claimed_command_cannot_relaunch_without_operation (tests.test_teaching_recovery.RecoveryPgTests.test_claimed_command_cannot_relaunch_without_operation) ... ok
+test_committed_command_receipt_is_not_overwritten (tests.test_teaching_recovery.RecoveryPgTests.test_committed_command_receipt_is_not_overwritten) ... ok
+test_finish_not_admitted_fails_and_clears_pending (tests.test_teaching_recovery.RecoveryPgTests.test_finish_not_admitted_fails_and_clears_pending) ... ok
+test_frozen_digest_corruption_rejected_before_claim (tests.test_teaching_recovery.RecoveryPgTests.test_frozen_digest_corruption_rejected_before_claim) ... ok
+test_obsolete_command_cannot_launch (tests.test_teaching_recovery.RecoveryPgTests.test_obsolete_command_cannot_launch) ... ok
+test_unknown_pending_blocks_second_launch_of_same_slot (tests.test_teaching_recovery.RecoveryPgTests.test_unknown_pending_blocks_second_launch_of_same_slot) ... ok
+test_actual_frozen_context_binds_goal_path_exercise_answer (tests.test_task100_integration.IntegrationPGTests.test_actual_frozen_context_binds_goal_path_exercise_answer) ... ERROR
+test_answer_change_after_admit_blocks_mark_before_dispatch (tests.test_task100_integration.IntegrationPGTests.test_answer_change_after_admit_blocks_mark_before_dispatch) ... ERROR
+test_database_admit_requires_trusted_binding_before_reservation (tests.test_task100_integration.IntegrationPGTests.test_database_admit_requires_trusted_binding_before_reservation) ... ERROR
+test_each_public_read_uses_one_select_snapshot (tests.test_task100_integration.IntegrationPGTests.test_each_public_read_uses_one_select_snapshot) ... ERROR
+test_invalid_teaching_result_rolls_back_original_007_and_terminal (tests.test_task100_integration.IntegrationPGTests.test_invalid_teaching_result_rolls_back_original_007_and_terminal) ... ERROR
+test_other_activity_cannot_read_record (tests.test_task100_integration.IntegrationPGTests.test_other_activity_cannot_read_record) ... ERROR
+test_pending_closed_settled_state_is_launchable (tests.test_task100_integration.IntegrationPGTests.test_pending_closed_settled_state_is_launchable) ... ERROR
+test_real_concurrent_answer_slot_has_one_effect_and_no_fork (tests.test_task100_integration.IntegrationPGTests.test_real_concurrent_answer_slot_has_one_effect_and_no_fork) ... ERROR
+test_reference_requires_write_exposure_and_get_does_not_write (tests.test_task100_integration.IntegrationPGTests.test_reference_requires_write_exposure_and_get_does_not_write) ... ERROR
+test_zero_fee_answer_preserved_at_exhausted_budget (tests.test_task100_integration.IntegrationPGTests.test_zero_fee_answer_preserved_at_exhausted_budget) ... ERROR
+
+======================================================================
+ERROR: test_actual_frozen_context_binds_goal_path_exercise_answer (tests.test_task100_integration.IntegrationPGTests.test_actual_frozen_context_binds_goal_path_exercise_answer)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\test_task100_integration.py", line 15, in asyncSetUp
+    self.aid,self.source,self.eid,self.answer=await ready_answer(self.fixture)
+                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task100\seed_helpers.py", line 57, in ready_answer
+    proposal=await seed_model(fixture,aid,'plan',{'confirmed':True,'correction_record_id':None,'retry_of':None})
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task100\seed_helpers.py", line 31, in seed_model
+    value=stored_teaching_result(profile,result,frozen.messages)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\learning\teaching_contracts.py", line 627, in stored_teaching_result
+    user = json.loads(next(m.content for m in reversed(messages) if m.role == "user"))
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\learning\teaching_contracts.py", line 627, in <genexpr>
+    user = json.loads(next(m.content for m in reversed(messages) if m.role == "user"))
+                                                                    ^^^^^^
+AttributeError: 'dict' object has no attribute 'role'
+
+======================================================================
+ERROR: test_answer_change_after_admit_blocks_mark_before_dispatch (tests.test_task100_integration.IntegrationPGTests.test_answer_change_after_admit_blocks_mark_before_dispatch)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\test_task100_integration.py", line 15, in asyncSetUp
+    self.aid,self.source,self.eid,self.answer=await ready_answer(self.fixture)
+                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task100\seed_helpers.py", line 57, in ready_answer
+    proposal=await seed_model(fixture,aid,'plan',{'confirmed':True,'correction_record_id':None,'retry_of':None})
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task100\seed_helpers.py", line 31, in seed_model
+    value=stored_teaching_result(profile,result,frozen.messages)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\learning\teaching_contracts.py", line 627, in stored_teaching_result
+    user = json.loads(next(m.content for m in reversed(messages) if m.role == "user"))
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\learning\teaching_contracts.py", line 627, in <genexpr>
+    user = json.loads(next(m.content for m in reversed(messages) if m.role == "user"))
+                                                                    ^^^^^^
+AttributeError: 'dict' object has no attribute 'role'
+
+======================================================================
+ERROR: test_database_admit_requires_trusted_binding_before_reservation (tests.test_task100_integration.IntegrationPGTests.test_database_admit_requires_trusted_binding_before_reservation)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\test_task100_integration.py", line 15, in asyncSetUp
+    self.aid,self.source,self.eid,self.answer=await ready_answer(self.fixture)
+                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task100\seed_helpers.py", line 57, in ready_answer
+    proposal=await seed_model(fixture,aid,'plan',{'confirmed':True,'correction_record_id':None,'retry_of':None})
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task100\seed_helpers.py", line 31, in seed_model
+    value=stored_teaching_result(profile,result,frozen.messages)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\learning\teaching_contracts.py", line 627, in stored_teaching_result
+    user = json.loads(next(m.content for m in reversed(messages) if m.role == "user"))
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\learning\teaching_contracts.py", line 627, in <genexpr>
+    user = json.loads(next(m.content for m in reversed(messages) if m.role == "user"))
+                                                                    ^^^^^^
+AttributeError: 'dict' object has no attribute 'role'
+
+======================================================================
+ERROR: test_each_public_read_uses_one_select_snapshot (tests.test_task100_integration.IntegrationPGTests.test_each_public_read_uses_one_select_snapshot)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\test_task100_integration.py", line 15, in asyncSetUp
+    self.aid,self.source,self.eid,self.answer=await ready_answer(self.fixture)
+                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task100\seed_helpers.py", line 57, in ready_answer
+    proposal=await seed_model(fixture,aid,'plan',{'confirmed':True,'correction_record_id':None,'retry_of':None})
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task100\seed_helpers.py", line 31, in seed_model
+    value=stored_teaching_result(profile,result,frozen.messages)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\learning\teaching_contracts.py", line 627, in stored_teaching_result
+    user = json.loads(next(m.content for m in reversed(messages) if m.role == "user"))
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\learning\teaching_contracts.py", line 627, in <genexpr>
+    user = json.loads(next(m.content for m in reversed(messages) if m.role == "user"))
+                                                                    ^^^^^^
+AttributeError: 'dict' object has no attribute 'role'
+
+======================================================================
+ERROR: test_invalid_teaching_result_rolls_back_original_007_and_terminal (tests.test_task100_integration.IntegrationPGTests.test_invalid_teaching_result_rolls_back_original_007_and_terminal)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\test_task100_integration.py", line 15, in asyncSetUp
+    self.aid,self.source,self.eid,self.answer=await ready_answer(self.fixture)
+                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task100\seed_helpers.py", line 57, in ready_answer
+    proposal=await seed_model(fixture,aid,'plan',{'confirmed':True,'correction_record_id':None,'retry_of':None})
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task100\seed_helpers.py", line 31, in seed_model
+    value=stored_teaching_result(profile,result,frozen.messages)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\learning\teaching_contracts.py", line 627, in stored_teaching_result
+    user = json.loads(next(m.content for m in reversed(messages) if m.role == "user"))
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\learning\teaching_contracts.py", line 627, in <genexpr>
+    user = json.loads(next(m.content for m in reversed(messages) if m.role == "user"))
+                                                                    ^^^^^^
+AttributeError: 'dict' object has no attribute 'role'
+
+======================================================================
+ERROR: test_other_activity_cannot_read_record (tests.test_task100_integration.IntegrationPGTests.test_other_activity_cannot_read_record)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\test_task100_integration.py", line 15, in asyncSetUp
+    self.aid,self.source,self.eid,self.answer=await ready_answer(self.fixture)
+                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task100\seed_helpers.py", line 57, in ready_answer
+    proposal=await seed_model(fixture,aid,'plan',{'confirmed':True,'correction_record_id':None,'retry_of':None})
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task100\seed_helpers.py", line 31, in seed_model
+    value=stored_teaching_result(profile,result,frozen.messages)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\learning\teaching_contracts.py", line 627, in stored_teaching_result
+    user = json.loads(next(m.content for m in reversed(messages) if m.role == "user"))
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\learning\teaching_contracts.py", line 627, in <genexpr>
+    user = json.loads(next(m.content for m in reversed(messages) if m.role == "user"))
+                                                                    ^^^^^^
+AttributeError: 'dict' object has no attribute 'role'
+
+======================================================================
+ERROR: test_pending_closed_settled_state_is_launchable (tests.test_task100_integration.IntegrationPGTests.test_pending_closed_settled_state_is_launchable)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\test_task100_integration.py", line 15, in asyncSetUp
+    self.aid,self.source,self.eid,self.answer=await ready_answer(self.fixture)
+                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task100\seed_helpers.py", line 57, in ready_answer
+    proposal=await seed_model(fixture,aid,'plan',{'confirmed':True,'correction_record_id':None,'retry_of':None})
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task100\seed_helpers.py", line 31, in seed_model
+    value=stored_teaching_result(profile,result,frozen.messages)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\learning\teaching_contracts.py", line 627, in stored_teaching_result
+    user = json.loads(next(m.content for m in reversed(messages) if m.role == "user"))
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\learning\teaching_contracts.py", line 627, in <genexpr>
+    user = json.loads(next(m.content for m in reversed(messages) if m.role == "user"))
+                                                                    ^^^^^^
+AttributeError: 'dict' object has no attribute 'role'
+
+======================================================================
+ERROR: test_real_concurrent_answer_slot_has_one_effect_and_no_fork (tests.test_task100_integration.IntegrationPGTests.test_real_concurrent_answer_slot_has_one_effect_and_no_fork)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\test_task100_integration.py", line 15, in asyncSetUp
+    self.aid,self.source,self.eid,self.answer=await ready_answer(self.fixture)
+                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task100\seed_helpers.py", line 57, in ready_answer
+    proposal=await seed_model(fixture,aid,'plan',{'confirmed':True,'correction_record_id':None,'retry_of':None})
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task100\seed_helpers.py", line 31, in seed_model
+    value=stored_teaching_result(profile,result,frozen.messages)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\learning\teaching_contracts.py", line 627, in stored_teaching_result
+    user = json.loads(next(m.content for m in reversed(messages) if m.role == "user"))
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\learning\teaching_contracts.py", line 627, in <genexpr>
+    user = json.loads(next(m.content for m in reversed(messages) if m.role == "user"))
+                                                                    ^^^^^^
+AttributeError: 'dict' object has no attribute 'role'
+
+======================================================================
+ERROR: test_reference_requires_write_exposure_and_get_does_not_write (tests.test_task100_integration.IntegrationPGTests.test_reference_requires_write_exposure_and_get_does_not_write)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\test_task100_integration.py", line 15, in asyncSetUp
+    self.aid,self.source,self.eid,self.answer=await ready_answer(self.fixture)
+                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task100\seed_helpers.py", line 57, in ready_answer
+    proposal=await seed_model(fixture,aid,'plan',{'confirmed':True,'correction_record_id':None,'retry_of':None})
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task100\seed_helpers.py", line 31, in seed_model
+    value=stored_teaching_result(profile,result,frozen.messages)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\learning\teaching_contracts.py", line 627, in stored_teaching_result
+    user = json.loads(next(m.content for m in reversed(messages) if m.role == "user"))
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\learning\teaching_contracts.py", line 627, in <genexpr>
+    user = json.loads(next(m.content for m in reversed(messages) if m.role == "user"))
+                                                                    ^^^^^^
+AttributeError: 'dict' object has no attribute 'role'
+
+======================================================================
+ERROR: test_zero_fee_answer_preserved_at_exhausted_budget (tests.test_task100_integration.IntegrationPGTests.test_zero_fee_answer_preserved_at_exhausted_budget)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\test_task100_integration.py", line 15, in asyncSetUp
+    self.aid,self.source,self.eid,self.answer=await ready_answer(self.fixture)
+                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task100\seed_helpers.py", line 57, in ready_answer
+    proposal=await seed_model(fixture,aid,'plan',{'confirmed':True,'correction_record_id':None,'retry_of':None})
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task100\seed_helpers.py", line 31, in seed_model
+    value=stored_teaching_result(profile,result,frozen.messages)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\learning\teaching_contracts.py", line 627, in stored_teaching_result
+    user = json.loads(next(m.content for m in reversed(messages) if m.role == "user"))
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\learning\teaching_contracts.py", line 627, in <genexpr>
+    user = json.loads(next(m.content for m in reversed(messages) if m.role == "user"))
+                                                                    ^^^^^^
+AttributeError: 'dict' object has no attribute 'role'
+
+----------------------------------------------------------------------
+Ran 26 tests in 8.987s
+
+FAILED (errors=10)

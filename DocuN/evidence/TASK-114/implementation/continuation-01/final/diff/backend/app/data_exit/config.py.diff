@@ -1,0 +1,28 @@
+--- pre/backend/app/data_exit/config.py
++++ final/backend/app/data_exit/config.py
+@@ -54,6 +54,7 @@
+         self.factory = TargetFactory(self.hub, restore_root, profile["factory"], limits=self.limits) if profile.get("factory") else None
+         self.source_state = None
+         self.source_error=None
++        self.target_error=None
+         selection = self.hub.state()["selection"]
+         if selection is None:
+             known=self.hub.state()['source']
+@@ -86,7 +87,10 @@
+         if selection is not None:
+             if self.factory is None: raise DataError("restore_executor_missing", 503)
+             target = self.factory.target(selection["target_id"])
+-            self.bind_readonly(target, self.factory.readonly_credentials(target.target_id), selection)
++            try:self.bind_readonly(target, self.factory.readonly_credentials(target.target_id), selection)
++            except (DataError,OSError) as error:
++                # 选中目标不可连时仍保留同Hub的job/包查询；业务入口已在绑定前关闭。
++                self.target_error=error.code if isinstance(error,DataError) else 'storage_unavailable'
+         else:
+             self._configure_source()
+ 
+@@ -187,4 +191,5 @@
+                 "backup_available": self.packages is not None and self.packages.snapshot is not None, "restore_executor_configured": self.factory is not None,
+                 'source_delete_available':self.deletions is not None and self.hub.state()['fence'] is None,
+                 'source_observation_status':'unknown' if self.source_error else 'configured',
++                'target_observation_status':'unknown' if self.target_error else 'configured',
+                 "limits": self.limits.__dict__, "browser_drafts_included": False, "permanent_readonly_restore": True}

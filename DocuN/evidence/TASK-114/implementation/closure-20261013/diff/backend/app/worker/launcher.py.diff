@@ -1,0 +1,67 @@
+--- before/backend/app/worker/launcher.py
++++ final/backend/app/worker/launcher.py
+@@ -298,6 +298,26 @@
+     mapping_name = "Local\\RetroLume.SUP." + secrets.token_hex(16)
+     request = _request(ledger, config, activity_id, executor_id, command, run_tag, mapping_name, deadline_ns,
+                        one_call, tool_action)
++    data_gate=getattr(ledger,'mutation_gate',None)
++    owned_id=None
++    data_permit=None
++    data_admission=None
++    if data_gate is not None:
++        data_permit=data_gate.acquire(outgoing=True)
++        permit=data_permit.__enter__()
++        try:
++            data_admission=data_gate.admission_lock.acquire()
++            permit.check(outgoing=True)
++            from app.preview.process import birth
++            parent=birth(os.getpid())
++            if parent['state']!='running':raise ManagerControlError('data_parent_birth_unknown')
++            owned_id=data_gate.register_owned('worker',{'parent':{'pid':os.getpid(),'birth':parent['birth']},'activity_id':activity_id,'run_tag':run_tag,'manager_pending':True})
++            request['ledger']['data_guard']={'root':str(data_gate.hub.root),'control_id':data_gate.hub.control_id,
++                                          'origin':permit.context.public(),'owned_id':owned_id}
++        except BaseException:
++            if data_admission is not None:data_admission.close()
++            data_permit.__exit__(*sys.exc_info())
++            raise
+     mapping = None
+     process = None
+     outcome = None
+@@ -323,10 +343,16 @@
+                     raise
+                 manager_pid = process.pid
+                 manager_created = process.creation_time_100ns()
++                if data_gate is not None:
++                    data_gate.hub.commit('owned.begin',{'owned_id':owned_id,'identity':{'parent':{'pid':os.getpid(),'birth':parent['birth']},
++                        'manager_pid':manager_pid,'manager_created_100ns':manager_created,'activity_id':activity_id,'run_tag':run_tag},
++                        'origin':permit.context.public(),'state':'registered'})
+                 if _remaining(run_deadline_ns) <= 0:
+                     state = "manager_startup_deadline_unconfirmed"
+                 else:
+                     process.resume()
++                    if data_admission is not None:
++                        data_admission.close();data_admission=None
+                     state = "supervisor_lost_unconfirmed"
+                     exited = process.wait(_remaining(run_deadline_ns))
+                     if not exited:
+@@ -360,6 +386,7 @@
+         failure = exc
+         errors.append(f"launcher:{type(exc).__name__}")
+     finally:
++        if data_admission is not None:data_admission.close()
+         if process is not None:
+             try:
+                 exited = process.wait(0)
+@@ -404,6 +431,12 @@
+             cleanup_errors=tuple(errors),
+             manager_pid=manager_pid, manager_created_100ns=manager_created,
+         )
++    if data_gate is not None:
++        try:
++            from app.data_exit.contracts import canonical,digest
++            data_gate.end_owned(owned_id,confirmed=exited and not outcome.cleanup_incomplete,
++                                proof_sha256=digest(canonical(asdict(outcome))))
++        finally:data_permit.__exit__(None,None,None)
+     if isinstance(failure, (KeyboardInterrupt, SystemExit, asyncio.CancelledError)):
+         failure.session_outcome = outcome
+         raise failure

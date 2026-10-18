@@ -1,0 +1,389 @@
+
+backend/migrations/014_step018_retrieval.sql
+1: -- STEP018前向增量，保留001—013原文、旧tool NULL/零费用及R01包。
+2: BEGIN;
+3: DO $f$
+4: BEGIN
+5:  IF EXISTS(SELECT 1 FROM public.data_control WHERE mode NOT IN('normal','loading'))
+6:  OR EXISTS(SELECT 1 FROM public.activities WHERE running_reserved_seconds>0 OR lease_expires_at>CURRENT_TIMESTAMP)
+7:  OR EXISTS(SELECT 1 FROM public.html_preview_sessions WHERE state NOT IN('stopped','failed_unstarted')) THEN
+8:   RAISE EXCEPTION 'step018_migration_requires_quiescent_normal';
+9:  END IF;
+10: END $f$;
+11: 
+12: CREATE EXTENSION IF NOT EXISTS vector;
+13: CREATE ROLE retrolume_retrieval_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+14: CREATE ROLE retrolume_retrieval_app NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+15: 
+16: ALTER TABLE public.activities ADD COLUMN outbound_grant_sha256 text
+17:  CHECK(outbound_grant_sha256 IS NULL OR outbound_grant_sha256~'^[0-9a-f]{64}$');
+18: GRANT SELECT(outbound_grant_sha256) ON public.activities TO retrolume_data_app,retrolume_data_snapshot,retrolume_data_restore_loader;
+19: GRANT INSERT(outbound_grant_sha256) ON public.activities TO retrolume_data_app,retrolume_data_restore_loader;
+20: ALTER TABLE public.activity_operations DROP CONSTRAINT activity_operations_kind_domain;
+21: ALTER TABLE public.activity_operations DROP CONSTRAINT activity_operations_kind_shape;
+22: ALTER TABLE public.activity_operations DROP CONSTRAINT activity_operations_max_output_tokens_check;
+23: ALTER TABLE public.activity_operations ADD CONSTRAINT activity_operations_max_output_tokens_check CHECK(max_output_tokens>=0);
+24: ALTER TABLE public.activity_operations ADD CONSTRAINT activity_operations_kind_domain CHECK(kind IN('model','tool','embedding'));
+25: ALTER TABLE public.activity_operations ADD CONSTRAINT activity_operations_kind_shape CHECK(
+26:  (kind='model' AND provider IS NOT NULL AND configured_model IS NOT NULL AND request_bytes IS NOT NULL AND request_bytes>0
+27:   AND max_output_tokens IS NOT NULL AND max_output_tokens>0 AND reserved_cost_microunits>0 AND arguments_sha256 IS NULL AND tool_call_id IS NULL)
+28:  OR (kind='tool' AND provider IS NULL AND configured_model IS NULL AND request_bytes IS NULL AND max_output_tokens IS NULL
+29:   AND reserved_cost_microunits=0 AND tool_names=ARRAY['finite_calculate']::varchar(64)[]
+30:   AND arguments_sha256 IS NOT NULL AND octet_length(arguments_sha256)=64 AND arguments_sha256~'^[0-9a-f]{64}$'
+31:   AND tool_call_id IS NOT NULL AND char_length(tool_call_id) BETWEEN 1 AND 128 AND tool_call_id!~'[^A-Za-z0-9._:/-]'
+32:   AND remote_request_id IS NULL AND returned_model IS NULL AND finish_reason IS NULL AND prompt_tokens IS NULL
+33:   AND completion_tokens IS NULL AND response_bytes IS NULL)
+34:  OR (kind='embedding' AND provider='zhipu_embeddings' AND configured_model='embedding-3'
+35:   AND request_bytes IS NOT NULL AND request_bytes BETWEEN 1 AND 65536
+36:   AND max_output_tokens IS NOT NULL AND max_output_tokens=0 AND reserved_cost_microunits>0
+37:   AND tool_names=ARRAY[]::varchar(64)[] AND arguments_sha256 IS NULL AND tool_call_id IS NULL)
+38: );
+39: 
+40: CREATE TABLE public.retrieval_spaces(
+41:  space_id text PRIMARY KEY CHECK(space_id~'^[0-9a-f]{64}$'),
+42:  provider text NOT NULL CHECK(provider~'^[A-Za-z0-9._:/-]{1,64}$'),
+43:  configured_model text NOT NULL CHECK(configured_model~'^[A-Za-z0-9._:/-]{1,128}$'),
+44:  dimensions smallint NOT NULL CHECK(dimensions=512),
+45:  normalization text NOT NULL CHECK(normalization='l2.v1'),
+46:  chunk_recipe text NOT NULL CHECK(chunk_recipe='lossless-line-2048cp.v1'),
+47:  created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+48:  UNIQUE(provider,configured_model,dimensions,normalization,chunk_recipe)
+49: );
+50: CREATE TABLE public.retrieval_commands(
+51:  activity_id uuid NOT NULL REFERENCES public.activities(id),business_key uuid NOT NULL,
+52:  action text NOT NULL CHECK(action IN('source_index','query')),
+53:  space_id text NOT NULL REFERENCES public.retrieval_spaces(space_id),
+54:  scope_revision integer NOT NULL CHECK(scope_revision>0),
+55:  domain text NOT NULL CHECK(domain IN('learning','interview')),
+56:  domain_revision integer NOT NULL CHECK(domain_revision>=0),
+57:  request_body text,request_sha256 text NOT NULL CHECK(request_sha256~'^[0-9a-f]{64}$'),
+58:  source_refs jsonb NOT NULL CHECK(jsonb_typeof(source_refs)='array' AND jsonb_array_length(source_refs) BETWEEN 1 AND 10),
+59:  parent_refs jsonb NOT NULL CHECK(jsonb_typeof(parent_refs)='array' AND jsonb_array_length(parent_refs)<=12),
+60:  query_sha256 text,manifest_sha256 text NOT NULL CHECK(manifest_sha256~'^[0-9a-f]{64}$'),
+61:  batch_count smallint NOT NULL CHECK(batch_count BETWEEN 0 AND 128),
+62:  status text NOT NULL CHECK(status IN('accepted','launch_claimed','terminal')),
+63:  terminal_disposition text CHECK(terminal_disposition IN('received','not_sent','unknown','invalidated','partial','cache_ready')),
+64:  result_sha256 text CHECK(result_sha256 IS NULL OR result_sha256~'^[0-9a-f]{64}$'),
+65:  error_code text CHECK(error_code IS NULL OR error_code~'^[A-Za-z0-9._:/-]{1,64}$'),
+66:  created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+67:  PRIMARY KEY(activity_id,business_key),
+68:  CHECK(request_body IS NULL OR octet_length(request_body) BETWEEN 1 AND 65536),
+69:  CHECK((action='query' AND batch_count=1 AND query_sha256 IS NOT NULL AND query_sha256~'^[0-9a-f]{64}$')
+70:        OR(action='source_index' AND query_sha256 IS NULL)),
+71:  CHECK(batch_count<>0 OR(action='source_index' AND status='terminal' AND terminal_disposition IS NOT NULL AND terminal_disposition='cache_ready'))
+72: );
+73: CREATE TABLE public.retrieval_chunks(
+74:  space_id text NOT NULL REFERENCES public.retrieval_spaces(space_id),evidence_id text NOT NULL CHECK(octet_length(evidence_id) BETWEEN 1 AND 128),
+75:  source_id uuid NOT NULL REFERENCES public.material_sources(id),source_version_id uuid NOT NULL REFERENCES public.material_versions(id),
+76:  source_revision integer NOT NULL CHECK(source_revision>0),
+77:  origin text NOT NULL CHECK(origin IN('original','user_supplement')),physical_page integer CHECK(physical_page>0),
+78:  start_codepoint integer NOT NULL CHECK(start_codepoint>=0),end_codepoint integer NOT NULL CHECK(end_codepoint>start_codepoint),
+79:  text_sha256 text NOT NULL CHECK(text_sha256~'^[0-9a-f]{64}$'),
+80:  vector_value public.vector(512),vector_sha256 text CHECK(vector_sha256 IS NULL OR vector_sha256~'^[0-9a-f]{64}$'),
+81:  committed_activity_id uuid NOT NULL,committed_operation_id text NOT NULL,
+82:  created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+83:  PRIMARY KEY(space_id,evidence_id),
+84:  FOREIGN KEY(committed_activity_id,committed_operation_id) REFERENCES public.activity_operations(activity_id,operation_id),
+85:  CHECK((vector_value IS NULL)=(vector_sha256 IS NULL))
+86: );
+87: ALTER TABLE public.retrieval_spaces OWNER TO retrolume_retrieval_owner;
+88: ALTER TABLE public.retrieval_commands OWNER TO retrolume_retrieval_owner;
+89: ALTER TABLE public.retrieval_chunks OWNER TO retrolume_retrieval_owner;
+90: REVOKE ALL ON public.retrieval_spaces,public.retrieval_commands,public.retrieval_chunks FROM PUBLIC;
+91: GRANT SELECT,INSERT ON public.retrieval_spaces,public.retrieval_chunks TO retrolume_retrieval_app;
+92: GRANT SELECT,INSERT ON public.retrieval_commands TO retrolume_retrieval_app;
+93: GRANT UPDATE(status,terminal_disposition,result_sha256,error_code,updated_at) ON public.retrieval_commands TO retrolume_retrieval_app;
+94: GRANT SELECT ON public.retrieval_spaces,public.retrieval_commands,public.retrieval_chunks TO retrolume_data_snapshot,retrolume_data_restore_loader,retrolume_data_owner;
+95: GRANT INSERT ON public.retrieval_spaces,public.retrieval_commands,public.retrieval_chunks TO retrolume_data_restore_loader;
+96: GRANT SELECT ON public.activities,public.activity_operations,public.activity_operation_results,public.material_sources,public.material_versions,
+97:  public.activity_scope_sources,public.data_tombstones TO retrolume_retrieval_owner;
+98: GRANT DELETE ON public.activity_operation_results TO retrolume_retrieval_owner;
+99: GRANT EXECUTE ON FUNCTION public.data_loading_allowed() TO retrolume_retrieval_owner,retrolume_retrieval_app;
+100: GRANT EXECUTE ON FUNCTION public.data_state() TO retrolume_retrieval_owner,retrolume_retrieval_app;
+101: 
+102: CREATE FUNCTION public.retrieval_vector_digest(value public.vector) RETURNS text LANGUAGE plpgsql IMMUTABLE STRICT
+103:  SET search_path=pg_catalog,pg_temp AS $f$
+104: DECLARE raw bytea;part bytea;little bytea:=''::bytea;i integer;
+105: BEGIN
+106:  raw:=public.vector_send(value);
+107:  IF octet_length(raw)<>2052 THEN RAISE EXCEPTION 'retrieval_vector_dimensions'; END IF;
+108:  FOR i IN 0..511 LOOP
+109:   part:=substr(raw,5+i*4,4);
+110:   little:=little||substr(part,4,1)||substr(part,3,1)||substr(part,2,1)||substr(part,1,1);
+111:  END LOOP;
+112:  RETURN encode(sha256(little),'hex');
+113: END $f$;
+114: CREATE FUNCTION public.retrieval_space_guard() RETURNS trigger LANGUAGE plpgsql
+115:  SET search_path=pg_catalog,pg_temp AS $f$
+116: DECLARE body text;
+117: BEGIN
+118:  IF TG_OP<>'INSERT' THEN RAISE EXCEPTION 'retrieval_space_immutable'; END IF;
+119:  body:='{"chunk_recipe":"lossless-line-2048cp.v1","configured_model":'||to_json(NEW.configured_model)::text||
+120:  ',"dimensions":512,"normalization":"l2.v1","provider":'||to_json(NEW.provider)::text||'}';
+121:  IF NEW.space_id IS DISTINCT FROM encode(sha256(convert_to(body,'UTF8')),'hex') THEN RAISE EXCEPTION 'retrieval_space_identity'; END IF;
+122:  RETURN NEW;
+123: END $f$;
+124: CREATE FUNCTION public.retrieval_command_guard() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+125:  SET search_path=pg_catalog,pg_temp AS $f$
+126: DECLARE a public.activities;ref jsonb;v public.material_versions;
+127: BEGIN
+128:  IF TG_OP='DELETE' THEN RAISE EXCEPTION 'retrieval_commands_retained'; END IF;
+129:  IF TG_OP='UPDATE' THEN
+130:   IF (to_jsonb(NEW)-ARRAY['status','terminal_disposition','result_sha256','error_code','updated_at','request_body'])
+131:     IS DISTINCT FROM(to_jsonb(OLD)-ARRAY['status','terminal_disposition','result_sha256','error_code','updated_at','request_body'])
+132:    OR(NEW.request_body IS DISTINCT FROM OLD.request_body AND NOT(NEW.request_body IS NULL AND OLD.request_body IS NOT NULL
+133:        AND EXISTS(SELECT 1 FROM public.data_tombstones t, jsonb_array_elements(OLD.source_refs) s WHERE t.entity_kind='source' AND t.entity_id=(s->>'source_id')::uuid)))
+134:    OR(OLD.status='terminal' AND NEW.status<>OLD.status)
+135:    OR(OLD.status='terminal' AND (to_jsonb(NEW)-ARRAY['request_body','updated_at']) IS DISTINCT FROM (to_jsonb(OLD)-ARRAY['request_body','updated_at']))
+136:    OR(NEW.status<>OLD.status AND NOT(OLD.status='accepted' AND NEW.status IN('launch_claimed','terminal') OR OLD.status='launch_claimed' AND NEW.status='terminal'))
+137:   THEN RAISE EXCEPTION 'retrieval_command_immutable'; END IF;
+138:  END IF;
+139:  IF public.data_loading_allowed() THEN RETURN NEW; END IF;
+140:  IF TG_OP='INSERT' AND NEW.status NOT IN('accepted','terminal') THEN RAISE EXCEPTION 'retrieval_command_start'; END IF;
+141:  IF TG_OP='INSERT' AND NEW.status='terminal' AND NEW.terminal_disposition IS DISTINCT FROM 'cache_ready' THEN RAISE EXCEPTION 'retrieval_command_cache'; END IF;
+142:  IF TG_OP='INSERT' OR NEW.status='launch_claimed' AND OLD.status='accepted' THEN
+143:   SELECT * INTO a FROM public.activities WHERE id=NEW.activity_id;
+144:   IF a.id IS NULL OR a.status='cancelled' OR a.scope_revision<>NEW.scope_revision OR a.deadline_at<=CURRENT_TIMESTAMP
+145:   THEN RAISE EXCEPTION 'retrieval_command_ineligible'; END IF;
+146:   FOR ref IN SELECT * FROM jsonb_array_elements(NEW.source_refs) LOOP
+147:    SELECT * INTO v FROM public.material_versions WHERE id=(ref->>'source_version_id')::uuid;
+148:    IF v.id IS NULL OR v.source_id<>(ref->>'source_id')::uuid
+149:     OR NOT EXISTS(SELECT 1 FROM public.material_sources s JOIN public.activity_scope_sources x ON x.source_id=s.id
+150:        WHERE x.activity_id=a.id AND s.id=v.source_id AND s.current_version=v.id AND x.version_id=v.id
+151:          AND s.revision=x.source_revision AND s.revision=(ref->>'source_revision')::integer)
+152:     OR EXISTS(SELECT 1 FROM public.data_tombstones WHERE entity_kind='source' AND entity_id=v.source_id)
+153:    THEN RAISE EXCEPTION 'retrieval_source_invalid'; END IF;
+154:   END LOOP;
+155:  END IF;
+156:  RETURN NEW;
+157: END $f$;
+158: CREATE FUNCTION public.retrieval_result_guard() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+159:  SET search_path=pg_catalog,pg_temp AS $f$
+160: DECLARE op public.activity_operations;b jsonb;c public.retrieval_commands;key uuid;ordinal integer;
+161: BEGIN
+162:  SELECT * INTO op FROM public.activity_operations WHERE activity_id=NEW.activity_id AND operation_id=NEW.operation_id;
+163:  IF op.kind IS DISTINCT FROM 'embedding' THEN RETURN NEW; END IF;
+164:  b:=NEW.payload::jsonb->'value';
+165:  IF op.state IS DISTINCT FROM 'received' OR NEW.payload_format IS DISTINCT FROM 'json'
+166:   OR NEW.admission_id IS DISTINCT FROM op.admission_id OR NEW.execution_generation IS DISTINCT FROM op.execution_generation
+167:   OR NEW.scope_revision IS DISTINCT FROM op.scope_revision OR NEW.payload_sha256 IS DISTINCT FROM encode(sha256(convert_to(NEW.payload,'UTF8')),'hex')
+168:   OR b->>'profile' IS DISTINCT FROM 'embedding.v1' OR jsonb_typeof(b->'inputs') IS DISTINCT FROM 'array'
+169:   OR jsonb_array_length(b->'inputs') NOT BETWEEN 1 AND 4
+170:  THEN RAISE EXCEPTION 'embedding_result_binding'; END IF;
+171:  key:=split_part(NEW.operation_id,'.',2)::uuid;ordinal:=split_part(NEW.operation_id,'.',3)::integer;
+172:  SELECT * INTO c FROM public.retrieval_commands WHERE activity_id=NEW.activity_id AND business_key=key;
+173:  IF c.activity_id IS NULL OR c.scope_revision<>op.scope_revision OR c.space_id IS DISTINCT FROM b->>'space_id'
+174:   OR c.request_sha256 IS DISTINCT FROM b->>'request_sha256' OR c.manifest_sha256 IS DISTINCT FROM b->>'manifest_sha256'
+175:   OR c.action IS DISTINCT FROM b->>'purpose' OR ordinal<0 OR ordinal>=c.batch_count
+176:   OR NOT public.data_loading_allowed() AND c.status IS DISTINCT FROM 'launch_claimed'
+177:  THEN RAISE EXCEPTION 'embedding_result_command'; END IF;
+178:  RETURN NEW;
+179: END $f$;
+180: CREATE FUNCTION public.retrieval_chunk_guard() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+181:  SET search_path=pg_catalog,pg_temp AS $f$
+182: DECLARE op public.activity_operations;r public.activity_operation_results;c public.retrieval_commands;b jsonb;item jsonb;meta jsonb;key uuid;
+183: BEGIN
+184:  IF TG_OP='DELETE' THEN
+185:   IF NOT EXISTS(SELECT 1 FROM public.data_tombstones WHERE entity_kind='source' AND entity_id=OLD.source_id)
+186:    AND NOT EXISTS(SELECT 1 FROM public.retrieval_commands purge_command,jsonb_array_elements(purge_command.source_refs) s,public.data_tombstones t
+187:      WHERE purge_command.activity_id=OLD.committed_activity_id AND purge_command.business_key=split_part(OLD.committed_operation_id,'.',2)::uuid
+188:        AND t.entity_kind='source' AND t.entity_id=(s->>'source_id')::uuid)
+189:    THEN RAISE EXCEPTION 'retrieval_purge_not_authorized'; END IF;
+190:   RETURN OLD;
+191:  END IF;
+192:  IF TG_OP='UPDATE' THEN RAISE EXCEPTION 'retrieval_chunk_immutable'; END IF;
+193:  SELECT * INTO op FROM public.activity_operations WHERE activity_id=NEW.committed_activity_id AND operation_id=NEW.committed_operation_id;
+194:  SELECT * INTO r FROM public.activity_operation_results WHERE activity_id=NEW.committed_activity_id AND operation_id=NEW.committed_operation_id;
+195:  key:=split_part(NEW.committed_operation_id,'.',2)::uuid;
+196:  SELECT * INTO c FROM public.retrieval_commands WHERE activity_id=NEW.committed_activity_id AND business_key=key;
+197:  b:=r.payload::jsonb->'value';
+198:  IF op.kind IS DISTINCT FROM 'embedding' OR op.state IS DISTINCT FROM 'received' OR c.action IS DISTINCT FROM 'source_index'
+199:   OR b->>'profile' IS DISTINCT FROM 'embedding.v1' OR c.space_id<>NEW.space_id THEN RAISE EXCEPTION 'retrieval_chunk_result'; END IF;
+200:  IF NEW.vector_value IS NOT NULL THEN
+201:   IF NEW.vector_sha256 IS DISTINCT FROM public.retrieval_vector_digest(NEW.vector_value) THEN RAISE EXCEPTION 'retrieval_vector_digest'; END IF;
+202:   SELECT x INTO item FROM jsonb_array_elements(b->'inputs') x WHERE x->>'identity_sha256' IN
+203:    (SELECT y->>'identity_sha256' FROM jsonb_array_elements(c.request_body::jsonb->'manifest') y WHERE y->>'evidence_id'=NEW.evidence_id);
+204:   IF item IS NULL OR item->>'vector_sha256' IS DISTINCT FROM NEW.vector_sha256
+205:    OR (((item->'vector')::text::public.vector OPERATOR(public.=) NEW.vector_value) IS NOT TRUE) THEN RAISE EXCEPTION 'retrieval_vector_fact'; END IF;
+
+backend/app/activities/repository.py
+332:     async def _transaction(self, operation: Callable[[object], Awaitable[_T]], *, closing_memory_purge=False) -> _T:
+333:         try:
+334:             import psycopg
+335:             from psycopg.rows import dict_row
+336:         except ImportError:
+337:             raise AdmissionUnavailable("PostgreSQL 驱动不可用") from None
+338:         guarded = None
+339:         outgoing = None
+340:         try:
+341:             connection = await psycopg.AsyncConnection.connect(
+342:                 self._dsn,
+343:                 connect_timeout=self._connect_timeout,
+344:                 row_factory=dict_row,
+345:             )
+346:             async with connection:
+347:                 async with connection.transaction():
+348:                     await connection.execute(
+349:                         "SELECT set_config('statement_timeout', %s, true)",
+350:                         (f"{self._statement_timeout_ms}ms",),
+351:                     )
+352:                     await connection.execute(
+353:                         "SELECT set_config('lock_timeout', %s, true)",
+354:                         (f"{self._lock_timeout_ms}ms",),
+355:                     )
+356:                     await connection.execute(
+357:                         "SET LOCAL idle_in_transaction_session_timeout = '5s'"
+358:                     )
+359:                     if self.data_enabled is None:
+360:                         cursor=await connection.execute("SELECT to_regclass('public.data_control') IS NOT NULL AS enabled")
+361:                         self.data_enabled=(await cursor.fetchone())['enabled']
+362:                     if self.data_enabled:
+363:                         from app.data_exit.maintenance import GuardedAsyncConnection, outgoing_operation, CLOSE_LANE
+364:                         from app.data_exit.contracts import DataError
+365:                         readonly=self.data_readonly or (self.mutation_gate is not None and self.mutation_gate.context().mode!='normal')
+366:                         if not readonly:await connection.execute('SELECT public.data_mutation_enter()')
+367:                         if self.mutation_gate is not None and outgoing_operation(operation) and not closing_memory_purge:
+368:                             outgoing=self.mutation_gate.outgoing_section()
+369:                             outgoing.__enter__()
+370:                         guarded=GuardedAsyncConnection(connection,self.mutation_gate,readonly)
+371:                         if self.data_owned_id is not None:
+372:                             with self.mutation_gate.close_lane(self.data_owned_id):
+373:                                 result=await operation(guarded)
+374:                         else:result=await operation(guarded)
+375:                     else:result=await operation(connection)
+376:                 return result
+377:         except (AdmissionDenied, ActivityLedgerConflict):
+378:             raise
+379:         except psycopg.Error:
+380:             raise AdmissionUnavailable("持久准入账本暂不可用") from None
+381:         finally:
+382:             if guarded is not None:guarded.close_permit()
+383:             if outgoing is not None:outgoing.__exit__(None,None,None)
+384: 
+385:     @staticmethod
+386:     def _uuid(value: str, field: str) -> str:
+
+backend/app/activities/repository.py
+1074:             return len(changed)
+1075: 
+1076:         return await self._transaction(operation)
+1077: 
+1078:     @staticmethod
+1079:     def _intent_fields(intent: AdmissionIntent) -> tuple[str, str, str, str, str]:
+1080:         context = intent.context
+1081:         try:
+1082:             activity_id = str(UUID(context.activity_id))
+1083:         except (ValueError, TypeError, AttributeError):
+1084:             raise AdmissionDenied("活动 ID 非法") from None
+1085:         try:
+1086:             operation_id = PostgresAdmissionLedger._bounded_name(context.operation_id, "operation_id")
+1087:             executor_id = PostgresAdmissionLedger._bounded_name(context.executor_id, "executor_id")
+1088:             provider = PostgresAdmissionLedger._bounded_name(str(intent.provider), "provider", maximum=64)
+1089:             model = PostgresAdmissionLedger._bounded_name(intent.configured_model, "model")
+1090:         except ValueError as exc:
+1091:             raise AdmissionDenied(str(exc)) from None
+1092:         if (
+1093:             isinstance(intent.request_bytes, bool)
+1094:             or not isinstance(intent.request_bytes, int)
+1095:             or intent.request_bytes <= 0
+1096:             or isinstance(intent.max_output_tokens, bool)
+1097:             or not isinstance(intent.max_output_tokens, int)
+1098:             or intent.max_output_tokens <= 0
+1099:         ):
+1100:             raise AdmissionDenied("请求限额字段非法")
+1101:         if tuple(sorted(set(intent.tool_names))) != intent.tool_names or len(intent.tool_names) > 32:
+1102:             raise AdmissionDenied("工具集合必须有限、排序且无重复")
+1103:         try:
+1104:             for tool in intent.tool_names:
+1105:                 PostgresAdmissionLedger._bounded_name(tool, "tool", maximum=64)
+1106:         except ValueError as exc:
+1107:             raise AdmissionDenied(str(exc)) from None
+1108:         return activity_id, operation_id, executor_id, provider, model
+1109: 
+1110:     @staticmethod
+1111:     def _activity_allows(activity: dict, intent: AdmissionIntent, executor_id: str, *, now: datetime) -> bool:
+1112:         context = intent.context
+1113:         return (
+1114:             activity["status"] == "running"
+1115:             and not activity["dispatch_closed"]
+1116:             and activity["executor_id"] == executor_id
+1117:             and activity["execution_generation"] == context.execution_generation
+1118:             and activity["scope_revision"] == context.scope_revision
+1119:             and activity["lease_expires_at"] is not None
+1120:             and activity["lease_expires_at"] > now
+1121:             and activity["deadline_at"] > now
+1122:             and intent.request_bytes <= activity["max_request_bytes"]
+1123:             and intent.max_output_tokens <= activity["max_output_tokens"]
+1124:             and set(intent.tool_names).issubset(set(activity["allowed_tools"]))
+1125:             and activity["requests_reserved"] < activity["max_requests"]
+1126:             and activity["cost_reserved_microunits"] + activity["reserve_cost_microunits"]
+1127:             <= activity["max_cost_microunits"]
+1128:         )
+1129: 
+1130:     async def admit(self, intent: AdmissionIntent) -> AdmissionPermit:
+1131:         activity_id, operation_id, executor_id, provider, model = self._intent_fields(intent)
+1132: 
+1133:         async def operation(connection: object) -> AdmissionPermit:
+1134:             await self._outbound_lock(connection,activity_id,intent.outbound_grant,provider,model,intent.request_bytes,intent.max_output_tokens,intent.outbound_source_manifest)
+1135:             memory_state=await self._memory_lock_prefix(connection,activity_id)
+1136:             snapshots=memory_state['snapshots']
+1137:             sources_valid=memory_state['sources_valid']
+
+backend/app/activities/repository.py
+1519:     async def _locked_operation(
+1520:         self, connection: object, permit: AdmissionPermit, *, kind: str = "model",
+1521:     ) -> tuple[dict, dict, bool]:
+1522:         try:
+1523:             admission_id = self._uuid(permit.admission_id, "admission_id")
+1524:             operation_id = self._bounded_name(permit.operation_id, "operation_id")
+1525:             executor_id = self._bounded_name(permit.executor_id, "executor_id")
+1526:         except ValueError as exc:
+1527:             raise AdmissionDenied(str(exc)) from None
+1528:         cursor = await connection.execute(
+1529:             "SELECT activity_id FROM activity_operations WHERE admission_id = %s",
+1530:             (admission_id,),
+1531:         )
+1532:         locator = await cursor.fetchone()
+1533:         if locator is None:
+1534:             raise AdmissionDenied("准入凭证不存在")
+1535:         activity_id = str(locator["activity_id"])
+1536:         memory_state=await self._memory_lock_prefix(connection,activity_id)
+1537:         snapshots=memory_state['snapshots']
+1538:         sources_valid=memory_state['sources_valid']
+1539:         activity=memory_state['activity']
+1540:         if operation_id.startswith(('teach8m.','teach8t.','int10m.','int18m.','emb18i.','emb18q.','html11m.')):
+1541:             await self._teaching_lock_operations(connection,activity_id)
+1542:         cursor = await connection.execute(
+1543:             "SELECT * FROM activity_operations WHERE admission_id = %s FOR UPDATE",
+1544:             (admission_id,),
+1545:         )
+1546:         operation = await cursor.fetchone()
+1547:         if (
+1548:             activity is None
+1549:             or operation is None
+1550:             or operation["operation_id"] != operation_id
+1551:             or operation["executor_id"] != executor_id
+1552:             or operation["kind"] != kind
+1553:         ):
+1554:             raise AdmissionDenied("准入凭证与操作或执行者不匹配")
+1555:         return activity, operation, sources_valid
+1556: 
+1557:     @staticmethod
+1558:     def _operation_is_current(activity: dict, operation: dict, sources_valid: bool) -> bool:
+1559:         now = datetime.now(timezone.utc)
+1560:         return (
+1561:             sources_valid
+1562:             and activity.get("_memory_eligible", True)
+1563:             and activity["status"] == "running"
+1564:             and activity["executor_id"] == operation["executor_id"]
+1565:             and activity["execution_generation"] == operation["execution_generation"]
+1566:             and activity["scope_revision"] == operation["scope_revision"]
+1567:             and activity["lease_expires_at"] is not None
+1568:             and activity["lease_expires_at"] > now
+1569:             and activity["deadline_at"] > now
+1570:         )
+1571: 
+1572:     async def mark_dispatch_started(self, permit: AdmissionPermit, *, retrieval_ref=None) -> None:
+1573:         async def operation(connection: object) -> AdmissionPermit:
+1574:             activity, call, sources_valid = await self._locked_operation(connection, permit)
+1575:             if retrieval_ref is not None:await self._require_retrieval_ref(connection,activity,retrieval_ref)

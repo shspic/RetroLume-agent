@@ -1,0 +1,1250 @@
+{
+  "task": "TASK-103",
+  "round": "continuation-01",
+  "permit": "TASK-103-G9-C01-20261006",
+  "first_read_utc": "2026-10-06T13:18:10+00:00",
+  "start_ns": 564101358540000,
+  "deadline_ns": 585701358540000,
+  "mapping": "首读UTC映射到monotonic另扣60秒，不后移",
+  "counts": {
+    "offline": 6,
+    "build": 1,
+    "entry": 12,
+    "container_create": 0,
+    "volume_create": 0,
+    "container_start": 14,
+    "listener_start": 3,
+    "sup": 22,
+    "browser": 3,
+    "driver": 3
+  },
+  "used_seconds": {
+    "offline": 12.641000000061467,
+    "real": 233.701999999932,
+    "cleanup": 13.512999999918975,
+    "metadata": 413.81200000003446
+  },
+  "limits": {
+    "offline": 1200,
+    "real": 3600,
+    "cleanup": 600,
+    "metadata": 600
+  },
+  "resources": [
+    {
+      "slot": 1,
+      "name": "retrolume-task-103-g9-pg1",
+      "volume": "retrolume-task-103-g9-pg1-data",
+      "port": 55443,
+      "database": "retrolume_task103_g9_main",
+      "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11"
+    },
+    {
+      "slot": 2,
+      "name": "retrolume-task-103-g9-pg2",
+      "volume": "retrolume-task-103-g9-pg2-data",
+      "port": 55444,
+      "database": "retrolume_task103_g9_upgrade",
+      "cid": "f96ac8dcb64648c76a2bc70f3f8b75969ada0ea0ea69b5896fe5ecb71affab85"
+    },
+    {
+      "slot": 3,
+      "name": "retrolume-task-103-g9-pg3",
+      "volume": "retrolume-task-103-g9-pg3-data",
+      "port": 55445,
+      "database": "retrolume_task103_g9_fault",
+      "cid": "4b813f9e4317aef9c613eb140fcb2d40c55a6bd98ee5d79807ea5851975d7f68"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "offline",
+      "count": 1,
+      "at": "2026-10-06T13:50:22.550814+00:00",
+      "ns": 566093906000000,
+      "detail": {
+        "name": "offline-01-controls"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "offline",
+      "seconds": 2.234000000054948,
+      "at": "2026-10-06T13:50:24.781245+00:00",
+      "detail": {
+        "name": "offline-01-controls"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 1,
+      "at": "2026-10-06T13:56:28.297732+00:00",
+      "ns": 566459656000000,
+      "detail": {
+        "name": "real-01-core"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 1,
+      "at": "2026-10-06T13:56:29.972760+00:00",
+      "ns": 566461328000000,
+      "detail": {
+        "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11"
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 1,
+      "at": "2026-10-06T13:56:39.415113+00:00",
+      "ns": 566470765000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 2708
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 2,
+      "at": "2026-10-06T13:56:43.716712+00:00",
+      "ns": 566475062000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 2708
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 3,
+      "at": "2026-10-06T13:56:47.914192+00:00",
+      "ns": 566479265000000,
+      "detail": {
+        "kind": "run_one_tool",
+        "caller_pid": 2708
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T13:56:52.997540+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg1",
+          "volume": "retrolume-task-103-g9-pg1-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 0.8599999999860302,
+      "at": "2026-10-06T13:56:53.031807+00:00",
+      "detail": {
+        "name": "core"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 24.844000000040978,
+      "at": "2026-10-06T13:56:53.160163+00:00",
+      "detail": {
+        "name": "real-01-core"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 2,
+      "at": "2026-10-06T14:00:03.638684+00:00",
+      "ns": 566674984000000,
+      "detail": {
+        "name": "real-02-core-context-fix"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 2,
+      "at": "2026-10-06T14:00:05.214165+00:00",
+      "ns": 566676562000000,
+      "detail": {
+        "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11"
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 4,
+      "at": "2026-10-06T14:00:10.111231+00:00",
+      "ns": 566681468000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 8608
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 5,
+      "at": "2026-10-06T14:00:18.640661+00:00",
+      "ns": 566690000000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 8608
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 6,
+      "at": "2026-10-06T14:00:27.779629+00:00",
+      "ns": 566699125000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 8608
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T14:00:32.278487+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg1",
+          "volume": "retrolume-task-103-g9-pg1-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 0.859000000054948,
+      "at": "2026-10-06T14:00:32.294429+00:00",
+      "detail": {
+        "name": "core"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 28.780999999959022,
+      "at": "2026-10-06T14:00:32.432927+00:00",
+      "detail": {
+        "name": "real-02-core-context-fix"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 3,
+      "at": "2026-10-06T14:11:02.307722+00:00",
+      "ns": 567333656000000,
+      "detail": {
+        "name": "real-03-core-batched-context"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 3,
+      "at": "2026-10-06T14:11:03.904745+00:00",
+      "ns": 567335250000000,
+      "detail": {
+        "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11"
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T14:11:13.963078+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg1",
+          "volume": "retrolume-task-103-g9-pg1-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 0.7970000000204891,
+      "at": "2026-10-06T14:11:13.982675+00:00",
+      "detail": {
+        "name": "remaining"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 11.781000000075437,
+      "at": "2026-10-06T14:11:14.103597+00:00",
+      "detail": {
+        "name": "real-03-core-batched-context"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 4,
+      "at": "2026-10-06T14:15:40.829214+00:00",
+      "ns": 567612187000000,
+      "detail": {
+        "name": "real-04-pdf-and-degrade"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 4,
+      "at": "2026-10-06T14:15:42.475667+00:00",
+      "ns": 567613828000000,
+      "detail": {
+        "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11"
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 7,
+      "at": "2026-10-06T14:15:46.254962+00:00",
+      "ns": 567617609000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 10680
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 8,
+      "at": "2026-10-06T14:15:49.871884+00:00",
+      "ns": 567621218000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 10680
+      }
+    },
+    {
+      "kind": "build",
+      "count": 1,
+      "at": "2026-10-06T14:15:51.561056+00:00",
+      "ns": 567622906000000,
+      "detail": {
+        "name": "build-01-final-ui"
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 9,
+      "at": "2026-10-06T14:15:54.404025+00:00",
+      "ns": 567625750000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 10680
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "offline",
+      "seconds": 6.266000000061467,
+      "at": "2026-10-06T14:15:57.858177+00:00",
+      "detail": {
+        "name": "build-01-final-ui"
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 10,
+      "at": "2026-10-06T14:15:58.231727+00:00",
+      "ns": 567629578000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 10680
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 11,
+      "at": "2026-10-06T14:16:00.673593+00:00",
+      "ns": 567632031000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 10680
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T14:16:03.579361+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg1",
+          "volume": "retrolume-task-103-g9-pg1-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 0.7970000000204891,
+      "at": "2026-10-06T14:16:03.600910+00:00",
+      "detail": {
+        "name": "remaining"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 22.858999999938533,
+      "at": "2026-10-06T14:16:03.718088+00:00",
+      "detail": {
+        "name": "real-04-pdf-and-degrade"
+      }
+    },
+    {
+      "kind": "offline",
+      "count": 2,
+      "at": "2026-10-06T14:26:14.529028+00:00",
+      "ns": 568245875000000,
+      "detail": {
+        "name": "offline-02-browser-syntax"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "offline",
+      "seconds": 0.31299999996554106,
+      "at": "2026-10-06T14:26:14.845225+00:00",
+      "detail": {
+        "name": "offline-02-browser-syntax"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 5,
+      "at": "2026-10-06T14:26:15.969280+00:00",
+      "ns": 568247328000000,
+      "detail": {
+        "name": "real-05-browser-final"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 5,
+      "at": "2026-10-06T14:26:17.587066+00:00",
+      "ns": 568248937000000,
+      "detail": {
+        "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11"
+      }
+    },
+    {
+      "kind": "listener_start",
+      "count": 1,
+      "at": "2026-10-06T14:26:22.977627+00:00",
+      "ns": 568254328000000,
+      "detail": {
+        "module": "tests.fixtures.task103.c01.server",
+        "port": 18103
+      }
+    },
+    {
+      "kind": "driver",
+      "count": 1,
+      "at": "2026-10-06T14:26:24.648431+00:00",
+      "ns": 568256000000000,
+      "detail": {
+        "script": "frontend/tests/task103-c01-browser.cjs"
+      }
+    },
+    {
+      "kind": "browser",
+      "count": 1,
+      "at": "2026-10-06T14:26:24.662411+00:00",
+      "ns": 568256015000000,
+      "detail": {
+        "profile": "workspace/browser-profile-01"
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T14:26:36.456172+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg1",
+          "volume": "retrolume-task-103-g9-pg1-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 1.547000000020489,
+      "at": "2026-10-06T14:26:36.478524+00:00",
+      "detail": {
+        "name": "browser"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 20.57799999997951,
+      "at": "2026-10-06T14:26:36.572525+00:00",
+      "detail": {
+        "name": "real-05-browser-final"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 6,
+      "at": "2026-10-06T15:14:26.205811+00:00",
+      "ns": 571137562000000,
+      "detail": {
+        "name": "real-06-browser-async-selection"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 6,
+      "at": "2026-10-06T15:14:27.911601+00:00",
+      "ns": 571139265000000,
+      "detail": {
+        "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11"
+      }
+    },
+    {
+      "kind": "listener_start",
+      "count": 2,
+      "at": "2026-10-06T15:14:33.706782+00:00",
+      "ns": 571145062000000,
+      "detail": {
+        "module": "tests.fixtures.task103.c01.server",
+        "port": 18103
+      }
+    },
+    {
+      "kind": "driver",
+      "count": 2,
+      "at": "2026-10-06T15:14:35.391245+00:00",
+      "ns": 571146750000000,
+      "detail": {
+        "script": "frontend/tests/task103-c01-browser.cjs"
+      }
+    },
+    {
+      "kind": "browser",
+      "count": 2,
+      "at": "2026-10-06T15:14:35.405854+00:00",
+      "ns": 571146765000000,
+      "detail": {
+        "profile": "workspace/browser-profile-02"
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 12,
+      "at": "2026-10-06T15:14:39.012867+00:00",
+      "ns": 571150359000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 40480
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 13,
+      "at": "2026-10-06T15:14:42.467442+00:00",
+      "ns": 571153812000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 40480
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 14,
+      "at": "2026-10-06T15:14:46.676834+00:00",
+      "ns": 571158031000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 40480
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T15:15:00.988684+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg1",
+          "volume": "retrolume-task-103-g9-pg1-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 1.4839999999385327,
+      "at": "2026-10-06T15:15:01.011046+00:00",
+      "detail": {
+        "name": "browser"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 34.85899999993853,
+      "at": "2026-10-06T15:15:01.089750+00:00",
+      "detail": {
+        "name": "real-06-browser-async-selection"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 7,
+      "at": "2026-10-06T15:23:59.390493+00:00",
+      "ns": 571710750000000,
+      "detail": {
+        "name": "real-07-browser-established-activity"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 7,
+      "at": "2026-10-06T15:24:01.099844+00:00",
+      "ns": 571712453000000,
+      "detail": {
+        "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11"
+      }
+    },
+    {
+      "kind": "listener_start",
+      "count": 3,
+      "at": "2026-10-06T15:24:06.617603+00:00",
+      "ns": 571717968000000,
+      "detail": {
+        "module": "tests.fixtures.task103.c01.server",
+        "port": 18103
+      }
+    },
+    {
+      "kind": "driver",
+      "count": 3,
+      "at": "2026-10-06T15:24:08.295526+00:00",
+      "ns": 571719640000000,
+      "detail": {
+        "script": "frontend/tests/task103-c01-browser.cjs"
+      }
+    },
+    {
+      "kind": "browser",
+      "count": 3,
+      "at": "2026-10-06T15:24:08.310507+00:00",
+      "ns": 571719656000000,
+      "detail": {
+        "profile": "workspace/browser-profile-03"
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T15:24:14.586144+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg1",
+          "volume": "retrolume-task-103-g9-pg1-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 1.5,
+      "at": "2026-10-06T15:24:14.625215+00:00",
+      "detail": {
+        "name": "browser"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 15.295999999972992,
+      "at": "2026-10-06T15:24:14.698975+00:00",
+      "detail": {
+        "name": "real-07-browser-established-activity"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "metadata",
+      "seconds": 300,
+      "at": "2026-10-06T15:35:53.571205+00:00",
+      "detail": {
+        "scope": "续作首读至断点核对的全部未逐条测量元数据工具时间",
+        "kind": "conservative",
+        "exact_seconds_unknown": true
+      }
+    },
+    {
+      "kind": "offline",
+      "count": 3,
+      "at": "2026-10-06T15:43:44.453542+00:00",
+      "ns": 572895812000000,
+      "detail": {
+        "name": "offline-03-preflight-import-failure",
+        "retroactive_record": true,
+        "reason": "Control新增dist清单缩进错误，outer import失败，无子进程/PG/SUP启动；此动作计数晚记如实保留"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "offline",
+      "seconds": 1,
+      "at": "2026-10-06T15:43:44.467102+00:00",
+      "detail": {
+        "name": "offline-03-preflight-import-failure",
+        "kind": "conservative",
+        "measured_tool_wall_seconds": 0.2708707
+      }
+    },
+    {
+      "kind": "offline",
+      "count": 4,
+      "at": "2026-10-06T15:43:44.486104+00:00",
+      "ns": 572895843000000,
+      "detail": {
+        "name": "offline-04-gap-static"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "offline",
+      "seconds": 0.3910000000614673,
+      "at": "2026-10-06T15:43:44.878170+00:00",
+      "detail": {
+        "name": "offline-04-gap-static"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 8,
+      "at": "2026-10-06T15:43:44.941093+00:00",
+      "ns": 572896296000000,
+      "detail": {
+        "name": "real-08-feedback-closure-residuals"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 8,
+      "at": "2026-10-06T15:43:46.474933+00:00",
+      "ns": 572897828000000,
+      "detail": {
+        "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11"
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T15:43:54.708936+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg1",
+          "volume": "retrolume-task-103-g9-pg1-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 0.8429999999934807,
+      "at": "2026-10-06T15:43:54.748584+00:00",
+      "detail": {
+        "name": "gaps"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 9.922000000020489,
+      "at": "2026-10-06T15:43:54.875779+00:00",
+      "detail": {
+        "name": "real-08-feedback-closure-residuals"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 9,
+      "at": "2026-10-06T15:45:17.581203+00:00",
+      "ns": 572988937000000,
+      "detail": {
+        "name": "real-09-resume-matched-evidence"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 9,
+      "at": "2026-10-06T15:45:19.214887+00:00",
+      "ns": 572990562000000,
+      "detail": {
+        "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11"
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 15,
+      "at": "2026-10-06T15:45:21.948486+00:00",
+      "ns": 572993296000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 20876
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 16,
+      "at": "2026-10-06T15:45:25.654588+00:00",
+      "ns": 572997000000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 20876
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 17,
+      "at": "2026-10-06T15:45:29.725449+00:00",
+      "ns": 573001078000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 20876
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 18,
+      "at": "2026-10-06T15:45:35.137899+00:00",
+      "ns": 573006484000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 20876
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 19,
+      "at": "2026-10-06T15:45:40.319455+00:00",
+      "ns": 573011671000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 20876
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 20,
+      "at": "2026-10-06T15:45:44.825987+00:00",
+      "ns": 573016171000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 20876
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 21,
+      "at": "2026-10-06T15:45:48.630828+00:00",
+      "ns": 573019984000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 20876
+      }
+    },
+    {
+      "kind": "sup",
+      "count": 22,
+      "at": "2026-10-06T15:45:53.110771+00:00",
+      "ns": 573024468000000,
+      "detail": {
+        "kind": "run_one_call",
+        "caller_pid": 20876
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T15:45:58.147542+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg1",
+          "volume": "retrolume-task-103-g9-pg1-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 0.8120000000344589,
+      "at": "2026-10-06T15:45:58.176350+00:00",
+      "detail": {
+        "name": "gaps"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 40.67200000002049,
+      "at": "2026-10-06T15:45:58.274201+00:00",
+      "detail": {
+        "name": "real-09-resume-matched-evidence"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 10,
+      "at": "2026-10-06T15:48:38.492870+00:00",
+      "ns": 573189843000000,
+      "detail": {
+        "name": "real-10-resume-sql-negatives"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 10,
+      "at": "2026-10-06T15:48:40.142816+00:00",
+      "ns": 573191500000000,
+      "detail": {
+        "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11"
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T15:48:43.708674+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg1",
+          "volume": "retrolume-task-103-g9-pg1-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 0.7809999999590218,
+      "at": "2026-10-06T15:48:43.751313+00:00",
+      "detail": {
+        "name": "gaps"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 5.35999999998603,
+      "at": "2026-10-06T15:48:43.858737+00:00",
+      "detail": {
+        "name": "real-10-resume-sql-negatives"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 11,
+      "at": "2026-10-06T15:48:43.932080+00:00",
+      "ns": 573195281000000,
+      "detail": {
+        "name": "real-11-cleanup-missing-unreadable"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 11,
+      "at": "2026-10-06T15:48:45.547301+00:00",
+      "ns": 573196906000000,
+      "detail": {
+        "cid": "4b813f9e4317aef9c613eb140fcb2d40c55a6bd98ee5d79807ea5851975d7f68"
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T15:48:48.436831+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4b813f9e4317aef9c613eb140fcb2d40c55a6bd98ee5d79807ea5851975d7f68",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg3",
+          "volume": "retrolume-task-103-g9-pg3-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 0.7809999999590218,
+      "at": "2026-10-06T15:48:48.465971+00:00",
+      "detail": {
+        "name": "cleanup-gaps-fault-stop"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 12,
+      "at": "2026-10-06T15:48:52.190200+00:00",
+      "ns": 573203546000000,
+      "detail": {
+        "cid": "4b813f9e4317aef9c613eb140fcb2d40c55a6bd98ee5d79807ea5851975d7f68"
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T15:48:53.799323+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4b813f9e4317aef9c613eb140fcb2d40c55a6bd98ee5d79807ea5851975d7f68",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg3",
+          "volume": "retrolume-task-103-g9-pg3-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 0.7959999999729916,
+      "at": "2026-10-06T15:48:53.826747+00:00",
+      "detail": {
+        "name": "cleanup-gaps"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 9.984000000054948,
+      "at": "2026-10-06T15:48:53.933799+00:00",
+      "detail": {
+        "name": "real-11-cleanup-missing-unreadable"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 12,
+      "at": "2026-10-06T15:52:01.838438+00:00",
+      "ns": 573393187000000,
+      "detail": {
+        "name": "real-12-resume-contract-status-and-absent"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 13,
+      "at": "2026-10-06T15:52:03.510882+00:00",
+      "ns": 573394859000000,
+      "detail": {
+        "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11"
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T15:52:07.459783+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg1",
+          "volume": "retrolume-task-103-g9-pg1-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 0.8279999999795109,
+      "at": "2026-10-06T15:52:07.506539+00:00",
+      "detail": {
+        "name": "gaps-pg1"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 14,
+      "at": "2026-10-06T15:52:08.242876+00:00",
+      "ns": 573399593000000,
+      "detail": {
+        "cid": "f96ac8dcb64648c76a2bc70f3f8b75969ada0ea0ea69b5896fe5ecb71affab85"
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-06T15:52:10.397002+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "f96ac8dcb64648c76a2bc70f3f8b75969ada0ea0ea69b5896fe5ecb71affab85",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg2",
+          "volume": "retrolume-task-103-g9-pg2-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 0.8279999999795109,
+      "at": "2026-10-06T15:52:10.452420+00:00",
+      "detail": {
+        "name": "gaps"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 8.765999999945052,
+      "at": "2026-10-06T15:52:10.609588+00:00",
+      "detail": {
+        "name": "real-12-resume-contract-status-and-absent"
+      }
+    },
+    {
+      "kind": "offline",
+      "count": 5,
+      "at": "2026-10-06T15:57:25.498795+00:00",
+      "ns": 573716843000000,
+      "detail": {
+        "name": "offline-05-final-python-syntax"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "offline",
+      "seconds": 1.0469999999040738,
+      "at": "2026-10-06T15:57:26.562109+00:00",
+      "detail": {
+        "name": "offline-05-final-python-syntax"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "metadata",
+      "seconds": 0.26500000001396984,
+      "at": "2026-10-06T16:01:52.530841+00:00",
+      "detail": {
+        "name": "c01-final-byte-and-resource-package",
+        "kind": "measured"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "metadata",
+      "seconds": 59.09400000004098,
+      "at": "2026-10-06T16:04:48.631743+00:00",
+      "detail": {
+        "name": "c01-final-byte-and-resource-package",
+        "kind": "measured"
+      }
+    },
+    {
+      "kind": "offline",
+      "count": 6,
+      "at": "2026-10-06T16:22:52.016787+00:00",
+      "ns": 575243375000000,
+      "detail": {
+        "name": "offline-06-final-no-evidence-http"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "offline",
+      "seconds": 1.3900000000139698,
+      "at": "2026-10-06T16:22:53.412876+00:00",
+      "detail": {
+        "name": "offline-06-final-no-evidence-http"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "metadata",
+      "seconds": 4.452999999979511,
+      "at": "2026-10-06T16:27:46.498568+00:00",
+      "detail": {
+        "name": "c01-final-byte-and-resource-package",
+        "kind": "measured"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "metadata",
+      "seconds": 50,
+      "at": "2026-10-06T16:38:22.448303+00:00",
+      "detail": {
+        "name": "未逐条计时的补读／API修复／文档与最终封装尾段",
+        "kind": "conservative",
+        "exact_seconds_unknown": true,
+        "final_write_within_this_reserve": true
+      }
+    }
+  ],
+  "previous_permit": "TASK-103-G9-20261006",
+  "previous_counts": {
+    "offline": 4,
+    "build": 3,
+    "entry": 24,
+    "container_create": 3,
+    "volume_create": 3,
+    "container_start": 23,
+    "listener_start": 3,
+    "sup": 16,
+    "browser": 3,
+    "driver": 3
+  },
+  "previous_used_seconds": {
+    "offline": 15.452999999979511,
+    "real": 539.2510000002803,
+    "cleanup": 22.017999999807216,
+    "metadata": 548.4530000000959
+  },
+  "previous_result_sha256": "b62695f7da2b3b5c65553f7a7ec5f87a979c7029c3e2b33ed5ee9cb06fe21b13",
+  "closed": true,
+  "status": "PARTIAL_STOPPED",
+  "closed_at": "2026-10-06T16:38:22.494771+00:00",
+  "stop_reason": "V15晚到保存回执／晚到引用响应／浏览器实际冲突POST缺直接证据，browser／driver3/3及entry12/12到限"
+}

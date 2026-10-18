@@ -1,0 +1,46 @@
+Traceback (most recent call last):
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task106\windows.py", line 59, in verify
+    try:await h.command(aid,'ask',{'mode':'first','retry_of':command.business_key})
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task106\core.py", line 59, in command
+    receipt=await self.service.submit_command(aid,command,self.config,run_tag='task106-'+secrets.token_hex(12))
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\interview\service.py", line 72, in submit_command
+    replay=await self.ledger.lookup_interview_replay(aid,command)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\activities\interview_repository.py", line 674, in lookup_interview_replay
+    found=await self._transaction(lookup)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\activities\repository.py", line 338, in _transaction
+    return await operation(connection)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\activities\interview_repository.py", line 673, in lookup
+    return await self._interview_replay(connection,state,aid,command) is not None
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\activities\interview_repository.py", line 162, in _interview_replay
+    if winner['request_body']!=request or winner['request_sha256']!=command.request_hash(aid):raise InterviewRefusal('interview_slot_conflict')
+                                                                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+app.interview.contracts.InterviewRefusal: interview_slot_conflict
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task106\control.py", line 70, in batch
+    yield folder
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task106\resume_windows.py", line 26, in main
+    asyncio.run(resume(h))
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 195, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task106\resume_windows.py", line 18, in resume
+    await verify(h,stages=('marked_before_result','committed_before_repair'))
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task106\windows.py", line 60, in verify
+    except InterviewRefusal as exc:assert exc.code in ('interview_pending','window_unavailable','interview_retry_forbidden'),exc.code
+                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: interview_slot_conflict

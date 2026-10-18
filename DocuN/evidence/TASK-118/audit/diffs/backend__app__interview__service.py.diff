@@ -1,0 +1,72 @@
+--- first-pre/backend/app/interview/service.py
++++ current/backend/app/interview/service.py
+@@ -9,7 +9,7 @@
+ from app.worker.one_call import OneCallInput,run_one_call
+ from app.worker.session import SessionConfig
+ from .contracts import (InterviewContext,InterviewLimits,GoalBody,SourceBinding,SourceRole,RecordRef,
+-    InterviewRefusal,profile_for,operation_id,canonical,load_json,sha)
++    InterviewRefusal,profile_for,operation_id,canonical,load_json,sha,InterviewHybridContext,InterviewCatalogEntry)
+ from .prompt import messages
+ from .policy import transition
+ from .evidence import load_units,assemble_catalog,verify_citation
+@@ -42,7 +42,14 @@
+         g=GoalBody.model_validate(goal['body']['value']['goal'])
+         snapshot=await self.ledger.read_learning_snapshot(aid)
+         units=await asyncio.to_thread(load_units,snapshot,self.materials,self.originals)
+-        catalog=assemble_catalog(g.target+' '+(g.focus or '')+' '+' '.join(g.clarifications),units,command.request_hash(aid))
++        hybrid=command.schema_id=='interview.command.v2'
++        if hybrid:
++            from app.retrieval.service import RetrievalService
++            from app.retrieval.contracts import RetrievalRefusal
++            try:entries=await RetrievalService(self.ledger,self.materials,self.originals).catalog(aid,command.retrieval_ref,command.request_hash(aid),top_k=4,max_chars=4000,max_bytes=8000)
++            except RetrievalRefusal as exc:raise InterviewRefusal(exc.code,'本轮检索已失效') from None
++            catalog=[InterviewCatalogEntry.model_validate({**e.model_dump(),'citation_id':'ic_'+sha(command.request_hash(aid)+e.evidence_id)[:24]}) for e in entries]
++        else:catalog=assemble_catalog(g.target+' '+(g.focus or '')+' '+' '.join(g.clarifications),units,command.request_hash(aid))
+         refs=[]
+         if command.action=='review':
+             # Only this round's question/answer chain. No unbounded prior history.
+@@ -63,11 +70,18 @@
+         limits=InterviewLimits(max_output_tokens=getattr(config,'interview_output_tokens',0) or 1,
+             max_followups_per_round=getattr(config,'interview_followups',0) or 1)
+         identity={'provider':config.provider,'model':config.model} if config.provider and config.model else await self.ledger.read_interview_identity(aid)
+-        frozen=InterviewContext(activity_id=aid,business_key=command.business_key,request_sha256=command.request_hash(aid),action=command.action,
++        extra={}
++        if hybrid:
++            selection=await self.ledger.read_memory_selection(aid,include_bodies=True)
++            if not selection.get('eligible'):raise InterviewRefusal('interview_memory_dependency_invalid')
++            memory_refs=[{k:x[k] for k in ('memory_id','version','revision','body_sha256')} for x in selection['entries']]
++            extra=dict(retrieval_ref=command.retrieval_ref,memory_recipe={'policy':'interview.memory.recipe.v1','activity_id':aid,'refs':memory_refs} if memory_refs else None,
++                memory_refs=memory_refs,memory_selection_sha256=selection['selection_sha256'],memory_dependency_sha256=selection.get('dependency_sha256'))
++        frozen=(InterviewHybridContext if hybrid else InterviewContext)(activity_id=aid,business_key=command.business_key,request_sha256=command.request_hash(aid),action=command.action,
+             expected_head_revision=command.expected_head_revision,expected_goal_version=command.expected_goal_version,expected_scope_revision=command.expected_scope_revision,
+             goal_record_id=h['goal_record_id'],goal_body=g,sources=[SourceBinding.model_validate({k:s[k] for k in ('source_id','version_id','source_revision','original_sha256')}) for s in view['sources']],
+             material_roles=g.material_roles,round_index=h['round_index'],probe_depth=h['probe_depth'],parent_record_refs=refs,catalog=catalog,
+-            identity=identity,limits=limits)
++            identity=identity,limits=limits,**extra)
+         return frozen
+ 
+     @owned_service
+@@ -90,11 +104,20 @@
+             return await self.ledger.apply_interview_local(aid,command,application_value=value)
+         layer=getattr(config,'interview_model_layer',None)
+         if not layer or not layer.available or config.model_service is None:raise InterviewRefusal(layer.reason if layer else 'interview_not_configured','面试模型配置未就绪',503)
+-        request=ModelCallRequest(interview_profile=profile_for(frozen),messages=tuple(Message.model_validate(m) for m in messages(frozen)),
+-            max_output_tokens=frozen.limits.max_output_tokens,allowed_tools=frozenset())
++        background=None
++        if isinstance(frozen,InterviewHybridContext):
++            from app.memory.context import interview_background,check_capacity
++            from app.memory.contracts import MemoryRefusal
++            try:
++                selection=await self.ledger.read_memory_selection(aid,include_bodies=True)
++                background=interview_background(selection,frozen)
++                if selection.get('selected'):check_capacity(messages(frozen,background),selection,config.memory_context,await self.ledger.read_learning_snapshot(aid),config.model_service)
++            except MemoryRefusal as exc:raise InterviewRefusal(exc.code,exc.message) from None
++        request=ModelCallRequest(interview_profile=profile_for(frozen),messages=tuple(Message.model_validate(m) for m in messages(frozen,background)),
++            max_output_tokens=frozen.limits.max_output_tokens,allowed_tools=frozenset(),retrieval_ref=frozen.retrieval_ref if isinstance(frozen,InterviewHybridContext) else None)
+         service=config.model_service;session=self.session_config or SessionConfig()
+         if service.timeout_seconds>session.request_timeout_seconds:raise InterviewRefusal('interview_config_invalid','模型超时超过监督窗口',503)
+-        try:OneCallInput(operation_id(command.business_key),request,service).to_wire()
++        try:OneCallInput(operation_id(command.business_key,command.schema_id),request,service).to_wire()
+         except (ValueError,TypeError):raise InterviewRefusal('interview_context_too_large','完整受控请求超过通道上限',422) from None
+         receipt=await self.ledger.accept_interview_command(aid,command,frozen) if stored is None else await self.ledger.read_interview_command(aid,command.business_key)
+         if receipt['status']!='accepted' or receipt['duplicate_of']:return receipt

@@ -1,0 +1,159 @@
+[
+  {
+    "step": "resource-identity",
+    "ok": true,
+    "identity": {
+      "owner": "retrolume_task095_synth",
+      "role": [
+        true,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "sessions": 0
+    }
+  },
+  {
+    "step": "pg-api-retest",
+    "ok": false,
+    "returncode": 1,
+    "tail": "FAILED (errors=1)"
+  },
+  {
+    "step": "app-ready",
+    "ok": true,
+    "pid": 20744
+  },
+  {
+    "step": "create-via-http",
+    "ok": true,
+    "status": 200
+  },
+  {
+    "step": "continue-chain",
+    "ok": true,
+    "status": 200,
+    "supervision": {
+      "state": "settled",
+      "settled_seconds": 6,
+      "reserved_seconds": 0,
+      "pending_fold_seconds": 0,
+      "cleanup_incomplete": false
+    },
+    "business": {
+      "read_status": "committed_current",
+      "payload_available": true
+    }
+  },
+  {
+    "step": "transport-single-send",
+    "ok": true,
+    "sends": 1,
+    "roles": [
+      "assistant",
+      "user"
+    ]
+  },
+  {
+    "step": "pg-facts-after-chain",
+    "ok": true,
+    "operations": [
+      {
+        "state": "received",
+        "disposition": "received"
+      }
+    ],
+    "account": {
+      "requests_reserved": 2,
+      "cost_reserved_microunits": 200000,
+      "running_reserved_seconds": 0,
+      "dispatch_closed": true,
+      "status": "pending",
+      "last_settled_generation": 3,
+      "running_settled_seconds": 7
+    },
+    "payload_value": {
+      "reply": "synthetic-continue-095"
+    }
+  },
+  {
+    "step": "job-gone-after-settle",
+    "ok": true,
+    "generation": 3
+  },
+  {
+    "step": "same-key-replay",
+    "ok": true,
+    "status": 200,
+    "supervision": null
+  },
+  {
+    "step": "same-key-race-unique",
+    "ok": true,
+    "rows": 1,
+    "sends": 2,
+    "account": {
+      "requests_reserved": 3,
+      "cost_reserved_microunits": 300000
+    },
+    "responses": [
+      200,
+      200
+    ]
+  },
+  {
+    "step": "pre-admit-fail-no-row",
+    "ok": true,
+    "status": 200,
+    "rows": 0,
+    "body_status": "supervision_unknown",
+    "supervision": "failed_closed"
+  },
+  {
+    "step": "same-key-retry-after-fail",
+    "ok": true,
+    "status": 200,
+    "sends": 4,
+    "rows": [
+      {
+        "state": "received"
+      }
+    ]
+  },
+  {
+    "step": "browser-continue",
+    "ok": false,
+    "summary": {
+      "ok": false,
+      "console_errors": [],
+      "steps": [
+        "workspace-list-visible"
+      ],
+      "error": "TimeoutError: locator.innerText: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('.ws-op-detail pre').first()\u001b[22m\n"
+    }
+  },
+  {
+    "step": "browser-workspace",
+    "ok": false,
+    "summary": {
+      "ok": false,
+      "steps": [
+        "capabilities-layers",
+        "ui-create"
+      ],
+      "console_errors": [],
+      "expected_network_errors": [],
+      "counts": {},
+      "error": "TimeoutError: locator.waitFor: Timeout 15000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByText('上次动作未确认') to be visible\u001b[22m\n",
+      "page_errors": []
+    }
+  },
+  {
+    "step": "app-terminated",
+    "ok": true,
+    "pid": 20744
+  }
+]

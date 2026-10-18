@@ -1,0 +1,163 @@
+{
+  "case_id": "ordinary",
+  "source_path": "fixtures/ordinary_two_pages.pdf",
+  "source_sha256": "039fd0023772028e90da1fda858eccd6ba9992b1ccff402a67c1f3a4f0a08d35",
+  "basename": "ordinary_two_pages.pdf",
+  "mode": "plain",
+  "adapter": "pypdf",
+  "status": "success",
+  "pages": [
+    {
+      "physical_page": 1,
+      "text": "普通文字资料 / Ordinary text\n第一页：先定义问题，再检查证据。\nPage one: define the question before checking evidence.\nPrinted page 101\n"
+    },
+    {
+      "physical_page": 2,
+      "text": "复测记录 / Second attempt\n第二页：复测结果可以改变下一步练习。\nPage two: use a second attempt to choose the next exercise.\nPrinted page 205\n"
+    }
+  ],
+  "evaluation": {
+    "fragments": [
+      {
+        "id": "P1ZH",
+        "expected": {
+          "id": "P1ZH",
+          "text": "第一页：先定义问题，再检查证据。",
+          "physical_page": 1
+        },
+        "hits": [
+          {
+            "physical_page": 1,
+            "extracted_offset": 23,
+            "text": "第一页：先定义问题，再检查证据。",
+            "excerpt": "普通文字资料 / Ordinary text\n第一页：先定义问题，再检查证据。\nPage one: define the question"
+          }
+        ],
+        "content_unique_pass": true,
+        "location_pass": true
+      },
+      {
+        "id": "P1EN",
+        "expected": {
+          "id": "P1EN",
+          "text": "Page one: define the question before checking evidence.",
+          "physical_page": 1
+        },
+        "hits": [
+          {
+            "physical_page": 1,
+            "extracted_offset": 40,
+            "text": "Page one: define the question before checking evidence.",
+            "excerpt": "rdinary text\n第一页：先定义问题，再检查证据。\nPage one: define the question before checking evidence.\nPrinted page 101\n"
+          }
+        ],
+        "content_unique_pass": true,
+        "location_pass": true
+      },
+      {
+        "id": "P1FOOT",
+        "expected": {
+          "id": "P1FOOT",
+          "text": "Printed page 101",
+          "physical_page": 1
+        },
+        "hits": [
+          {
+            "physical_page": 1,
+            "extracted_offset": 96,
+            "text": "Printed page 101",
+            "excerpt": "ion before checking evidence.\nPrinted page 101\n"
+          }
+        ],
+        "content_unique_pass": true,
+        "location_pass": true
+      },
+      {
+        "id": "P2ZH",
+        "expected": {
+          "id": "P2ZH",
+          "text": "第二页：复测结果可以改变下一步练习。",
+          "physical_page": 2
+        },
+        "hits": [
+          {
+            "physical_page": 2,
+            "extracted_offset": 22,
+            "text": "第二页：复测结果可以改变下一步练习。",
+            "excerpt": "复测记录 / Second attempt\n第二页：复测结果可以改变下一步练习。\nPage two: use a second attemp"
+          }
+        ],
+        "content_unique_pass": true,
+        "location_pass": true
+      },
+      {
+        "id": "P2EN",
+        "expected": {
+          "id": "P2EN",
+          "text": "Page two: use a second attempt to choose the next exercise.",
+          "physical_page": 2
+        },
+        "hits": [
+          {
+            "physical_page": 2,
+            "extracted_offset": 41,
+            "text": "Page two: use a second attempt to choose the next exercise.",
+            "excerpt": "nd attempt\n第二页：复测结果可以改变下一步练习。\nPage two: use a second attempt to choose the next exercise.\nPrinted page 205\n"
+          }
+        ],
+        "content_unique_pass": true,
+        "location_pass": true
+      },
+      {
+        "id": "P2FOOT",
+        "expected": {
+          "id": "P2FOOT",
+          "text": "Printed page 205",
+          "physical_page": 2
+        },
+        "hits": [
+          {
+            "physical_page": 2,
+            "extracted_offset": 101,
+            "text": "Printed page 205",
+            "excerpt": " to choose the next exercise.\nPrinted page 205\n"
+          }
+        ],
+        "content_unique_pass": true,
+        "location_pass": true
+      }
+    ],
+    "orders": [
+      {
+        "name": "page_then_body",
+        "expected": [
+          "P1ZH",
+          "P1EN",
+          "P1FOOT",
+          "P2ZH",
+          "P2EN",
+          "P2FOOT"
+        ],
+        "observed": [
+          "P1ZH",
+          "P1EN",
+          "P1FOOT",
+          "P2ZH",
+          "P2EN",
+          "P2FOOT"
+        ],
+        "pass": true
+      }
+    ],
+    "page_count": {
+      "expected": 2,
+      "actual": 2,
+      "pass": true
+    }
+  },
+  "python_warnings": [],
+  "pypdf_log": "",
+  "captured_stdout": "",
+  "captured_stderr": "",
+  "status_matches_manifest": true
+}

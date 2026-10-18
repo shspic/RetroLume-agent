@@ -1,0 +1,215 @@
+"""TASK-083 D3-10 one-container bounded runner; password remains in this process only."""
+from __future__ import annotations
+import ctypes
+from datetime import datetime
+import json
+import os
+from pathlib import Path
+import secrets
+import socket
+import subprocess
+import time
+from ctypes import wintypes
+
+import psycopg
+
+ROOT=Path(r"D:/shspic/project_NO3_RetroLume-agent")
+EVID=ROOT/"Ndocu/evidence/task-083/d3-implementation-10"
+PY=ROOT/"backend/.venv/Scripts/python.exe"
+TEST=ROOT/"backend/tests/fixtures/task083/d3_pg_windows.py"
+IMAGE="sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f"
+TAG=datetime.now().strftime("%Y%m%d-%H%M%S")
+NAME=f"retrolume-task-083-d3-{TAG}"
+DB="retrolume_task083_d3"
+USER="task083_d3"
+PORT=55439
+T0=time.monotonic()
+DEADLINE=T0+1800
+password=None
+cid=None
+state={"tag":TAG,"name":NAME,"attempts":[],"container_id":None,"cleanup_incomplete":False}
+
+def left():
+    return DEADLINE-time.monotonic()
+
+def log(msg):
+    line=f"[{time.monotonic()-T0:.3f}s] {msg}"
+    print(line,flush=True)
+    with (EVID/"runner-log.txt").open("a",encoding="utf-8") as f: f.write(line+"\n")
+
+def save():
+    (EVID/"runner-state.json").write_text(json.dumps(state,indent=2,ensure_ascii=False,default=str),encoding="utf-8")
+
+def docker(args, timeout=30):
+    r=subprocess.run(["docker",*args],capture_output=True,text=True,timeout=min(timeout,max(1,left()-60)))
+    return r
+
+def select_inspect(container):
+    r=docker(["inspect",container],30)
+    if r.returncode!=0: raise RuntimeError(f"inspect exit={r.returncode}")
+    obj=json.loads(r.stdout)[0]
+    hc=obj["HostConfig"]
+    selected={
+        "id":obj["Id"],"name":obj["Name"],"image":obj["Image"],
+        "labels":obj["Config"]["Labels"],"running":obj["State"]["Running"],
+        "nano_cpus":hc["NanoCpus"],"memory":hc["Memory"],"pids_limit":hc["PidsLimit"],
+        "restart":hc["RestartPolicy"]["Name"],"network":hc["NetworkMode"],
+        "port_bindings":hc["PortBindings"],"binds":hc["Binds"],"mounts":obj["Mounts"],
+    }
+    return selected
+
+def owner_ok(obj):
+    labels=obj["labels"] or {}
+    binding=(obj["port_bindings"] or {}).get("5432/tcp") or []
+    return (obj["id"]==cid and labels.get("retrolume-task")=="083"
+            and labels.get("phase")=="d3-10" and labels.get("run")==TAG
+            and obj["image"]==IMAGE and obj["nano_cpus"]==1000000000
+            and obj["memory"]==536870912 and obj["pids_limit"]==128
+            and obj["restart"]=="no" and obj["network"]=="bridge"
+            and obj["binds"] is None
+            and len(obj["mounts"])==1
+            and obj["mounts"][0]["Type"]=="volume"
+            and obj["mounts"][0]["Destination"]=="/var/lib/postgresql/data"
+            and binding==[{"HostIp":"127.0.0.1","HostPort":str(PORT)}])
+
+def process_created(handle):
+    class FileTime(ctypes.Structure):
+        _fields_=[("low",wintypes.DWORD),("high",wintypes.DWORD)]
+    api=ctypes.WinDLL("kernel32",use_last_error=True)
+    api.GetProcessTimes.argtypes=[wintypes.HANDLE,*([ctypes.POINTER(FileTime)]*4)]
+    api.GetProcessTimes.restype=wintypes.BOOL
+    values=[FileTime() for _ in range(4)]
+    if not api.GetProcessTimes(handle,*(ctypes.byref(x) for x in values)):
+        raise RuntimeError(f"GetProcessTimes error={ctypes.get_last_error()}")
+    return (int(values[0].high)<<32)|int(values[0].low)
+
+def batch(parts,number,dsn):
+    attempt=EVID/f"attempt-{number:02d}"
+    attempt.mkdir(exist_ok=False)
+    script_bytes=TEST.read_bytes()
+    import hashlib
+    (attempt/"as-run.sha256").write_text(hashlib.sha256(script_bytes).hexdigest()+"  backend/tests/fixtures/task083/d3_pg_windows.py\n",encoding="utf-8")
+    (attempt/"as-run.py").write_bytes(script_bytes)
+    env=os.environ.copy()
+    env.pop("RETROLUME_TASK_083_DATABASE_URL",None)
+    env["RETROLUME_TASK_083_D3_DATABASE_URL"]=dsn
+    env["D3_PARTS"]=parts
+    cmd=[str(PY),"-B",str(TEST)]
+    log(f"batch {number} start parts={parts} timeout=60s")
+    started=time.monotonic()
+    proc=subprocess.Popen(cmd,cwd=str(ROOT/"backend/tests"),env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    created=process_created(proc._handle)
+    killed=False
+    try:
+        out,err=proc.communicate(timeout=min(60,max(1,left()-65)))
+    except subprocess.TimeoutExpired:
+        killed=True
+        if process_created(proc._handle)!=created:
+            state["cleanup_incomplete"]=True
+            raise RuntimeError("batch PID creation time changed; ownership unknown")
+        tk=subprocess.run(["taskkill","/PID",str(proc.pid),"/T","/F"],capture_output=True,text=True,timeout=15)
+        (attempt/"timeout-kill.json").write_text(json.dumps({"pid":proc.pid,"created_100ns":created,"exit":tk.returncode,
+            "stdout":tk.stdout,"stderr":tk.stderr},ensure_ascii=False),encoding="utf-8")
+        out,err=proc.communicate(timeout=10)
+    text_out=out.decode("utf-8",errors="replace").replace(password,"***")
+    text_err=err.decode("utf-8",errors="replace").replace(password,"***")
+    (attempt/"stdout.log").write_text(text_out,encoding="utf-8")
+    (attempt/"stderr.log").write_text(text_err,encoding="utf-8")
+    phases=[]
+    for line in text_out.splitlines():
+        try: phases.append(json.loads(line).get("phase"))
+        except json.JSONDecodeError: pass
+    meta={"parts":parts,"pid":proc.pid,"created_100ns":created,"exit":proc.returncode,
+          "elapsed_seconds":time.monotonic()-started,"timeout_killed":killed,"phases":phases}
+    (attempt/"meta.json").write_text(json.dumps(meta,indent=2),encoding="utf-8")
+    state["attempts"].append(meta);save()
+    ok=proc.returncode==0 and not killed and "complete" in phases and text_err.strip()==""
+    log(f"batch {number} exit={proc.returncode} elapsed={meta['elapsed_seconds']:.2f}s phases={phases} pass={ok}")
+    return ok
+
+try:
+    log("precheck start: one attempt, no pull/start/port change")
+    r=docker(["info","--format","{{.ServerVersion}}"],30)
+    state["precheck_docker_info"]={"exit":r.returncode,"server":r.stdout.strip(),"error":r.stderr.strip()[:200]}
+    if r.returncode!=0: raise RuntimeError("Docker engine unavailable")
+    r=docker(["image","inspect",IMAGE,"--format","{{.Id}}"],30)
+    state["precheck_image"]={"exit":r.returncode,"id":r.stdout.strip(),"error":r.stderr.strip()[:200]}
+    if r.returncode!=0 or r.stdout.strip()!=IMAGE: raise RuntimeError("fixed local image unavailable")
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1",PORT))
+    state["precheck_port"]="127.0.0.1:55439 free"
+    save()
+    log("precheck passed")
+    password=secrets.token_urlsafe(24)
+    dsn=f"postgresql://{USER}:{password}@127.0.0.1:{PORT}/{DB}"
+    r=docker(["run","-d","--name",NAME,
+              "--label","retrolume-task=083","--label","phase=d3-10","--label",f"run={TAG}",
+              "--cpus","1","--memory","512m","--pids-limit","128","--restart","no","--network","bridge",
+              "-p",f"127.0.0.1:{PORT}:5432","-e",f"POSTGRES_USER={USER}",
+              "-e",f"POSTGRES_PASSWORD={password}","-e",f"POSTGRES_DB={DB}",IMAGE],30)
+    if r.returncode!=0:
+        state["create_error"]={"exit":r.returncode,"stderr":r.stderr.replace(password,"***")[:500]}
+        raise RuntimeError("container create failed")
+    cid=r.stdout.strip();state["container_id"]=cid;save();log(f"created id={cid}")
+    obj=select_inspect(cid)
+    (EVID/"container-created.json").write_text(json.dumps(obj,indent=2),encoding="utf-8")
+    if not owner_ok(obj) or not obj["running"]: raise RuntimeError("created resource identity/config mismatch")
+    ready_until=time.monotonic()+30
+    while time.monotonic()<ready_until and left()>90:
+        try:
+            with psycopg.connect(dsn,connect_timeout=3) as conn:
+                identity=conn.execute("SELECT current_database(),current_user,inet_server_port()").fetchone()
+            if identity!=(DB,USER,5432): raise RuntimeError(f"PG identity mismatch {identity}")
+            state["pg_identity"]={"database":identity[0],"user":identity[1],"internal_port":identity[2]}
+            save();break
+        except psycopg.OperationalError:
+            time.sleep(1)
+    else: raise RuntimeError("PG readiness timeout")
+    log("PG ready and identity verified")
+    for number in range(1,4):
+        if left()<125: raise RuntimeError("budget reserve reached")
+        parts="migration,ledger,windows" if number==1 else None
+        if number>1:
+            go=EVID/f"attempt-{number:02d}.go"
+            until=min(time.monotonic()+240,DEADLINE-125)
+            log(f"waiting for grounded correction signal {go.name}")
+            while time.monotonic()<until and not go.exists(): time.sleep(.5)
+            if not go.exists(): break
+            parts=go.read_text(encoding="utf-8").strip()
+            if parts not in ("migration","ledger","windows","migration,ledger","ledger,windows","migration,windows"):
+                raise RuntimeError("invalid correction selection")
+        if batch(parts,number,dsn):
+            state["verdict"]="PASS";break
+        state["verdict"]=f"ATTEMPT_{number}_FAILED";save()
+    else:
+        state["verdict"]="THREE_ATTEMPTS_FAILED"
+    if state.get("verdict")!="PASS": log(f"verification stopped verdict={state.get('verdict')}")
+except BaseException as exc:
+    state["verdict"]=state.get("verdict") or "BLOCKED"
+    state["error_type"]=type(exc).__name__
+    state["error_message"]=str(exc).replace(password,"***") if password else str(exc)
+    log(f"blocked {type(exc).__name__}: {state['error_message']}")
+finally:
+    if cid is not None:
+        try:
+            obj=select_inspect(cid)
+            if not owner_ok(obj): raise RuntimeError("cleanup owner mismatch")
+            log(f"cleanup owner verified id={cid}")
+            r=docker(["stop","--timeout","10",cid],20)
+            state["stop"]={"exit":r.returncode,"stderr":r.stderr[:200]}
+            if r.returncode!=0:
+                r=docker(["kill",cid],15)
+                state["kill"]={"exit":r.returncode,"stderr":r.stderr[:200]}
+            final=select_inspect(cid)
+            (EVID/"container-final.json").write_text(json.dumps(final,indent=2),encoding="utf-8")
+            if not owner_ok(final) or final["running"]:
+                state["cleanup_incomplete"]=True
+                log("cleanup_incomplete")
+            else: log("container stopped and retained")
+        except BaseException as exc:
+            state["cleanup_incomplete"]=True
+            state["cleanup_error"]=f"{type(exc).__name__}: {exc}"
+            log("cleanup_incomplete")
+    state["elapsed_seconds"]=time.monotonic()-T0
+    save()
+    log(f"final verdict={state.get('verdict')} elapsed={state['elapsed_seconds']:.2f}s cleanup_incomplete={state['cleanup_incomplete']}")

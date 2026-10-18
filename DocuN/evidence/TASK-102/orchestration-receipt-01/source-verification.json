@@ -1,0 +1,27 @@
+{
+  "at": "2026-10-06T12:54:00.723276+08:00",
+  "existing_source_FK": "001 has UNIQUE(source_id,id); M4 source composite target exists",
+  "existing_event_FK": "009 PRIMARY KEY(activity_id,record_id); M4 event composite target exists",
+  "current_locks": "_teaching_lock already takes sources then activity; proposed memory prefix must precede first activity lock",
+  "v1_adapter": "Current validate_teaching_request recomputes messages from request data; proposed v2 must instead use persistent recipe and qualification, not request self-certification",
+  "official_readonly_verified": [
+    {
+      "url": "https://www.postgresql.org/docs/16/sql-createfunction.html",
+      "fact": "SECURITY DEFINER uses owner privileges; restrict search_path and remove default PUBLIC execute in the creation transaction"
+    },
+    {
+      "url": "https://www.postgresql.org/docs/16/explicit-locking.html",
+      "fact": "Consistent object order reduces deadlocks; same most restrictive lock must be obtained before later operations"
+    },
+    {
+      "url": "https://www.postgresql.org/docs/16/transaction-iso.html",
+      "fact": "Read Committed may show different committed versions to successive SELECT commands"
+    },
+    {
+      "url": "https://www.postgresql.org/docs/16/functions-binarystring.html",
+      "fact": "Core sha256(bytea) and convert_to(text,encoding) support UTF8 hash protocol"
+    }
+  ],
+  "actual_database_version_or_role_validation": false,
+  "ordinary_contract_clarification": "MemoryPage projects metadata and qualified short title only; full body and dependency closure are detail reads; keep wire response <=65536 bytes"
+}

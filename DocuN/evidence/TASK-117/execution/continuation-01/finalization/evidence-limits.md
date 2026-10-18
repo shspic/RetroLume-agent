@@ -1,0 +1,1 @@
+辅助只读Node模块定位曾多次失败，最终改用公共executablePath并核证；未启动额外浏览器。一次apply_patch因完整行不匹配原子失败，随后精确修正。原工具回执保留，未追造当时raw日志。四个S02 pre晚恢复条目的原说明保留；没有首建pre的本轮helper仅给当前post/as-run身份。

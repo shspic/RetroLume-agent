@@ -1,0 +1,466 @@
+backend/app/data_exit/control.py
+105:             elif kind == "deletion.observe":
+106:                 state["deletions"][p["entity_kind"] + ":" + p["entity_id"]] = p
+107:             elif kind=='source.register':state['source']=p
+108:         return state
+109: 
+110:     def _validated_locked(self, *, writable=False):
+111:         """仅由持有本hub真实文件锁的读写入口调用，返回当前完整字节的已验快照。"""
+112:         # 每次仍在真实锁内读取当前完整字节；仅复用同一文件对象和摘要的已验投影。
+113:         info = regular(self.path)
+114:         with self.path.open('rb') as stream:
+115:             opened = os.fstat(stream.fileno())
+116:             if (info.st_dev, info.st_ino) != (opened.st_dev, opened.st_ino):
+117:                 raise DataError('control_corrupt', 503)
+118:             if opened.st_size > MAX_JOURNAL:
+119:                 raise DataError('capacity_exceeded', 413)
+120:             raw = stream.read(opened.st_size + 1)
+121:             after = os.fstat(stream.fileno())
+122:         current = regular(self.path)
+123:         if len(raw) > MAX_JOURNAL:
+124:             raise DataError('capacity_exceeded', 413)
+125:         if (opened.st_dev, opened.st_ino, opened.st_size) != (after.st_dev, after.st_ino, len(raw)) or (current.st_dev, current.st_ino, current.st_size) != (opened.st_dev, opened.st_ino, len(raw)):
+126:             raise DataError('control_corrupt', 503)
+127:         identity = (opened.st_dev, opened.st_ino, digest(raw))
+128:         cached = getattr(self, '_state_cache', None)
+129:         if cached is None or cached[0] != identity:
+130:             events, tail = self._read(raw)
+131:             if not events or events[0]['kind']!='hub.init' or events[0]['payload'].get('control_id')!=self.control_id:
+132:                 raise DataError('control_corrupt',503)
+133:             state = self.replay(events)
+134:             cached = (identity, canonical(state), {key: canonical(job) for key, job in state['jobs'].items()}, tail, events)
+135:             self._state_cache = cached
+136:         if writable and cached[3]:
+137:             raise DataError('control_tail_unconfirmed', 503)
+138:         return cached
+139: 
+140:     def _current_snapshot(self, job_id=None, *, writable=False):
+141:         with self.lock.acquire():
+142:             cached = self._validated_locked(writable=writable)
+143:             # 不把可变的日志payload或缓存对象交给调用者。
+144:             return json.loads(cached[1] if job_id is None else cached[2][job_id])
+145: 
+146:     def state(self):
+147:         return self._current_snapshot()
+148: 
+149:     def execution_job(self, job_id):
+150:         """同一完整字节校验，只复制当前操作，避免逐行解码无关计划。"""
+151:         return self._current_snapshot(job_id)
+152: 
+153:     def commit(self, kind, payload, *, validate=None):
+154:         with self.lock.acquire(True, timeout=1):
+155:             cached = self._validated_locked(writable=True)
+156:             events, state = cached[4], json.loads(cached[1])
+157:             if validate is not None:
+158:                 validate(state)
+159:             return self._append(events, kind, payload)
+160: 
+161:     def assert_writable(self):
+162:         return self._current_snapshot(writable=True)
+163: 
+164:     @staticmethod
+165:     def receipt(job):
+166:         return {key: job[key] for key in PUBLIC_JOB if key in job}
+167: 
+168:     def current_receipt(self, state, job):
+169:         receipt = self.receipt(job)
+170:         if job.get('completion_protocol') == 1 and job['state'] in ('published','received','verified','active_readonly','deleted','deleted_pending'):
+171:             confirmation=job.get('completion_confirmed_ns')
+172:             deadline=job.get('execution',{}).get('deadline_ns')
+173:             if type(confirmation) is not int or type(deadline) is not int or not 0 < confirmation < deadline:
+174:                 receipt.update(state={'portable_export':'published_unconfirmed','restore_checkpoint':'published_unconfirmed',
+175:                     'upload':'upload_unconfirmed','restore':'restore_unconfirmed','activate':'activation_unconfirmed',
+176:                     'source_delete':'deletion_unconfirmed'}[job['kind']],stage='completion_unconfirmed')
+177:         if job['kind']=='restore':
+178:             receipt.update(plan_id=job['scope']['plan_id'],plan_sha256=job['scope']['plan_sha256'])
+179:         selection = state['selection']
+180:         if selection is not None and selection.get('activation_job_id') == job['job_id']:
+181:             receipt.update(selector_commit='confirmed',selection_generation=selection['generation'],target_id=selection['target_id'])
+182:             if job['state'] != 'active_readonly':
+183:                 receipt.update(state='activation_unconfirmed', stage='selector_committed')
+184:         return receipt
+185: 
+186:     def create_or_get_job(self, command, origin_context):
+187:         request_sha = digest(command.normalized())
+188:         key = business_key(command.business_key)
+189:         with self.lock.acquire(True, timeout=1):
+190:             cached = self._validated_locked(writable=True)
+191:             events, state = cached[4], json.loads(cached[1])
+192:             for job in state["jobs"].values():
+193:                 if job["business_key"] == key:
+194:                     if job["request_sha256"] != request_sha or job["kind"] != command.kind:
+195:                         raise DataError("request_conflict")
+196:                     return self.current_receipt(state, job)
+197:             if len(state["jobs"]) >= 256:
+198:                 raise DataError("capacity_exceeded", 413)
+199:             now = datetime.now(timezone.utc).isoformat()
+200:             job = {"job_id": str(uuid4()), "business_key": key, "kind": command.kind,
+201:                    "request_sha256": request_sha, "scope": command.scope,
+202:                    "origin": origin_context.public(), "state": "prepared", "stage": "prepared",
+203:                    "revision": 1, "created_at": now, "updated_at": now, "execution_protocol": 2, "completion_protocol": 1}
+204:             event = self._append(events, "job.create", job)
+205:             return self.receipt({**job, "control_seq": event["seq"]})
+206: 
+207:     def update_job(self, job_id, expected_revision, *, expected_states=None, validate=None, **changes):
+208:         uuid(job_id)
+209:         changes.pop("control_seq", None)
+210:         forbidden = {"business_key", "kind", "request_sha256", "origin", "scope", "job_id", "revision"}
+211:         if forbidden.intersection(changes):
+212:             raise ValueError("不可改写操作身份")
+213:         payload = {"job_id": job_id, **changes, "revision": expected_revision + 1,
+214:                    "updated_at": datetime.now(timezone.utc).isoformat()}
+215:         def check(state):
+216:             job = state["jobs"].get(job_id)
+217:             if job is None or job["revision"] != expected_revision:
+218:                 raise DataError("request_conflict")
+219:             if expected_states is not None and job['state'] not in expected_states:
+220:                 raise DataError('request_conflict')
+221:             if job['state'] in ('cancelled', 'cancel_requested') and changes.get('state', job['state']) not in ('cancel_requested', 'cancelled', 'cleanup_unconfirmed'):
+222:                 raise DataError('operation_cancelled')
+223:             if changes.get('state') in ('published', 'received', 'verified', 'active_readonly', 'deleted', 'deleted_pending'):
+224:                 from .operations import validate_success
+225:                 if job.get('execution_protocol') != 2 or validate is None or expected_states != ('committing',):
+226:                     raise DataError('operation_authority_unknown')
+227:                 validate_success(job, changes['state'])
+228:             if validate is not None:
+229:                 validate(job)
+230:         self.commit("job.update", payload, validate=check)
+231:         return self.get(job_id)
+232: 
+233:     def change_job(self, job_id, decide):
+234:         """短锁内读取、验证与CAS；decide仅计算字段，不能进行I/O。"""
+235:         uuid(job_id)
+236:         with self.lock.acquire(True, timeout=1):
+237:             cached = self._validated_locked(writable=True)
+238:             events, state = cached[4], json.loads(cached[1])
+239:             job = state['jobs'].get(job_id)
+240:             if job is None: raise DataError('not_found', 404)
+241:             changes = decide(job)
+242:             if changes:
+243:                 payload = {'job_id': job_id, **changes, 'revision': job['revision'] + 1,
+244:                            'updated_at': datetime.now(timezone.utc).isoformat()}
+245:                 event = self._append(events, 'job.update', payload)
+246:                 job = {**job, **payload, 'control_seq': event['seq']}
+247:             return self.current_receipt(state, job)
+248: 
+249:     def get(self, job_id):
+250:         state = self.state()
+251:         job = state["jobs"].get(uuid(job_id))
+252:         if job is None:
+
+backend/tests/test_step018_control_snapshot.py
+1: """真实文件锁内校验当前字节，缓存不能隐藏修订、取消和损坏。"""
+2: from pathlib import Path
+3: from tempfile import mkdtemp
+4: import os
+5: import time
+6: import unittest
+7: from uuid import uuid4
+8: from app.data_exit.control import ControlHub
+9: from app.data_exit.contracts import DataContext, DataJobCommand, DataError
+10: from app.data_exit.operations import Operation, request_cancel
+11: 
+12: 
+13: class SnapshotTests(unittest.TestCase):
+14:     def setUp(self):
+15:         self.root = Path(mkdtemp(prefix='retrolume-snapshot-check-',dir=os.environ.get('S08_EVIDENCE')))
+16:         self.hub = ControlHub(self.root)
+17:         context = DataContext(self.hub.control_id, 0, str(uuid4()), str(uuid4()), 'normal')
+18:         self.job = self.hub.create_or_get_job(DataJobCommand('restore', str(uuid4()), {'plan_id':str(uuid4()), 'plan_sha256':'0'*64}), context)
+19:         self.op = Operation(self.hub, self.job['job_id'], 60, 'snapshot-test')
+20:         self.op.check()
+21: 
+22:     def tearDown(self):
+23:         self.hub.lock.close(); self.hub.operation_lock.close()
+24: 
+25:     def test_returned_state_is_detached_and_peer_cancel_is_current(self):
+26:         value = self.hub.state()
+27:         value['jobs'][self.job['job_id']]['state'] = 'failed'
+28:         self.op.check()
+29:         peer = ControlHub(self.root)
+30:         try:
+31:             request_cancel(peer, self.job['job_id'])
+32:             with self.assertRaises(DataError) as caught: self.op.check()
+33:             self.assertEqual(caught.exception.code, 'operation_cancelled')
+34:         finally: peer.lock.close(); peer.operation_lock.close()
+35: 
+36:     def test_same_size_same_mtime_tamper_is_rejected(self):
+37:         path = self.hub.path; info = path.stat(); raw = bytearray(path.read_bytes())
+38:         raw[40] ^= 1; path.write_bytes(raw); os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns))
+39:         with self.assertRaises(DataError): self.op.check()
+40: 
+41:     def test_truncation_cannot_keep_old_execution(self):
+42:         self.hub.path.write_bytes(b'')
+43:         with self.assertRaises((DataError, KeyError)): self.op.check()
+44: 
+45:     def test_new_revision_and_clock_authority_still_fail_closed(self):
+46:         self.hub.change_job(self.job['job_id'], lambda j: {'stage': 'peer-revised'})
+47:         with self.assertRaises(DataError) as caught: self.op.check()
+48:         self.assertEqual(caught.exception.code, 'request_conflict')
+49:         self.hub.change_job(self.job['job_id'], lambda j: {'execution': {**j['execution'], 'clock_domain': 'foreign-domain'}})
+50:         with self.assertRaises(DataError) as caught: self.op.check()
+51:         self.assertEqual(caught.exception.code, 'operation_authority_unknown')
+52: 
+53:     def test_file_replacement_and_expired_deadline_are_not_cached(self):
+54:         original = self.hub.path.read_bytes(); other = self.root/'replacement.bin'
+55:         other.write_bytes(original); os.replace(other, self.hub.path)
+56:         self.op.check()
+57:         self.op.deadline_ns = time.monotonic_ns()-1
+58:         with self.assertRaises(DataError): self.op.check()
+59: 
+60:     def test_writable_snapshot_rejects_new_tail_even_after_read_cache(self):
+61:         self.hub.assert_writable()
+62:         with self.hub.path.open('ab') as stream: stream.write(b'\x00\x00')
+63:         self.hub.state()  # GET may expose only the last complete committed prefix.
+64:         with self.assertRaises(DataError) as caught: self.hub.assert_writable()
+65:         self.assertEqual(caught.exception.code, 'control_tail_unconfirmed')
+66: 
+67:     def test_valid_foreign_hub_replacement_cannot_keep_writable_identity(self):
+68:         self.hub.assert_writable()
+69:         foreign=ControlHub(Path(mkdtemp(prefix='retrolume-foreign-hub-',dir=os.environ.get('S08_EVIDENCE'))))
+70:         try:
+71:             self.hub.path.write_bytes(foreign.path.read_bytes())
+72:             with self.assertRaises(DataError):self.hub.assert_writable()
+73:         finally:foreign.lock.close();foreign.operation_lock.close()
+74: 
+75:     def test_writable_snapshot_observes_peer_fence_and_current_tamper(self):
+76:         self.hub.assert_writable()
+77:         peer = ControlHub(self.root)
+78:         try:
+79:             peer.commit('maintenance.fence', {'state':'frozen'})
+80:             self.assertEqual(self.hub.assert_writable()['fence'], {'state':'frozen'})
+81:             path=self.hub.path; info=path.stat(); raw=bytearray(path.read_bytes())
+82:             raw[40] ^= 1; path.write_bytes(raw); os.utime(path, ns=(info.st_atime_ns,info.st_mtime_ns))
+83:             with self.assertRaises(DataError): self.hub.assert_writable()
+84:         finally: peer.lock.close(); peer.operation_lock.close()
+85: 
+86:     def foreign_write_refused(self, action):
+87:         """D01：有效B日志取代已读缓存的A，三个写入口均不得追加或返回B事实。"""
+88:         self.hub.state()
+89:         foreign=ControlHub(Path(mkdtemp(prefix='s08-foreign-write-',dir=os.environ.get('S08_EVIDENCE'))))
+90:         try:
+91:             command=DataJobCommand('restore',self.job['business_key'],{'plan_id':str(uuid4()),'plan_sha256':'0'*64})
+92:             context=DataContext(foreign.control_id,0,str(uuid4()),str(uuid4()),'normal')
+93:             job=foreign.create_or_get_job(command,context)
+94:             raw=foreign.path.read_bytes();self.hub.path.write_bytes(raw)
+95:             invoked=[]
+96:             def decide(value):invoked.append(value);return {'stage':'错误混入B'}
+97:             with self.assertRaises(DataError) as caught:
+98:                 if action=='commit':self.hub.commit('maintenance.fence',{'state':'frozen'})
+99:                 elif action=='same-key':self.hub.create_or_get_job(command,context)
+100:                 else:self.hub.change_job(job['job_id'],decide)
+101:             self.assertEqual(caught.exception.code,'control_corrupt')
+102:             self.assertEqual(self.hub.path.read_bytes(),raw)
+103:             self.assertEqual(invoked,[])
+104:         finally:foreign.lock.close();foreign.operation_lock.close()
+105: 
+106:     def test_foreign_log_commit_rejects_without_append(self):self.foreign_write_refused('commit')
+107:     def test_foreign_log_same_business_key_cannot_return_foreign_job(self):self.foreign_write_refused('same-key')
+108:     def test_foreign_log_change_known_foreign_job_never_calls_decide(self):self.foreign_write_refused('change')
+109: 
+110:     def test_all_write_entries_refuse_readable_committed_prefix_with_tail(self):
+111:         with self.hub.path.open('ab') as stream:stream.write(b'\x00\x00')
+112:         self.hub.state();raw=self.hub.path.read_bytes()
+113:         command=DataJobCommand('restore',self.job['business_key'],{'plan_id':str(uuid4()),'plan_sha256':'0'*64})
+114:         origin=DataContext(self.hub.control_id,0,str(uuid4()),str(uuid4()),'normal')
+115:         for call in (lambda:self.hub.commit('maintenance.fence',{}),lambda:self.hub.create_or_get_job(command,origin),lambda:self.hub.change_job(self.job['job_id'],lambda _:{})):
+116:             with self.assertRaises(DataError) as caught:call()
+117:             self.assertEqual(caught.exception.code,'control_tail_unconfirmed')
+118:             self.assertEqual(self.hub.path.read_bytes(),raw)
+119: 
+120: 
+121: if __name__ == '__main__': unittest.main()
+
+DocuN/evidence/TASK-117/execution/continuation-07/TASK118-four-repairs.diff
+112: --- TASK118-audited/backend/app/capabilities/embedding.py
+113: +++ final/backend/app/capabilities/embedding.py
+114: @@ -126,6 +126,13 @@
+115:        'unit_sha256':v['unit_sha256'],'original_sha256':v['original_sha256']})
+116:  
+117:  
+118: +class OutboundModelApproval(BaseModel):
+119: +    """受信离线清单逐动作批准完整发送对象及其原请求身份。"""
+120: +    model_config=ConfigDict(extra='forbid',frozen=True,strict=True)
+121: +    payload_sha256:str=Field(pattern=HEX)
+122: +    request_sha256:str=Field(pattern=HEX)
+123: +
+124: +
+125:  class OutboundSourceManifest(BaseModel):
+126:      """operator采用的有限实际版本/片段，不把样本文件hash冒实际外发范围。"""
+127:      model_config=ConfigDict(extra='forbid',frozen=True,strict=True)
+128: @@ -134,6 +141,7 @@
+129:      sources:tuple[dict,...]=Field(min_length=1,max_length=128)
+130:      fragments:tuple[dict,...]=Field(min_length=1,max_length=512)
+131:      query_input_sha256:tuple[str,...]=Field(min_length=1,max_length=128)
+132: +    model_requests:tuple[OutboundModelApproval,...]=Field(default=(),max_length=128)
+133:  
+134:      @model_validator(mode='after')
+135:      def closed(self):
+136: @@ -149,10 +157,14 @@
+137:              if set(row)!={'identity_sha256','input_sha256'} or any(not isinstance(v,str) or not re.fullmatch(HEX,v) for v in row.values()) or row['identity_sha256'] in ids:raise ValueError('outbound_fragment_shape')
+138:              ids.add(row['identity_sha256'])
+139:          if len(set(self.query_input_sha256))!=len(self.query_input_sha256) or any(not re.fullmatch(HEX,x) for x in self.query_input_sha256):raise ValueError('outbound_query_shape')
+140: +        pairs=[(row.payload_sha256,row.request_sha256) for row in self.model_requests]
+141: +        if len(set(pairs))!=len(pairs):raise ValueError('outbound_model_approval_duplicate')
+142:          return self
+143:  
+144:      @property
+145: -    def sha256(self):return digest(self.model_dump(mode='json'))
+146: +    def sha256(self):
+147: +        # 空新增字段保留原Embedding清单身份；模型没有完整批准仍失败关闭。
+148: +        return digest(self.model_dump(mode='json',exclude={'model_requests'} if not self.model_requests else set()))
+149:      @classmethod
+150:      def from_wire(cls,value):return cls.model_validate_json(json.dumps(value,ensure_ascii=False,separators=(',',':')))
+151:  
+152: @@ -168,7 +180,9 @@
+153:              else:valid=digest(item.text) in self.query_input_sha256
+154:              if not valid:raise AdmissionDenied('outbound_input_not_approved')
+155:  
+156: -    def check_model(self,request):
+157: +    def check_model(self,request,payload=None):
+158: +        if payload is None or not any(row.payload_sha256==digest(payload) and row.request_sha256==digest(request.model_dump(mode='json')) for row in self.model_requests):
+159: +            raise AdmissionDenied('outbound_model_payload_not_approved')
+160:          profile=request.learning_profile or request.teaching_profile or request.interview_profile
+161:          if profile is not None:catalog=profile.catalog
+162:          elif request.html_profile is not None:catalog=json.loads(request.html_profile.context_json).get('catalog',[])
+163: --- TASK118-audited/backend/app/capabilities/gateway.py
+164: +++ final/backend/app/capabilities/gateway.py
+165: @@ -98,6 +98,15 @@
+166:          self._tools = tools or ToolRegistry()
+167:  
+168:      async def call(self, context: CallContext, request: ModelCallRequest) -> ModelCallResult:
+169: +        # 冻结原请求及服务端配置；await不能把已核正文换成新正文。
+170: +        original_request = request
+171: +        request = request.model_copy(deep=True)
+172: +        config = self._config.model_copy(deep=True)
+173: +        request_snapshot = json.dumps(request.model_dump(mode='json'),sort_keys=True,separators=(',',':'),allow_nan=False)
+174: +        config_snapshot = json.dumps(config.model_dump(mode='json'),sort_keys=True,separators=(',',':'),allow_nan=False)
+175: +        def original_scope_unchanged():
+176: +            return (json.dumps(original_request.model_dump(mode='json'),sort_keys=True,separators=(',',':'),allow_nan=False)==request_snapshot
+177: +                and json.dumps(self._config.model_dump(mode='json'),sort_keys=True,separators=(',',':'),allow_nan=False)==config_snapshot)
+178:          if context.operation_id.startswith("html11m.") and request.html_profile is None:
+179:              return self._result(context, CallStatus.REJECTED, "html_profile_required")
+180:          if request.html_profile is not None:
+181: @@ -134,28 +143,29 @@
+182:              or request.allowed_tools
+183:          ):
+184:              return self._result(context, CallStatus.REJECTED, "invalid_input")
+185: -        if request.max_output_tokens > self._config.max_output_tokens_limit:
+186: +        if request.max_output_tokens > config.max_output_tokens_limit:
+187:              return self._result(context, CallStatus.REJECTED, "output_token_limit")
+188:          try:
+189: -            payload = self._build_payload(request)
+190: +            payload = self._build_payload(request, config=config)
+191:              encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+192:          except (ToolValidationError, ValueError, TypeError):
+193:              return self._result(context, CallStatus.REJECTED, "invalid_request")
+194: -        if len(encoded) > self._config.max_request_bytes:
+195: +        if len(encoded) > config.max_request_bytes:
+196:              return self._result(context, CallStatus.REJECTED, "context_limit")
+197:  
+198:          approved_grant = None
+199:          approved_manifest=None
+200: -        if getattr(self._transport, 'is_external', True) or self._config.outbound_grant is not None:
+201: +        if getattr(self._transport, 'is_external', True) or config.outbound_grant is not None:
+202:              from .embedding import OutboundGrant,OutboundSourceManifest
+203: -            if self._config.outbound_grant is None:
+204: +            if config.outbound_grant is None:
+205:                  return self._result(context, CallStatus.REJECTED, 'outbound_not_authorized')
+206:              try:
+207: -                grant = OutboundGrant.from_wire(self._config.outbound_grant)
+208: -                grant.check(context.activity_id,self._config.provider.value,self._config.model,len(encoded),request.max_output_tokens)
+209: -                manifest=OutboundSourceManifest.from_wire(self._config.outbound_source_manifest)
+210: +                grant = OutboundGrant.from_wire(config.outbound_grant)
+211: +                grant.check(context.activity_id,config.provider.value,config.model,len(encoded),request.max_output_tokens)
+212: +                manifest=OutboundSourceManifest.from_wire(config.outbound_source_manifest)
+213:                  if manifest.sha256!=grant.source_manifest_sha256:raise AdmissionDenied('outbound_manifest_mismatch')
+214: -                manifest.check_model(request)
+215: +                if not original_scope_unchanged():raise AdmissionDenied('outbound_scope_changed')
+216: +                manifest.check_model(request,payload)
+217:                  approved_grant = grant.model_dump(mode='json')
+218:                  approved_manifest=manifest.model_dump(mode='json')
+219:              except (ValueError,AdmissionDenied):
+220: @@ -163,8 +173,8 @@
+221:  
+222:          intent = AdmissionIntent(
+223:              context=context,
+224: -            provider=self._config.provider,
+225: -            configured_model=self._config.model,
+226: +            provider=config.provider,
+227: +            configured_model=config.model,
+228:              request_bytes=len(encoded),
+229:              max_output_tokens=request.max_output_tokens,
+230:              tool_names=tuple(sorted(request.allowed_tools)),
+231: @@ -197,18 +207,31 @@
+232:                      context_sha256=p.context_sha256, renderer_sha256=p.renderer_sha256,
+233:                      memory_selection_sha256=frozen.get("memory_selection_sha256")))
+234:          intent = replace(intent,retrieval_ref=request.retrieval_ref,outbound_grant=approved_grant,outbound_source_manifest=approved_manifest)
+235: +        approved_wire = json.dumps([approved_grant,approved_manifest],sort_keys=True,separators=(',',':'))
+236: +        def check_approved_scope():
+237: +            if approved_grant is None:return
+238: +            if not original_scope_unchanged() or json.dumps([intent.outbound_grant,intent.outbound_source_manifest],sort_keys=True,separators=(',',':'))!=approved_wire:
+239: +                raise AdmissionDenied('outbound_scope_changed')
+240: +            grant.check(context.activity_id,config.provider.value,config.model,len(encoded),request.max_output_tokens)
+241: +            manifest.check_model(request,json.loads(encoded))
+242:          stage = "admit"
+243:          try:
+244: +            check_approved_scope()
+245:              permit = await self._ledger.admit(intent)
+246:              stage = "permit_check"
+247:              self._validate_permit(permit, context)
+248:              stage = "mark_dispatch"
+249: -            if approved_grant is not None:grant.check(context.activity_id,self._config.provider.value,self._config.model,len(encoded),request.max_output_tokens)
+250: +            check_approved_scope()
+251:              if request.retrieval_ref is not None:await self._ledger.mark_dispatch_started(permit,retrieval_ref=request.retrieval_ref)
+252:              else:await self._ledger.mark_dispatch_started(permit)
+253: +            stage = "dispatch_scope_check"
+254: +            check_approved_scope()
+255:          except AdmissionDenied as exc:
+256:              code = str(exc)
+257: -            if not code.startswith("interview_") and code not in {"scope_conflict","source_invalid","result_invalidated","cancelled","budget_exhausted","integrity_error","invalid_input"}:
+258: +            if stage=="dispatch_scope_check":
+259: +                # 已预扣/登记dispatch但尚未调用transport，明确未发送且不退款。
+260: +                return await self._finish(permit,context,LedgerOutcome(LedgerDisposition.NOT_SENT,error_code='outbound_scope_changed'),CallStatus.NOT_SENT)
+261: +            if not code.startswith("interview_") and code not in {"scope_conflict","source_invalid","result_invalidated","cancelled","budget_exhausted","integrity_error","invalid_input","outbound_scope_changed"}:
+262:                  code = "admission_denied"
+263:              return self._result(context, CallStatus.REJECTED, code)
+264:          except AdmissionUnavailable:
+265: @@ -225,13 +248,13 @@
+266:              return self._result(context, CallStatus.REJECTED, "admission_internal_error")
+267:  
+268:          try:
+269: -            async with asyncio.timeout(self._config.timeout_seconds):
+270: +            async with asyncio.timeout(config.timeout_seconds):
+271:                  response = await self._transport.send(
+272: -                    endpoint=f"{self._config.base_url}/chat/completions",
+273: -                    api_key=self._config.api_key.get_secret_value(),
+274: -                    payload=payload,
+275: -                    timeout_seconds=self._config.timeout_seconds,
+276: -                    max_response_bytes=self._config.max_response_bytes,
+277: +                    endpoint=f"{config.base_url}/chat/completions",
+278: +                    api_key=config.api_key.get_secret_value(),
+279: +                    payload=json.loads(encoded),
+280: +                    timeout_seconds=config.timeout_seconds,
+281: +                    max_response_bytes=config.max_response_bytes,
+282:                  )
+283:          except RequestNotSent:
+284:              outcome = LedgerOutcome(LedgerDisposition.NOT_SENT, error_code="request_not_sent")
+285: @@ -251,14 +274,15 @@
+286:  
+287:          return await self._handle_response(permit, context, request, response)
+288:  
+289: -    def _build_payload(self, request: ModelCallRequest) -> dict[str, Any]:
+290: +    def _build_payload(self, request: ModelCallRequest, *, config: ModelServiceConfig | None = None) -> dict[str, Any]:
+291: +        config = config or self._config
+292:          self._validate_conversation(request)
+293:          payload: dict[str, Any] = {
+294: -            "model": self._config.model,
+295: +            "model": config.model,
+296:              "messages": [message.model_dump(exclude_none=True) for message in request.messages],
+297:              "max_tokens": request.max_output_tokens,
+298:              "stream": False,
+299: -            "thinking": {"type": self._config.thinking.value},
+300: +            "thinking": {"type": config.thinking.value},
+301:          }
+302:          if request.response_mode == ResponseMode.JSON_OBJECT:
+303:              payload["response_format"] = {"type": "json_object"}

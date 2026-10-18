@@ -1,0 +1,22 @@
+--- first-pre/backend/app/retrieval/evidence.py
++++ current/backend/app/retrieval/evidence.py
+@@ -98,7 +98,7 @@
+         return False
+ 
+ 
+-def rank_term_candidates(query: str, fragments: tuple[EvidenceFragment, ...], *, allowed_versions: frozenset[tuple[str, str]], top_k: int = 10) -> tuple[RetrievalCandidate, ...]:
++def rank_term_candidates(query: str, fragments: tuple[EvidenceFragment, ...], *, allowed_versions: frozenset[tuple[str, str]], top_k: int = 10, truncate_terms: bool = False) -> tuple[RetrievalCandidate, ...]:
+     """范围先过滤的中英词项候选排序；空结果代表本通道没有证据。"""
+     if not isinstance(query, str):
+         raise ValueError("查询必须是文字")
+@@ -109,7 +109,9 @@
+         raise ValueError("允许范围必须是来源和版本的冻结集合")
+     terms = _terms(query)
+     if len(terms) > MAX_QUERY_TERMS:
+-        raise ValueError("查询词项数量超过上限")
++        if not truncate_terms:raise ValueError("查询词项数量超过上限")
++        # 混合检索仅本通道使用确定前缀，完整原查询仍用于已绑定的向量检索。
++        terms = terms[:MAX_QUERY_TERMS]
+     ranked: list[RetrievalCandidate] = []
+     for fragment in fragments:
+         if (fragment.source_id, fragment.version_id) not in allowed_versions:

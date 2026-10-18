@@ -1,0 +1,118 @@
+--- a/repository.py.pre-task068
++++ b/repository.py
+@@ -61,6 +61,19 @@
+     execution_generation: int
+     scope_revision: int
+     lease_expires_at: datetime
++
++
++@dataclass(frozen=True)
++class UnresolvedOperation:
++    """活动内未决操作的观察快照；它只用于发现与对账，不是后续写入的授权。"""
++
++    operation_id: str
++    admission_id: str
++    executor_id: str
++    execution_generation: int
++    scope_revision: int
++    reserved_at: datetime
++    dispatch_started_at: datetime | None
+ 
+ 
+ class PostgresAdmissionLedger:
+@@ -350,6 +363,95 @@
+                     (error_code, activity_id),
+                 )
+             return len(operations)
++        return await self._transaction(operation)
++
++    async def list_unresolved_operations(
++        self,
++        activity_id: str,
++        *,
++        limit: int = 100,
++        after_operation_id: str | None = None,
++    ) -> tuple[UnresolvedOperation, ...]:
++        """有界列出本活动 reserved/dispatched 的未决操作；只读观察，不加行锁。"""
++        activity_id = self._uuid(activity_id, "activity_id")
++        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
++            raise ValueError("limit 必须是 1 到 200 之间的整数")
++        if after_operation_id is not None:
++            after_operation_id = self._bounded_name(after_operation_id, "after_operation_id")
++
++        conditions = "activity_id = %s AND state IN ('reserved', 'dispatched')"
++        params: list[object] = [activity_id]
++        if after_operation_id is not None:
++            conditions += " AND operation_id > %s"
++            params.append(after_operation_id)
++        params.append(limit)
++
++        async def operation(connection: object) -> tuple[UnresolvedOperation, ...]:
++            cursor = await connection.execute(
++                f"""SELECT operation_id, admission_id, executor_id, execution_generation,
++                           scope_revision, reserved_at, dispatch_started_at
++                      FROM activity_operations
++                     WHERE {conditions}
++                     ORDER BY operation_id
++                     LIMIT %s""",
++                tuple(params),
++            )
++            rows = list(await cursor.fetchall())
++            return tuple(
++                UnresolvedOperation(
++                    row["operation_id"],
++                    str(row["admission_id"]),
++                    row["executor_id"],
++                    row["execution_generation"],
++                    row["scope_revision"],
++                    row["reserved_at"],
++                    row["dispatch_started_at"],
++                )
++                for row in rows
++            )
++
++        return await self._transaction(operation)
++
++    async def recover_obsolete_operations(self, activity_id: str, *, error_code: str = "executor_lost") -> int:
++        """把执行代次低于活动当前代次的未决操作收敛为 unknown；不退预留、不重发。
++
++        锁序保持来源→活动→操作；判据只用代次差，不使用墙钟。
++        当前代次与未来代次操作、既有终态一律不动；不改变 recover_unknown
++        的取消/租约/时钟语义，也不接 worker 或自动调用。
++        """
++        activity_id = self._uuid(activity_id, "activity_id")
++        error_code = self._bounded_name(error_code, "error_code", maximum=64)
++
++        async def operation(connection: object) -> int:
++            snapshots = await self._source_rows(connection, activity_id)
++            await self._lock_sources(connection, snapshots)
++            cursor = await connection.execute("SELECT * FROM activities WHERE id = %s FOR UPDATE", (activity_id,))
++            activity = await cursor.fetchone()
++            if activity is None:
++                raise ActivityLedgerConflict("活动不存在")
++            current_generation = activity["execution_generation"]
++            cursor = await connection.execute(
++                """SELECT operation_id FROM activity_operations
++                    WHERE activity_id = %s
++                      AND state IN ('reserved', 'dispatched')
++                      AND execution_generation < %s
++                    ORDER BY operation_id
++                    FOR UPDATE""",
++                (activity_id, current_generation),
++            )
++            await cursor.fetchall()  # 按 operation_id 顺序锁定候选行，保持与 recover_unknown 一致的锁序
++            cursor = await connection.execute(
++                """UPDATE activity_operations
++                      SET state = 'unknown', disposition = 'unknown', error_code = %s,
++                          recorded_at = CURRENT_TIMESTAMP
++                    WHERE activity_id = %s
++                      AND state IN ('reserved', 'dispatched')
++                      AND execution_generation < %s
++                    RETURNING operation_id""",
++                (error_code, activity_id, current_generation),
++            )
++            changed = list(await cursor.fetchall())
++            return len(changed)
+ 
+         return await self._transaction(operation)
+ 

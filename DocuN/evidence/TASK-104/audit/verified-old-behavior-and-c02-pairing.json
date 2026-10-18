@@ -1,0 +1,695 @@
+{
+  "at": "2026-10-07T10:48:03.298826+00:00",
+  "evidence": {
+    "memory-boundaries-result.json": {
+      "sha256": "78ac9a111af51cec08df8cec558b9cd3a81939e3d3dda17ded99755eeb6f0b8e",
+      "cases": [
+        {
+          "case": "V12 strict UTF8/duplicate/bytes/auth zero write",
+          "status": "PASS",
+          "executed": true,
+          "commands_before": 19,
+          "commands_after": 19
+        },
+        {
+          "case": "V10 same key different body rejected, receipt no content",
+          "status": "PASS",
+          "executed": true,
+          "memory_id": "cd9e5571-c675-41ee-acb2-21a6b59e2804"
+        },
+        {
+          "case": "V11 actual concurrent CAS one effect",
+          "status": "PASS",
+          "executed": true,
+          "statuses": [
+            409,
+            200
+          ],
+          "revision": 2
+        },
+        {
+          "case": "V09/V21 50 unicode list metadata only",
+          "status": "PASS",
+          "executed": true,
+          "wire_bytes": 25641,
+          "items": 50
+        },
+        {
+          "case": "V12/V16 real app direct mutation and denied execution rejected",
+          "status": "PASS",
+          "executed": true
+        },
+        {
+          "case": "V18/V19 separate revoke, wrong manifest retains body, explicit original cleanup",
+          "status": "PASS",
+          "executed": true,
+          "memory_id": "25b19faa-52a3-4c22-a263-2b742ecc3acb"
+        },
+        {
+          "case": "V13 accept-unclaimed invalid memory zero launch",
+          "status": "PASS",
+          "executed": true,
+          "activity_id": "0201ec0d-87c4-4f82-a927-7c9b82daf06b",
+          "sup_delta": 0
+        },
+        {
+          "case": "V07/V17 original correction invalidates saved observation, preview suppressed",
+          "status": "PASS",
+          "executed": true,
+          "memory_id": "b08730c1-77a8-4852-b1ce-ded5b18f8fea",
+          "target_activity": "d0252c52-d1ed-4936-ac06-f33dfbd319cf"
+        },
+        {
+          "case": "V16 immutable original progress unchanged",
+          "status": "PASS",
+          "executed": true
+        },
+        {
+          "case": "V05 source replacement invalidates target scope even self-report selection",
+          "status": "PASS",
+          "executed": true,
+          "activity_id": "76f67a38-91ac-40b2-9ace-6d1a2f41bd62"
+        }
+      ],
+      "whole_status": "PASS"
+    },
+    "migration-upgrade-resume-result.json": {
+      "sha256": "67fe9640a88cbfb7e837e7097a2de7d840d2ba394c1553468659ccc7b598f995",
+      "cases": [
+        {
+          "name": "V20 非空v1/007/UNKNOWN升级旧行逐字段不变",
+          "status": "PASS",
+          "executed": true,
+          "before_sha": "190592afc073646d699ca248c108a2f43c13beca79afb3d0def524145b020f60",
+          "after_sha": "190592afc073646d699ca248c108a2f43c13beca79afb3d0def524145b020f60",
+          "tables": 14,
+          "rows": 32,
+          "activity_ids": [
+            "42819f27-6909-49c8-94ee-fa6433ed9dfa",
+            "cbf542d8-d659-45b0-a28f-eea770aab88d"
+          ]
+        },
+        {
+          "name": "V20 空010精确反向DDL，无CASCADE，旧数据与v1读取保留",
+          "status": "PASS",
+          "executed": true,
+          "new_rows": 0,
+          "external_fk": 0,
+          "statements": 39,
+          "old_before_sha": "190592afc073646d699ca248c108a2f43c13beca79afb3d0def524145b020f60",
+          "old_after_sha": "190592afc073646d699ca248c108a2f43c13beca79afb3d0def524145b020f60"
+        }
+      ],
+      "whole_status": "PASS"
+    },
+    "migration-fault-resume-result.json": {
+      "sha256": "8295764fb9af335de40af21c1aa6528beb96137ccd09a19803e9388073841a0a",
+      "cases": [
+        {
+          "name": "V20 同名kind CHECK被弱化迁移失败且全回滚",
+          "status": "PASS",
+          "executed": true,
+          "sqlstate": "P0001",
+          "reason": "010旧kind约束不符",
+          "pre_sha": "cb25c24811bf16a50b57e6cb640270088037c6059e42f58b721868cc7f82d417",
+          "post_sha": "cb25c24811bf16a50b57e6cb640270088037c6059e42f58b721868cc7f82d417"
+        },
+        {
+          "name": "V20 007 payload列类型错迁移失败且全回滚",
+          "status": "PASS",
+          "executed": true,
+          "sqlstate": "P0001",
+          "reason": "010列基线不符",
+          "pre_sha": "b644e0b30d2c9676d95df7d5b288797f79bc70fcd5dd140ea27e6774e97f04c5",
+          "post_sha": "b644e0b30d2c9676d95df7d5b288797f79bc70fcd5dd140ea27e6774e97f04c5"
+        },
+        {
+          "name": "V20 009触发器身份缺失迁移失败且全回滚",
+          "status": "PASS",
+          "executed": true,
+          "sqlstate": "P0001",
+          "reason": "010旧事实不可变基线不符",
+          "pre_sha": "62b97ceff2acd3427e278ea3fd5d14deb0ceb266595fae6b1abccf4563dab951",
+          "post_sha": "62b97ceff2acd3427e278ea3fd5d14deb0ceb266595fae6b1abccf4563dab951"
+        },
+        {
+          "name": "V20 新表残迹迁移失败且全回滚",
+          "status": "PASS",
+          "executed": true,
+          "sqlstate": "P0001",
+          "reason": "010残迹/重复迁移",
+          "pre_sha": "41e5aa426b92610804575460ac5b461c933b67a6adf44e22880f11c70220ec53",
+          "post_sha": "41e5aa426b92610804575460ac5b461c933b67a6adf44e22880f11c70220ec53"
+        },
+        {
+          "name": "V20 新角色残迹迁移失败且全回滚",
+          "status": "PASS",
+          "executed": true,
+          "sqlstate": "P0001",
+          "reason": "010角色残迹，不宽松复用",
+          "pre_sha": "32763020e65e05dfd80f452eb9d51f3f07c9b616c190b45f7fcea6fb4309a98e",
+          "post_sha": "32763020e65e05dfd80f452eb9d51f3f07c9b616c190b45f7fcea6fb4309a98e"
+        },
+        {
+          "name": "V19 第二版删除中途故障整笔回滚，墓碑保留",
+          "status": "PASS",
+          "executed": true,
+          "memory_id": "5036479e-7db2-49c0-a6ad-268ee9db98fd",
+          "bodies_before": 2,
+          "bodies_after": 2,
+          "rows_sha_before": "5ee3185a4db7685fe43eb6e55e70e7caebcac6ee2443cd4cd5c67b4624a1d5b8",
+          "rows_sha_after": "5ee3185a4db7685fe43eb6e55e70e7caebcac6ee2443cd4cd5c67b4624a1d5b8"
+        },
+        {
+          "name": "V19 正文hash不符拒绝且零效果",
+          "status": "PASS",
+          "executed": true,
+          "sqlstate": "P0001",
+          "reason": "清理目标hash不符",
+          "pre_sha": "d3a87b1a907bd3d79c3ab86fdf710751ee55de4d9a3d029433a09990145d493f",
+          "post_sha": "d3a87b1a907bd3d79c3ab86fdf710751ee55de4d9a3d029433a09990145d493f"
+        },
+        {
+          "name": "V19 清单缺版本拒绝且零效果",
+          "status": "PASS",
+          "executed": true,
+          "sqlstate": "P0001",
+          "reason": "清理集合不符",
+          "pre_sha": "287d9fbc990b0cd3e672b027e0bb4bcb930cbed26b845364797696f6f9baab01",
+          "post_sha": "287d9fbc990b0cd3e672b027e0bb4bcb930cbed26b845364797696f6f9baab01"
+        },
+        {
+          "name": "V19 清单额外版本拒绝且零效果",
+          "status": "PASS",
+          "executed": true,
+          "sqlstate": "P0001",
+          "reason": "清理集合不符",
+          "pre_sha": "490e2ffe80a2dee2da22ddc2dfed5c1707046270d00e3f73668a2e4ffd5e4140",
+          "post_sha": "490e2ffe80a2dee2da22ddc2dfed5c1707046270d00e3f73668a2e4ffd5e4140"
+        },
+        {
+          "name": "V12/V19 普通app/GUC/角色切换/DDL与PUBLIC清理权限拒绝",
+          "status": "PASS",
+          "executed": true,
+          "app_role": "retrolume_task103_app",
+          "denied_role": "retrolume_task103_denied"
+        },
+        {
+          "name": "V18/V19 临时同名对象不改目标，精确清理与同键回放一次效果",
+          "status": "PASS",
+          "executed": true,
+          "memory_id": "5036479e-7db2-49c0-a6ad-268ee9db98fd",
+          "bodies_before": 2,
+          "bodies_after": 0,
+          "versions_retained": 2,
+          "cleanup_receipts": 1
+        }
+      ],
+      "whole_status": "PASS"
+    },
+    "integration-resume-result.json": {
+      "sha256": "7bbaa9246ac47a9b744837dccf3c56cb65c3fb2dbb6a202f8039e981f01f6950",
+      "cases": [
+        {
+          "name": "V10 同时首次保存同键唯一效果与持久收据",
+          "status": "PASS",
+          "executed": true,
+          "memory_id": "d9759bdc-dd2e-4b4c-b305-74069461dd9d",
+          "statuses": [
+            200,
+            200
+          ],
+          "commands": 1,
+          "effects": 1
+        },
+        {
+          "name": "V10 同时首次保存不同键同槽唯一效果与持久收据",
+          "status": "PASS",
+          "executed": true,
+          "memory_id": "8297d883-e9fb-4265-b75a-4bc953d6cceb",
+          "statuses": [
+            200,
+            200
+          ],
+          "commands": 2,
+          "effects": 1
+        },
+        {
+          "name": "V03 坏选择原子零创建",
+          "status": 409,
+          "executed": true,
+          "activity_id": "bce25cf4-0f92-4055-ad05-c9bd884553ae"
+        },
+        {
+          "name": "V04/V13 两种低信任背景，持久recipe有效恢复恰一SUP",
+          "status": "PASS",
+          "executed": true,
+          "activity_id": "b4be88f6-0fda-43ad-99ce-ef8e48989210",
+          "sup_delta": 1,
+          "frozen_sha": "0c40d95da8c30a7429488d5d28971096078cee0dec0df0afffbaa1a3a186022b",
+          "selected": 2,
+          "context_plaintext": false
+        },
+        {
+          "name": "V01/V08 真实教学观察带来源/事件/已选上游闭包",
+          "status": "PASS",
+          "executed": true,
+          "memory_id": "81468af4-f3ca-41d2-b36a-d47bd8492914",
+          "origin_activity": "b4be88f6-0fda-43ad-99ce-ef8e48989210",
+          "target_activity": "91b75634-4af1-4b22-8a78-fb96e6a55e89",
+          "dependencies": 7,
+          "kinds": [
+            "event",
+            "event",
+            "event",
+            "event",
+            "memory",
+            "memory",
+            "source"
+          ]
+        },
+        {
+          "name": "V22 真实位置回查与冻结原文数值支持分别核",
+          "status": "PASS",
+          "executed": true,
+          "citation_id": "lc_4ab68bf8cd33e5d4a358d027",
+          "source_sha": "2cf6d42095064095a7c82760eee133b1ef3f69b1abb7f7a766b154e654e50d80"
+        },
+        {
+          "name": "V07/V22 答案后继失效；模型all-met与unknown答文不能作独立支持",
+          "status": "PASS",
+          "executed": true,
+          "origin_activity": "b4be88f6-0fda-43ad-99ce-ef8e48989210",
+          "target_activity": "91b75634-4af1-4b22-8a78-fb96e6a55e89",
+          "support_checks": [
+            {
+              "answer_status": "unchecked",
+              "computed": "1",
+              "dimension_ids": [
+                "value"
+              ],
+              "point_id": "p1",
+              "reference_status": "matched",
+              "status": "unchecked"
+            }
+          ]
+        },
+        {
+          "name": "V04/V21 超记忆容量与缺配置均零accept/零SUP",
+          "status": "PASS",
+          "executed": true,
+          "activity_id": "68ead160-4216-4623-a1a4-f6daf667f9ac",
+          "sup_delta": 0,
+          "capacity_error": {
+            "detail": {
+              "code": "memory_context_limit",
+              "message": "所选背景超过有限容量，请减少选择"
+            }
+          }
+        },
+        {
+          "name": "V09 并发修订读取完整前或后状态，正文hash同快照",
+          "status": "PASS",
+          "executed": true,
+          "memory_id": "659c0ebe-7a19-4128-bc0a-d908f97de680",
+          "reads": [
+            {
+              "revision": 1,
+              "qualification": "current",
+              "body_present": true
+            },
+            {
+              "revision": 1,
+              "qualification": "current",
+              "body_present": true
+            },
+            {
+              "revision": 1,
+              "qualification": "current",
+              "body_present": true
+            },
+            {
+              "revision": 1,
+              "qualification": "current",
+              "body_present": true
+            },
+            {
+              "revision": 1,
+              "qualification": "current",
+              "body_present": true
+            },
+            {
+              "revision": 1,
+              "qualification": "current",
+              "body_present": true
+            },
+            {
+              "revision": 1,
+              "qualification": "current",
+              "body_present": true
+            },
+            {
+              "revision": 1,
+              "qualification": "current",
+              "body_present": true
+            }
+          ]
+        },
+        {
+          "name": "V06/V16 全公开派生读面停用，用户原答仍能读",
+          "status": "PASS",
+          "executed": true,
+          "activity_id": "b4be88f6-0fda-43ad-99ce-ef8e48989210",
+          "operations": 4,
+          "seed_status": 409,
+          "citation_status": 409,
+          "budget_before": [
+            4,
+            4000,
+            0,
+            0,
+            10
+          ]
+        },
+        {
+          "name": "V14 失效后相同终态只确认，旧预算不改",
+          "status": "PASS",
+          "executed": true,
+          "activity_id": "b4be88f6-0fda-43ad-99ce-ef8e48989210",
+          "confirmation": "already_present"
+        },
+        {
+          "name": "V17 dependency_invalid重建拒绝、不复活",
+          "status": "PASS",
+          "executed": true,
+          "activity_id": "b4be88f6-0fda-43ad-99ce-ef8e48989210",
+          "memory_id": "659c0ebe-7a19-4128-bc0a-d908f97de680"
+        },
+        {
+          "name": "V17 revoked_body_retained重建拒绝、不复活",
+          "status": "PASS",
+          "executed": true,
+          "activity_id": "b4be88f6-0fda-43ad-99ce-ef8e48989210",
+          "memory_id": "659c0ebe-7a19-4128-bc0a-d908f97de680"
+        },
+        {
+          "name": "V17 purged重建拒绝、不复活",
+          "status": "PASS",
+          "executed": true,
+          "activity_id": "b4be88f6-0fda-43ad-99ce-ef8e48989210",
+          "memory_id": "659c0ebe-7a19-4128-bc0a-d908f97de680"
+        },
+        {
+          "name": "V14 真实after_admit窗断言完成",
+          "status": "PASS",
+          "executed": true,
+          "activity_id": "e492f3b8-d180-41bf-b632-77d4551e4096",
+          "operation": {
+            "state": "reserved",
+            "dispatch_started_at": null
+          },
+          "results": {
+            "results": 0,
+            "derived": 0
+          },
+          "budgets": [
+            1,
+            1000,
+            0,
+            0,
+            2
+          ]
+        },
+        {
+          "name": "V14 真实before_result窗断言完成",
+          "status": "PASS",
+          "executed": true,
+          "activity_id": "3113723a-ca4e-40f4-8809-279d8a7049a2",
+          "operation": {
+            "state": "unknown",
+            "dispatch_started_at": "2026-10-06T10:19:08.888512+00:00"
+          },
+          "results": {
+            "results": 0,
+            "derived": 0
+          },
+          "budgets": [
+            1,
+            1000,
+            0,
+            0,
+            2
+          ]
+        },
+        {
+          "name": "V14 失效后显式UNKNOWN诊断可写，GET不重发，预留不退",
+          "status": "unknown",
+          "executed": true,
+          "activity_id": "3113723a-ca4e-40f4-8809-279d8a7049a2",
+          "sup_delta": 0,
+          "previous_sup_root": "real-20-integration-resume"
+        },
+        {
+          "name": "V23 当前墓碑权威缺失失败关闭，在线重开不复活",
+          "status": "PASS",
+          "executed": true,
+          "activity_id": "b4be88f6-0fda-43ad-99ce-ef8e48989210",
+          "memory_id": "659c0ebe-7a19-4128-bc0a-d908f97de680",
+          "missing_status": 503
+        }
+      ],
+      "whole_status": "FAIL"
+    },
+    "continuation-01/gaps-result.json": {
+      "sha256": "a564602a812e7986174e848d4879934966e40579f8c2e5828fb25c4046405ec3",
+      "cases": [
+        {
+          "name": "V07 同answer新feedback使关联观察失效，无关活动与旧feedback注记不误伤",
+          "status": "PASS",
+          "executed": true,
+          "activity": "387188c4-2c62-4683-8f40-2e775d53243f",
+          "answer": "06ffeb4d-c3c1-4166-97c3-15612f132d33",
+          "feedback_ids": [
+            "d00be31c-3a63-4026-a195-1b7115cac520",
+            "abb3ded3-04d0-4579-baac-0dca5bb216cf",
+            "c1153481-7fbc-4b9f-a328-963cb90464c8"
+          ],
+          "memory_ids": [
+            "80e60b09-60f6-4a6c-9586-5cd1726f6a66",
+            "864b56f3-5327-43b3-9cfb-e313a7ac7bb0",
+            "ebdcb45c-5812-461b-9c1a-4627f43f5c13"
+          ],
+          "unrelated": "9d673925-5b7b-4245-98e7-7511030ad35b",
+          "sup_delta": 5
+        },
+        {
+          "name": "V08 最终三函数下真实两层闭包和v2上下文可用",
+          "status": "PASS",
+          "executed": true,
+          "parent": "ebdcb45c-5812-461b-9c1a-4627f43f5c13",
+          "child": "474a6f44-a72a-407c-9699-52f9ff35a154",
+          "child_activity": "a29a945b-a58f-4798-b4b3-93cc1e736aed"
+        },
+        {
+          "name": "V08 伪造漏闭包被最终SQL拒绝",
+          "status": "PASS",
+          "executed": true,
+          "sqlstate": "P0001",
+          "reason": "记忆上游缺选用事实或完整闭包",
+          "before_sha": "36c5521c48bd7b4399221ccf6a37d1d228e8a1dda70f0a14faf78453d290aa4d",
+          "after_sha": "36c5521c48bd7b4399221ccf6a37d1d228e8a1dda70f0a14faf78453d290aa4d",
+          "negative_sample_rolled_back": true
+        },
+        {
+          "name": "V08 无选用事实的上游被最终SQL拒绝",
+          "status": "PASS",
+          "executed": true,
+          "sqlstate": "P0001",
+          "reason": "记忆上游缺选用事实或完整闭包",
+          "before_sha": "36c5521c48bd7b4399221ccf6a37d1d228e8a1dda70f0a14faf78453d290aa4d",
+          "after_sha": "36c5521c48bd7b4399221ccf6a37d1d228e8a1dda70f0a14faf78453d290aa4d",
+          "negative_sample_rolled_back": true
+        },
+        {
+          "name": "V08 自引用CHECK拒绝",
+          "status": "PASS",
+          "executed": true,
+          "sqlstate": "23514",
+          "reason": "new row for relation \"learning_memory_dependencies\" violates check constraint \"learning_memory_dependencies_check\"",
+          "before_sha": "36c5521c48bd7b4399221ccf6a37d1d228e8a1dda70f0a14faf78453d290aa4d",
+          "after_sha": "36c5521c48bd7b4399221ccf6a37d1d228e8a1dda70f0a14faf78453d290aa4d",
+          "negative_sample_rolled_back": true
+        },
+        {
+          "name": "V08 两节点循环无合法固定选用事实，提交拒绝",
+          "status": "PASS",
+          "executed": true,
+          "sqlstate": "P0001",
+          "reason": "记忆上游缺选用事实或完整闭包",
+          "before_sha": "36c5521c48bd7b4399221ccf6a37d1d228e8a1dda70f0a14faf78453d290aa4d",
+          "after_sha": "36c5521c48bd7b4399221ccf6a37d1d228e8a1dda70f0a14faf78453d290aa4d",
+          "negative_sample_rolled_back": true
+        },
+        {
+          "name": "V08 单类来源11超过10，最终SQL拒绝",
+          "status": "PASS",
+          "executed": true,
+          "sqlstate": "P0001",
+          "reason": "记忆依赖种类容量不符",
+          "before_sha": "21ce1c84aab22c230e5c3facc348473374ccebc7d87c28a1abc424ac4dd00dca",
+          "after_sha": "21ce1c84aab22c230e5c3facc348473374ccebc7d87c28a1abc424ac4dd00dca",
+          "negative_sample_rolled_back": true
+        },
+        {
+          "name": "V08 ordinal33超总界，CHECK拒绝",
+          "status": "PASS",
+          "executed": true,
+          "sqlstate": "23514",
+          "reason": "new row for relation \"learning_memory_dependencies\" violates check constraint \"learning_memory_dependencies_ordinal_check\"",
+          "before_sha": "21ce1c84aab22c230e5c3facc348473374ccebc7d87c28a1abc424ac4dd00dca",
+          "after_sha": "21ce1c84aab22c230e5c3facc348473374ccebc7d87c28a1abc424ac4dd00dca",
+          "negative_sample_rolled_back": true
+        },
+        {
+          "name": "V08 HTTP 跨活动capture拒绝且0效果",
+          "status": "PASS",
+          "executed": true,
+          "http_status": 404,
+          "error": {
+            "detail": {
+              "code": "record_not_found",
+              "message": "请选择可回查的学习进度"
+            }
+          }
+        },
+        {
+          "name": "V08 HTTP 伪record哈希拒绝且0效果",
+          "status": "PASS",
+          "executed": true,
+          "http_status": 409,
+          "error": {
+            "detail": {
+              "code": "impact_changed",
+              "message": "保存观察已变化，请重新查看"
+            }
+          }
+        },
+        {
+          "name": "V08 HTTP 伪视图token拒绝且0效果",
+          "status": "PASS",
+          "executed": true,
+          "http_status": 409,
+          "error": {
+            "detail": {
+              "code": "impact_changed",
+              "message": "保存观察已变化，请重新查看"
+            }
+          }
+        },
+        {
+          "name": "V08 客户端手写dependencies不被接纳",
+          "status": "PASS",
+          "executed": true,
+          "http_status": 400,
+          "error_code": "invalid_input",
+          "inherited_actual_response": "real-10-resume-sql-negatives的真实400，不重发原请求；当前全表行hash仍等于其HTTP组前态",
+          "before_sha": "21ce1c84aab22c230e5c3facc348473374ccebc7d87c28a1abc424ac4dd00dca",
+          "after_sha": "21ce1c84aab22c230e5c3facc348473374ccebc7d87c28a1abc424ac4dd00dca"
+        },
+        {
+          "name": "V10 ready但M6无绑定行且result残迹失败关闭",
+          "status": "PASS",
+          "executed": true,
+          "activity": "9d673925-5b7b-4245-98e7-7511030ad35b",
+          "rolled_back": true,
+          "before_sha": "21ce1c84aab22c230e5c3facc348473374ccebc7d87c28a1abc424ac4dd00dca",
+          "after_sha": "21ce1c84aab22c230e5c3facc348473374ccebc7d87c28a1abc424ac4dd00dca"
+        },
+        {
+          "name": "V10 ready但M6无绑定行且accepted_context残迹失败关闭",
+          "status": "PASS",
+          "executed": true,
+          "activity": "9d673925-5b7b-4245-98e7-7511030ad35b",
+          "rolled_back": true,
+          "before_sha": "21ce1c84aab22c230e5c3facc348473374ccebc7d87c28a1abc424ac4dd00dca",
+          "after_sha": "21ce1c84aab22c230e5c3facc348473374ccebc7d87c28a1abc424ac4dd00dca"
+        },
+        {
+          "name": "V10 缺M6且result真实v2残迹，最终仓储SQL拒绝",
+          "status": "PASS",
+          "executed": true,
+          "eligible": false,
+          "sql_guard": "NOT EXISTS(SELECT 1 FROM public.activity_operation_results mr WHERE mr.activity_id='42819f27-6909-49c8-94ee-fa6433ed9dfa'::uuid AND mr.payload_format='json' AND mr.payload::jsonb->'value'->>'profile'='teaching.v2') AND NOT EXISTS(SELECT 1 FROM public.teaching_commands mt WHERE mt.activity_id='42819f27-6909-49c8-94ee-fa6433ed9dfa'::uuid AND mt.context_body IS NOT NULL AND mt.context_body::jsonb->>'schema'='teaching.context.v2')",
+          "template_sha256": "e708d25cc0e4635bf509d2859f4c4c4f07c2eeb2d7e9bf1b18efc5eb92daa937",
+          "synthetic_restore_negative_only": true,
+          "rolled_back": true
+        },
+        {
+          "name": "V10 缺M6且accepted_context真实v2残迹，最终仓储SQL拒绝",
+          "status": "PASS",
+          "executed": true,
+          "eligible": false,
+          "sql_guard": "NOT EXISTS(SELECT 1 FROM public.activity_operation_results mr WHERE mr.activity_id='42819f27-6909-49c8-94ee-fa6433ed9dfa'::uuid AND mr.payload_format='json' AND mr.payload::jsonb->'value'->>'profile'='teaching.v2') AND NOT EXISTS(SELECT 1 FROM public.teaching_commands mt WHERE mt.activity_id='42819f27-6909-49c8-94ee-fa6433ed9dfa'::uuid AND mt.context_body IS NOT NULL AND mt.context_body::jsonb->>'schema'='teaching.context.v2')",
+          "template_sha256": "e708d25cc0e4635bf509d2859f4c4c4f07c2eeb2d7e9bf1b18efc5eb92daa937",
+          "synthetic_restore_negative_only": true,
+          "rolled_back": true
+        },
+        {
+          "name": "V10 实际absent 010升级库，旧007/v1正文和原全部行保留",
+          "status": "PASS",
+          "executed": true,
+          "activity": "42819f27-6909-49c8-94ee-fa6433ed9dfa",
+          "before_sha": "190592afc073646d699ca248c108a2f43c13beca79afb3d0def524145b020f60",
+          "after_sha": "190592afc073646d699ca248c108a2f43c13beca79afb3d0def524145b020f60"
+        }
+      ],
+      "whole_status": "PASS"
+    },
+    "continuation-01/cleanup-gaps-result.json": {
+      "sha256": "884ab92cc498cb1f15db3fcfa913ebb592522c7c84acb1956ce22588fbaccbbc",
+      "cases": [
+        {
+          "name": "V18 普通app调用最终清理函数，物理缺正文拒绝/墓碑pending/0新收据",
+          "status": "PASS",
+          "executed": true,
+          "sqlstate": "P0001",
+          "reason": "清理集合不符",
+          "target": {
+            "memory_id": "4ca80351-4a6c-4896-8b59-985fdfd4490b",
+            "version": 1,
+            "body_sha256": "e506230382737af56e15108b07f3acfff77b57b3ebb55211fe679a8e5038d1ec"
+          },
+          "exact_delete_count": 1,
+          "before_sha": "dc22fbf4ed3add5def17400bc2101456cc085c374ae9e337ddb92452fae941c6",
+          "after_sha": "dc22fbf4ed3add5def17400bc2101456cc085c374ae9e337ddb92452fae941c6",
+          "triggers_and_rows_restored": true
+        },
+        {
+          "name": "V18 实际DB不可读，清理未确认；重启只读核墓碑/正文/旧收据保留",
+          "status": "PASS",
+          "executed": true,
+          "failure": {
+            "type": "AdmissionUnavailable",
+            "message": "持久准入账本暂不可用"
+          },
+          "pending": true,
+          "before_sha": "dc22fbf4ed3add5def17400bc2101456cc085c374ae9e337ddb92452fae941c6",
+          "after_sha": "dc22fbf4ed3add5def17400bc2101456cc085c374ae9e337ddb92452fae941c6",
+          "no_auto_retry": true,
+          "no_new_receipt": true,
+          "revoked_body_suppressed": true
+        }
+      ],
+      "whole_status": "PASS"
+    },
+    "c02_verified": {
+      "no_evidence": "六表/四账实值相等、409与零SUP已独立配对",
+      "CAS": "实际409、陈旧key未插入、B输入保留",
+      "late_edit": "请求hash=真实回执=PG M5，M3只保存提交正文，后续新输入未覆盖",
+      "late_switch": "真实200与网络/DOM身份成立，无末后PG快照，不升级为PG全证据",
+      "citation": "旧NOT_RUN，104三根前置FAIL、浏览器0，仍未补齐"
+    }
+  },
+  "successful_canonical_purge_text": "{\"manifest_sha256\":\"6c09ca805bcd4fd50a403ec280d95793339f22d64c91409d86fd43ce8145f02e\",\"memory_id\":\"bed685a5-42b6-4316-9af4-6d50ad13ee26\",\"purge_state_now\":\"done\",\"revision_after\":2,\"revocation_key\":\"f242041b-a6b1-4412-94ab-b1240c5dbfb0\",\"status\":\"committed\",\"version_after\":1}",
+  "new_business_execution": false
+}

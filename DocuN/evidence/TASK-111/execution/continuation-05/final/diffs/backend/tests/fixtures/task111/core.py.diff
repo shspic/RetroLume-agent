@@ -1,0 +1,11 @@
+--- C05-pre/backend/tests/fixtures/task111/core.py
++++ backend/tests/fixtures/task111/core.py
+@@ -35,7 +35,7 @@
+         self.resource,self.folder=resource,folder
+         self.ledger=PostgresAdmissionLedger(resource["app"]);self.materials=PostgresMaterials(resource["app"])
+         from .control import synthetic_root,preview_name,registry_root,CONTINUATION
+-        if CONTINUATION.endswith("C04-20261011") and registry_dir is not None and Path(registry_dir).resolve()!=registry_root().resolve():
++        if CONTINUATION.endswith(("C04-20261011","C05-20261011")) and registry_dir is not None and Path(registry_dir).resolve()!=registry_root().resolve():
+             raise RuntimeError("C04唯一控制根不允许更换")
+         self.data=synthetic_root()/"data";self.data.mkdir(parents=True,exist_ok=True)
+         (self.data/"originals").mkdir(exist_ok=True);self.originals=OriginalStore(self.data/"originals")

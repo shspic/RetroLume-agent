@@ -1,0 +1,78 @@
+[
+  {
+    "name": "container",
+    "status": "pass",
+    "facts": {
+      "container_id": "80ae914138fa42a9ae72acf898d13f7e740b759ff09fc248470abb6df0c15d4d",
+      "running": true,
+      "password_not_logged": true
+    },
+    "started_at": "2026-10-04T15:22:36.913142+00:00",
+    "ended_at": "2026-10-04T15:22:40.721635+00:00",
+    "elapsed": 3.8119999999762513,
+    "exit_code": 0
+  },
+  {
+    "name": "database",
+    "status": "pass",
+    "facts": {
+      "database": "retrolume_task100_g8_main",
+      "owner": "retrolume_task100_admin",
+      "runtime_role": "retrolume_task100_app",
+      "retained": true
+    },
+    "started_at": "2026-10-04T15:22:40.724252+00:00",
+    "ended_at": "2026-10-04T15:22:40.923868+00:00",
+    "elapsed": 0.18800000002374873,
+    "exit_code": 0
+  },
+  {
+    "name": "repository",
+    "status": "fail",
+    "tests": 10,
+    "skipped": 0,
+    "exit_code": 1,
+    "started_at": "2026-10-04T15:22:40.925905+00:00",
+    "ended_at": "2026-10-04T15:22:52.999404+00:00",
+    "elapsed": 12.062999999965541,
+    "timeout": 300.0,
+    "pid": 12516
+  },
+  {
+    "name": "application",
+    "status": "not_run",
+    "reason": "dependency_failed",
+    "dependencies": [
+      "database",
+      "repository"
+    ],
+    "elapsed": 0
+  },
+  {
+    "name": "http",
+    "status": "not_run",
+    "reason": "dependency_failed",
+    "dependencies": [
+      "application"
+    ],
+    "elapsed": 0
+  },
+  {
+    "name": "windows",
+    "status": "not_run",
+    "reason": "dependency_failed",
+    "dependencies": [
+      "http"
+    ],
+    "elapsed": 0
+  },
+  {
+    "name": "browser",
+    "status": "not_run",
+    "reason": "dependency_failed",
+    "dependencies": [
+      "windows"
+    ],
+    "elapsed": 0
+  }
+]

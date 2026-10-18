@@ -1,0 +1,72 @@
+--- first-pre/backend/app/activities/teaching_repository.py
++++ current/backend/app/activities/teaching_repository.py
+@@ -14,6 +14,14 @@
+ 
+ # head 指针哨兵：显式置空；None 表示本次不改动该列。
+ _HEAD_CLEAR = "__clear__"
++
++
++def _progress_reason(status, candidate):
++    if status != 'evidence_sufficient':
++        return '保留当前节点；独立实例不足、存在辅助或争议时不推定长期掌握。'
++    if candidate is None:
++        return '当前节点已有足够的独立实例证据，但没有满足前置条件的待推进节点；保留当前节点，不推定长期掌握。'
++    return '按当前评价已有两个不同的独立实例，含复测，可有限前进；不推定长期掌握。'
+ 
+ from app.capabilities.contracts import LedgerDisposition
+ 
+@@ -38,6 +46,7 @@
+     TeachingCommandReceipt,
+     TeachingFrozenContext,
+     TeachingMemoryFrozenContext,
++    TeachingHybridFrozenContext,
+     parse_frozen_context,
+     TeachingRefusal,
+     semantic_slot,
+@@ -331,11 +340,17 @@
+             raise TeachingRefusal("version_conflict", "教学绑定已改变")
+         if not activity.get('_memory_eligible',True):
+             raise TeachingRefusal('memory_dependency_invalid','所选学习背景已更新或撤销')
+-        if isinstance(frozen,TeachingMemoryFrozenContext):
++        if isinstance(frozen,TeachingMemoryFrozenContext) and frozen.memory_selection_sha256 is not None:
+             cursor=await connection.execute("SELECT selection_sha256 FROM public.activity_memory_bindings WHERE activity_id=%s",(str(activity['id']),))
+             selected=await cursor.fetchone()
+             if selected is None or selected['selection_sha256']!=frozen.memory_selection_sha256:
+                 raise TeachingRefusal('memory_dependency_invalid','固定背景选择不符')
++        if isinstance(frozen,TeachingHybridFrozenContext):
++            from app.capabilities.contracts import AdmissionDenied
++            try:
++                await self._require_retrieval_ref(connection,activity,frozen.retrieval_ref,domain='learning',expected_revision=command['expected_revision'])
++                if frozen.memory_dependency_sha256!=activity.get('_memory_dependency_sha256'):raise AdmissionDenied('memory_dependency_invalid')
++            except AdmissionDenied as exc:raise TeachingRefusal(str(exc),'本轮检索或背景身份不符') from None
+         if frozen.operation_id != command["operation_id"]:
+             raise TeachingRefusal("unknown_slot", "冻结操作身份不一致")
+         from app.learning.teaching_contracts import frozen_context_digest
+@@ -974,7 +989,7 @@
+                     raise TeachingRefusal('memory_dependency_invalid','所选学习背景已更新或撤销')
+                 if frozen.kind=='model' and not isinstance(frozen,TeachingMemoryFrozenContext):
+                     raise TeachingRefusal('memory_profile_required','本活动须使用明确学习背景协议')
+-            elif isinstance(frozen,TeachingMemoryFrozenContext):
++            elif isinstance(frozen,TeachingMemoryFrozenContext) and frozen.memory_selection_sha256 is not None:
+                 raise TeachingRefusal('memory_profile_required','本活动未明确选用背景')
+ 
+             if existing is not None:
+@@ -1190,6 +1205,9 @@
+             if (getattr(binding,'memory_selection_sha256',None)!=frozen.memory_selection_sha256
+                     or getattr(binding,'assembled_messages_sha256',None)!=frozen.assembled_messages_sha256):
+                 raise TeachingRefusal('memory_profile_required','背景消息受信绑定不符')
++        if isinstance(frozen,TeachingHybridFrozenContext) and binding is not None:
++            if getattr(binding,'retrieval_ref',None)!=frozen.retrieval_ref or getattr(binding,'memory_dependency_sha256',None)!=frozen.memory_dependency_sha256:
++                raise TeachingRefusal('retrieval_ref_invalidated','本轮检索受信绑定不符')
+         if phase != "result":
+             await self._teaching_verify_current(connection,activity,head,command,frozen)
+         return command
+@@ -1298,7 +1316,7 @@
+                         and all(projection["nodes"][f"n{p+1}"]["status"] == "evidence_sufficient" for p in n["prerequisites"])),None)
+                 progress_id = str(uuid4())
+                 seq += 1
+-                reason = "按当前评价已有两个不同的独立实例，含复测，可有限前进。" if candidate else "保留当前节点；独立实例不足、存在辅助或争议时不推定长期掌握。"
++                reason = _progress_reason(current_node['status'], candidate)
+                 progress_body = canonical({"feedback_record_id":record_id,"answer_record_id":body["answer_record_id"],
+                     "advance":bool(candidate),"node_before":head["node_id"],"node_after":candidate or head["node_id"],
+                     "reason":reason,"observations":current_node,"support_checks":derive_support_checks(

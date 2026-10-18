@@ -1,0 +1,9 @@
+{
+  "kind": "sql",
+  "pid": 28032,
+  "value": {
+    "tag": "selection",
+    "sql": "SELECT b.selection_sha256,b.bound_scope_revision,\n             public.activity_memory_eligible(b.activity_id) AS eligible,\n             COALESCE((SELECT jsonb_agg(jsonb_build_object('memory_id',c.memory_id,'version',c.version,\n              'revision',c.selected_revision,'body_sha256',c.body_sha256,\n              'body',CASE WHEN %s AND public.activity_memory_eligible(b.activity_id) THEN mb.body ELSE NULL END)\n              ORDER BY c.ordinal) FROM public.activity_memory_choices c LEFT JOIN public.learning_memory_bodies mb\n              ON mb.memory_id=c.memory_id AND mb.version=c.version WHERE c.activity_id=b.activity_id),'[]'::jsonb) AS entries\n             FROM public.activity_memory_bindings b WHERE b.activity_id=%s",
+    "arguments_saved": false
+  }
+}

@@ -1,0 +1,143 @@
+--- pre/frontend/src/activities/MemoryWorkspace.tsx
++++ post/frontend/src/activities/MemoryWorkspace.tsx
+@@ -2,7 +2,7 @@
+ import { getMemory, getMemoryImpact, getMemoryReceipt, listMemories, memoryRequest,
+   type MemoryChoice, type MemoryCommand, type MemoryImpact, type MemoryItem, type MemoryView } from "./memoryApi";
+ import { loadMemoryIntents, memoryEditorOwner, readMemoryDraft, removeMemoryIntent, removeMemoryDraft,
+-  saveMemoryDraft, submitTrackedMemory, submitTrackedMemoryCreate, type MemoryIntent } from "./memoryIntents";
++  saveMemoryDraft, removeMemoryDraftIfCurrent, submitTrackedMemory, submitTrackedMemoryCreate, type MemoryIntent } from "./memoryIntents";
+ import "./memory-workspace.css";
+ 
+ const kinds: Record<string, string> = { self_report: "用户自报", preference: "学习偏好", focus: "待练难点", learning_observation: "当时有限观察" };
+@@ -36,20 +36,27 @@
+   const editSequence = useRef(0);
+   const dirty = useRef(false);
+   const mounted = useRef(true);
++  const lifecycle = useRef(0);
+   const newId = useRef<string>(crypto.randomUUID());
+   const controller = useRef<AbortController | null>(null);
+   const draftKey = () => binding.current && owner.current ? ["edit", binding.current.id, binding.current.version,
+     binding.current.revision, binding.current.sha, owner.current].join("|") : null;
+   const reloadIntents = () => { const value = loadMemoryIntents(); setIntents(value.items); setIntentsOk(value.ok); };
+-  async function refresh() {
++  async function refresh(authorized: () => boolean = () => true) {
++    const generation = lifecycle.current;
++    const current = () => mounted.current && generation === lifecycle.current && authorized();
+     try {
+       const result = await listMemories(token);
+-      if (mounted.current) { setItems(result.items); setNext(result.next_cursor); reloadIntents(); }
+-    } catch (reason) { if (mounted.current) setError(reason instanceof Error ? reason.message : "记忆读取未确认"); }
++      if (current()) { setItems(result.items); setNext(result.next_cursor); reloadIntents(); }
++    } catch (reason) { if (current()) setError(reason instanceof Error ? reason.message : "记忆读取未确认"); }
+   }
+   useEffect(() => {
+     mounted.current = true;
++    const generation = ++lifecycle.current;
++    const currentInstance = () => mounted.current && generation === lifecycle.current;
++    setBusy(false);
+     void memoryEditorOwner().then(async value => {
++      if (!currentInstance()) return;
+       owner.current=value;
+       setOwnerReady(Boolean(value));
+       if(!value||!mounted.current||binding.current)return;
+@@ -58,19 +65,20 @@
+       if(!id){id=crypto.randomUUID();sessionStorage.setItem(key,id);}
+       newId.current=id;binding.current={id,version:0,revision:0,sha:""};
+       const edited=editSequence.current,sequence=readSequence.current;const draft=await readMemoryDraft(["edit",id,0,0,"",value].join("|"));
+-      if(draft&&mounted.current&&sequence===readSequence.current&&binding.current?.id===id&&edited===editSequence.current&&!view) {
++      if(draft&&currentInstance()&&sequence===readSequence.current&&binding.current?.id===id&&edited===editSequence.current&&!view) {
+         const content=JSON.parse(draft.content);setTitle(content.title);setText(content.text);setKind(content.kind);dirty.current=true;
+       }
+     });
+-    void memoryRequest<{ read: boolean; write: boolean; cleanup: boolean }>("/api/memories/capabilities", token).then(setCaps).catch(() => setCaps(null));
++    void memoryRequest<{ read: boolean; write: boolean; cleanup: boolean }>("/api/memories/capabilities", token).then(value => { if (currentInstance()) setCaps(value); }).catch(() => { if (currentInstance()) setCaps(null); });
+     void refresh();
+     const storage = (event: StorageEvent) => { if (event.key === "retrolume.memory-intents.v1") reloadIntents(); };
+     window.addEventListener("storage", storage);
+-    return () => { mounted.current = false; controller.current?.abort(); window.removeEventListener("storage", storage); };
++    return () => { mounted.current = false; ++lifecycle.current; ++readSequence.current; controller.current?.abort(); window.removeEventListener("storage", storage); };
+   }, [token]);
+ 
+   async function select(id: string, explicit = false, keep = false) {
+     const sequence = ++readSequence.current; controller.current?.abort();
++    if (id !== binding.current?.id) setNotice("");
+     const active = new AbortController(); controller.current = active;
+     const editedAt = editSequence.current;
+     setReading(true);setImpact(null);setImpactAction(null);setError("");setReadUnconfirmed(false);
+@@ -124,28 +132,45 @@
+     if (busy || !intentsOk || conflict) return;
+     const submittedSequence=readSequence.current;
+     const submittedEdit=editSequence.current,submittedDraft=draftKey();
++    const submittedGeneration = lifecycle.current, submittedOwner = owner.current;
++    const submittedBinding = binding.current ? { ...binding.current } : null;
++    const sameInstance = () => mounted.current && lifecycle.current === submittedGeneration;
++    const sameEditor = () => sameInstance() && owner.current === submittedOwner && readSequence.current === submittedSequence
++      && binding.current?.id === submittedBinding?.id && binding.current?.version === submittedBinding?.version
++      && binding.current?.revision === submittedBinding?.revision && binding.current?.sha === submittedBinding?.sha;
++    const unchangedEditor = () => sameEditor() && editSequence.current === submittedEdit;
+     const identity = command.memory_id; setBusy(true); setError(""); setNotice("");
+     try {
+       const receipt = await submitTrackedMemory(command, token);
+-      if (!mounted.current) return;
++      if (!sameInstance()) return;
+       reloadIntents();
+       if (receipt.status !== "committed") throw new Error("保存结果未确认，原意图保留");
+-      if(readSequence.current!==submittedSequence){await refresh();return;}
++      if (!sameEditor()) return;
+       if(submittedEdit!==editSequence.current){
+-        setNotice("保存已确认，读取期间的新输入仍保留，请核对版本。");await refresh();await select(identity);return;
++        setNotice("保存已确认，读取期间的新输入仍保留，请核对版本。");
++        await refresh(sameEditor);
++        if (sameEditor()) await select(identity);
++        return;
++      }
++      if(submittedDraft)await removeMemoryDraftIfCurrent(submittedDraft, unchangedEditor);
++      if (!sameEditor()) return;
++      if (submittedEdit !== editSequence.current) {
++        setNotice("保存已确认，读取期间的新输入仍保留，请核对版本。");
++        await refresh(sameEditor);
++        if (sameEditor()) await select(identity);
++        return;
+       }
+       dirty.current = false;
+-      if(submittedDraft)await removeMemoryDraft(submittedDraft);
+       if(command.action==='save'&&newId.current===identity&&owner.current){
+         newId.current=crypto.randomUUID();sessionStorage.setItem("retrolume.memory-new-id.v1:"+owner.current,newId.current);
+       }
+       setNotice(command.action === "revoke" ? (receipt.purge_state_now === "done" ? "已撤销，本条在线记忆正文已清理；原始事实和保留副本仍在。" : "已撤销，内容清理待核对；不会再用于生成。") : "已确认保存，未调用模型。");
+       setImpact(null); setImpactAction(null);
+-      await refresh();
+-      if(readSequence.current===submittedSequence)await select(identity, submittedEdit===editSequence.current);
++      await refresh(unchangedEditor);
++      if (unchangedEditor()) await select(identity, true);
+     } catch (reason) {
+-      if (mounted.current) { setError(reason instanceof Error ? reason.message : "动作未确认"); reloadIntents(); }
+-    } finally { if (mounted.current) setBusy(false); }
++      if (sameEditor()) { setError(reason instanceof Error ? reason.message : "动作未确认"); reloadIntents(); }
++    } finally { if (sameInstance()) setBusy(false); }
+   }
+   async function preview(action: "revise" | "revoke") {
+     if (!view || busy || conflict || reading || readUnconfirmed) return;
+--- pre/frontend/src/activities/memoryIntents.ts
++++ post/frontend/src/activities/memoryIntents.ts
+@@ -75,6 +75,20 @@
+     tx.oncomplete = () => { db.close(); resolve(true); }; tx.onabort = () => { db.close(); resolve(false); };
+   });
+ }
++export async function removeMemoryDraftIfCurrent(id: string, current: () => boolean): Promise<boolean> {
++  const db = await openDb(); if (!db) return false;
++  if (!current()) { db.close(); return false; }
++  return new Promise(resolve => {
++    const tx = db.transaction("drafts", "readwrite"); const store = tx.objectStore("drafts");
++    const req = store.get(id); let removed = false;
++    req.onsuccess = () => {
++      // 同一事件内核当前编辑身份；随后新编辑的事务排在此删除之后，不清新草稿。
++      if (current()) { store.delete(id); removed = true; }
++    };
++    tx.oncomplete = () => { db.close(); resolve(removed); };
++    tx.onabort = tx.onerror = () => { db.close(); resolve(false); };
++  });
++}
+ export async function clearMemoryDraftsForId(memoryId: string): Promise<boolean> {
+   const db = await openDb(); if (!db) return false;
+   return new Promise(resolve => {

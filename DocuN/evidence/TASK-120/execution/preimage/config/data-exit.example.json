@@ -1,0 +1,16 @@
+{
+  "enabled": false,
+  "snapshot_url_env": "RETROLUME_DATA_SNAPSHOT_URL",
+  "maintenance_key_env": "RETROLUME_DATA_MAINTENANCE_KEY",
+  "factory": {
+    "id": "local-pg17-readonly-v1",
+    "image_id": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+    "pg_major": 17,
+    "login_prefix": "retrolume_restore_",
+    "source_name": "retrolume-local-pg",
+    "slots": [
+      {"id": "target01", "name": "retrolume-data-target01", "volume": "retrolume-data-target01-data", "port": 55462, "database": "retrolume_readonly", "schema_profile": "data_exit.v1.r01"},
+      {"id": "target02", "name": "retrolume-data-target02", "volume": "retrolume-data-target02-data", "port": 55463, "database": "retrolume_readonly_r02", "schema_profile": "data_exit.v1.r02"}
+    ]
+  }
+}

@@ -1,0 +1,143 @@
+--- test_activity_recovery.py.pre-task069
++++ test_activity_recovery.py.post-task069
+@@ -53,18 +53,33 @@
+         self.activity_id = str(uuid4())
+         self.source_id = str(uuid4())
+         self.version_id = str(uuid4())
++        # 本例额外创建的活动 ID（如 test_04 的隔离对照活动）。
++        # 创建前先登记：即使创建中途失败，收尾也按 ID 清理，残留行为空操作。
++        self.extra_activity_ids: list[str] = []
+ 
+     async def asyncTearDown(self) -> None:
+-        """只删除本例合成的活动与来源行；不触碰任何其他数据。"""
++        """只删除本例合成的活动与来源行；不触碰任何其他数据。
++
++        删除顺序遵循外键依赖：活动操作/模型许可/来源关联 → 活动；
++        随后必须先解除本例 source.current_version 对版本的引用
++        （001 的 material_current_version_source 立即组合外键），
++        再删版本，最后删来源。清理失败如实抛出，不吞掉。
++        """
++        activity_ids = [self.activity_id, *self.extra_activity_ids]
+         async with await psycopg.AsyncConnection.connect(DSN) as connection:
+             async with connection.transaction():
+-                for sql in (
+-                    "DELETE FROM activity_operations WHERE activity_id = %s",
+-                    "DELETE FROM activity_allowed_models WHERE activity_id = %s",
+-                    "DELETE FROM activity_scope_sources WHERE activity_id = %s",
+-                    "DELETE FROM activities WHERE id = %s",
+-                ):
+-                    await connection.execute(sql, (self.activity_id,))
++                for activity_id in activity_ids:
++                    for sql in (
++                        "DELETE FROM activity_operations WHERE activity_id = %s",
++                        "DELETE FROM activity_allowed_models WHERE activity_id = %s",
++                        "DELETE FROM activity_scope_sources WHERE activity_id = %s",
++                        "DELETE FROM activities WHERE id = %s",
++                    ):
++                        await connection.execute(sql, (activity_id,))
++                await connection.execute(
++                    "UPDATE material_sources SET current_version = NULL WHERE id = %s",
++                    (self.source_id,),
++                )
+                 await connection.execute("DELETE FROM material_versions WHERE id = %s", (self.version_id,))
+                 await connection.execute("DELETE FROM material_sources WHERE id = %s", (self.source_id,))
+ 
+@@ -270,60 +285,49 @@
+             allowed_tools=(),
+             scope_revision=1,
+         )
++        # 创建前登记，消除"创建成功但后续准备步骤失败"时无人清理的窗口；
++        # 创建本身失败会回滚，收尾按 ID 删除为空操作，重复清理无害。
++        self.extra_activity_ids.append(other.activity_id)
+         await self.ledger.create_activity(other)
+         other_lease = await self.ledger.claim_lease(other.activity_id, "worker-1", lease_seconds=300)
+         await self.ledger.admit(self.intent(other, other_lease, "xb-op-1"))
+         await self.ledger.admit(self.intent(other, other_lease, "xb-op-2"))
+         await self.reclaim_next_generation(other)
+-        try:
+-            full = await self.ledger.list_unresolved_operations(spec.activity_id)
+-            self.assertEqual(
+-                [item.operation_id for item in full],
+-                [f"op-{index:02d}" for index in range(7)] + ["op-90"],
+-            )
+-            page = await self.ledger.list_unresolved_operations(spec.activity_id, limit=3)
+-            self.assertEqual([item.operation_id for item in page], ["op-00", "op-01", "op-02"])
+-            collected: list[str] = []
+-            cursor = None
+-            while True:
+-                rows = await self.ledger.list_unresolved_operations(
+-                    spec.activity_id, limit=3, after_operation_id=cursor
+-                )
+-                if not rows:
+-                    break
+-                self.assertLessEqual(len(rows), 3)
+-                collected.extend(item.operation_id for item in rows)
+-                cursor = rows[-1].operation_id
+-            self.assertEqual(collected, [item.operation_id for item in full])
+-            self.assertEqual(len(collected), len(set(collected)))
+-
+-            across = await self.ledger.list_unresolved_operations(
+-                other.activity_id, limit=200, after_operation_id="op-90"
+-            )
+-            self.assertEqual([item.operation_id for item in across], ["xb-op-1", "xb-op-2"])
+-            other_full = await self.ledger.list_unresolved_operations(other.activity_id)
+-            self.assertEqual([item.operation_id for item in other_full], ["xb-op-1", "xb-op-2"])
+-
+-            changed = await self.ledger.recover_obsolete_operations(spec.activity_id)
+-            self.assertEqual(changed, 7)
+-            other_rows = await self.db_rows(
+-                "SELECT state FROM activity_operations WHERE activity_id = %s ORDER BY operation_id",
+-                (other.activity_id,),
+-            )
+-            self.assertEqual([row["state"] for row in other_rows], ["reserved", "reserved"])
+-        finally:
+-            async with await psycopg.AsyncConnection.connect(DSN) as connection:
+-                async with connection.transaction():
+-                    await connection.execute(
+-                        "DELETE FROM activity_operations WHERE activity_id = %s", (other.activity_id,)
+-                    )
+-                    await connection.execute(
+-                        "DELETE FROM activity_allowed_models WHERE activity_id = %s", (other.activity_id,)
+-                    )
+-                    await connection.execute(
+-                        "DELETE FROM activity_scope_sources WHERE activity_id = %s", (other.activity_id,)
+-                    )
+-                    await connection.execute("DELETE FROM activities WHERE id = %s", (other.activity_id,))
++        full = await self.ledger.list_unresolved_operations(spec.activity_id)
++        self.assertEqual(
++            [item.operation_id for item in full],
++            [f"op-{index:02d}" for index in range(7)] + ["op-90"],
++        )
++        page = await self.ledger.list_unresolved_operations(spec.activity_id, limit=3)
++        self.assertEqual([item.operation_id for item in page], ["op-00", "op-01", "op-02"])
++        collected: list[str] = []
++        cursor = None
++        while True:
++            rows = await self.ledger.list_unresolved_operations(
++                spec.activity_id, limit=3, after_operation_id=cursor
++            )
++            if not rows:
++                break
++            self.assertLessEqual(len(rows), 3)
++            collected.extend(item.operation_id for item in rows)
++            cursor = rows[-1].operation_id
++        self.assertEqual(collected, [item.operation_id for item in full])
++        self.assertEqual(len(collected), len(set(collected)))
++
++        across = await self.ledger.list_unresolved_operations(
++            other.activity_id, limit=200, after_operation_id="op-90"
++        )
++        self.assertEqual([item.operation_id for item in across], ["xb-op-1", "xb-op-2"])
++        other_full = await self.ledger.list_unresolved_operations(other.activity_id)
++        self.assertEqual([item.operation_id for item in other_full], ["xb-op-1", "xb-op-2"])
++
++        changed = await self.ledger.recover_obsolete_operations(spec.activity_id)
++        self.assertEqual(changed, 7)
++        other_rows = await self.db_rows(
++            "SELECT state FROM activity_operations WHERE activity_id = %s ORDER BY operation_id",
++            (other.activity_id,),
++        )
++        self.assertEqual([row["state"] for row in other_rows], ["reserved", "reserved"])
+ 
+     async def test_05_late_permit_cannot_overwrite_recovered_unknown(self) -> None:
+         spec, lease, _ = await self.build_activity()

@@ -1,0 +1,40 @@
+# TASK117/R111 — 预览operator部署交接补充
+
+接收A+，继续当前TASK116/114延续的TASK117工程窗口。本补充是原S01许可内的准确部署交接，不是新任务、重新审计、扩预算或要求用户找密钥。读完本补充并在当前执行账记录新合同hash后继续原卡；其它实现/验证不中断。
+
+## 已查明的缺口与采用依据
+
+主控确认TASK112独立终审已完成、G11有限切片已正式关闭，但当时没有创建正常operator部署配置/审核票据。TASK117把“复用已验签票”写为现成输入不准确。本补充取消寻找不存在现成票据的要求，明确允许正常部署动作；不改原独审结论、不自行审计产品。
+
+独立终审结果是D:/shspic/project_NO3_RetroLume-agent/DocuN/results/TASK-112-result.md，冻结SHA256为1dab1126aa72e335288d037baed5bc13b7cfdc1e4a386b6c04553e630f871571。主控已采用的有限关闭依据为D:/shspic/project_NO3_RetroLume-agent/DocuN/results/TASK-111-G11-final-acceptance.md及TASK-112-work-decision.md。按上述报告的Windows单机、合成资料、固定程序/描述/输入和原故障模型适用；不是整个项目、任意脚本、真实个人资料或新kind独审通过。
+
+允许的固定宿主身份如下，必须实核一致。
+
+- image_id为sha256:ec3c70c7a8a8894c647a69b08b0c296727bb052f639e487567e9cd4624766789。
+- load_manifest_sha256为8a047050ffe584dffa6e85222c16c8f400c0ab4db82f72a32812c2befd082b3f。
+- renderer_sha256为6cc300164a6cb364d9bd0bae4897f06d3f6a65cf5d4272477d2bccde67312597。
+- kernel_release仍为6.6.114.1-microsoft-standard-WSL2。当前真实环境不同则不伪填，不改HostPolicy白名单；只停预览依赖并交准确差异。
+
+当前Python预览停止/资格传播按随后已关闭的114/115源身份继承。主控核得host_policy.py为7c54c0d4574ecfd9edd2b2a70821a731d3f219df3c7abf5bd14e17d8acb90b83，pipe.py为db2a742a559d7905012273e9fd9acaec441a549e12d71fa8ac77a3f486d3f974，production_supervisor.py为d6870137371caf003412fc4089bfc1e0dcf6ecf859ee05633fd5024d894c6d58，三者逐项匹配TASK115最终接收的current清单；其中SUP不是112早期报告的715649值，不能抹去后续已验收的传播或冒称所有源从112以来不变。本轮仍禁止改这些主体。
+
+原112正文中未签生产票据和未开启生产部署的限制仍是当时事实。本次仅正常配置本轮已获准的合成集成验证实例，不据此开启用户库/个人资料/真实服务或公共部署。
+
+## 原窗口可连续完成的正常operator动作
+
+你可作为本轮合成实例的受托operator，基于上述既有独审事实生成认证文件。HMAC签名是部署认证，不是补造一次新独立审计。本次授权来源为用户已采用G11/已批准117 AP1及合成验证范围，主控在本补充中明确给出；无须向用户索密钥、另找旧私配或重新请付费批准。
+
+1. 只读核终审报告/主控关闭记录及上述固定源身份，按原117实时门核实际缓存image、Docker CLI绝对路径和内核。禁止pull/build或改固定runtime/host_policy.py、验签器、known授权字面值。原111历史runner/私密控制根不读取或复活。
+2. 使用本轮新目录D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-117/execution/synthetic/operator/。正常部署配置固定为preview.deployment.json，票据为preview.review.json；它们是本卡合成配置，不进入公开config示例或用户配置。目录若有内容先核本卡归属，不能覆盖未知对象。
+3. 配置严格使用retrolume.preview.deployment.v2现有封闭字段，image/load/renderer/kernel按实核相等值，docker为实际绝对路径，review_ticket为本轮preview.review.json绝对路径，review_key_env指定RETROLUME_TASK117_PREVIEW_REVIEW_KEY。registry仍由实际本卡settings.data_dir/preview-control派生，不能借新配置绕owner/nonce/旧UNKNOWN。
+4. 本轮私有控制器内存以安全随机源生成至少32个UTF8字节的认证key，不显示、不输出、不写shell历史/脚本常量/argv/报告/原始证据/公开配置、不写setx或用户全局环境。只在本卡API/必要受控测试子进程env注入RETROLUME_TASK117_PREVIEW_REVIEW_KEY和RETROLUME_PREVIEW_CONFIG。如果控制器重开丢失内存key，可依据同一冻结审核事实正常生成新key及相应认证文件，留旧票据hash和更新原因，不清任何业务账/预览计数，也不复用旧控制密钥。
+5. 票据严格为retrolume.preview.review.v2现有七字段。decision为approved，仅认证已正式关闭的固定G11；result_sha256必须为上述真实TASK112报告hash，三个加载身份逐项相等。signature按现产品canonical的UTF8字节和HMAC-SHA256正常计算，不手填任意签名，不给票据加loader不支持的字段。secret只在受信内存/子进程环境，票据与配置虽不含key也按本卡operator输入保护，不发浏览器/导出。
+6. 使用原产品load_host_policy正常读取验证，并在实际API子进程确认有且仅有配置存在/环境变量存在布尔值、HostPolicy正常加载结果与固定身份；不打印变量值或整个子进程环境。不从主控工具进程的环境存在性推断API进程已经注入。api启动/测试/preview的真实运行按原单账计数，不能因本补充加额度。
+7. 同时沿原117确认HTML活动profile和输出token限额真实就绪；公开示例仍保持不可误激活，不将用户部署密钥或本轮测试值写回示例。走原真实生成/准入/宿主/输入/停止链完成L10及相关集成，不能直接构造无审计的另一HostPolicy绕正常loader。仍只用本轮合成资料和最低传输替身，无真实provider/费用。
+
+本补充不在本窗口生成密钥/票据、运行产品或修改执行层源码。真正部署由当前工程窗口在原卡内完成。若正常loader拒绝，先依据具体身份/签名/路径/进程注入事实修正正常配置，不能patch验证函数或把authorization改成旧TASK111合成入口；两次有据修正仍失败按原停止条件交回。
+
+## 预算、历史与回传
+
+仍为TASK117/R111/S01，原首点2026-10-14T05:21:48.590792Z及全部UTC/mono/等待/已用root/1186.219秒离线等按真实单账连续，不重置或延长。主控读取的是在途账观测，不签当前预算最终验收，不动execution/receipt/budget/events或产品文件。正常部署文件写入不是新增产品运行根；实际loader导入/测试/API/容器/预览仍按原定义实际计入。
+
+本卡其它实现/验证继续。完成后与原TASK117统一结果一并回传，记录配置/票据路径及hash、固定审核报告/身份绑定、API进程注入布尔检查、正常loader结果与运行证据，绝不回传key。旧接口/角色/数据模型/签票schema不变，Q真实调用门与独立新边界审计未开，不签STEP018/项目通过。

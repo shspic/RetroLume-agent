@@ -1,0 +1,39 @@
+--- pre/backend/app/learning/teaching_contracts.py
++++ post/backend/app/learning/teaching_contracts.py
+@@ -729,17 +729,20 @@
+ 
+     @field_validator("value_decimal", "left", "right", "tolerance_decimal")
+     @classmethod
+-    def _decimal(cls, value):
++    def _decimal(cls, value, info):
+         from decimal import Decimal, InvalidOperation
+         if value is None:
+             return value
+-        if not re.fullmatch(r"-?\d+(\.\d+)?", value):
++        if not re.fullmatch(r"-?[0-9]+(\.[0-9]+)?", value):
+             raise ValueError("invalid_input")
+         try:
+             number = Decimal(value)
+         except InvalidOperation:
+             raise ValueError("invalid_input") from None
+-        if not number.is_finite() or abs(number) > Decimal("1e12"):
++        maximum = Decimal("1e18") if info.field_name == "value_decimal" else Decimal("1e12")
++        if (not number.is_finite() or number.copy_abs() > maximum
++                or info.field_name == "tolerance_decimal" and
++                (number < 0 or number > 1 or number.as_tuple().exponent < -12)):
+             raise ValueError("invalid_input")
+         return value
+ 
+@@ -803,7 +806,11 @@
+                 raise ValueError("invalid_input")
+             if not isinstance(item["unit"], str) or not 1 <= len(item["unit"]) <= 16:
+                 raise ValueError("invalid_input")
+-            if not re.fullmatch(r"-?\d+(\.\d+)?", str(item["value_decimal"])):
++            value = item["value_decimal"]
++            if type(value) is not str or not re.fullmatch(r"-?[0-9]+(\.[0-9]+)?", value):
++                raise ValueError("invalid_input")
++            from decimal import Decimal
++            if Decimal(value).copy_abs() > Decimal("1e18"):
+                 raise ValueError("invalid_input")
+             if item["name"] in names:
+                 raise ValueError("invalid_input")

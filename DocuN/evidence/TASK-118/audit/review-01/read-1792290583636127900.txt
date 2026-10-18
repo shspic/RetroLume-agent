@@ -1,0 +1,130 @@
+frontend/tests/step018-s08.mjs
+124: function installBarrier(){
+125:  const descriptor=Object.getOwnPropertyDescriptor(IDBTransaction.prototype,'oncomplete');
+126:  const nativePut=IDBObjectStore.prototype.put;
+127:  window.__s08Barrier={hit:false};window.__s08Arm=false;window.__s08Release=null;
+128:  IDBObjectStore.prototype.put=function(value,...rest){
+129:   if(window.__s08Arm&&typeof value?.draft_id==='string'&&value.draft_id.startsWith('draft-')){
+130:    this.transaction.__s08Draft=value;
+131:   }
+132:   return nativePut.call(this,value,...rest);
+133:  };
+134:  Object.defineProperty(IDBTransaction.prototype,'oncomplete',{configurable:true,enumerable:descriptor.enumerable,
+135:   get(){return descriptor.get.call(this);},set(callback){descriptor.set.call(this,typeof callback==='function'?function(event){
+136:    if(window.__s08Arm&&this.__s08Draft){window.__s08Arm=false;window.__s08Barrier={hit:true,draft:this.__s08Draft,committed:true};
+137:     window.__s08Release=()=>{window.__s08Release=null;callback.call(this,event);};
+138:    }else callback.call(this,event);
+139:   }:callback);}});
+140: }
+141: async function openPage(options={}){
+142:  const page=await context.newPage();page.setDefaultTimeout(15000);await page.addInitScript(installBarrier);
+143:  await page.goto(origin,{waitUntil:'networkidle'});
+144:  await page.getByRole('navigation').getByRole('button',{name:fixture.interview?/模拟面试/:/学习活动/}).click();
+145:  await page.locator(`[data-activity-id="${aid}"]`).click();
+146:  const area=page.locator(fixture.interview?'.interview-workspace':'section.ws-teaching');await area.waitFor();
+147:  await page.waitForFunction(()=>Object.keys(sessionStorage).some(k=>k.includes('editor-owner')));
+148:  await area.getByRole('button',{name:fixture.interview?'开始提问':'生成/重订路径（1 次模型）',exact:true}).waitFor();
+149:  return {page,area,panel:area.locator('section[aria-label="资料检索与恢复"]')};
+150: }
+151: async function waitUntil(fn){const end=Date.now()+15000;while(!fn()){assert(Date.now()<end,'观察超时');await new Promise(resolve=>setTimeout(resolve,30));}}
+152: function posts(name,suffix){return proof.requests.filter(x=>x.case===name&&x.method==='POST'&&x.path.endsWith(suffix));}
+153: async function disclosure(area,changed=false){
+154:  const vector=await area.locator('[data-service-disclosure="vector"]').innerText(),chat=await area.locator('[data-service-disclosure="chat"]').innerText();
+155:  for(const value of Object.values(fixture.vector))assert(vector.includes(value));for(const value of Object.values(fixture.chat))assert(chat.includes(value));
+156:  assert(vector.includes('250000')&&vector.includes('用途')&&vector.includes('30'));
+157:  const text=await area.innerText();assert(text.includes('2次请求')&&text.includes('两笔费用')&&text.includes('500000')&&text.includes('60'));
+158:  if(changed){assert(!vector.includes('embedding-3'));assert(!chat.includes('deepseek-chat'));}
+159:  return {vector,chat};
+160: }
+161: async function localRows(page){return page.evaluate(async()=>{
+162:  const chains=[],drafts=[];
+163:  for(const entry of await indexedDB.databases()){
+164:   if(!entry.name?.includes('retrolume-teaching'))continue;
+165:   const db=await new Promise((resolve,reject)=>{const r=indexedDB.open(entry.name);r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
+166:   for(const store of ['chains','drafts'])if(db.objectStoreNames.contains(store)){
+167:    const values=await new Promise((resolve,reject)=>{const r=db.transaction(store).objectStore(store).getAll();r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
+168:    (store==='chains'?chains:drafts).push(...values.map(value=>({database:entry.name,...value})));
+169:   }db.close();
+170:  }
+171:  return {chains,drafts};
+172: });}
+173: 
+174: try{
+175:  setup('startup');
+176:  const remaining=Math.min(Date.parse(spec.root.business_deadline_utc)-Date.now(),1500000);assert(remaining>0);
+177:  deadlineTimer=setTimeout(()=>void shutdown('independent_original_deadline'),remaining);
+178:  process.stdin.on('data',()=>void shutdown('stdin_stop'));process.stdin.on('end',()=>void shutdown('stdin_EOF'));process.stdin.resume();
+179:  let low=0;watchTimer=setInterval(()=>{low=os.freemem()/1048576<256?low+1:0;if(low>=2)void shutdown('pressure_two_samples');try{process.kill(process.ppid,0);}catch{void shutdown('parent_exit');}},2000);
+180:  assert(os.freemem()/1048576>=512,'fixture内存门');count('fixture_server_starts');
+181:  server=http.createServer((request,response)=>handler(request,response).catch(error=>{proof.server_error=String(error);if(!response.headersSent)json(response,{error:'fixture_failure'},500);else response.destroy();void shutdown('server_error');}));
+182:  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(18119,'127.0.0.1',resolve);});
+183:  assert(os.freemem()/1048576>=768,'browser内存门');count('browser_starts');
+184:  context=await chromium.launchPersistentContext(spec.profile,{headless:true,viewport:{width:1440,height:1000},serviceWorkers:'block',args:['--disable-background-networking']});
+185:  if(closing){await context.close();throw new Error('stopped_during_browser_start');}
+186:  await context.route('**/*',route=>{const url=new URL(route.request().url());if(url.origin===origin)return route.continue();proof.external_attempts.push(url.href);return route.abort('blockedbyclient');});
+187:  context.on('response',response=>{const p=new URL(response.url()).pathname;if(p.startsWith('/assets/')&&/\.(js|css)$/.test(p))observe(async()=>proof.assets.push({url:response.url(),sha256:sha(await response.body())}));});
+188:  for(const variant of ['same','owner','view','head']){
+189:   const name='D03-'+variant;setup(name,{ready:variant!=='same'});const {page,area,panel}=await openPage();
+190:   const identities=await disclosure(panel);
+191:   if(variant==='same'){
+192:    await page.screenshot({path:path.join(dir,'D04-index-teaching-before-confirm.png'),fullPage:true});
+193:    await panel.getByRole('button',{name:'确认用途、费用与索引当前资料',exact:true}).click();
+194:    await waitUntil(()=>posts(name,'/retrieval/commands').some(x=>x.body.action==='source_index'));
+195:    await page.waitForTimeout(200);
+196:   }
+197:   const plan=area.getByRole('button',{name:'生成/重订路径（1 次模型）',exact:true});await plan.waitFor();assert.equal(await plan.isEnabled(),true);
+198:   await page.evaluate(()=>{window.__s08Arm=true;});await plan.click();
+199:   await page.waitForFunction(()=>window.__s08Barrier.hit===true);
+200:   const barrier=await page.evaluate(()=>window.__s08Barrier);
+201:   const queries=posts(name,'/retrieval/commands').filter(x=>x.body.action==='query');assert.equal(queries.length,1);
+202:   const originalKey=queries[0].body.business_key,before=posts(name,'/teaching/commands').length;assert.equal(before,0);
+203:   const ownerBefore=await page.evaluate(()=>Object.fromEntries(Object.entries(sessionStorage).filter(([k])=>k.includes('teaching-editor-owner'))));
+204:   if(variant==='owner')await page.evaluate(id=>{const key=Object.keys(sessionStorage).find(k=>k.includes('teaching-editor-owner'));sessionStorage.setItem(key,id);},randomUUID());
+205:   if(variant==='view')fixture.view='s08-view-B';
+206:   if(variant==='head')fixture.revision=2;
+207:   if(variant!=='same'){
+208:    const reads=proof.requests.filter(x=>x.case===name&&x.path.endsWith('/teaching/workspace')).length;
+209:    await area.getByRole('button',{name:'刷新教学工作区（只读）',exact:true}).click();
+210:    await waitUntil(()=>proof.requests.filter(x=>x.case===name&&x.path.endsWith('/teaching/workspace')).length>reads);
+211:    await page.waitForTimeout(150);
+212:   }
+213:   await page.evaluate(()=>window.__s08Release());
+214:   if(variant==='same')await waitUntil(()=>posts(name,'/teaching/commands').length===1);
+215:   await page.waitForTimeout(650);
+216:   assert.equal(posts(name,'/teaching/commands').length,variant==='same'?1:0);
+217:   const stored=await localRows(page),chain=stored.chains.find(x=>x.query.business_key===originalKey),draft=stored.drafts.find(x=>x.draft_id===barrier.draft.draft_id);
+218:   assert(chain&&draft);assert.equal(chain.domain_sent,variant==='same');assert.equal(chain.domain_input.business_key,barrier.draft.draft_id.slice(6));assert.equal(chain.receipt.current,true);
+219:   assert.equal(draft.content,barrier.draft.content);assert.equal(JSON.parse(draft.content).body.confirmed,true);
+220:   const get=await page.evaluate(async({aid,key})=>{const response=await fetch(`/api/activities/${aid}/retrieval/commands/${key}`,{headers:{'X-RetroLume-Session':'test-only-s08-session'}});return {http:response.status,body:await response.json()};},{aid,key:originalKey});
+221:   assert.equal(get.http,200);assert.equal(get.body.business_key,originalKey);
+222:   proof.cases.push({name,status:'passed',same_activity:aid,barrier:'actual_IDB_commit_before_native_oncomplete_callback',query_key:originalKey,domain_key:chain.domain_input.business_key,
+223:    original_owner:ownerBefore,owner_after:await page.evaluate(()=>Object.fromEntries(Object.entries(sessionStorage).filter(([k])=>k.includes('teaching-editor-owner')))),
+224:    changed_only:variant,post_query_domain_posts:posts(name,'/teaching/commands').length,domain_sent:chain.domain_sent,draft_full_body_retained:true,original_key_GET:get,identities,
+225:    owner_case_boundary:variant==='owner'?'同activity会话owner A改B，原lease A失效为只读；未声称成功取得B编辑lease':null});
+226:   await page.screenshot({path:path.join(dir,name+'.png'),fullPage:true});save();await page.close();
+227:  }
+228:  for(const variant of ['missing-vector','missing-chat-teaching','missing-chat-interview','changed-interview']){
+229:   const name='D04-'+variant,isInterview=variant.includes('interview');setup(name,{interview:isInterview,missingVector:variant==='missing-vector',missingChat:variant.startsWith('missing-chat'),changed:variant==='changed-interview'});
+230:   const {page,area,panel}=await openPage();const model=area.getByRole('button',{name:isInterview?'开始提问':'生成/重订路径（1 次模型）',exact:true});
+231:   let identities=null;
+232:   if(variant==='changed-interview'){
+233:    identities=await disclosure(panel,true);await page.waitForTimeout(150);assert.equal(await model.isEnabled(),true);
+234:   }else{
+235:    await panel.getByRole('status').filter({hasText:variant==='missing-vector'?'向量供应商':'聊天供应商'}).waitFor();
+236:    assert.equal(await model.isDisabled(),true);
+237:    if(variant==='missing-vector')assert.equal(await panel.getByRole('button',{name:'确认用途、费用与索引当前资料',exact:true}).isDisabled(),true);
+238:    assert.equal(await area.getByRole('button',{name:isInterview?'保存修正目标（另存版本）':'保存目标（不调用模型）',exact:true}).isEnabled(),true);
+239:   }
+240:   assert.equal(proof.requests.filter(x=>x.case===name&&x.method==='POST').length,0);
+241:   proof.cases.push({name,status:'passed',before_confirm:true,model_enabled:await model.isEnabled(),no_POST:true,local_save_qualification_kept:variant!=='changed-interview',identities});
+242:   await page.screenshot({path:path.join(dir,name+'.png'),fullPage:true});save();await page.close();
+243:  }
+244:  await Promise.allSettled([...observations]);
+245:  assert.equal(proof.external_attempts.length,0);assert.equal(proof.unknown_routes.length,0);assert.equal(proof.observation_errors.length,0);
+246:  for(const suffix of ['.js','.css']){
+247:   const files=fs.readdirSync(path.join(spec.project,'frontend/dist/assets')).filter(x=>x.endsWith(suffix)&&x.startsWith('index-'));
+248:   assert(files.length);for(const file of files)assert(proof.assets.some(x=>x.url.endsWith('/'+file)&&x.sha256===sha(fs.readFileSync(path.join(spec.project,'frontend/dist/assets',file)))));
+249:  }
+250:  proof.status='passed';save();
+251: }catch(error){proof.status='failed';proof.error=String(error);proof.stack=error.stack;save();process.exitCode=1;}
+252: finally{await shutdown(proof.status);}

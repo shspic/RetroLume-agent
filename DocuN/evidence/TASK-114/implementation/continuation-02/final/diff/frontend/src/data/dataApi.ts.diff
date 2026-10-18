@@ -1,0 +1,13 @@
+--- pre/frontend/src/data/dataApi.ts
++++ final/frontend/src/data/dataApi.ts
+@@ -1,8 +1,8 @@
+ import {dataFetch,getDataContext,canonical} from './context';
+ export type Job={job_id:string;business_key:string;kind:string;state:string;stage:string;revision:number;package_id?:string;plan_id?:string;target_id?:string;selection_generation?:number;counts?:{bytes?:string;files?:number;rows?:number}};
+ export type Plan={plan_id:string;plan_sha256:string;package_root_sha256:string;deletion_policy:string;latest_status:string;overlay_count:number;executor_configured:boolean;permanent_readonly:boolean};
+-export async function dataRequest(token:string,path:string,body?:unknown):Promise<any>{
+-  const response=await dataFetch('/api/data'+path,{method:body===undefined?'GET':'POST',headers:{'X-RetroLume-Session':token,...(body===undefined?{}:{'Content-Type':'application/json'})},body:body===undefined?undefined:canonical(body),cache:'no-store'});
++export async function dataRequest(token:string,path:string,body?:unknown,options:{signal?:AbortSignal;capabilityRefresh?:boolean}={}):Promise<any>{
++  const response=await dataFetch('/api/data'+path,{method:body===undefined?'GET':'POST',headers:{'X-RetroLume-Session':token,...(body===undefined?{}:{'Content-Type':'application/json'})},body:body===undefined?undefined:canonical(body),cache:'no-store',signal:options.signal},{capabilityRefresh:options.capabilityRefresh});
+   const value=await response.json();if(!response.ok)throw new Error(typeof value.detail==='string'?value.detail:'操作未完成，请核对原操作编号。');return value;
+ }
+ const intentKey=()=>`retrolume.data-jobs.v1:${getDataContext()?.control_id??'unconfigured'}`;

@@ -1,0 +1,28 @@
+--- before/backend/app/memory/service.py
++++ final/backend/app/memory/service.py
+@@ -2,6 +2,7 @@
+ from __future__ import annotations
+ from uuid import uuid5,NAMESPACE_URL
+ from .contracts import MemoryCommandInput, MemoryRefusal, bounded_json
++from app.data_exit.maintenance import owned_service
+ 
+ 
+ class MemoryService:
+@@ -11,6 +12,7 @@
+     async def capabilities(self):
+         return await self.ledger.probe_memory()
+ 
++    @owned_service
+     async def submit_command(self,command):
+         capabilities=await self.capabilities()
+         if not capabilities["write"]:
+@@ -32,5 +34,9 @@
+                     if known:receipt["purge_state_now"]=known["purge_state_now"]
+                 except Exception:pass
+                 receipt["cleanup_status_unconfirmed"]=receipt["purge_state_now"]!="done"
++        observer=getattr(self.ledger,'tombstone_observer',None)
++        if command.action in ('revoke','purge') and observer is not None:
++            try:await observer(command.memory_id)
++            except Exception:pass
+         return bounded_json(receipt)
+ 

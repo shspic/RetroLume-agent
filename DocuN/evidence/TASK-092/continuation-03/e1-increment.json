@@ -1,0 +1,18 @@
+{
+  "kind": "E1 2048字节边界定向测试增量（final版）",
+  "class": "tests.test_activity_tools.ArgumentLengthBoundaryTests",
+  "tests": [
+    "test_raw_json_plan_path_exact_2048_pass_and_2049_length_reject",
+    "test_canonical_wire_boundary_to_wire_and_from_wire_stages",
+    "test_multibyte_byte_count_not_character_count_and_stages",
+    "test_canonical_2048_unreachable_basis_defense_only"
+  ],
+  "reachability_finding": "合法规范参数受Schema约束（三标量、|数值|<=1e12）最大规范字节<128，2048规范参数不可达；其长度分支为纵深防御，以可达性依据作证而非伪造成功样本",
+  "first_run": "2处断言误写（将非规范键序当规范形式）第1次有据修正",
+  "final": "4/4通过（0.359秒），离线账新增0.859秒（首跑0.5+复跑0.359）",
+  "test_file_hashes": {
+    "pre": "fc6da4375c7615d5482feeedf5ff7165baea9d438f97b277ab3004968fe19733",
+    "post": "08063c224b400f972e893640b4591cb0657ee088e313c903366495969a01c40c"
+  },
+  "note": "旧final-product-hashes.as-run与093审计冻结原件不覆盖；产品/migrations零改动"
+}

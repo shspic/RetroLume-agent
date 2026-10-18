@@ -1,0 +1,11 @@
+--- before/backend/app/worker/one_call.py
++++ final/backend/app/worker/one_call.py
+@@ -115,7 +115,7 @@
+         raise ValueError("worker input result activity mismatch")
+     if context.operation_id != call.operation_id or context.execution_generation < 1:
+         raise ValueError("worker identity mismatch")
+-    exact(value["ledger"], ("dsn", "connect_timeout_seconds", "statement_timeout_ms", "lock_timeout_ms"))
++    exact(value["ledger"], ("dsn", "connect_timeout_seconds", "statement_timeout_ms", "lock_timeout_ms") + (('data_guard',) if 'data_guard' in value['ledger'] else ()))
+     dsn = value["ledger"]["dsn"]
+     if type(dsn) is not str or not 1 <= len(dsn.encode("utf-8")) <= 4096 or "\0" in dsn:
+         raise ValueError("invalid ledger configuration")

@@ -1,0 +1,318 @@
+"""核收S08并登记原TASK118增量复核，仅标准库文档维护。"""
+from pathlib import Path
+from datetime import datetime, timezone, timedelta
+import hashlib
+import json
+import re
+
+ROOT = Path(__file__).resolve().parents[4]
+HERE = Path(__file__).resolve().parent
+C = ROOT / 'DocuN/evidence/TASK-117/execution/continuation-07'
+E = C.parent
+assert ROOT == Path('D:/shspic/project_NO3_RetroLume-agent').resolve()
+assert not (HERE / 'save-proof.json').exists(), '本批已保存，不重复发布'
+
+
+def sha(raw):
+    return hashlib.sha256(raw).hexdigest()
+
+
+def load(p):
+    return json.loads(p.read_text(encoding='utf-8-sig'))
+
+
+def stamp(p):
+    if not p.is_file():
+        return {'exists': False, 'bytes': 0, 'sha256': None}
+    raw = p.read_bytes()
+    return {'exists': True, 'bytes': len(raw), 'sha256': sha(raw)}
+
+
+def check(p, expected):
+    actual = stamp(p)
+    assert actual['exists'] == expected.get('exists', True), str(p)
+    if actual['exists']:
+        assert actual['sha256'] == expected['sha256'], str(p)
+        if 'bytes' in expected:
+            assert actual['bytes'] == expected['bytes'], str(p)
+    return {'path': str(p), **actual}
+
+
+def write(p, raw, new=False):
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open('xb' if new else 'wb') as f:
+        f.write(raw)
+    assert p.read_bytes() == raw
+    raw.decode('utf-8-sig')
+
+
+def save_json(name, value):
+    write(HERE / name, (json.dumps(value, ensure_ascii=False, indent=2) + '\n').encode('utf-8'), True)
+
+
+now = datetime.now(timezone(timedelta(hours=8))).isoformat()
+rules = load(ROOT / 'DocuN/evidence/v4-migration-20260930/rules-snapshot.json')
+for r in rules:
+    assert sha(Path(r['absolute_path']).read_bytes()) == r['sha256'], r['absolute_path']
+
+binding = load(C / 'final-binding.json')
+report = ROOT / 'DocuN/results/TASK-117-result.md'
+report_id = check(report, binding)
+assert report_id['bytes'] == 104337 and report_id['sha256'] == '90b4ebc77c34cf7886f5e4bb624a9912c14df9b5a7b53ac2528826487bd771e2'
+old_report = (C / 'before-result.md').read_bytes()
+assert len(old_report) == 88265 and sha(old_report) == 'fc600e1381e44542fc933bdd294e471e2e1a5d4b70b979a5a2be708878993aab'
+assert report.read_bytes().endswith(old_report)
+evidence_checks = [check(Path(e['path']), e) for e in binding['evidence']]
+assert len(evidence_checks) == 28
+
+post = load(C / 'post-source-manifest.json')
+current_map = {}
+changed = []
+for entry in post['files']:
+    row = check(ROOT / entry['path'], entry['post'])
+    current_map[Path(entry['path']).as_posix()] = row
+    for key in ['S08_pre', 'TASK118_pre']:
+        pre = entry.get(key)
+        if pre and pre['exists']:
+            check(ROOT / pre['backup'], pre)
+    if entry['changed_from_audit']:
+        changed.append({'path': entry['path'], 'D': entry['D'], 'post': entry['post'],
+                        'audit_pre': entry.get('TASK118_pre'), 'S08_pre': entry.get('S08_pre')})
+assert len(post['files']) == 20 and len(changed) == 18
+assets = [check(ROOT / a['path'], a) for a in load(C / 'bundle-8.json')['files']]
+assert len(assets) == 4
+for a in load(C / 'bundle-8.json')['files']:
+    current_map[Path(a['path']).as_posix()] = check(ROOT / a['path'], a)
+old_assets = {Path(a['path']).as_posix(): a for a in load(C / 'bundle-7-before.json')['files']}
+expected_build_removals = []
+baseline = load(E / 'continuation-05/final-source-manifest.json')
+for entry in baseline['entries']:
+    rel = Path(entry['path']).as_posix()
+    if rel not in current_map:
+        if rel in old_assets and not (ROOT / entry['path']).exists():
+            old = old_assets[rel]
+            assert old['sha256'] == entry['post']['sha256']
+            check(Path(old['backup']), old)
+            current_map[rel] = {'path': str(ROOT / entry['path']), **stamp(ROOT / entry['path']),
+                                'expected_removal': '正常获准bundle8构建移出旧hash资产，旧原字节备份仍匹配',
+                                'old_asset_backup': str(old['backup']), 'old_sha256': old['sha256']}
+            expected_build_removals.append(current_map[rel])
+        else:
+            current_map[rel] = check(ROOT / entry['path'], entry['post'])
+
+browser = load(C / 'root-25/attempt-03/proof.json')
+assert len(browser['cases']) == 8 and all(x['status'] == 'passed' for x in browser['cases'])
+assert browser['status'] == 'passed' and len(browser['requests']) == 162
+assert browser['external_attempts'] == [] and browser['unknown_routes'] == [] and browser['observation_errors'] == []
+asrun = load(C / 'as-run-final.json')
+assert len(asrun['unit_methods']) == asrun['unique_targeted_method_count'] == 33
+timing = load(C / 'final-timing.json')
+stop = load(C / 'final-resource-stop.json')
+assert stop['same_birth_alive'] == [] and stop['current_lookup_unknown'] == [] and stop['18119_no_listener']
+
+budget = load(E / 'budget.json')
+before_budget = load(C / 'before-budget.json')
+assert budget['active_root'] is None and budget['phase'] == 'S08_returned_engineering_candidate'
+assert budget['segments'][:len(before_budget['segments'])] == before_budget['segments']
+assert budget['roots'][:len(before_budget['roots'])] == before_budget['roots']
+assert budget['failures'][:len(before_budget['failures'])] == before_budget['failures']
+assert len(before_budget['failures']) == 66 and len(budget['failures']) == 81
+assert (E / 'events.jsonl').read_bytes().startswith((C / 'before-events.jsonl').read_bytes())
+
+audit_result = ROOT / 'DocuN/results/TASK-118-result.md'
+audit_identity = check(audit_result, {'bytes': 41590, 'sha256': 'dd0a5f1d2ddb2ffcd9a168496e4cca5b8292b7221977c76b8ff417f9ff0f21f1'})
+old_audit_receipt = load(ROOT / 'DocuN/evidence/TASK-118/audit/audit-execution-receipt.json')
+used = old_audit_receipt['metadata_conservative_process_debit_seconds']
+assert used == 116.9280809 and used + 1200 < 1800
+
+state = ROOT / 'DocuS/执行动态文档.MD'
+arch = ROOT / 'DocuS/架构动态文档.MD'
+change = ROOT / 'DocuS/文档变更记录.MD'
+work117 = ROOT / 'DocuN/results/TASK-117-work-decision.md'
+work118 = ROOT / 'DocuN/results/TASK-118-work-decision.md'
+card = ROOT / 'DocuN/tasks/TASK-118.md'
+assert '文档v2.69' in state.read_text(encoding='utf-8-sig').splitlines()[2]
+assert '文档v1.42' in arch.read_text(encoding='utf-8-sig').splitlines()[2]
+assert max(map(int, re.findall(r'CHG-(\d+)', change.read_text(encoding='utf-8-sig')))) == 1486
+before = {p: p.read_bytes() for p in [state, arch, change, work117, work118, card]}
+for p in before:
+    assert p.resolve().is_relative_to(ROOT), str(p)
+contract = (HERE / 'task-contract.md').read_bytes()
+t = contract.decode('utf-8')
+assert '*' not in t
+for token in ['review-01', 'D01', 'D02', 'D03', 'D04', 'TASK118-four-repairs.diff', '41590', '不实施修复', '1200', 'Q继续另列未启用']:
+    assert token in t, token
+
+protected_paths = {Path(x['path']) for x in list(current_map.values()) + evidence_checks + assets}
+protected_paths.update([report, audit_result, ROOT / 'DocuN/tasks/TASK-117.md', E / 'budget.json', E / 'events.jsonl', E / 'case-index.json',
+                        C / 'post-source-manifest.json', C / 'final-binding.json', C / 'before-result.md',
+                        ROOT / 'DocuN/evidence/TASK-118/audit/audit-execution-receipt.json'])
+protected = {p: stamp(p) for p in protected_paths}
+backups = HERE / 'before-documents'
+backups.mkdir(exist_ok=False)
+for p, raw in before.items():
+    write(backups / p.name, raw, True)
+
+received = {
+    'at': now, 'task': 'TASK-117', 'R': 'R-111', 'stage': 'S08', 'report': report_id,
+    'acceptance': '接收四项工程候选与可审原件，最终缺陷关闭/S验收待TASK118独立增量复核',
+    'source_files20_match': True, 'S08_changed14': sum(bool(x['changed_in_S08']) for x in post['files']),
+    'audit_cumulative_changed18': len(changed), 'binding28_match': True, 'dist4_match': True,
+    'asrun33_method_entries': '仅导航待独立方法级适用性核验，不把TIMEOUT整批改绿',
+    'browser_raw': {'status': browser['status'], 'cases': [x.get('name', x.get('case', x.get('id'))) for x in browser['cases']],
+                    'HTTP': len(browser['requests']), 'external_attempts': 0, 'unknown_routes': 0, 'observation_errors': 0},
+    'current_counts': budget['counts'], 'active_root': budget['active_root'], 'phase': budget['phase'],
+    'historical_failures_prefix66_preserved_now81': True, 'old_segments_roots_events_preserved': True,
+    'old_report_suffix_88265_preserved': True, 'timing': timing,
+    'stop_reference': {'sample': stop['sample'], 'same_birth_alive': [], 'current_lookup_unknown': [], '18119_no_listener': True,
+                       'old_PG_resampled': False},
+    'main_live_runtime_stop_queries': 0, 'main_product_tests_build_SQL_Docker_API_browser_provider_Git_writes': 0,
+    'expected_bundle8_old_asset_removal': expected_build_removals,
+    'main_document_precheck_failure': '原聚合旧资产预检一处失败，尚未写正式文档；查明bundle8正常替换和精确旧备份后修正。原脚本/错误和边界留本目录，未执行产品或测试。',
+    'Q_enabled': False, 'S_final_accepted': False,
+}
+save_json('received-candidate.json', received)
+
+scope = {
+    'at': now, 'task': 'TASK-118', 'R': 'R-112', 'round': 'review-01',
+    'original_findings': str(audit_result), 'current_delta': changed,
+    'original_review_full_repetition': False,
+    'original_audit_result_hash': audit_identity['sha256'],
+    'diffs': [{'path': str(C / name), **stamp(C / name)} for name in ['TASK118-four-repairs.diff', 'S08-delta.diff']],
+    'independent_read_order': '原发现/实际diff/源及直接测试，然后原运行证据；禁止117结果正文、聊天、推理、自评',
+    'post_repair_findings_prejudged': False,
+    'write_scope': ['DocuN/evidence/TASK-118/audit/review-01/', 'DocuN/results/TASK-118-result.md'],
+}
+save_json('scope-index.json', scope)
+inputs = {
+    'at': now, 'rules': rules, 'task': 'TASK-118', 'R': 'R-112', 'round': 'review-01',
+    'original_audit_result': audit_identity,
+    'implementation_report_hash_only_do_not_decode': report_id,
+    'current_sources': list(current_map.values()), 'current_changed18': changed, 'dist4': assets,
+    'expected_build_removals': expected_build_removals,
+    'critical_evidence28': evidence_checks,
+    'frozen_engineering_ledger': [{'path': str(E / n), **stamp(E / n)} for n in ['budget.json', 'events.jsonl', 'case-index.json']],
+    'task_contract': {'path': str(HERE / 'task-contract.md'), **stamp(HERE / 'task-contract.md')},
+}
+save_json('audit-inputs.json', inputs)
+permit = {
+    'id': 'TASK-118-STEP018-REVIEW01-20261018', 'issued_at': now, 'task': 'TASK-118', 'R': 'R-112', 'round': 'review-01',
+    'manual_transfer_pending': True, 'actual_receipt': False,
+    'calendar_hours': 48, 'save_only_calendar_remaining_seconds': 1200,
+    'activity_cap_seconds': None, 'activity_policy': '本增量观察段/UTC上界/unknown分记，旧活动/偏差保留，不以中断总差作新增硬门',
+    'prior_metadata_debit_seconds': used, 'original_metadata_total_cap_seconds': 1800,
+    'review01_metadata_process_seconds': 1200, 'cumulative_metadata_cap_for_this_permit_seconds': used + 1200,
+    'per_metadata_command_seconds': 60,
+    'product_tests_compile_build_PG_SQL_Docker_Job_API_Browser_provider_network_fee_Git': 0,
+    'original_unused_engineering_roots_or_counts_granted': False,
+    'Q_enabled': False, 'historical_violations_waived': False,
+}
+save_json('review-permit.json', permit)
+
+prefix117 = f'''# TASK117/R111 — S08工程候选接收，交原118四项增量独审
+
+{now}。用户带回S08报告104337字节/90b4ebc7…d771e2。20项源清单、相对独审基线18项/本轮14项、28关键绑定、新dist四项和88265旧后缀匹配，旧段/roots/失败66前缀及events保持。接收工程候选/可审证据，不自代独审或关闭四缺陷，不签完整S/Q/项目通过。
+
+已有D01真实FileLock反例、D02实际网关最低合成transport及loader/wire、D03/D04新bundle8真实浏览器合成HTTP原件；最后proof八场景passed、162HTTP、外网/未知路由/observer错误0，新JS bc2768fd…a3c0c1与CSS响应身份绑定。方法索引33只是导航，原D01批在异步夹具处TIMEOUT、后续方法级字节复用和no-I/O loop的适用性由原118独立核，不改命令整体退出码。真实PG/付费语义没有新增证明。
+
+S08实际root25/Browser19/build8/fixture server3/HTTP2486，PGcreate对象卷6/PGstart46/产品API33/Native140/preview各2/provider费用0保持，active_root空/phase已交工程候选。新命令wall至复读保守473.6992712/3600、持有并集上界30.11/3600，所有旧超额和S07 metadata unknown原样留存。失败累计81不是81个产品缺陷。停止仅按2026-10-18T02:06:12.601520Z原件的登记pid/birth和18119；主控没有实时查原PG/进程。
+
+工程运行权本次交回，不挪未用根26/27或build9继续。原TASK118/R112 review-01同号完整卡待人工转交原独立上下文，只核四项合并diff/实际直接影响/原件及控制，不再全七族审。新metadata从原116.9280809/1800余量中最多1200，累计本卡至1316.9280809，所有产品动态/外网/费用/Git写0。原首轮报告/原件不改，新复核结果置顶保41590旧字节。
+
+Q80次20元条件批准有效但仍冻结。实际持久共享PG总门、当期官方条件/正常配置/新normal资源/72h回执及有限完整payload批准对多步链的可执行合同均待后续，不能靠固定正例说Q就绪，也不能降低原语义目标。source永久readonly/frozen不解除。主控只读核证和共享维护；证据/许可/旧共享/保存证明在DocuN/evidence/TASK-118/orchestration-review01-20261018。
+
+## 以下为原裁定历史
+
+'''
+write(work117, prefix117.encode('utf-8') + before[work117])
+
+prefix118 = f'''# TASK118/R112 — review-01四项实际增量复核待人工转交
+
+{now}。首轮集中独审交付已通过、所审S当时不通过的原裁定不改。原117/S07初版与S08工程验证已交回，20清单/18累计差异、28binding与正式bundle8身份稳定；本轮只重新核D01—D04与直接影响和S07/S08控制。未签任何关闭结论，不重审未变七族。
+
+完整同号增量卡在DocuN/tasks/TASK-118.md，接收A+原独立审计上下文，实际不可续才一个保持独立的接续窗，不承接117聊天/自评。原工程窗停写冻结，结果正文只hash不可解码，原diff/preimage/源先于运行原件。原首轮41590字节/dd0a5f1d…0f21f1保持，增量只写audit/review-01与同结果置顶。
+
+原metadata已扣116.9280809/1800，从剩余中给本增量1200，累计至1316.9280809；新48h日历/最后1200保存、单命令60秒，投入与unknown分别记，不重置旧预算/偏差，不给产品/网络/费用/Git写。旧S01—S07控制失败留史，S08按其实际前向许可核，不能事后套旧门。原七族未改变部分的结论按对象继承。
+
+特别核TIMEOUT批中完成方法的最终适用字节、封闭无fd loop测试辨别力、IDB commit后/native oncomplete前的真实晚到门、D04告知及缺字段、完整请求批准与不可重绑grant对多步Q的限制。安全修正与Q可执行性分开，不把未来启用本身判当前泄露，不宣称Q马上可用。当前Q继续冻结、项目未通过，待真实独审回传由主控最终裁定。
+
+## 以下为首轮裁定历史
+
+'''
+write(work118, prefix118.encode('utf-8') + before[work118])
+
+arch_prefix = f'''# 架构动态文档
+
+文档v1.43，2026-10-18，Asia/Shanghai。需求v1.3、执行动态v2.70、task_model/07。以下v1.42原字节保留，116采用包不扩大。
+
+## 四项审计修正形成工程候选，待原118增量独审
+
+{now}。ControlHub读写共用当前字节/hub校验、有限model_requests全payload/request批准与dispatch复核、教学owner/view/head/scope/namespace晚到围栏及原键草稿时序、三处provider/model告知与缺字段门已有实际实现和定向原件。新正式bundle8 JS bc2768fd…a3c0c1及CSS被真实浏览器装载，八场景为合成HTTP层，不冒PG/真实供应商集成。
+
+D01文件锁方法与D02loader/wire/网关方法分批取证，TIMEOUT和夹具修正保留，其继承/闭合仍待原118审计，不写缺陷已最终关闭。S08本轮14变化、相对独审基线累计18变化，无迁移/持久模型/公开写合同/权限/停止退款语义扩大。旧包/preview/PDF/两域业务/readonly未变证据按原对象继承，不重跑旧链。
+
+有限全请求hash白名单收紧合成外发安全，不自动证明依赖未知上轮输出的多步Q在不可重绑grant下可执行；该合同边界与实际PG共享预扣、官方当前条件等仍是后续Q门。Q未启、source永久readonly/frozen不解除。原Windows/Compose边界不扩Linux/Nginx/公网发布，GitHub仅origin无新上传。完整S/STEP/Q/项目未通过。
+
+## 以下为v1.42及更早历史
+
+'''
+write(arch, arch_prefix.encode('utf-8') + before[arch])
+
+state_prefix = f'''# 执行动态文档
+
+文档v2.70，2026-10-18，Asia/Shanghai。唯一总状态账；需求v1.3、架构v1.43、task_model/07。以下v2.69原字节保留。
+
+## TASK117 S08工程候选已返回，原TASK118/R112 review-01增量复核{{status}}
+
+{now}。真实S08报告104337字节/90b4ebc7…d771e2、20源清单/18累计实际差异/28binding/4bundle和88265旧后缀匹配；本轮14项变化，先前六初版纳入完整差异，不漏审。TASK117调度已返回、验收部分通过仅工程候选及可审证据；D01—D04最终关闭和完整S通过待独立复核，不因工程自评提前放行。
+
+新bundle8 JS bc2768fd…a3c0c1/CSS实际响应hash匹配，封闭HTTP八场景passed/162请求、无外网/未知路由/observer错误。D01真实锁、D02真实gateway+最低替身/loader/wire、D03 IDB风险窗/D04配置字段告知各有原件。33方法是as-run索引，D01批整体TIMEOUT及最终方法/产品字节继承和无fd loop边界留审计判断，不把整批改绿、不全量复跑旧链。
+
+实际唯一账phase=S08_returned_engineering_candidate、active_root空，root25/Browser19/build8/fixture server3/HTTP2486；PGcreate对象卷6/PGstart46/产品API33/Native140/preview各2/provider费用0不变。S08命令wall至复读保守473.6992712/3600、持有并集上界30.11/3600按当时48h前向许可核。原66失败前缀保持，累计81；S07超8694.653691/metadata unknown及S01—S06旧偏差不追认。原S08首点2026-10-18T01:30:39.437716Z，截止2026-10-20T01:30:39.437716Z；工程交回后旧余次数不恢复。
+
+原TASK118/R112首轮已返回/独审合同交付通过，本review-01复核同号，未占119。完整卡只核四项实际diff/直接影响/证据/新控制，沿原A+独立上下文，工程停止写源。原metadata116.9280809/1800余量中给本review最多1200，累计许可至1316.9280809，单批60秒；实际接收后48h/最后1200只保存，无额外跨中断活动硬门。产品/测试/compile/build/Node/PG/SQL/Docker/Job/API/Browser/模型/网络/费用/Git写0。未登记真实转交/接收/开始。
+
+原首轮41590字节报告保持，新结果只audit/review-01及结果置顶；不读117实现自评/聊天/思考/个人记忆。其余首轮有效结论继承，不重七族审计。有限payload白名单的Q多步可执行性、不可重绑grant和真实持久共享总门等后续条件单列，不删原学习/面试语义目标。Q80次20元条件批准仍未启，不重问/不花费，不解冻source永久readonly或旧CID，STEP018/019/020/M1/项目未通过。
+
+停止仅按2026-10-18T02:06:12.601520Z本段pid/birth/18119原件；原六PG未重采，主控未实时查Docker/进程。GitHub仅已关联origin未commit/push。主控只读核证/共享维护，未执行产品或重做独审。输入/许可/原共享/保存证明在DocuN/evidence/TASK-118/orchestration-review01-20261018。CHG1487—1494，下一1495。
+
+## 以下为v2.69及更早历史
+
+'''
+write(state, state_prefix.replace('{status}', '已登记待保存').encode('utf-8') + before[state])
+save_json('dispatch-registration.json', {'at': now, 'task': 'TASK-118', 'R': 'R-112', 'round': 'review-01', 'state': 'registered_before_card_save', 'actual_dispatch_receipt_execution': False, 'manual_transfer': True})
+write(card, contract)
+write(state, state_prefix.replace('{status}', '待人工转交').encode('utf-8') + before[state])
+
+changes = [
+    ('1487', 'DocuN/evidence/TASK-118/orchestration-review01-20261018/received-candidate.json', '核收S08工程候选、20源/28binding/4bundle/旧后缀和真实计数，不预签独审结论。'),
+    ('1488', 'DocuN/results/TASK-117-work-decision.md', '工程候选接收与四项最终关闭分开，原窗停写，交原118独立增量复核。'),
+    ('1489', 'DocuN/results/TASK-118-work-decision.md', '同号review-01范围/原审计余量/独立性与Q门，首轮历史原字节保持。'),
+    ('1490', 'DocuS/执行动态文档.MD', 'v2.70先登记原118增量再保存卡转待人工，无新TASK119或实际派发。'),
+    ('1491', 'DocuN/tasks/TASK-118.md', '完整四项增量复核卡，原全面审计卡原字节备份，产品动态/联网/费用额度0。'),
+    ('1492', 'DocuS/架构动态文档.MD', 'v1.43登记四项候选和分层原件，Q安全/多步可执行性边界不混称已通过。'),
+    ('1493', 'DocuN/evidence/TASK-118/orchestration-review01-20261018', '保存scope/冻结输入/1200metadata余量许可/六份旧共享备份，不写工程账和旧原件。'),
+    ('1494', 'DocuN/evidence/TASK-118/orchestration-review01-20261018/save-proof.json', '新卡与共享完整复读、规则/源/原件/历史保持，待人工转交。'),
+]
+append = '\n' + '\n\n'.join(f'- CHG-{n}，{now}，Codex编排Agent，{p}。{s}' for n, p, s in changes) + '\n'
+write(change, before[change] + append.encode('utf-8'))
+
+for p, expected in protected.items():
+    assert stamp(p) == expected, str(p)
+for r in rules:
+    assert sha(Path(r['absolute_path']).read_bytes()) == r['sha256']
+for p in [state, arch, work117, work118]:
+    assert p.read_bytes().endswith(before[p]), str(p)
+assert change.read_bytes().startswith(before[change]) and card.read_bytes() == contract
+proof = {
+    'saved_at': datetime.now(timezone(timedelta(hours=8))).isoformat(), 'result': 'SAVED_AND_READ_BACK',
+    'task': 'TASK-118 / R-112 review-01', 'versions': {'state': 'v2.70', 'architecture': 'v1.43', 'last_CHG': 1494},
+    'documents': [{'path': str(p), **stamp(p)} for p in [state, arch, work117, work118, card, change]],
+    'current_source_count': len(current_map), 'protected_count': len(protected), 'protected_mismatches': [],
+    'old_reports_engineering_ledger_products_dist_unchanged': True, 'old_shared_raw_suffixes_preserved': True,
+    'rules7_MATCH': True, 'actual_dispatch_receipt_execution': False, 'Q_enabled': False,
+    'S_final_accepted': False, 'main_product_runtime_or_Git_mutations': 0,
+}
+save_json('save-proof.json', proof)
+print(json.dumps({'result': proof['result'], 'task': proof['task'], 'sources': len(current_map), 'protected': len(protected),
+                  'state': 'v2.70', 'architecture': 'v1.43', 'last_CHG': 1494, 'manual_transfer_pending': True, 'Q_enabled': False}, ensure_ascii=False))

@@ -1,0 +1,327 @@
+{
+  "rows": [
+    {
+      "phase": "metadata",
+      "start_ns": 1012109906000000,
+      "end_ns": 1012672406000000,
+      "seconds": 562.5,
+      "next": "implementation_offline"
+    },
+    {
+      "phase": "implementation_offline",
+      "start_ns": 1012672406000000,
+      "end_ns": 1012734296000000,
+      "seconds": 61.89,
+      "next": "implementation_offline"
+    },
+    {
+      "phase": "implementation_offline",
+      "start_ns": 1012734296000000,
+      "end_ns": 1013134750000000,
+      "seconds": 400.454,
+      "next": "implementation_offline"
+    },
+    {
+      "phase": "implementation_offline",
+      "start_ns": 1013134750000000,
+      "end_ns": 1013163046000000,
+      "seconds": 28.296,
+      "next": "real"
+    },
+    {
+      "phase": "real",
+      "start_ns": 1013163046000000,
+      "end_ns": 1013318484000000,
+      "seconds": 155.438,
+      "next": "implementation_offline"
+    },
+    {
+      "phase": "implementation_offline",
+      "start_ns": 1013318484000000,
+      "end_ns": 1013430109000000,
+      "seconds": 111.625,
+      "next": "real"
+    },
+    {
+      "phase": "real",
+      "start_ns": 1013430109000000,
+      "end_ns": 1013443562000000,
+      "seconds": 13.453,
+      "next": "implementation_offline"
+    },
+    {
+      "phase": "implementation_offline",
+      "start_ns": 1013443562000000,
+      "end_ns": 1013806859000000,
+      "seconds": 363.297,
+      "next": "cleanup"
+    },
+    {
+      "phase": "cleanup",
+      "start_ns": 1013806859000000,
+      "end_ns": 1013938359000000,
+      "seconds": 131.5,
+      "next": "complete"
+    }
+  ],
+  "checks": {
+    "ready_six": true,
+    "stderr_nine": true,
+    "Node_ten": true,
+    "phase_durations": true,
+    "phase_contiguous": true,
+    "conservative_300": true,
+    "integrated_window": true,
+    "stage_totals": true
+  },
+  "offline_scope": "已有离线结果和实际夹具源码交叉读取；本审计未重新运行",
+  "ready_cases": [
+    {
+      "accepted": true,
+      "commit_accepted_ns": 1007998000000,
+      "complete_packet_received_ns": 1007997000000,
+      "deadline_ns": 1060000000000,
+      "decision_clock_ns": 1007998000000,
+      "event_wait_success": true,
+      "expected": true,
+      "name": "timely",
+      "sampling": "确定离线替身单调时钟；实际产品_read/_wait_ready及匿名管道；不冒实机调度",
+      "t0_ns": 1000000000000
+    },
+    {
+      "accepted": false,
+      "commit_accepted_ns": null,
+      "complete_packet_received_ns": 1008000000000,
+      "deadline_ns": 1060000000000,
+      "decision_clock_ns": 1008000000000,
+      "event_wait_success": true,
+      "expected": false,
+      "name": "exact_boundary",
+      "sampling": "确定离线替身单调时钟；实际产品_read/_wait_ready及匿名管道；不冒实机调度",
+      "t0_ns": 1000000000000
+    },
+    {
+      "accepted": false,
+      "commit_accepted_ns": null,
+      "complete_packet_received_ns": 1008005000000,
+      "deadline_ns": 1060000000000,
+      "decision_clock_ns": 1008006000000,
+      "event_wait_success": true,
+      "expected": false,
+      "name": "wait_success_late",
+      "sampling": "确定离线替身单调时钟；实际产品_read/_wait_ready及匿名管道；不冒实机调度",
+      "t0_ns": 1000000000000
+    },
+    {
+      "accepted": false,
+      "commit_accepted_ns": null,
+      "complete_packet_received_ns": 1007997000000,
+      "deadline_ns": 1060000000000,
+      "decision_clock_ns": 1007998000000,
+      "event_wait_success": true,
+      "expected": false,
+      "name": "wait_success_stop",
+      "sampling": "确定离线替身单调时钟；实际产品_read/_wait_ready及匿名管道；不冒实机调度",
+      "t0_ns": 1000000000000
+    },
+    {
+      "accepted": false,
+      "commit_accepted_ns": null,
+      "complete_packet_received_ns": 1007997000000,
+      "deadline_ns": 1060000000000,
+      "decision_clock_ns": 1009000000000,
+      "event_wait_success": true,
+      "expected": false,
+      "name": "scheduler_window_closed",
+      "sampling": "确定离线替身单调时钟；实际产品_read/_wait_ready及匿名管道；不冒实机调度",
+      "t0_ns": 1000000000000
+    },
+    {
+      "accepted": false,
+      "commit_accepted_ns": null,
+      "complete_packet_received_ns": 1006999000000,
+      "deadline_ns": 1017000000000,
+      "decision_clock_ns": 1007000000000,
+      "event_wait_success": true,
+      "expected": false,
+      "name": "D_minus_10_boundary",
+      "sampling": "确定离线替身单调时钟；实际产品_read/_wait_ready及匿名管道；不冒实机调度",
+      "t0_ns": 1000000000000
+    }
+  ],
+  "stderr_cases": [
+    {
+      "level": "实际读取及结算门离线；不冒Linux/Job证明或PG事务",
+      "name": "empty",
+      "observation": {
+        "schema": "retrolume.preview.pipe_observation.v1",
+        "stderr_captured_bytes": 0,
+        "stderr_eof": true,
+        "stderr_observed_bytes": 0,
+        "stderr_overflow": false,
+        "stderr_read_error": null,
+        "stdout_eof": true,
+        "stdout_read_error": null
+      },
+      "settled": true,
+      "settlement_calls": [
+        {
+          "elapsed": 0,
+          "state": "stopped"
+        }
+      ]
+    },
+    {
+      "level": "实际读取及结算门离线；不冒Linux/Job证明或PG事务",
+      "name": "8192",
+      "observation": {
+        "schema": "retrolume.preview.pipe_observation.v1",
+        "stderr_captured_bytes": 8192,
+        "stderr_eof": true,
+        "stderr_observed_bytes": 8192,
+        "stderr_overflow": false,
+        "stderr_read_error": null,
+        "stdout_eof": true,
+        "stdout_read_error": null
+      },
+      "settled": true,
+      "settlement_calls": [
+        {
+          "elapsed": 0,
+          "state": "stopped"
+        }
+      ]
+    },
+    {
+      "level": "实际读取及结算门离线；不冒Linux/Job证明或PG事务",
+      "name": "8193",
+      "observation": {
+        "schema": "retrolume.preview.pipe_observation.v1",
+        "stderr_captured_bytes": 8192,
+        "stderr_eof": true,
+        "stderr_observed_bytes": 8193,
+        "stderr_overflow": true,
+        "stderr_read_error": null,
+        "stdout_eof": true,
+        "stdout_read_error": null
+      },
+      "settled": true,
+      "settlement_calls": [
+        {
+          "elapsed": 1,
+          "state": "stopped"
+        }
+      ]
+    },
+    {
+      "level": "实际读取及结算门离线；不冒Linux/Job证明或PG事务",
+      "name": "chunked_10000",
+      "observation": {
+        "schema": "retrolume.preview.pipe_observation.v1",
+        "stderr_captured_bytes": 8192,
+        "stderr_eof": true,
+        "stderr_observed_bytes": 10000,
+        "stderr_overflow": true,
+        "stderr_read_error": null,
+        "stdout_eof": true,
+        "stdout_read_error": null
+      },
+      "settled": true,
+      "settlement_calls": [
+        {
+          "elapsed": 0,
+          "state": "stopped"
+        }
+      ]
+    },
+    {
+      "level": "实际读取及结算门离线；不冒Linux/Job证明或PG事务",
+      "name": "read_exception",
+      "observation": {
+        "schema": "retrolume.preview.pipe_observation.v1",
+        "stderr_captured_bytes": 8192,
+        "stderr_eof": false,
+        "stderr_observed_bytes": 9216,
+        "stderr_overflow": true,
+        "stderr_read_error": "OSError",
+        "stdout_eof": true,
+        "stdout_read_error": null
+      },
+      "settled": false,
+      "settlement_calls": []
+    },
+    {
+      "name": "thread_ended_without_stderr_eof",
+      "observation": {
+        "schema": "retrolume.preview.pipe_observation.v1",
+        "stderr_captured_bytes": 0,
+        "stderr_eof": false,
+        "stderr_observed_bytes": 0,
+        "stderr_overflow": false,
+        "stderr_read_error": null,
+        "stdout_eof": true,
+        "stdout_read_error": null
+      },
+      "settled": false,
+      "settlement_calls": []
+    },
+    {
+      "name": "stdout_missing",
+      "observation": {
+        "schema": "retrolume.preview.pipe_observation.v1",
+        "stderr_captured_bytes": 0,
+        "stderr_eof": true,
+        "stderr_observed_bytes": 0,
+        "stderr_overflow": false,
+        "stderr_read_error": null,
+        "stdout_eof": false,
+        "stdout_read_error": null
+      },
+      "settled": false,
+      "settlement_calls": []
+    },
+    {
+      "name": "read_error_even_after_eof",
+      "observation": {
+        "schema": "retrolume.preview.pipe_observation.v1",
+        "stderr_captured_bytes": 0,
+        "stderr_eof": true,
+        "stderr_observed_bytes": 0,
+        "stderr_overflow": false,
+        "stderr_read_error": "OSError",
+        "stdout_eof": true,
+        "stdout_read_error": null
+      },
+      "settled": false,
+      "settlement_calls": []
+    },
+    {
+      "name": "stdout_read_exception",
+      "observation": {
+        "schema": "retrolume.preview.pipe_observation.v1",
+        "stderr_captured_bytes": 0,
+        "stderr_eof": false,
+        "stderr_observed_bytes": 0,
+        "stderr_overflow": false,
+        "stderr_read_error": null,
+        "stdout_eof": true,
+        "stdout_read_error": "PipeReadError"
+      }
+    }
+  ],
+  "phase_seconds": {
+    "metadata": "562.5",
+    "implementation_offline": "965.562",
+    "real": "168.891",
+    "cleanup": "131.5"
+  },
+  "known_post_sample_seconds": "1828.453",
+  "conservative_window_consumed_seconds": "2128.453",
+  "real_phase_vs_resource_batch_delta": "0.234",
+  "first_read_clock": "首两只读工具未采钟未知；accepted_utc标首采样时刻，accepted_ns另扣300秒，不能当同一次精确采样",
+  "failures": [],
+  "summary": {
+    "all_checks": true,
+    "permission_effect": "收紧原前向窗口；阶段混分不改用户授权或产品时窗"
+  }
+}

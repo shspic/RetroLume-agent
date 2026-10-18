@@ -1,0 +1,37 @@
+"""外部内存门阻塞时保存真实断点；不关闭/重置当前活根或活动计时。"""
+import json
+from c03_support import C03Budget, ROOT, EVIDENCE, freeze, sample, save
+from c03_deliver import identity
+
+
+def main():
+    budget = C03Budget(); value = budget.check()
+    assert value['counts']['browser_start'] == value['continuation']['baseline_counts']['browser_start']
+    assert all(resource['state'] == 'stopped' for resource in value['resources'])
+    label = 'c03-memory-checkpoint-' + str(sample()['mono_ns']); source = freeze(label)
+    report = ROOT / 'DocuN/results/TASK-114-result.md'; prior = (EVIDENCE / 'pre/TASK-114-result.md').read_bytes()
+    assert report.read_bytes() == prior
+    draft = (EVIDENCE / 'report-draft.md').read_text(encoding='utf-8')
+    latest_memory = json.loads(sorted((EVIDENCE / 'observations').glob('browser-memory-*.json'))[-1].read_text(encoding='utf-8'))
+    prefix = ('# TASK-114 / R-108 续作03断点结果\n\n'
+              '两项代码修复、受控loading pin检查及typecheck/build已完成；最终Chromium矩阵因实时内存未达卡面2GiB启动门尚未运行，本轮完整验证与最终交付未完成。未启动Browser、PG或API，无新在途消费者。请在用户释放内存后沿用本段和有效方法继续，不重跑已通过后台测试或构建。\n\n'
+              f"当前结果是外部阻塞断点，不是交原115独审的稳定完成候选。原C03活动段和c03-check-group仍开放，普通等待连续计时；不事后暂停、不重置额度，已结束的C02段不复活。实际最新RAM约{latest_memory['available_bytes'] / 1024 ** 3:.3f}GiB，内存采样原件在observations。\n\n"
+              '新源码、测试、bundle和完整当前字节已保存至as-run/' + label + '/manifest.json；最终目录未提前签封。本轮实际方法、argv/退出/UTC/mono/耗时在methods/，受控case在offline/cases/loading-pin-1207676843000000。\n\n'
+              f"累计root{value['counts']['real_roots']}/24（本轮最多23）、Browser{value['counts']['browser_start']}/9（本轮最多7）、build{value['counts']['frontend_build']}/7；offline{value['offline_seconds']:.3f}秒（本轮{value['offline_seconds'] - value['continuation']['baseline_offline_seconds']:.3f}），hold{value['real_holding_seconds']:.3f}秒且本轮新增0。PGcreate9/success9/start37、Windows11/API8均继承未增。全部旧消费者的stopped依据为此前保存metadata，未冒称今天新查Docker。\n\n"
+              + draft.replace('# TASK-114 / R-108 续作03工程结果草稿', '## 已保存的实现与验证正文', 1)
+              + '\n\n## 以下保留上轮69598字节结果全文原字节\n\n').encode('utf-8')
+    (EVIDENCE / 'checkpoint-prefix.md').write_bytes(prefix)
+    report.write_bytes(prefix + prior); assert report.read_bytes().endswith(prior)
+    method_paths = [str(path.relative_to(ROOT)) for path in sorted((EVIDENCE / 'methods').glob('*.json')) if not path.name.endswith('-begin.json')]
+    checkpoint = {'saved': sample(), 'state': 'external_memory_gate_pending', 'result_identity': identity(report),
+        'result_path': str(report), 'original_69598_suffix_exact': True, 'original_suffix_identity': identity(EVIDENCE / 'pre/TASK-114-result.md'),
+        'counts': value['counts'], 'offline_seconds': value['offline_seconds'], 'holding_seconds': value['real_holding_seconds'],
+        'source_snapshot': str(source.relative_to(ROOT)), 'valid_methods': method_paths, 'new_business_consumers': 0,
+        'roots_and_activity_still_open': True, 'memory_question_pending': True, 'latest_memory': latest_memory}
+    save(EVIDENCE / 'checkpoint.json', checkpoint)
+    budget.event('c03.memory_checkpoint', checkpoint)
+    value = budget.load(); value['continuation']['external_block'] = checkpoint; budget.save(value)
+    print(json.dumps(checkpoint, ensure_ascii=False))
+
+
+if __name__ == '__main__': main()

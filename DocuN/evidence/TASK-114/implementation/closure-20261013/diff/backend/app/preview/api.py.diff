@@ -1,0 +1,17 @@
+--- before/backend/app/preview/api.py
++++ final/backend/app/preview/api.py
+@@ -1,5 +1,6 @@
+ """API007有限生成/产物/画面/输入/停止，统一沿原本地会话权限。"""
+ from __future__ import annotations
++from app.data_exit.maintenance import owned_service
+ import secrets
+ from fastapi import APIRouter,Request,Query
+ from fastapi.responses import Response
+@@ -55,6 +56,7 @@
+ 
+ 
+ @router.post("/{activity_id}/html/commands")
++@owned_service
+ async def generate(request:Request,activity_id:str):
+     aid=identity(request,activity_id)
+     try:

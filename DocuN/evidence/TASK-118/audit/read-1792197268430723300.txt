@@ -1,0 +1,375 @@
+
+backend/app/data_exit/control.py
+80:         frame = struct.pack("!I", len(raw)) + raw + TAIL + digest(raw).encode("ascii") + b"\n"
+81:         if len(raw) > MAX_FRAME or self.path.stat().st_size + len(frame) > MAX_JOURNAL:
+82:             raise DataError("capacity_exceeded", 413)
+83:         with self.path.open("ab") as stream:
+84:             stream.write(frame); stream.flush(); os.fsync(stream.fileno())
+85:         return event
+86: 
+87:     @staticmethod
+88:     def replay(events):
+89:         state = {"jobs": {}, "plans": {}, "targets": {}, "selection": None, "fence": None, "owned": {}, "deletions": {}, 'source':None}
+90:         for event in events:
+91:             kind, p = event["kind"], event["payload"]
+92:             if kind in ("job.create", "job.update"):
+93:                 old = state["jobs"].get(p["job_id"], {})
+94:                 state["jobs"][p["job_id"]] = {**old, **p, "control_seq": event["seq"]}
+95:             elif kind == "plan.create":
+96:                 state["plans"][p["plan_id"]] = p
+97:             elif kind in ("target.register", "target.seal"):
+98:                 state["targets"][p["target_id"]] = {**state["targets"].get(p["target_id"], {}), **p}
+99:             elif kind == "selector_commit":
+100:                 state["selection"] = p
+101:             elif kind == "maintenance.fence":
+102:                 state["fence"] = p
+103:             elif kind in ("owned.begin", "owned.end"):
+104:                 state["owned"][p["owned_id"]] = {**state["owned"].get(p["owned_id"], {}), **p}
+105:             elif kind == "deletion.observe":
+106:                 state["deletions"][p["entity_kind"] + ":" + p["entity_id"]] = p
+107:             elif kind=='source.register':state['source']=p
+108:         return state
+109: 
+110:     def _current_snapshot(self, job_id=None, *, writable=False):
+111:         with self.lock.acquire():
+112:             # 每次仍在真实锁内读取当前完整字节；仅复用同一文件对象和摘要的已验投影。
+113:             info = regular(self.path)
+114:             with self.path.open('rb') as stream:
+115:                 opened = os.fstat(stream.fileno())
+116:                 if (info.st_dev, info.st_ino) != (opened.st_dev, opened.st_ino):
+117:                     raise DataError('control_corrupt', 503)
+118:                 if opened.st_size > MAX_JOURNAL:
+119:                     raise DataError('capacity_exceeded', 413)
+120:                 raw = stream.read(opened.st_size + 1)
+121:                 after = os.fstat(stream.fileno())
+122:             current = regular(self.path)
+123:             if len(raw) > MAX_JOURNAL:
+124:                 raise DataError('capacity_exceeded', 413)
+125:             if (opened.st_dev, opened.st_ino, opened.st_size) != (after.st_dev, after.st_ino, len(raw)) or (current.st_dev, current.st_ino, current.st_size) != (opened.st_dev, opened.st_ino, len(raw)):
+126:                 raise DataError('control_corrupt', 503)
+127:             identity = (opened.st_dev, opened.st_ino, digest(raw))
+128:             cached = getattr(self, '_state_cache', None)
+129:             if cached is None or cached[0] != identity:
+130:                 events, tail = self._read(raw)
+131:                 if not events or events[0]['kind']!='hub.init' or events[0]['payload'].get('control_id')!=self.control_id:
+132:                     raise DataError('control_corrupt',503)
+133:                 state = self.replay(events)
+134:                 cached = (identity, canonical(state), {key: canonical(job) for key, job in state['jobs'].items()}, tail)
+135:                 self._state_cache = cached
+136:             if writable and cached[3]:
+137:                 raise DataError('control_tail_unconfirmed', 503)
+138:             # 不把可变的日志payload或缓存对象交给调用者。
+139:             return json.loads(cached[1] if job_id is None else cached[2][job_id])
+140: 
+141:     def state(self):
+142:         return self._current_snapshot()
+143: 
+144:     def execution_job(self, job_id):
+145:         """同一完整字节校验，只复制当前操作，避免逐行解码无关计划。"""
+146:         return self._current_snapshot(job_id)
+147: 
+148:     def commit(self, kind, payload, *, validate=None):
+149:         with self.lock.acquire(True, timeout=1):
+150:             events, tail = self._read()
+151:             if tail:
+152:                 raise DataError("control_tail_unconfirmed", 503)
+153:             state = self.replay(events)
+154:             if validate is not None:
+155:                 validate(state)
+156:             return self._append(events, kind, payload)
+157: 
+158:     def assert_writable(self):
+159:         return self._current_snapshot(writable=True)
+160: 
+161:     @staticmethod
+162:     def receipt(job):
+163:         return {key: job[key] for key in PUBLIC_JOB if key in job}
+164: 
+165:     def current_receipt(self, state, job):
+166:         receipt = self.receipt(job)
+167:         if job.get('completion_protocol') == 1 and job['state'] in ('published','received','verified','active_readonly','deleted','deleted_pending'):
+168:             confirmation=job.get('completion_confirmed_ns')
+169:             deadline=job.get('execution',{}).get('deadline_ns')
+170:             if type(confirmation) is not int or type(deadline) is not int or not 0 < confirmation < deadline:
+171:                 receipt.update(state={'portable_export':'published_unconfirmed','restore_checkpoint':'published_unconfirmed',
+172:                     'upload':'upload_unconfirmed','restore':'restore_unconfirmed','activate':'activation_unconfirmed',
+173:                     'source_delete':'deletion_unconfirmed'}[job['kind']],stage='completion_unconfirmed')
+174:         if job['kind']=='restore':
+175:             receipt.update(plan_id=job['scope']['plan_id'],plan_sha256=job['scope']['plan_sha256'])
+176:         selection = state['selection']
+177:         if selection is not None and selection.get('activation_job_id') == job['job_id']:
+178:             receipt.update(selector_commit='confirmed',selection_generation=selection['generation'],target_id=selection['target_id'])
+179:             if job['state'] != 'active_readonly':
+180:                 receipt.update(state='activation_unconfirmed', stage='selector_committed')
+181:         return receipt
+182: 
+183:     def create_or_get_job(self, command, origin_context):
+184:         request_sha = digest(command.normalized())
+185:         key = business_key(command.business_key)
+186:         with self.lock.acquire(True, timeout=1):
+187:             events, tail = self._read()
+188:             state = self.replay(events)
+189:             for job in state["jobs"].values():
+190:                 if job["business_key"] == key:
+191:                     if job["request_sha256"] != request_sha or job["kind"] != command.kind:
+192:                         raise DataError("request_conflict")
+193:                     return self.current_receipt(state, job)
+194:             if tail:
+195:                 raise DataError("control_tail_unconfirmed", 503)
+196:             if len(state["jobs"]) >= 256:
+197:                 raise DataError("capacity_exceeded", 413)
+198:             now = datetime.now(timezone.utc).isoformat()
+199:             job = {"job_id": str(uuid4()), "business_key": key, "kind": command.kind,
+200:                    "request_sha256": request_sha, "scope": command.scope,
+201:                    "origin": origin_context.public(), "state": "prepared", "stage": "prepared",
+202:                    "revision": 1, "created_at": now, "updated_at": now, "execution_protocol": 2, "completion_protocol": 1}
+203:             event = self._append(events, "job.create", job)
+204:             return self.receipt({**job, "control_seq": event["seq"]})
+205: 
+206:     def update_job(self, job_id, expected_revision, *, expected_states=None, validate=None, **changes):
+207:         uuid(job_id)
+208:         changes.pop("control_seq", None)
+209:         forbidden = {"business_key", "kind", "request_sha256", "origin", "scope", "job_id", "revision"}
+210:         if forbidden.intersection(changes):
+211:             raise ValueError("不可改写操作身份")
+212:         payload = {"job_id": job_id, **changes, "revision": expected_revision + 1,
+213:                    "updated_at": datetime.now(timezone.utc).isoformat()}
+214:         def check(state):
+215:             job = state["jobs"].get(job_id)
+216:             if job is None or job["revision"] != expected_revision:
+217:                 raise DataError("request_conflict")
+218:             if expected_states is not None and job['state'] not in expected_states:
+219:                 raise DataError('request_conflict')
+220:             if job['state'] in ('cancelled', 'cancel_requested') and changes.get('state', job['state']) not in ('cancel_requested', 'cancelled', 'cleanup_unconfirmed'):
+221:                 raise DataError('operation_cancelled')
+222:             if changes.get('state') in ('published', 'received', 'verified', 'active_readonly', 'deleted', 'deleted_pending'):
+223:                 from .operations import validate_success
+224:                 if job.get('execution_protocol') != 2 or validate is None or expected_states != ('committing',):
+225:                     raise DataError('operation_authority_unknown')
+226:                 validate_success(job, changes['state'])
+227:             if validate is not None:
+228:                 validate(job)
+229:         self.commit("job.update", payload, validate=check)
+230:         return self.get(job_id)
+231: 
+232:     def change_job(self, job_id, decide):
+233:         """短锁内读取、验证与CAS；decide仅计算字段，不能进行I/O。"""
+234:         uuid(job_id)
+235:         with self.lock.acquire(True, timeout=1):
+236:             events, tail = self._read()
+237:             if tail: raise DataError('control_tail_unconfirmed', 503)
+238:             state = self.replay(events)
+239:             job = state['jobs'].get(job_id)
+240:             if job is None: raise DataError('not_found', 404)
+241:             changes = decide(job)
+242:             if changes:
+243:                 payload = {'job_id': job_id, **changes, 'revision': job['revision'] + 1,
+244:                            'updated_at': datetime.now(timezone.utc).isoformat()}
+245:                 event = self._append(events, 'job.update', payload)
+246:                 job = {**job, **payload, 'control_seq': event['seq']}
+247:             return self.current_receipt(state, job)
+248: 
+249:     def get(self, job_id):
+250:         state = self.state()
+251:         job = state["jobs"].get(uuid(job_id))
+252:         if job is None:
+253:             raise DataError("not_found", 404)
+254:         return self.current_receipt(state, job)
+255: 
+
+backend/app/capabilities/embedding.py
+129: class OutboundSourceManifest(BaseModel):
+130:     """operator采用的有限实际版本/片段，不把样本文件hash冒实际外发范围。"""
+131:     model_config=ConfigDict(extra='forbid',frozen=True,strict=True)
+132:     schema:Literal['retrolume.outbound-sources.v1']='retrolume.outbound-sources.v1'
+133:     frozen_samples_sha256:Literal[FROZEN_SAMPLE_SHA]
+134:     sources:tuple[dict,...]=Field(min_length=1,max_length=128)
+135:     fragments:tuple[dict,...]=Field(min_length=1,max_length=512)
+136:     query_input_sha256:tuple[str,...]=Field(min_length=1,max_length=128)
+137: 
+138:     @model_validator(mode='after')
+139:     def closed(self):
+140:         identities=set()
+141:         for row in self.sources:
+142:             if set(row)!={'source_id','source_version_id','source_revision','original_sha256'}:raise ValueError('outbound_source_shape')
+143:             if any(str(UUID(row[k]))!=row[k] for k in ('source_id','source_version_id')) or type(row['source_revision']) is not int or row['source_revision']<1 or not re.fullmatch(HEX,row['original_sha256']):raise ValueError('outbound_source_shape')
+144:             identity=(row['source_id'],row['source_version_id'],row['source_revision'])
+145:             if identity in identities:raise ValueError('outbound_source_duplicate')
+146:             identities.add(identity)
+147:         ids=set()
+148:         for row in self.fragments:
+149:             if set(row)!={'identity_sha256','input_sha256'} or any(not isinstance(v,str) or not re.fullmatch(HEX,v) for v in row.values()) or row['identity_sha256'] in ids:raise ValueError('outbound_fragment_shape')
+150:             ids.add(row['identity_sha256'])
+151:         if len(set(self.query_input_sha256))!=len(self.query_input_sha256) or any(not re.fullmatch(HEX,x) for x in self.query_input_sha256):raise ValueError('outbound_query_shape')
+152:         return self
+153: 
+154:     @property
+155:     def sha256(self):return digest(self.model_dump(mode='json'))
+156:     @classmethod
+157:     def from_wire(cls,value):return cls.model_validate_json(json.dumps(value,ensure_ascii=False,separators=(',',':')))
+158: 
+159:     def check_sources(self,rows):
+160:         allowed={(r['source_id'],r['source_version_id'],r['source_revision'],r['original_sha256']) for r in self.sources}
+161:         if not rows or any((str(r['source_id']),str(r.get('source_version_id',r.get('version_id'))),r['source_revision'],r.get('original_sha256',r.get('sha256'))) not in allowed for r in rows):raise AdmissionDenied('outbound_source_not_approved')
+162: 
+163:     def check_embedding(self,request):
+164:         approved={r['identity_sha256']:r['input_sha256'] for r in self.fragments}
+165:         for item in request.inputs:
+166:             if request.binding.purpose=='source_index':
+167:                 valid=approved.get(item.identity_sha256)==digest(item.text)
+168:             else:valid=digest(item.text) in self.query_input_sha256
+169:             if not valid:raise AdmissionDenied('outbound_input_not_approved')
+170: 
+171:     def check_model(self,request):
+172:         profile=request.learning_profile or request.teaching_profile or request.interview_profile
+173:         if profile is not None:catalog=profile.catalog
+174:         elif request.html_profile is not None:catalog=json.loads(request.html_profile.context_json).get('catalog',[])
+175:         else:raise AdmissionDenied('outbound_profile_required')
+176:         allowed={r['identity_sha256'] for r in self.fragments}
+177:         if not catalog:raise AdmissionDenied('outbound_source_not_approved')
+178:         for entry in catalog:
+179:             row=entry.model_dump() if hasattr(entry,'model_dump') else entry
+180:             if not isinstance(row.get('text'),str) or hashlib.sha256(row['text'].encode('utf-8')).hexdigest()!=row.get('fragment_sha256'):raise AdmissionDenied('outbound_fragment_not_approved')
+181:             if approved_fragment_identity(row) not in allowed:raise AdmissionDenied('outbound_fragment_not_approved')
+182:             self.check_sources([{'source_id':row['source_id'],'source_version_id':row['version_id'],'source_revision':row['source_revision'],'original_sha256':row['original_sha256']}])
+183: 
+
+frontend/src/activities/TeachingWorkspace.tsx
+200:     if (!mounted.current) return;
+201:     const seq = ++readSeq.current;
+202:     abort.current?.abort();
+203:     const controller = new AbortController();
+204:     abort.current = controller;
+205:     try {
+206:       const view = await getTeachingWorkspace(activityId, token, controller.signal);
+207:       if (!mounted.current || seq !== readSeq.current) return;
+208:       if (view === null) { setReadError("教学读取不可用（未确认）"); return; }
+209:       const key = [activityId, view.head.goal_record_id, view.head.path_record_id, view.head.node_id,
+210:         view.head.exercise_record_id, view.head.answer_record_id].join("|");
+211:       const editKey = `${key}|${view.head.revision}`;
+212:       const owner=await teachingEditorOwner();
+213:       if (!mounted.current||seq!==readSeq.current) return;
+214:       editorOwner.current=owner;
+215:       const ownDraftKey=owner ? `edit-${editKey}|${owner}` : null;
+216:       if (view.view_token !== workspaceToken.current) {
+217:         workspaceToken.current=view.view_token; ++pageSeq.current; pageAbort.current?.abort();
+218:         setOlderHistory([]); setHistoryNext(view.next_cursor??null); setHistoryLoading(false);
+219:       }
+220:       if (key !== contextKey.current) {
+221:         // 编辑身份独立于新快照；外部新答不把旧文字改绑为其supersedes。
+222:         contextKey.current = key;
+223:         setFeedback(null);
+224:         ++historySeq.current; historyAbort.current?.abort();
+225:         setHistoryDetail(null);
+226:         setCorrectionTarget(null);
+227:         draftId.current = null;
+228:         const editAt=editSeq.current;
+229:         if (editing.current && (dirty.current.answer||dirty.current.correction)) {
+230:           setEditConflict(true);
+
+frontend/src/activities/TeachingWorkspace.tsx
+315:       document.addEventListener("visibilitychange", onVisibility);
+316:     }
+317:     return () => { stop(); document.removeEventListener("visibilitychange", onVisibility); };
+318:   }, [workspace, refresh]);
+319: 
+320:   async function submit(action: TeachingAction, body: Record<string, unknown>,
+321:                          extra?: Partial<TeachingIntentSummary>, recovered?:RetrievalChain) {
+322:     if (busy || !intentsOk) return;
+323:     if ((action==='answer'||action==='correct') && editConflict) { setError("输入仍属于旧作答身份；请先核对并明确沿用草稿"); return; }
+324:     const submittedContext=contextKey.current;
+325:     const stillCurrent=()=>mounted.current&&activityRef.current===activityId&&contextKey.current===submittedContext;
+326:     setBusy(action); setError(""); setNotice("");
+327:     const key = recovered?String(recovered.domain_input.business_key):newTeachingKey();
+328:     const input: Omit<TeachingCommandInput, "body"> = {
+329:       business_key: key,
+330:       expected_revision: workspace?.head.revision ?? 0,
+331:       expected_goal_version: workspace?.head.goal_version ?? 0,
+332:       expected_scope_revision: scopeRevision,
+333:       action,
+334:     };
+335:     if (action==='answer' && editing.current) {
+336:       input.expected_revision=editing.current.head.revision;
+337:       input.expected_goal_version=editing.current.head.goal_version;
+338:       input.expected_scope_revision=editing.current.scope_revision;
+339:     }
+340:     try {
+341:       let retrievalChain:RetrievalChain|undefined;
+342:       if (['plan','exercise','evaluate'].includes(action)&&retrievalMode==='hybrid') {
+343:         const owner=await teachingEditorOwner();
+344:         if(!owner||!stillCurrent()||editorOwner.current!==owner)throw new Error('编辑身份不可核对，未提交');
+345:         if(recovered&&JSON.stringify(recovered.domain_input)!==JSON.stringify({...input,body}))throw new Error('原动作版本不同，不能改绑');
+346:         const query=String(workspace?.goal?.goal??goalText).trim().slice(0,1024);
+347:         const result=await retrieveForCommand(token,activityId,owner,'teaching',{...input,body},scopeRevision,input.expected_revision,query,()=>stillCurrent()&&editorOwner.current===owner,recovered);
+348:         if(!stillCurrent()||!result.ref)return;
+349:         input.retrieval_ref=result.ref;retrievalChain=result.row;
+350:       }
+351:       const built = await buildTeachingCommand(activityId, { ...input, body });
+352:       // 顺序：规范字节 → IndexedDB 完整正文 → localStorage 摘要 → POST 一次。
+353:       const stored = await saveTeachingDraft({
+354:         draft_id: `draft-${key}`,
+355:         activity_id: activityId,
+356:         goal_record_id: workspace?.head.goal_record_id ?? null,
+357:         exercise_record_id: workspace?.head.exercise_record_id ?? null,
+358:         answer_record_id: workspace?.head.answer_record_id ?? null,
+359:         path_record_id: workspace?.head.path_record_id ?? null,
+360:         node_id: workspace?.head.node_id ?? null,
+361:         head_revision: input.expected_revision,
+362:         content: built.request_body,
+363:         created_at: new Date().toISOString(),
+364:       });
+365:       if (!stored) { setError("本机草稿写入失败，输入已保留，未发出任何请求"); return; }
+366:       draftId.current = `draft-${key}`;
+367:       const summary: TeachingIntentSummary = {
+368:         key, action, activity_id: activityId,
+369:         head_revision: input.expected_revision, goal_version: input.expected_goal_version,
+370:         scope_revision: input.expected_scope_revision,
+371:         exercise_id: workspace?.head.exercise_record_id ?? undefined,
+372:         answer_id: workspace?.head.answer_record_id ?? undefined,
+373:         request_sha: built.request_sha256, draft_id: draftId.current,
+374:         created_at: new Date().toISOString(), state: "pending",
+375:         ...extra,
+376:       };
+377:       if (!await appendTeachingIntent(summary)) {
+378:         setError("本机恢复台账写入失败，未发出任何请求");
+379:         return;
+380:       }
+381:       reloadIntents();
+382:       if (!await updateTeachingIntent(key, { state: "submitted" })) {
+383:         setError("本机恢复台账确认失败，未发出请求"); return;
+384:       }
+385:       reloadIntents();
+386:       let receipt: TeachingReceipt;
+387:       try {
+388:         if(retrievalChain)await storeRetrievalChain({...retrievalChain,domain_sent:true});
+389:         const currentOwner=await teachingEditorOwner();
+390:         if(!stillCurrent()||!currentOwner||currentOwner!==editorOwner.current)return;
+391:         receipt = await postTeachingCommand(activityId, { ...input, body }, token);
+392:       } catch (reason) {
+393:         const known = reason instanceof TeachingApiError && reason.status > 0;
+394:         await updateTeachingIntent(key, known
+395:           ? { state: "refused", last_code: (reason as TeachingApiError).code, last_message: (reason as Error).message }
+396:           : { state: "unconfirmed" });
+
+frontend/src/activities/RetrievalPanel.tsx
+1: import {useEffect,useRef,useState} from 'react';
+2: import {retrievalRequest,retrievalChains,retrieveForCommand,storeRetrievalChain,type RetrievalChain,type RetrievalReceipt,type RetrievalStatus} from './retrieval-api';
+3: 
+4: export function RetrievalPanel({token,activityId,scopeRevision,domainRevision,owner,mode,onMode,onContinue,indexAllowed=true}:{token:string;activityId:string;scopeRevision:number;domainRevision:number;owner:string|null;mode:'hybrid'|'terms';onMode:(mode:'hybrid'|'terms')=>void;onContinue?:(chain:RetrievalChain)=>void;indexAllowed?:boolean}){
+5:   const [status,setStatus]=useState<RetrievalStatus|null>(null),[chains,setChains]=useState<RetrievalChain[]>([]),[error,setError]=useState(''),[busy,setBusy]=useState(false);
+6:   const current=useRef('');current.current=`${activityId}:${scopeRevision}:${domainRevision}:${owner}`;
+7:   const mounted=useRef(false);useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;};},[]);
+8:   async function refresh(){const identity=current.current;const live=()=>mounted.current&&identity===current.current;try{const s=await retrievalRequest<RetrievalStatus>(token,activityId,'/status',undefined,live);const c=await retrievalChains(activityId);if(live()){setStatus(s);setChains(c);}}catch(e){if(live())setError((e as Error).message);}}
+9:   useEffect(()=>{setStatus(null);setChains([]);void refresh();},[activityId,scopeRevision,domainRevision,owner,token]);
+10:   async function index(){if(!owner||busy||!indexAllowed)return;const identity=current.current;setBusy(true);setError('');try{await retrieveForCommand(token,activityId,owner,'index',{},scopeRevision,domainRevision,'',()=>mounted.current&&identity===current.current);await refresh();}catch(e){if(identity===current.current)setError((e as Error).message);}finally{if(identity===current.current)setBusy(false);}}
+11:   async function reconcile(row:RetrievalChain){const identity=current.current;setBusy(true);setError('');try{const receipt=await retrievalRequest<RetrievalReceipt>(token,activityId,`/commands/${row.query.business_key}`,undefined,()=>mounted.current&&identity===current.current);if(receipt.business_key!==row.query.business_key)throw new Error('原操作身份不同');await storeRetrievalChain({...row,receipt});await refresh();}catch(e){if(identity===current.current)setError((e as Error).message);}finally{if(identity===current.current)setBusy(false);}}
+12:   return <section aria-label="资料检索与恢复"><h4>资料检索</h4><p>只使用当前确认的资料片段与本轮必要问题；回答和学习记忆不发送给向量服务。</p>
+13:     <p>选择混合检索后，每次生成或评价先查询一次，合格后再调用一次模型，共需2次请求、两笔费用预留及两个运行窗口。未确认时保留原键，不自动重发。</p>
+14:     <label><input type="radio" checked={mode==='hybrid'} onChange={()=>onMode('hybrid')}/>结合原文词项与向量检索</label> <label><input type="radio" checked={mode==='terms'} onChange={()=>onMode('terms')}/>明确使用词项降级（不算混合检索通过）</label>
+15:     <p>{status?.available?`已核对 ${status.fragments??0} 个片段，缓存 ${status.cached_fragments??0} 个。${status.ready?'当前索引就绪。':`本次至多 ${status.index_batches??0} 批，单批预留 ${status.reserve_cost_microunits} 微单位。`}`:'混合检索尚未就绪，请检查本机服务配置。'}</p>
+16:     {status?.available&&<p>当前剩余 {status.remaining_requests} 次请求、{status.remaining_cost_microunits} 微单位费用额度、{status.remaining_running_seconds} 秒；查询及后续模型需预留 {status.query_then_model_reserve_microunits} 微单位、{2*status.window_reserve_seconds} 秒。预览后服务器仍逐笔核准；不足时整步不发。</p>}
+17:     {!indexAllowed&&<p>请先保存面试目标并开始场次，再确认资料索引。</p>}
+18:     <button disabled={busy} onClick={()=>void refresh()}>只读核对索引与原意图</button> <button disabled={busy||!owner||!status?.available||status.ready||!indexAllowed} onClick={()=>void index()}>确认用途、费用与索引当前资料</button>
+19:     {chains.filter(c=>c.owner===owner).map(c=><div key={c.key}><p>{c.domain==='index'?'资料索引':'本轮查询'} · {c.receipt?.terminal_disposition??'未确认'}{c.domain_sent?' · 后续动作已交付，请核对领域原意图':''}</p><button disabled={busy} onClick={()=>void reconcile(c)}>按原键只读核对</button>{c.domain!=='index'&&!c.domain_sent&&c.receipt?.current&&c.receipt.terminal_disposition==='received'&&onContinue&&<button disabled={busy||c.query.expected_scope_revision!==scopeRevision||c.query.expected_domain_revision!==domainRevision} onClick={()=>onContinue(c)}>明确继续尚未发送的原动作</button>}</div>)}
+20:     {error&&<p role="alert">{error}</p>}</section>;
+21: }

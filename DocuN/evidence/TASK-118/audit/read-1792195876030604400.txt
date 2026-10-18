@@ -1,0 +1,107 @@
+
+DocuN/evidence/TASK-117/execution/continuation-05/shared_gate_check.py
+1: """Two in-memory S transactions exercise the unchanged production global gate, no PG/Q/provider."""
+2: import asyncio,json,sys
+3: print('S06 shared gate: interpreter entered',flush=True)
+4: from pathlib import Path
+5: N=Path(__file__).resolve().parent;ROOT=N.parents[4]
+6: sys.path[:0]=[str(N.parent),str(ROOT/'backend'),str(ROOT/'backend/tests')]
+7: import control as c
+8: print('S06 shared gate: controller imported',flush=True)
+9: from test_step018_flows import adopted_fixture
+10: from app.activities.repository import PostgresAdmissionLedger
+11: from app.capabilities.contracts import AdmissionDenied
+12: entry,manifest,grant,request=adopted_fixture()
+13: print('S06 shared gate: synthetic grant and manifest constructed',flush=True)
+14: class Cursor:
+15:     def __init__(self,row=None,rows=None):self.row,self.rows=row,rows
+16:     async def fetchone(self):return self.row
+17:     async def fetchall(self):return self.rows
+18: async def run():
+19:     lock=asyncio.Lock();budget={'requests':79,'cost':19750000};locks=[]
+20:     class Connection:
+21:         held=False
+22:         async def execute(self,sql,args=None):
+23:             if 'pg_advisory_xact_lock' in sql:
+24:                 print('S06 shared gate: waiting shared lock',flush=True)
+25:                 await lock.acquire();self.held=True;locks.append(sql);return Cursor()
+26:             if 'source_version_id' in sql:return Cursor(rows=list(manifest.sources))
+27:             if 'outbound_grant_sha256,reserve_cost_microunits' in sql:return Cursor({'outbound_grant_sha256':grant.sha256,'reserve_cost_microunits':250000})
+28:             if 'sum(requests_reserved)' in sql:
+29:                 assert args[0]==list(grant.allowed_activity_ids);return Cursor(dict(budget))
+30:             raise AssertionError('unexpected production query')
+31:     ledger=PostgresAdmissionLedger('unused-synthetic-contract-only')
+32:     async def transaction(provider,model):
+33:         connection=Connection()
+34:         try:
+35:             await ledger._outbound_lock(connection,request.activity_id,grant.model_dump(mode='json'),provider,model,100,0,manifest.model_dump(mode='json'))
+36:             await asyncio.sleep(0);budget['requests']+=1;budget['cost']+=250000
+37:             return {'provider':provider,'admitted':True,'synthetic_transport_calls':1}
+38:         except AdmissionDenied as error:return {'provider':provider,'admitted':False,'refusal':str(error),'synthetic_transport_calls':0}
+39:         finally:
+40:             if connection.held:lock.release()
+41:     results=await asyncio.gather(transaction('deepseek_chat_completions','deepseek-chat'),transaction('zhipu_embeddings','embedding-3'))
+42:     assert sum(x['admitted'] for x in results)==1 and budget=={'requests':80,'cost':20000000} and len(set(locks))==1
+43:     c.write(N/'shared-global-budget-concurrency.json',{'sample':c.sample(),'layer':'T: production gate with isolated in-memory transaction/transport; not a real PG race','concurrent_S_operations':2,'results':results,'final_synthetic_budget':budget,'same_production_gate_and_lock':True,'production_gate_sha256':c.sha((ROOT/'backend/app/retrieval/repository.py').read_bytes()),'real_PG_Q_roster_created':0,'real_provider_calls':0,'actual_fee':0,'Q':'NOT_ENABLED','prior_applicable_PG_lock_evidence':'existing G3/G5 and S05 X07 unchanged activity transaction gate'})
+44:     print(json.dumps({'global_gate_two_S_operations':True,'admitted':1,'real_provider':0,'Q_roster_created':0}))
+45: asyncio.run(asyncio.wait_for(run(),timeout=8))
+
+DocuN/evidence/TASK-117/execution/continuation-05/root24_global_gate.py
+1: """Distinguishing PG lock check with isolated synthetic budget: no Q roster or target writes."""
+2: from batch_runtime import *
+3: from profiles_batch import factory_profile,Hooks
+4: from app.data_exit.control import ControlHub
+5: from app.data_exit.restore import TargetFactory
+6: from app.activities.repository import PostgresAdmissionLedger
+7: from app.capabilities.contracts import AdmissionDenied
+8: from app.runtime import psycopg_compatible_loop_factory
+9: import asyncio,psycopg
+10: sys.path.insert(0,str(ROOT/'backend/tests'))
+11: from test_step018_flows import adopted_fixture
+12: class Cursor:
+13:     def __init__(self,row=None,rows=None):self.row,self.rows=row,rows
+14:     async def fetchone(self):return self.row
+15:     async def fetchall(self):return self.rows
+16: async def check(dsn):
+17:     _,manifest,grant,request=adopted_fixture();budget={'requests':79,'cost':19750000};locks=[]
+18:     ledger=PostgresAdmissionLedger('unused-no-Q-ledger-rows')
+19:     class Proxy:
+20:         def __init__(self,connection,pid):self.connection,self.pid=connection,pid
+21:         async def execute(self,query,args=None):
+22:             if 'pg_advisory_xact_lock' in query:
+23:                 begin=time.monotonic_ns();result=await self.connection.execute(query,args);locks.append({'backend_pid':self.pid,'sql':query,'begin_ns':begin,'acquired_ns':time.monotonic_ns()});return result
+24:             if 'source_version_id' in query:return Cursor(rows=list(manifest.sources))
+25:             if 'outbound_grant_sha256,reserve_cost_microunits' in query:return Cursor({'outbound_grant_sha256':grant.sha256,'reserve_cost_microunits':250000})
+26:             if 'sum(requests_reserved)' in query:
+27:                 assert args[0]==list(grant.allowed_activity_ids);return Cursor(dict(budget))
+28:             raise AssertionError('unexpected query; no target write permitted')
+29:     ready=asyncio.Event();arrivals=0
+30:     async def transaction(provider,model):
+31:         nonlocal arrivals
+32:         async with await psycopg.AsyncConnection.connect(dsn) as connection:
+33:             async with connection.transaction():
+34:                 await connection.execute('SET TRANSACTION READ ONLY')
+35:                 cursor=await connection.execute('SELECT pg_backend_pid(),current_setting(\'transaction_read_only\')');pid,readonly=await cursor.fetchone();assert readonly=='on'
+36:                 arrivals+=1
+37:                 if arrivals==2:ready.set()
+38:                 await ready.wait()
+39:                 try:
+40:                     await ledger._outbound_lock(Proxy(connection,pid),request.activity_id,grant.model_dump(mode='json'),provider,model,100,0,manifest.model_dump(mode='json'))
+41:                     await asyncio.sleep(.08);budget['requests']+=1;budget['cost']+=250000
+42:                     return {'provider':provider,'admitted':True,'synthetic_transport_calls':1,'backend_pid':pid}
+43:                 except AdmissionDenied as error:return {'provider':provider,'admitted':False,'reason':str(error),'synthetic_transport_calls':0,'backend_pid':pid}
+44:     results=await asyncio.wait_for(asyncio.gather(transaction('deepseek_chat_completions','deepseek-chat'),transaction('zhipu_embeddings','embedding-3')),timeout=15)
+45:     assert sum(x['admitted'] for x in results)==1 and budget=={'requests':80,'cost':20000000}
+46:     assert len({x['backend_pid'] for x in locks})==2 and len({x['sql'] for x in locks})==1
+47:     c.write(C01/'shared-global-budget-PG-lock.json',{'sample':c.sample(),'layer':'real PG transaction advisory lock with isolated in-memory S budget/manifest/grant/transport; not real outbound admission or PG business/Q rows','same_unchanged_production_gate':True,'production_sha256':c.sha((ROOT/'backend/app/retrieval/repository.py').read_bytes()),'results':results,'budget':budget,'locks':locks,'real_PG_connections':2,'read_only_transactions':True,'target_SQL_writes':0,'Q_roster_rows_created':0,'real_provider_calls':0,'actual_fee':0})
+48: def main():
+49:     preflight('S06-global-PG-lock-distinction')
+50:     with Batch(24,'S06-R02-formal-selector-and-reopen') as batch:
+51:         hub=ControlHub(EXEC/'synthetic/source-control');selection=hub.state()['selection'];assert selection['target_id']=='634aa034-51f6-4510-b075-38cb005481d8'
+52:         factory=TargetFactory(hub,EXEC/'synthetic/source-restore',factory_profile());factory.hooks=Hooks(batch.run,factory);target=factory.target(selection['target_id'])
+53:         batch.run.register('same-permanent-readonly-R02',lambda:factory.stop(target),priority=0)
+54:         batch.run.register('source-hub-lock',hub.lock.close,priority=1);batch.run.register('source-operation-lock',hub.operation_lock.close,priority=1)
+55:         factory.start(target);credentials=factory.readonly_credentials(target.target_id);factory._wait_pg(credentials['readonly_dsn'])
+56:         with asyncio.Runner(loop_factory=psycopg_compatible_loop_factory) as runner:runner.run(check(credentials['readonly_dsn']))
+57:         credentials.clear();assert hub.state()['selection']==selection
+58: if __name__=='__main__':main()

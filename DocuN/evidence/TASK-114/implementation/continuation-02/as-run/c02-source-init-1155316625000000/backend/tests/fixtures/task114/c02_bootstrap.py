@@ -1,0 +1,74 @@
+"""C02接收：封存旧字节，只升级原执行账，不接触旧业务Hub。"""
+from datetime import datetime, timezone
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import time
+
+ROOT = Path(__file__).resolve().parents[4]
+BASE = ROOT / 'DocuN/evidence/TASK-114/implementation'
+DEST = BASE / 'continuation-02'
+
+
+def main():
+    receipt_path = BASE / 'control/receipt.json'
+    receipt = json.loads(receipt_path.read_bytes())
+    permit = json.loads((ROOT / 'DocuN/evidence/TASK-114/orchestration-repair-c02-20261013/continuation-permit.json').read_bytes())
+    if receipt['continuation']['permit'] == permit['permit']:
+        raise RuntimeError('C02已接收，不重复升级')
+    if any(r['state'] == 'running' for r in receipt['resources']):
+        raise RuntimeError('原账存在运行资源，先准确核对')
+    manifest = json.loads((BASE / 'continuation-01/final/manifest.json').read_bytes())
+    for entry in manifest:
+        path = ROOT / entry['path']
+        if entry.get('sha256'):
+            if hashlib.sha256(path.read_bytes()).hexdigest() != entry['sha256']:
+                raise RuntimeError('前基线漂移: ' + entry['path'])
+        elif path.exists():
+            raise RuntimeError('已移除输出重新出现: ' + entry['path'])
+    result_path = ROOT / 'DocuN/results/TASK-114-result.md'
+    if hashlib.sha256(result_path.read_bytes()).hexdigest() != 'c0f970d48ac57d1081e79afa90bcab5822d4c6058e60ed7f9fb6f9b0cd770e2e':
+        raise RuntimeError('原结果漂移')
+    audit = ROOT / 'DocuN/results/TASK-115-result.md'
+    if hashlib.sha256(audit.read_bytes()).hexdigest() != '7d34ec7e7f433effe3bf51367c68229a566dc525361a30c4b2c496702f4ca67a':
+        raise RuntimeError('独审原件漂移')
+    rules = json.loads((ROOT / 'DocuN/evidence/v4-migration-20260930/rules-snapshot.json').read_bytes())
+    for entry in rules:
+        if hashlib.sha256(Path(entry['absolute_path']).read_bytes()).hexdigest() != entry['sha256']:
+            raise RuntimeError('锁定规则变化: ' + entry['relative_path'])
+    for path in [ROOT / e['path'] for e in manifest if e.get('sha256')] + [result_path, receipt_path, BASE / 'control/events.jsonl']:
+        dest = DEST / 'pre' / path.relative_to(ROOT)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if dest.exists():
+            raise RuntimeError('本轮pre已存在，不能覆盖')
+        shutil.copyfile(path, dest)
+    (DEST / 'pre-manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
+    now, mono = datetime.now(timezone.utc), time.monotonic_ns()
+    # 同批最早实采08:54:00.903Z；保守向前取整，读卡/恢复时间也计活动。
+    received = datetime(2026, 10, 13, 8, 54, 0, tzinfo=timezone.utc)
+    received_ns = mono - int((now - received).total_seconds() * 1e9)
+    receipt.setdefault('continuation_history', []).append(receipt['continuation'])
+    receipt['limits'].update(permit['new_cumulative_task114_limits'])
+    receipt['continuation'] = {
+        'permit': permit['permit'], 'received_utc': received.isoformat(), 'received_monotonic_ns': received_ns,
+        'anchor_basis': 'conservative floor of first tool UTC 08:54:00.903Z; mono derived at bootstrap; all reads included',
+        'active_limit_seconds': permit['new_activity_seconds'], 'calendar_limit_seconds': permit['calendar_seconds'],
+        'active_segments': [{'begin_utc': received.isoformat(), 'begin_ns': received_ns, 'end_ns': None, 'reason': 'receipt/read/repair work'}],
+        'real_batches': [], 'pause': None, 'status': 'active', 'model': 'Codex GPT-6; A+ is resource label',
+        'windows_policy': 'no new business Native windows; API/Browser charged in own counters',
+    }
+    pending = receipt_path.with_suffix('.pending')
+    pending.write_text(json.dumps(receipt, ensure_ascii=False, indent=2), encoding='utf-8')
+    os.replace(pending, receipt_path)
+    event = {'utc': now.isoformat(), 'monotonic_ns': mono, 'kind': 'continuation.accepted', 'permit': permit['permit'],
+             'counts_preserved': receipt['counts'], 'old_anchors_unchanged': True, 'current_files_verified': 216, 'rules_verified': 7}
+    with (BASE / 'control/events.jsonl').open('a', encoding='utf-8') as stream:
+        stream.write(json.dumps(event, ensure_ascii=False) + '\n'); stream.flush(); os.fsync(stream.fileno())
+    (DEST / 'accepted.json').write_text(json.dumps(event, ensure_ascii=False, indent=2), encoding='utf-8')
+    print(json.dumps(event, ensure_ascii=False))
+
+
+if __name__ == '__main__':
+    main()

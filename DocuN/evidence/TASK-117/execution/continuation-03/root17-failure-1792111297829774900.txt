@@ -1,0 +1,30 @@
+Traceback (most recent call last):
+  File "D:\shspic\project_NO3_RetroLume-agent\DocuN\evidence\TASK-117\execution\continuation-03\preview_case.py", line 40, in run_preview
+    if status['state'] in ('stopped','failed_unstarted','cleanup_unconfirmed') or time.monotonic()>=deadline:raise RuntimeError('preview_not_ready:'+status['state'])
+                                                                                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: preview_not_ready:cleanup_unconfirmed
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\shspic\project_NO3_RetroLume-agent\DocuN\evidence\TASK-117\execution\continuation-03\normal_remaining.py", line 100, in main
+    run_preview(batch,flow,tid,artifact['artifact_id']);save('L10-fixed-host-completed',{'activity_id':tid,'artifact_id':artifact['artifact_id'],'real_host':True})
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\DocuN\evidence\TASK-117\execution\continuation-03\preview_case.py", line 64, in run_preview
+    if status['state']=='cleanup_unconfirmed':raise RuntimeError('preview_cleanup_unconfirmed')
+                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: preview_cleanup_unconfirmed
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\shspic\project_NO3_RetroLume-agent\DocuN\evidence\TASK-117\execution\continuation-03\normal_remaining.py", line 112, in <module>
+    try:main()
+        ^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\DocuN\evidence\TASK-117\execution\continuation-03\normal_remaining.py", line 46, in main
+    with Batch(17,'S04_normal_UI_preview_and_remaining') as batch:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\DocuN\evidence\TASK-117\execution\continuation-03\batch_runtime.py", line 193, in __exit__
+    else:raise RuntimeError('batch_stop_unconfirmed')
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: batch_stop_unconfirmed

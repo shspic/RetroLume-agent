@@ -1,0 +1,56 @@
+{
+  "task": "TASK-091",
+  "round": "R-085",
+  "date": "2026-09-30",
+  "purpose": "G5 只读设计合同的读入文件指纹记录。仅记录本卡实际读入且影响设计的文件；hash 为读入时点当前值。",
+  "frozen_baseline_check": {
+    "source": "Ndocu/evidence/task-090/final-product-hashes.json（67 项）及 DocuN/results/TASK-090-final-acceptance.md",
+    "checked": [
+      {"path": "backend/app/activities/repository.py", "expected": "aaa0e01aefddbb7c435628942617f57c83d952bc146c5941036aae89ed37b81d", "actual": "aaa0e01aefddbb7c435628942617f57c83d952bc146c5941036aae89ed37b81d", "match": true},
+      {"path": "backend/app/activities/service.py", "expected": "977f14c73f8c5533eebb7d34bba82de55a14ee5e9e314f903c2a0697cf5cbe32", "actual": "977f14c73f8c5533eebb7d34bba82de55a14ee5e9e314f903c2a0697cf5cbe32", "match": true},
+      {"path": "backend/app/capabilities/tools.py", "expected": "bb94408fc68b31b35bfb423c618d82c2b4fc3971c559c03948d4d70a4cea5838", "actual": "bb94408fc68b31b35bfb423c618d82c2b4fc3971c559c03948d4d70a4cea5838", "match": true},
+      {"path": "backend/app/capabilities/contracts.py", "expected": "8b367fc049c41fb7f7ae13118f9ae99e7e65fa9b323611d4b6eb7adfff7f5b00", "actual": "8b367fc049c41fb7f7ae13118f9ae99e7e65fa9b323611d4b6eb7adfff7f5b00", "match": true},
+      {"path": "backend/app/capabilities/gateway.py", "expected": "abc4eb7eaee026a5dd7296b1fee49598ea108c07f59aac9c386be82fe52137c2", "actual": "abc4eb7eaee026a5dd7296b1fee49598ea108c07f59aac9c386be82fe52137c2", "match": true}
+    ],
+    "conclusion": "五个 G5 直接相关主文件与 090 冻结值逐项一致，无产品漂移；未整仓重算，符合卡面范围。"
+  },
+  "rules_snapshot": {
+    "source": "DocuN/evidence/v4-migration-20260930/rules-snapshot.json",
+    "verified": [
+      {"file": "DocuS/AGENTS.MD", "sha256": "e7e6b1a806d80a19294c5d6b95f93c7a004dc254029c7c01256910df479d4514", "match": true},
+      {"file": "DocuS/WORK.MD", "sha256": "96211d15f0affef4846784d56330ce4a9a25d6be622ff67828c92f1897b3461a", "match": true},
+      {"file": "task_model/TASK_TEMPLATE.md", "sha256": "5def1510570bf4d018dcfc0a67631f624227d7f9dc6bcc77c4a547e880c8ff8d", "match": true}
+    ]
+  },
+  "files_read": [
+    {"path": "backend/app/capabilities/tools.py", "sha256": "bb94408fc68b31b35bfb423c618d82c2b4fc3971c559c03948d4d70a4cea5838", "bytes": 5143, "coverage": "全文"},
+    {"path": "backend/app/capabilities/contracts.py", "sha256": "8b367fc049c41fb7f7ae13118f9ae99e7e65fa9b323611d4b6eb7adfff7f5b00", "bytes": 16057, "coverage": "全文"},
+    {"path": "backend/app/capabilities/gateway.py", "sha256": "abc4eb7eaee026a5dd7296b1fee49598ea108c07f59aac9c386be82fe52137c2", "bytes": 21216, "coverage": "全文"},
+    {"path": "backend/app/capabilities/transport.py", "sha256": "1d80347e2e41434297dafedfc7123cfdafdb661f576672290108de191e55b656", "bytes": 3043, "coverage": "全文"},
+    {"path": "backend/app/activities/repository.py", "sha256": "aaa0e01aefddbb7c435628942617f57c83d952bc146c5941036aae89ed37b81d", "bytes": 74021, "coverage": "全文"},
+    {"path": "backend/app/activities/service.py", "sha256": "977f14c73f8c5533eebb7d34bba82de55a14ee5e9e314f903c2a0697cf5cbe32", "bytes": 7488, "coverage": "全文"},
+    {"path": "backend/app/worker/one_call.py", "sha256": "3120abbea7b565179d67612ac16dbc1f0944dff0663d6e210ed9633f9841dc76", "bytes": 12823, "coverage": "全文"},
+    {"path": "backend/app/worker/launcher.py", "sha256": "02bca0dfa0ae7d729a51b1035870bdbd430f0233fec1c885b6415235b0f9616a", "bytes": 16739, "coverage": "部分（172-301 行，_request/_decode_outcome/run_supervised_window）"},
+    {"path": "backend/app/worker/supervisor_main.py", "sha256": "c329e531361c88fc6c455e6a8e7a8502fefa2c1d98914687f62a6014e490155b", "bytes": 4435, "coverage": "全文"},
+    {"path": "backend/app/worker/session.py", "sha256": "5e624f63b414e6c712129a06405499e026a2a72f991321135561bc8a0a6f5af6", "bytes": 20748, "coverage": "部分（34-107 行声明与 140-370 行 run_once 主体）"},
+    {"path": "backend/app/worker/worker_main.py", "sha256": "5372ac4b16f2565cc5d14921ab1e314e7bfb1c7870776cb00fab28b36a757705", "bytes": 3298, "coverage": "全文"},
+    {"path": "backend/app/worker/gate.py", "sha256": "7e7588a58869038f53d850816c027aab00ecd1270d2c893d1fc4902978d32674", "bytes": 1905, "coverage": "全文"},
+    {"path": "backend/app/worker/command.py", "sha256": "dd4d6af8940bdf3ba1b5206460f8612c026feb824774e6cfb0ffb3abc2de1c22", "bytes": 1109, "coverage": "定向 grep 全量命中行"},
+    {"path": "backend/migrations/002_activities.sql", "sha256": "3a9c5855aa9ddc54a03666327267ff3b7cb81eafa931a9f260c5637922b2dda6", "bytes": 4203, "coverage": "全文"},
+    {"path": "backend/migrations/004_activities_time_budget.sql", "sha256": "8f04f57c743c260f5081e0c6f232860301b30c7b03fef69498d7c0704c0a97cc", "bytes": 2346, "coverage": "全文"},
+    {"path": "backend/migrations/005_activities_dispatch_closed.sql", "sha256": "26b71a836355fa9620401f6bbb76e9a42668a1ce52077aa91ecb2f61ebeb50eb", "bytes": 445, "coverage": "全文"},
+    {"path": "backend/migrations/006_activities_running_owner_session.sql", "sha256": "f791f22dcfccf204f6fda369470978452b3b23cca0fc40d2057bd08ea47f6428", "bytes": 247, "coverage": "全文"},
+    {"path": "backend/migrations/007_activity_operation_results.sql", "sha256": "754b528cd5382fd4aae582258e09475bb3d83a0ec97589cf6b7b2a3cafdf133a", "bytes": 1363, "coverage": "全文"},
+    {"path": "backend/tests/test_capabilities.py", "sha256": "949c35c607586ed83fda129995c98db9299ffe3e27a2b4411cec645e0b6ace22", "bytes": 19693, "coverage": "部分（305-370 行工具两用例）"},
+    {"path": "backend/tests/test_worker_one_call.py", "sha256": "abcdbf9e360f2c4176af8585a211e48640a9c7a682b703978da35ad5c848def0", "bytes": 14609, "coverage": "部分（198-223 行 tool_plan_never_executes 等）"},
+    {"path": "backend/tests/test_activity_results.py", "sha256": "16fb3a25712af545daa61fc6f6765bed610ccc8c25784e7b5968f658f71c71f8", "bytes": 81529, "coverage": "定向 grep 定位（314 行 test_tool_plan_and_failure_never_fake_payload_success），未通读"},
+    {"path": "backend/tests/test_activity_scope.py", "sha256": "9050d263b2bfd3173b8e695aa56095b8394189e0044ad3a63844aa20969f3394", "bytes": 10053, "coverage": "仅 hash 登记；范围/CAS 行为沿 TASK-090 验收引用，未通读"},
+    {"path": "backend/tests/test_activity_continuation.py", "sha256": "472eb7a9cf2deb848fdc1029ec01ce12dc501791545b54ee8ed0ff8268d6c9c9", "bytes": 20322, "coverage": "仅 hash 登记；续接行为沿 TASK-090 验收引用，未通读"},
+    {"path": "DocuS/执行动态文档.MD", "sha256": "571ef732797ab062df99b80f973d6bcc9f6b2933714a164457939e0318af2b69", "bytes": 479844, "coverage": "部分（1-120 行顶部 V4 接续、090 验收、091 待转交记录）"},
+    {"path": "DocuS/最终需求文档.MD", "sha256": "0f6a6b1cd35cc46e8684d078d6711f291c4e0ee7e5d9b7b41dae401025af7a7d", "bytes": 30773, "coverage": "部分（NFR-002/003、SEC-001/002、INT-002、第 12/13/14 节定位）"},
+    {"path": "DocuS/架构动态文档.MD", "sha256": "c9723bbb5e1b3e4423fedf3ac71c57efdfd2fe33c08b6bf4c4c07e79133142fd", "bytes": 87415, "coverage": "部分（顶部 G5/G6 边界 1-60 行；MOD-007/FLOW-005/DATA-007/API-006 相关 282-357 行；需求追踪 395-431 行定位）"},
+    {"path": "DocuN/results/TASK-090-final-acceptance.md", "sha256": "83d2b4112cf732e710f8414c7725d8314033e3a5859e43130e9a8722bddc03c7", "bytes": 4002, "coverage": "全文"}
+  ],
+  "no_run_statement": "本卡未运行 compile、unittest、pytest、Docker、PG、Windows Job、应用、模型或 ToolRegistry.execute；本文件为只读核对记录。",
+  "writer": "TASK-091 执行者（GLM-5.3-Flash，A+ 接收口径按执行动态文档登记，不虚构平台型号）"
+}

@@ -1,0 +1,157 @@
+--- pre__focused_unit.py (4a633aff...)
++++ focused_unit.py post-fix-06
+@@ -63,28 +63,30 @@
+     os.environ.copy为纯复制。无任何真实事件/进程/Job。Kernel各API经
+     functools.partial包装为可设属性的实例闭包，使verify_last_handle对API的
+     argtypes/restype赋值合法（修正04实证：普通绑定方法不可设属性）。
++    回执身份由fake_spawn从真实spawn实参派生（修正06）：verify_last_handle
++    自生成随机身份并经argv传给SUP子进程（job_control.py:34-36/:82-84），
++    夹具回执与open_existing断言均使用同一派生身份，不硬编码、不patch
++    控制器uuid4、不取消任何身份校验。两次WinDLL（starter/kernel）的句柄
++    基址互不相交（修正06缺陷三），父Start句柄与worker/事件句柄不撞号。
+     """
+ 
+-    def _identity_lines(self):
+-        activity = "11111111-1111-1111-1111-111111111111"
+-        created = {"phase": "suspended", "activity_id": activity, "generation": 7,
+-                   "run_tag": "lifecycle-unit", "job_name": job_name(activity, 7),
+-                   "pid": 123, "created_100ns": 0, "active_processes": 1}
+-        resumed = {"phase": "resumed", "pid": 123}
+-        return activity, [
+-            (json.dumps(created) + "\n").encode(),
+-            (json.dumps(resumed) + "\n").encode(),
+-        ]
+-
+-    def _run(self, *, lines, spawn_error=None):
+-        """替身化OS边界后调用真实verify_last_handle；返回(次序log, kernels, result, 异常)。"""
++    def _run(self, *, receipt="identity", spawn_error=None):
++        """替身化OS边界后调用真实verify_last_handle。
++
++        返回(次序log, kernels, 派生身份, result, 异常)。receipt:
++        "identity"=spawn成功后按派生身份回执created+resumed两行；
++        "empty"=spawn成功但回执空行（身份校验失败分支）。spawn异常分支
++        未产生派生身份（保持空dict），调用方不得引用。
++        """
+         log = []
+         kernels = []
++        identity = {}
++        receipt_lines = []
+ 
+         class Kernel:
+-            def __init__(self):
++            def __init__(self, base):
+                 self.start_handle = None
+-                self._next = 100
++                self._next = base
+                 # verify_last_handle会向每个kernel API赋argtypes/restype
+                 # （job_control.py 49-71行）；普通绑定方法不可设属性
+                 # （AttributeError），故用partial包装的实例闭包占位：
+@@ -138,12 +140,9 @@
+                 return True
+ 
+         class FakeStdout:
+-            def __init__(self):
+-                self._lines = list(lines)
+-
+             async def readline(self):
+                 log.append(("readline",))
+-                return self._lines.pop(0) if self._lines else b""
++                return receipt_lines.pop(0) if receipt_lines else b""
+ 
+         class FakeProc:
+             def __init__(self):
+@@ -160,11 +159,27 @@
+                     self.returncode = 0
+                 return self.returncode
+ 
+-        async def fake_spawn(*_args, **_kwargs):
++        async def fake_spawn(*args, **_kwargs):
+             if spawn_error is not None:
+                 log.append(("spawn_error",))
+                 raise spawn_error
+             log.append(("spawn",))
++            # job_control.py:82-84实参顺序核对：args[4]=activity_id、
++            # args[5]=str(generation)、args[6]=run_tag、args[7]=start_name。
++            # 从真实spawn实参派生活动UUID/G/runTag，按真实job_name函数构造
++            # created/resumed回执，与SUP子进程从argv接收身份再回执的协议
++            # 数据流一致；不patch控制器uuid4、不固定控制器内部随机身份。
++            # pid/creation_time及现有协议字段保持不变。
++            identity["activity_id"] = args[4]
++            identity["generation"] = int(args[5])
++            identity["run_tag"] = args[6]
++            if receipt == "identity":
++                created = {"phase": "suspended", "activity_id": identity["activity_id"],
++                           "generation": identity["generation"], "run_tag": identity["run_tag"],
++                           "job_name": job_name(identity["activity_id"], identity["generation"]),
++                           "pid": 123, "created_100ns": 0, "active_processes": 1}
++                receipt_lines.append((json.dumps(created) + "\n").encode())
++                receipt_lines.append((json.dumps({"phase": "resumed", "pid": 123}) + "\n").encode())
+             return FakeProc()
+ 
+         class FakeOpened:
+@@ -182,7 +197,10 @@
+                 return FakeOpened()
+ 
+         def fake_windll(*_args, **_kwargs):
+-            kernel = Kernel()
++            # 两次WinDLL分别构造starter与kernel（job_control.py:48/:57）；
++            # 基址按实例序号分离（首例100起、次例100100起），父Start句柄与
++            # worker/事件句柄互不相交，close/set次序断言不再互相混淆。
++            kernel = Kernel(base=100 + 100000 * len(kernels))
+             kernels.append(kernel)
+             return kernel
+ 
+@@ -194,11 +212,10 @@
+                 exc = None
+             except BaseException as raised:  # 替身边界内异常原样返回给断言。
+                 result, exc = None, raised
+-        return log, kernels, result, exc
++        return log, kernels, identity, result, exc
+ 
+     def test_04_start_handle_closes_after_identity_receipt(self):
+-        activity, lines = self._identity_lines()
+-        log, kernels, result, exc = self._run(lines=lines)
++        log, kernels, identity, result, exc = self._run(receipt="identity")
+         self.assertIsNone(exc)
+         self.assertEqual(result["phase"], "suspended")
+         self.assertEqual(result["pid"], 123)
+@@ -212,29 +229,33 @@
+         self.assertLess(log.index(("readline",)), log.index(("close_handle", start_handle)))
+         # 句柄释放后才取得精确worker句柄与观察Job（最后句柄死亡测试次序不变）。
+         self.assertLess(log.index(("close_handle", start_handle)), log.index(("open_process",)))
+-        self.assertLess(log.index(("close_handle", start_handle)), log.index(("open_existing", activity, 7)))
++        # open_existing断言用派生身份：与控制器内部随机activity同源（spawn实参）。
++        self.assertLess(log.index(("close_handle", start_handle)),
++                        log.index(("open_existing", identity["activity_id"], 7)))
+ 
+     def test_04_start_handle_release_exactly_once_on_failure(self):
+         # 分支A：提前异常（控制进程创建失败）——Start句柄仍在收尾中恰好关闭一次。
+-        activity, lines = self._identity_lines()
+-        log, kernels, result, exc = self._run(lines=lines, spawn_error=RuntimeError("spawn refused"))
++        log, kernels, identity, result, exc = self._run(spawn_error=RuntimeError("spawn refused"))
+         self.assertIsInstance(exc, RuntimeError)
+         self.assertIsNone(result)
++        self.assertEqual(identity, {})  # spawn未成功，未产生派生身份。
+         start_handle = kernels[0].start_handle
+         self.assertEqual(log.count(("close_handle", start_handle)), 1)
+         self.assertNotIn(("readline",), log)
+         self.assertNotIn(("open_process",), log)
+         self.assertNotIn(("kill",), log)  # proc为None，不误杀。
+         # 分支B：身份回执失败（SUP无输出）——同样恰好一次，且不进入身份后续。
+-        activity, lines = self._identity_lines()
+-        log, kernels, result, exc = self._run(lines=[b""])
++        log, kernels, identity, result, exc = self._run(receipt="empty")
+         self.assertIsInstance(exc, AssertionError)
+         self.assertIsNone(result)
+         start_handle = kernels[0].start_handle
+         self.assertEqual(log.count(("close_handle", start_handle)), 1)
+         self.assertIn(("kill",), log)  # 精确收尾终止已启动的控制进程。
+         self.assertNotIn(("open_process",), log)
+-        self.assertNotIn(("open_existing", activity, 7), log)
++        # open_existing正反断言均用派生身份：控制器内部随机activity经spawn
++        # 实参派生而来，若意外调用open_existing必被此断言发现，不以硬编码
++        # 元组掩盖行为。
++        self.assertNotIn(("open_existing", identity["activity_id"], 7), log)
+         self.assertLess(log.index(("readline",)), log.index(("close_handle", start_handle)))
+ 
+ 

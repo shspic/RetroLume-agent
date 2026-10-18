@@ -1,0 +1,229 @@
+
+DocuN/evidence/TASK-118/audit/diffs/backend__app__data_exit__codec.py.diff
+1: --- first-pre/backend/app/data_exit/codec.py
+2: +++ current/backend/app/data_exit/codec.py
+3: @@ -52,19 +52,26 @@
+4:      return value
+5:  
+6:  
+7: -def encode_row(table, row):
+8: -    from .schema import COLUMNS
+9: +def encode_row(table, row,profile='data_exit.v1.r01'):
+10: +    from .schema_profiles import get_profile
+11: +    COLUMNS=get_profile(profile).columns
+12:      encoded = {}
+13:      for column, kind in COLUMNS[table].items():
+14:          value = row[column]
+15:          if value is not None and kind == "bigint":
+16:              value = str(value)
+17: +        elif value is not None and kind=='vector(512)':
+18: +            from app.capabilities.embedding import float32_values,vector_digest
+19: +            value=list(float32_values(json.loads(value) if isinstance(value,str) else value))
+20: +            if vector_digest(value)!=row['vector_sha256']:raise DataError('integrity_failed',422)
+21:          encoded[column] = plain(value)
+22:      return encoded
+23:  
+24:  
+25: -def decode_row(table, row):
+26: -    from .schema import COLUMNS
+27: +def decode_row(table, row,profile='data_exit.v1.r01'):
+28: +    from .schema_profiles import get_profile
+29: +    COLUMNS=get_profile(profile).columns
+30: +    if table not in COLUMNS:raise DataError('codec_mismatch',422)
+31:      if not isinstance(row, dict) or set(row) != set(COLUMNS[table]):
+32:          raise DataError("codec_mismatch", 422)
+33:      result = {}
+34: @@ -73,7 +80,14 @@
+35:          if value is None:
+36:              result[column] = None
+37:              continue
+38: -        if kind.endswith("[]"):
+39: +        if kind=='vector(512)':
+40: +            from app.capabilities.embedding import float32_values,vector_digest
+41: +            try:
+42: +                values=float32_values(value)
+43: +                if list(values)!=value or vector_digest(values)!=row['vector_sha256']:raise ValueError()
+44: +                value=canonical(list(values))
+45: +            except (ValueError,TypeError,KeyError):raise DataError('integrity_failed',422) from None
+46: +        elif kind.endswith("[]"):
+47:              if not isinstance(value, list): raise DataError("codec_mismatch", 422)
+48:              if kind == "uuid[]":
+49:                  if any(not isinstance(v, str) or str(UUID(v)) != v for v in value): raise DataError("codec_mismatch", 422)
+50: @@ -149,7 +163,7 @@
+51:                    'cleanup_state_observed','manifest_sha256','hash_size_targets'}
+52:  
+53:  
+54: -def validate_metadata(name,row):
+55: +def validate_metadata(name,row,profile='data_exit.v1.r01'):
+56:      from .contracts import PROFILE,uuid
+57:      expected=CONTROL_FIELDS if name=='source_control' else HISTORY_FIELDS if name=='operation_history' else TOMBSTONE_FIELDS
+58:      if not isinstance(row,dict) or set(row)!=expected:raise DataError('codec_mismatch',422)
+59: @@ -165,7 +179,7 @@
+60:          if not isinstance(value,str) or re.fullmatch(r'[0-9a-f]{64}',value) is None:raise DataError('codec_mismatch',422)
+61:      if name=='source_control':
+62:          uuid(row['dataset_id']);uuid(row['source_instance_observed'])
+63: -        if row['schema_profile']!=PROFILE or row['mode_observed'] not in ('normal','loading','frozen','restored_readonly'):raise DataError('codec_mismatch',422)
+64: +        if row['schema_profile']!=profile or row['mode_observed'] not in ('normal','loading','frozen','restored_readonly'):raise DataError('codec_mismatch',422)
+65:          timestamp('created_at');hex_value('source_root_sha256',True)
+66:          if row['source_snapshot_id'] is not None:uuid(row['source_snapshot_id'])
+67:      elif name=='operation_history':
+
+DocuN/evidence/TASK-118/audit/diffs/backend__app__data_exit__snapshot.py.diff
+1: --- first-pre/backend/app/data_exit/snapshot.py
+2: +++ current/backend/app/data_exit/snapshot.py
+3: @@ -57,9 +57,13 @@
+4:          rows={table:[] for table in TABLES}
+5:          graph=('material_sources','material_versions','activities','activity_scope_sources','activity_memory_choices','learning_memory_dependencies')
+6:          with self.repository.connection(readonly=True,repeatable=True) as connection:
+7: +            from .schema_profiles import observed_profile,R02
+8: +            profile=observed_profile(connection);COLUMNS=profile.columns
+9: +            rows={table:[] for table in profile.tables}
+10: +            if profile.name==R02:graph+=('retrieval_spaces','retrieval_commands','retrieval_chunks')
+11:              for table in graph:
+12:                  columns=','.join(COLUMNS[table])
+13: -                rows[table]=[encode_row(table,row) for row in connection.execute('SELECT '+columns+' FROM public.'+table+' ORDER BY '+','.join(list(COLUMNS[table])[:2])).fetchall()]
+14: +                rows[table]=[encode_row(table,row,profile.name) for row in connection.execute('SELECT '+columns+' FROM public.'+table+' ORDER BY '+','.join(list(COLUMNS[table])[:2])).fetchall()]
+15:          selected,closure=self._closure(rows,scope)
+16:          return {**closure,'closure_sha256':self.closure_digest(selected,closure),
+17:                  'materials':[{'id':r['id'],'title':r['title'],'revision':r['revision']} for r in selected['material_sources']],
+18: @@ -71,6 +75,8 @@
+19:          values={'closure':closure,'materials':rows['material_sources'],
+20:                  'versions':rows['material_versions'],'activity_scope_sources':rows['activity_scope_sources'],
+21:                  'activity_memory_choices':rows['activity_memory_choices'],'learning_memory_dependencies':rows['learning_memory_dependencies']}
+22: +        if 'retrieval_commands' in rows:
+23: +            values.update({k:rows[k] for k in ('retrieval_spaces','retrieval_commands','retrieval_chunks')})
+24:          result=hashlib.sha256();result.update(b'{')
+25:          for index,(key,value) in enumerate(sorted(values.items())):
+26:              if index:result.update(b',')
+27: @@ -149,6 +155,8 @@
+28:                  if role is None or role['rolcanlogin'] is not True or any(role[k] for k in ("rolsuper", "rolcreatedb", "rolcreaterole",'rolreplication', "rolbypassrls")):
+29:                      raise DataError("snapshot_role_unsafe", 503)
+30:                  point = plain(connection.execute("SELECT CURRENT_TIMESTAMP AS logical_time_utc,pg_current_snapshot()::text AS database_snapshot").fetchone())
+31: +                from .schema_profiles import observed_profile
+32: +                profile=observed_profile(connection);PROFILE=profile.name;TABLES=profile.tables;COLUMNS=profile.columns;MIGRATIONS=profile.codec_migrations
+33:                  for table in TABLES:
+34:                      bounded()
+35:                      columns = COLUMNS[table]
+36: @@ -157,7 +165,7 @@
+37:                      if table == "learning_memory_bodies":
+38:                          where = " WHERE memory_id IN(SELECT memory_id FROM public.learning_memories WHERE state='active')"
+39:                      query = f"SELECT {selected} FROM public.{table}{where} ORDER BY " + ",".join(list(columns)[:2])
+40: -                    rows[table] = spool(connection,table,query,lambda row:encode_row(table,row))
+41: +                    rows[table] = spool(connection,table,query,lambda row:encode_row(table,row,PROFILE))
+42:                      if time.monotonic() - start > self.limits.snapshot_seconds:
+43:                          raise DataError("operation_timeout", 504)
+44:                  control = plain(connection.execute("SELECT * FROM public.data_export_control_v1").fetchone())
+45: @@ -259,9 +267,15 @@
+46:                      if r["source_id"]: sources.add(r["source_id"])
+47:                      if r["origin_activity_id"]: activities.add(r["origin_activity_id"])
+48:                      if r["upstream_memory_id"]: memories.add(r["upstream_memory_id"])
+49: +            for r in rows.get('retrieval_commands',[]):
+50: +                if r['activity_id'] in activities:
+51: +                    for ref in r['source_refs']:sources.add(ref['source_id'])
+52: +            for r in rows.get('retrieval_chunks',[]):
+53: +                if r['source_id'] in sources:activities.add(r['committed_activity_id'])
+54:              changed = old != (len(sources), len(activities), len(memories))
+55:          versions = {r["id"] for r in rows["material_versions"] if r["source_id"] in sources}
+56:          candidates = {r["id"] for r in rows["pdf_review_candidates"] if r["source_id"] in sources}
+57: +        spaces={r['space_id'] for r in rows.get('retrieval_commands',[]) if r['activity_id'] in activities} | {r['space_id'] for r in rows.get('retrieval_chunks',[]) if r['committed_activity_id'] in activities}
+58:          selected = {}
+59:          for table, values in rows.items():
+60:              if table == "material_sources": predicate=lambda r:r['id'] in sources
+61: @@ -270,6 +284,8 @@
+62:              elif table == "pdf_review_candidates": predicate=lambda r:r['id'] in candidates
+63:              elif table.startswith("pdf_"): predicate=lambda r:r['version_id'] in versions
+64:              elif table.startswith("learning_memory") or table == "learning_memories": predicate=lambda r:r['memory_id'] in memories
+65: +            elif table=='retrieval_spaces':predicate=lambda r:r['space_id'] in spaces
+66: +            elif table=='retrieval_chunks':predicate=lambda r:r['committed_activity_id'] in activities
+67:              else: predicate=lambda r:r['activity_id'] in activities
+68:              selected[table] = FilteredRows(values,predicate)
+69:          return selected, {"mode": "selected", "source_ids": sorted(sources), "activity_ids": sorted(activities),
+
+DocuN/evidence/TASK-118/audit/diffs/backend__app__data_exit__packages.py.diff
+1: --- first-pre/backend/app/data_exit/packages.py
+2: +++ current/backend/app/data_exit/packages.py
+3: @@ -13,14 +13,16 @@
+4:  UUID_PATH = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+5:  
+6:  
+7: -def allowed_member(name):
+8: +def allowed_member(name,profile=None):
+9:      if not isinstance(name, str) or not name.isascii() or any(ord(c) < 32 for c in name) or any(c in name for c in "\\:\x00"):
+10:          return False
+11:      fixed = {"manifest.json", "README.txt", "codec_description.json", "references/reference_edges.jsonl",
+12:               "metadata/source_control.json", "metadata/operation_history.jsonl", "metadata/tombstones.jsonl"}
+13:      if name in fixed: return True
+14:      if re.fullmatch(r"originals/[0-9a-f]{64}|texts/[0-9a-f]{64}\.txt|summaries/" + UUID_PATH + r"\.txt", name): return True
+15: -    return name in {prefix + "/" + table + ".jsonl" for prefix in ("records", "checkpoint") for table in TABLES}
+16: +    from .schema_profiles import get_profile,R02
+17: +    tables=get_profile(profile).tables if profile is not None else get_profile(R02).tables
+18: +    return name in {prefix + "/" + table + ".jsonl" for prefix in ("records", "checkpoint") for table in tables}
+19:  
+20:  
+21:  def hash_file(path, limit, check=lambda: None):
+22: @@ -100,10 +102,14 @@
+23:          manifest = load_json(self.archive.read("manifest.json"), self.limits)
+24:          required = {"format", "format_version", "package_id", "package_kind", "codec_profile", "source_business_table_count",
+25:                      "snapshot_control_domain_count", "snapshot", "contents", "availability", "scope", "completion", "restore_eligible", "root_sha256"}
+26: -        if set(manifest) != required or manifest["format"] != FORMAT or manifest["format_version"] != 1 or manifest["codec_profile"] != PROFILE:
+27: +        if set(manifest) != required or manifest["format"] != FORMAT or manifest["format_version"] != 1:
+28:              raise DataError("unsupported_format", 415)
+29: +        from .schema_profiles import get_profile
+30: +        try:self.schema_profile=get_profile(manifest['codec_profile'])
+31: +        except DataError:raise DataError('unsupported_format',415) from None
+32: +        PROFILE=self.schema_profile.name;TABLES=self.schema_profile.tables
+33:          uuid(manifest["package_id"])
+34: -        if manifest["package_kind"] not in ("portable_export", "restore_checkpoint") or manifest["source_business_table_count"] != 28 or manifest["snapshot_control_domain_count"] != 3:
+35: +        if manifest["package_kind"] not in ("portable_export", "restore_checkpoint") or manifest["source_business_table_count"] != len(TABLES) or manifest["snapshot_control_domain_count"] != 3:
+36:              raise DataError("unsupported_format", 415)
+37:          if type(manifest['format_version']) is not int:raise DataError('unsupported_format',415)
+38:          point=manifest['snapshot']
+39: @@ -130,7 +136,7 @@
+40:          total_rows = 0
+41:          for entry in entries:
+42:              self.check()
+43: -            if set(entry) != {"path", "kind", "availability", "bytes", "sha256"} or not allowed_member(entry["path"]) or entry["path"] == "manifest.json" or entry["availability"] != "present":
+44: +            if set(entry) != {"path", "kind", "availability", "bytes", "sha256"} or not allowed_member(entry["path"],PROFILE) or entry["path"] == "manifest.json" or entry["availability"] != "present":
+45:                  raise DataError("integrity_failed", 422)
+46:              if not isinstance(entry["bytes"], str) or re.fullmatch(r"0|[1-9][0-9]*", entry["bytes"]) is None or re.fullmatch(r"[0-9a-f]{64}", entry["sha256"]) is None:
+47:                  raise DataError("integrity_failed", 422)
+48: @@ -150,15 +156,15 @@
+49:                          total_rows += 1
+50:                          if total_rows > self.limits.rows * (2 if manifest["package_kind"] == "restore_checkpoint" else 1): raise DataError("capacity_exceeded", 413)
+51:                          if entry["path"].startswith(("records/", "checkpoint/")):
+52: -                            decode_row(entry["path"].split("/")[1][:-6], row)
+53: +                            decode_row(entry["path"].split("/")[1][:-6], row,PROFILE)
+54:                          elif entry['path'].startswith('metadata/'):
+55: -                            validate_metadata(entry['path'].split('/')[1][:-6],row)
+56: +                            validate_metadata(entry['path'].split('/')[1][:-6],row,PROFILE)
+57:              elif entry["path"].endswith(".json"):
+58:                  if count > self.limits.manifest_bytes: raise DataError("capacity_exceeded", 413)
+59:                  value=load_json(self.archive.read(entry["path"]), self.limits)
+60: -                if entry['path']=='metadata/source_control.json':validate_metadata('source_control',value)
+61: +                if entry['path']=='metadata/source_control.json':validate_metadata('source_control',value,PROFILE)
+62:                  if entry['path']=='codec_description.json':
+63: -                    from .schema import COLUMNS,MIGRATIONS
+64: +                    COLUMNS=self.schema_profile.columns;MIGRATIONS=self.schema_profile.codec_migrations
+65:                      from .codec import TRANSFORMS
+66:                      if value!={'profile':PROFILE,'columns':COLUMNS,'transformations':TRANSFORMS,'bigint_encoding':'decimal_string',
+67:                          'text_encoding':'UTF-8 原字符串','migration_sha256':MIGRATIONS}:raise DataError('codec_mismatch',422)
+68: @@ -208,7 +214,7 @@
+69:          self.manifest = manifest
+70:  
+71:      def rows(self, table):
+72: -        if table not in TABLES: raise ValueError("表未受信")
+73: +        if table not in self.schema_profile.tables: raise ValueError("表未受信")
+74:          with self.archive.open("checkpoint/" + table + ".jsonl") as stream:
+75:              yield from lines(stream, self.limits)
+76:  
+77: @@ -244,8 +250,8 @@
+78:                  captured = self.snapshot.capture(job_id, job["kind"], scope, check_cancel=operation.check, on_stage=stage, operation=operation)
+79:                  stage("verifying")
+80:                  manifest = {"format": FORMAT, "format_version": 1, "package_id": job_id, "package_kind": job["kind"],
+81: -                            "codec_profile": PROFILE, "source_business_table_count": 28, "snapshot_control_domain_count": 3,
+82: -                            "snapshot": {**captured.point, "source_schema_profile": PROFILE,
+83: +                            "codec_profile": captured.source_control['schema_profile'], "source_business_table_count": len(captured.rows), "snapshot_control_domain_count": 3,
+84: +                            "snapshot": {**captured.point, "source_schema_profile": captured.source_control['schema_profile'],
+85:                                           "source_dataset_id": captured.source_control["dataset_id"], "runtime_authority_included": False,
+86:                                           "browser_drafts_included": False}, "contents": captured.entries,
+87:                              "availability": captured.availability, "scope": captured.scope,

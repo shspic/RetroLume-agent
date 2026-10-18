@@ -1,0 +1,99 @@
+{
+  "case_id": "version_1",
+  "source_path": "fixtures/version_1/notes.pdf",
+  "source_sha256": "fbb13933304c0acd3ad68394bc6fede2b8575cccc205b77b231690cabe264e34",
+  "basename": "notes.pdf",
+  "mode": "plain",
+  "adapter": "pypdf",
+  "status": "success",
+  "pages": [
+    {
+      "physical_page": 1,
+      "text": "同名资料 / Same file name\nVERSION=1\n复习间隔：三天。\nRetention interval: 3 days.\n"
+    }
+  ],
+  "evaluation": {
+    "fragments": [
+      {
+        "id": "V1",
+        "expected": {
+          "id": "V1",
+          "text": "VERSION=1",
+          "physical_page": 1
+        },
+        "hits": [
+          {
+            "physical_page": 1,
+            "extracted_offset": 22,
+            "text": "VERSION=1",
+            "excerpt": "同名资料 / Same file name\nVERSION=1\n复习间隔：三天。\nRetention interval: "
+          }
+        ],
+        "content_unique_pass": true,
+        "location_pass": true
+      },
+      {
+        "id": "V1ZH",
+        "expected": {
+          "id": "V1ZH",
+          "text": "复习间隔：三天。",
+          "physical_page": 1
+        },
+        "hits": [
+          {
+            "physical_page": 1,
+            "extracted_offset": 32,
+            "text": "复习间隔：三天。",
+            "excerpt": "资料 / Same file name\nVERSION=1\n复习间隔：三天。\nRetention interval: 3 days.\n"
+          }
+        ],
+        "content_unique_pass": true,
+        "location_pass": true
+      },
+      {
+        "id": "V1EN",
+        "expected": {
+          "id": "V1EN",
+          "text": "Retention interval: 3 days.",
+          "physical_page": 1
+        },
+        "hits": [
+          {
+            "physical_page": 1,
+            "extracted_offset": 41,
+            "text": "Retention interval: 3 days.",
+            "excerpt": " file name\nVERSION=1\n复习间隔：三天。\nRetention interval: 3 days.\n"
+          }
+        ],
+        "content_unique_pass": true,
+        "location_pass": true
+      }
+    ],
+    "orders": [
+      {
+        "name": "body",
+        "expected": [
+          "V1",
+          "V1ZH",
+          "V1EN"
+        ],
+        "observed": [
+          "V1",
+          "V1ZH",
+          "V1EN"
+        ],
+        "pass": true
+      }
+    ],
+    "page_count": {
+      "expected": 1,
+      "actual": 1,
+      "pass": true
+    }
+  },
+  "python_warnings": [],
+  "pypdf_log": "",
+  "captured_stdout": "",
+  "captured_stderr": "",
+  "status_matches_manifest": true
+}

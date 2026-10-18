@@ -1,0 +1,22 @@
+--- pre/backend/app/main.py
++++ current/backend/app/main.py
+@@ -14,7 +14,8 @@
+ from app.activities.api import router as activities_router
+ from app.learning.api import router as learning_router
+ from app.learning.teaching_api import router as teaching_router
+-from app.memory.api import router as memory_router
++from app.memory.api import router as memory_router
++from app.interview.api import router as interview_router
+ from app.service_config import load_activity_config
+ 
+ class Settings(BaseModel):
+@@ -81,7 +82,8 @@
+     app.include_router(activities_router)
+     app.include_router(learning_router)
+     app.include_router(teaching_router)
+-    app.include_router(memory_router)
++    app.include_router(memory_router)
++    app.include_router(interview_router)
+     dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+     if dist.is_dir():
+         app.mount("/", StaticFiles(directory=dist, html=True), name="frontend")

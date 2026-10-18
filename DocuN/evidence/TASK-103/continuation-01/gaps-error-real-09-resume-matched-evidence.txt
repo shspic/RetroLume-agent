@@ -1,0 +1,18 @@
+Traceback (most recent call last):
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task103\c01\gaps.py", line 136, in run
+    reject('V08 单类来源11超过10，最终SQL拒绝',lambda:one([d for d in deps if d['dependency_kind']!='source']+source_deps),'种类容量')
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task103\c01\gaps.py", line 110, in reject
+    with conn.transaction():action();conn.execute('SET CONSTRAINTS ALL IMMEDIATE')
+                            ^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task103\c01\gaps.py", line 136, in <lambda>
+    reject('V08 单类来源11超过10，最终SQL拒绝',lambda:one([d for d in deps if d['dependency_kind']!='source']+source_deps),'种类容量')
+                                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task103\c01\gaps.py", line 116, in one
+    for d in clone_base(str(uuid4()),items):insert(conn,'learning_memory_dependencies',d)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task103\c01\gaps.py", line 100, in clone_base
+    key=str(uuid4());items=order_dependencies(items)
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\memory\contracts.py", line 185, in order_dependencies
+    raise MemoryRefusal("memory_dependency_limit","依据关联超过有限容量，请保存更小的观察或独立用户笔记")
+app.memory.contracts.MemoryRefusal: 依据关联超过有限容量，请保存更小的观察或独立用户笔记

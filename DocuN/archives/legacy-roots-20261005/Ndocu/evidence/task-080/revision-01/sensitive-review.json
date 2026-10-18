@@ -1,0 +1,155 @@
+{
+ "hits": [
+  {
+   "path": "Ndocu/evidence/task-057/task054-original-script-copy.mjs",
+   "patterns": [
+    "cred_url"
+   ],
+   "status": "candidate",
+   "verdict": "良性，保留候选",
+   "rationale": "指向 127.0.0.1 本地合成测试库的固定测试标识符（与任务同名的占位用户/口令），非真实凭据",
+   "prior": true
+  },
+  {
+   "path": "Ndocu/evidence/task-059/task054-pre-059-script-copy.mjs",
+   "patterns": [
+    "cred_url"
+   ],
+   "status": "candidate",
+   "verdict": "良性，保留候选",
+   "rationale": "指向 127.0.0.1 本地合成测试库的固定测试标识符（与任务同名的占位用户/口令），非真实凭据",
+   "prior": true
+  },
+  {
+   "path": "Ndocu/evidence/task-061/task054-pre-061-script-copy.mjs",
+   "patterns": [
+    "cred_url"
+   ],
+   "status": "candidate",
+   "verdict": "良性，保留候选",
+   "rationale": "指向 127.0.0.1 本地合成测试库的固定测试标识符（与任务同名的占位用户/口令），非真实凭据",
+   "prior": true
+  },
+  {
+   "path": "Ndocu/evidence/task-064/pre-task054_pdf_materials_integration.mjs",
+   "patterns": [
+    "cred_url"
+   ],
+   "status": "candidate",
+   "verdict": "良性，保留候选",
+   "rationale": "指向 127.0.0.1 本地合成测试库的固定测试标识符（与任务同名的占位用户/口令），非真实凭据",
+   "prior": true
+  },
+  {
+   "path": "Ndocu/evidence/task-066/pre-task054_pdf_materials_integration.mjs",
+   "patterns": [
+    "cred_url"
+   ],
+   "status": "candidate",
+   "verdict": "良性，保留候选",
+   "rationale": "指向 127.0.0.1 本地合成测试库的固定测试标识符（与任务同名的占位用户/口令），非真实凭据",
+   "prior": true
+  },
+  {
+   "path": "Ndocu/evidence/task-073/20260921T1254-wbA1/run_task073.py",
+   "patterns": [
+    "cred_url"
+   ],
+   "status": "candidate",
+   "verdict": "良性，保留候选",
+   "rationale": "DSN 为运行期生成拼接的模板字符串，脚本内无硬编码口令",
+   "prior": true
+  },
+  {
+   "path": "Ndocu/evidence/task-074/20260921T1319-wbB1/run_task074.py",
+   "patterns": [
+    "cred_url"
+   ],
+   "status": "candidate",
+   "verdict": "良性，保留候选",
+   "rationale": "DSN 为运行期生成拼接的模板字符串，脚本内无硬编码口令",
+   "prior": true
+  },
+  {
+   "path": "backend/app/capabilities/contracts.py",
+   "patterns": [
+    "assign_secret"
+   ],
+   "status": "candidate",
+   "verdict": "良性，保留候选",
+   "rationale": "Pydantic SecretStr 字段声明与 get_secret_value() 取值调用，无硬编码密钥值",
+   "prior": true
+  },
+  {
+   "path": "backend/app/capabilities/gateway.py",
+   "patterns": [
+    "assign_secret"
+   ],
+   "status": "candidate",
+   "verdict": "良性，保留候选",
+   "rationale": "Pydantic SecretStr 字段声明与 get_secret_value() 取值调用，无硬编码密钥值",
+   "prior": true
+  },
+  {
+   "path": "tests/task054_pdf_materials_integration.mjs",
+   "patterns": [
+    "cred_url"
+   ],
+   "status": "candidate",
+   "verdict": "良性，保留候选",
+   "rationale": "指向 127.0.0.1 本地合成测试库的固定测试标识符（与任务同名的占位用户/口令），非真实凭据",
+   "prior": true
+  }
+ ],
+ "uncertain_excluded": [],
+ "adjudication": [
+  {
+   "files": [
+    "tests/task054_pdf_materials_integration.mjs",
+    "Ndocu/evidence/task-057/task054-original-script-copy.mjs",
+    "Ndocu/evidence/task-059/task054-pre-059-script-copy.mjs",
+    "Ndocu/evidence/task-061/task054-pre-061-script-copy.mjs",
+    "Ndocu/evidence/task-064/pre-task054_pdf_materials_integration.mjs",
+    "Ndocu/evidence/task-066/pre-task054_pdf_materials_integration.mjs"
+   ],
+   "patterns": [
+    "cred_url"
+   ],
+   "verdict": "良性，保留候选",
+   "rationale": "指向 127.0.0.1 本地合成测试库的固定测试标识符（与任务同名的占位用户/口令），非真实凭据"
+  },
+  {
+   "files": [
+    "Ndocu/evidence/task-073/20260921T1254-wbA1/run_task073.py",
+    "Ndocu/evidence/task-074/20260921T1319-wbB1/run_task074.py"
+   ],
+   "patterns": [
+    "cred_url"
+   ],
+   "verdict": "良性，保留候选",
+   "rationale": "DSN 为运行期生成拼接的模板字符串，脚本内无硬编码口令"
+  },
+  {
+   "files": [
+    "Ndocu/evidence/task-073/20260921T1254-wbA1/run-result.json",
+    "Ndocu/evidence/task-074/20260921T1319-wbB1/run-result.json"
+   ],
+   "patterns": [
+    "cred_url"
+   ],
+   "verdict": "凭据值文件，续作01起按根相对忽略规则永久排除原件纳管（编排裁定），本地原件保留不改",
+   "rationale": "含运行期生成的 db_password 与 DSN 实际值；不以容器据称销毁作为公开依据"
+  },
+  {
+   "files": [
+    "backend/app/capabilities/contracts.py",
+    "backend/app/capabilities/gateway.py"
+   ],
+   "patterns": [
+    "assign_secret"
+   ],
+   "verdict": "良性，保留候选",
+   "rationale": "Pydantic SecretStr 字段声明与 get_secret_value() 取值调用，无硬编码密钥值"
+  }
+ ]
+}

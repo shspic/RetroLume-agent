@@ -1,0 +1,51 @@
+"""复用本卡已发布包与已核计划；source stopped 时只建立一个隔离目标。"""
+import json
+import sys
+import time
+from uuid import uuid4
+from budget import ROOT,CONTROL,Budget,FactoryHooks
+sys.path.insert(0,str(ROOT/'backend'))
+from setup_source import reference,memory_guard,IMAGE
+from matrix_pg import environment
+from freeze import freeze
+from app.data_exit.contracts import DataJobCommand
+from app.data_exit.restore import inspect_target
+
+
+def main():
+    budget=Budget();budget.check()
+    if not memory_guard()['ready']:print(json.dumps({'state':'not_run','reason':'memory_start_guard'}));return 78
+    source,credentials=reference()
+    if inspect_target(source,IMAGE)['running']:raise RuntimeError('此批要求 source 准确 stopped')
+    label='target-saved-'+str(time.monotonic_ns());output=ROOT/'DocuN/evidence/TASK-114/implementation/batches'/label
+    output.mkdir(parents=True);freeze(label);environment(credentials)
+    from app.main import create_app
+    app=create_app();runtime=app.state.data_exit
+    if runtime is None:raise RuntimeError('控制入口不可用')
+    runtime.factory.hooks=FactoryHooks(budget)
+    plans=runtime.hub.state()['plans'];plan=next(reversed(plans.values()))
+    checked=runtime.restore.plan(plan['plan_id'],plan['plan_sha256'])
+    if checked['latest_status']!='known':raise RuntimeError('原 plan 未取得最新旁证，不冒已知')
+    job=runtime.hub.create_or_get_job(DataJobCommand('restore',str(uuid4()),{'plan_id':plan['plan_id'],'plan_sha256':plan['plan_sha256']}),runtime.context())
+    try:
+        verified=runtime.restore.verify(job['job_id'],plan['plan_sha256'])
+        result={'state':'passed','restore_job':verified,'plan':plan,'source_remained_stopped':True,'source_values_not_written':True,
+                'scope':'实际新隔离集群加载、完整逐列核对、seal 与真实 readonly LOGIN 拒写'}
+        (output/'result.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
+        print(json.dumps({'state':'passed','target_id':verified['target_id'],'batch':label}));return 0
+    except BaseException as error:
+        import traceback
+        failure={'state':'failed','type':type(error).__name__,'code':getattr(error,'code',None),'sqlstate':getattr(error,'sqlstate',None)}
+        causes=[];cause=error
+        for _ in range(8):
+            if cause is None:break
+            causes.append({'type':type(cause).__name__,'sqlstate':getattr(cause,'sqlstate',None),'message_primary':getattr(getattr(cause,'diag',None),'message_primary',None)})
+            cause=cause.__context__
+        (output/'result.json').write_text(json.dumps(failure,indent=2),encoding='utf-8')
+        (output/'causes.json').write_text(json.dumps(causes,ensure_ascii=False,indent=2),encoding='utf-8')
+        (output/'failure.txt').write_text(traceback.format_exc(),encoding='utf-8')
+        budget.event('target_verification_failed',failure)
+        print(json.dumps({**failure,'batch':label}));return 1
+
+
+if __name__=='__main__':raise SystemExit(main())

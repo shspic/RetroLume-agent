@@ -1,0 +1,118 @@
+--- before/frontend/src/activities/memoryApi.ts
++++ final/frontend/src/activities/memoryApi.ts
+@@ -1,57 +1,58 @@
+-export type MemoryChoice = { memory_id: string; version: number; revision: number; body_sha256: string };
+-export type MemoryItem = { memory_id: string; revision: number; version: number; title: string | null; state: string;
+-  qualification: string; claim_kind: string; uncertainty: string; purge_state: string };
+-export type MemoryView = MemoryItem & { body_sha256: string; current_version: number; body: {
+-  title: string; text: string; kind: string; uncertainty: string; observation?: Record<string, unknown> | null;
+-} | null; dependencies: Record<string, unknown>[] | null; view_token: string; revocation_key: string | null };
+-export type MemoryCommand = { schema?: "memory.command.v1"; business_key: string; memory_id: string;
+-  expected_revision: number; action: "save" | "revise" | "revoke" | "purge"; body: Record<string, unknown> };
+-export type MemoryReceipt = { business_key: string; action: string; memory_id: string; request_sha256: string;
+-  revision_after: number; version_after: number; status: string; duplicate_of?: string | null;
+-  purge_state_now: string; manifest_sha256?: string; revocation_key?: string; cleanup_status_unconfirmed?: boolean };
+-export type MemoryImpact = { memory_id: string; revision: number; impact_token: string;
+-  activity_count: number; dependent_memory_count: number; version_count: number; effect: string };
+-
+-export class MemoryApiError extends Error {
+-  constructor(public status: number, public code: string, message: string) { super(message); }
+-}
+-export function canonicalMemory(value: unknown): string {
+-  if (value === null || typeof value !== "object") return JSON.stringify(value);
+-  if (Array.isArray(value)) return "[" + value.map(canonicalMemory).join(",") + "]";
+-  const obj = value as Record<string, unknown>;
+-  return "{" + Object.keys(obj).filter(k => obj[k] !== undefined).sort()
+-    .map(k => JSON.stringify(k) + ":" + canonicalMemory(obj[k])).join(",") + "}";
+-}
+-export async function memoryDigest(value: unknown): Promise<string> {
+-  const bytes = new TextEncoder().encode(canonicalMemory(value));
+-  return [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
+-    .map(b => b.toString(16).padStart(2, "0")).join("");
+-}
+-export function memoryCommandBody(command: MemoryCommand) {
+-  return { schema: "memory.command.v1", action: command.action, memory_id: command.memory_id,
+-    expected_revision: command.expected_revision, body: command.body };
+-}
+-export async function memoryRequest<T>(path: string, token: string, init: RequestInit = {}): Promise<T> {
+-  let response: Response;
+-  try { response = await fetch(path, { ...init, headers: { ...init.headers, "X-RetroLume-Session": token } }); }
+-  catch (reason) {
+-    if (reason instanceof DOMException && reason.name === "AbortError") throw reason;
+-    throw new MemoryApiError(0, "unconfirmed", "结果未确认，请先核对；不会自动重发。");
+-  }
+-  const data = await response.json();
+-  if (!response.ok) throw new MemoryApiError(response.status, data.detail?.code ?? "unavailable",
+-    typeof data.detail === "string" ? data.detail : data.detail?.message ?? "记忆状态未确认");
+-  return data as T;
+-}
+-export const listMemories = (token: string, cursor?: string) =>
+-  memoryRequest<{ items: MemoryItem[]; next_cursor: string | null; view_token: string }>("/api/memories?limit=20" + (cursor ? "&cursor=" + encodeURIComponent(cursor) : ""), token);
+-export const getMemory = (id: string, token: string, signal?: AbortSignal) =>
+-  memoryRequest<MemoryView>("/api/memories/" + id, token, { signal });
+-export const getMemoryReceipt = (key: string, token: string) =>
+-  memoryRequest<MemoryReceipt>("/api/memories/commands/" + key, token);
+-export const getMemoryImpact = (id: string, revision: number, action: string, token: string) =>
+-  memoryRequest<MemoryImpact>("/api/memories/" + id + "/impact?expected_revision=" + revision + "&action=" + action, token);
+-export const postMemory = (command: MemoryCommand, token: string) =>
+-  memoryRequest<MemoryReceipt>("/api/memories/commands", token, { method: "POST",
+-    headers: { "Content-Type": "application/json" }, body: JSON.stringify(command) });
+-
++import {dataFetch} from "../data/context";
++export type MemoryChoice = { memory_id: string; version: number; revision: number; body_sha256: string };
++export type MemoryItem = { memory_id: string; revision: number; version: number; title: string | null; state: string;
++  qualification: string; claim_kind: string; uncertainty: string; purge_state: string };
++export type MemoryView = MemoryItem & { body_sha256: string; current_version: number; body: {
++  title: string; text: string; kind: string; uncertainty: string; observation?: Record<string, unknown> | null;
++} | null; dependencies: Record<string, unknown>[] | null; view_token: string; revocation_key: string | null };
++export type MemoryCommand = { schema?: "memory.command.v1"; business_key: string; memory_id: string;
++  expected_revision: number; action: "save" | "revise" | "revoke" | "purge"; body: Record<string, unknown> };
++export type MemoryReceipt = { business_key: string; action: string; memory_id: string; request_sha256: string;
++  revision_after: number; version_after: number; status: string; duplicate_of?: string | null;
++  purge_state_now: string; manifest_sha256?: string; revocation_key?: string; cleanup_status_unconfirmed?: boolean };
++export type MemoryImpact = { memory_id: string; revision: number; impact_token: string;
++  activity_count: number; dependent_memory_count: number; version_count: number; effect: string };
++
++export class MemoryApiError extends Error {
++  constructor(public status: number, public code: string, message: string) { super(message); }
++}
++export function canonicalMemory(value: unknown): string {
++  if (value === null || typeof value !== "object") return JSON.stringify(value);
++  if (Array.isArray(value)) return "[" + value.map(canonicalMemory).join(",") + "]";
++  const obj = value as Record<string, unknown>;
++  return "{" + Object.keys(obj).filter(k => obj[k] !== undefined).sort()
++    .map(k => JSON.stringify(k) + ":" + canonicalMemory(obj[k])).join(",") + "}";
++}
++export async function memoryDigest(value: unknown): Promise<string> {
++  const bytes = new TextEncoder().encode(canonicalMemory(value));
++  return [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
++    .map(b => b.toString(16).padStart(2, "0")).join("");
++}
++export function memoryCommandBody(command: MemoryCommand) {
++  return { schema: "memory.command.v1", action: command.action, memory_id: command.memory_id,
++    expected_revision: command.expected_revision, body: command.body };
++}
++export async function memoryRequest<T>(path: string, token: string, init: RequestInit = {}): Promise<T> {
++  let response: Response;
++  try { response = await dataFetch(path, { ...init, headers: { ...init.headers, "X-RetroLume-Session": token } }); }
++  catch (reason) {
++    if (reason instanceof DOMException && reason.name === "AbortError") throw reason;
++    throw new MemoryApiError(0, "unconfirmed", "结果未确认，请先核对；不会自动重发。");
++  }
++  const data = await response.json();
++  if (!response.ok) throw new MemoryApiError(response.status, data.detail?.code ?? "unavailable",
++    typeof data.detail === "string" ? data.detail : data.detail?.message ?? "记忆状态未确认");
++  return data as T;
++}
++export const listMemories = (token: string, cursor?: string) =>
++  memoryRequest<{ items: MemoryItem[]; next_cursor: string | null; view_token: string }>("/api/memories?limit=20" + (cursor ? "&cursor=" + encodeURIComponent(cursor) : ""), token);
++export const getMemory = (id: string, token: string, signal?: AbortSignal) =>
++  memoryRequest<MemoryView>("/api/memories/" + id, token, { signal });
++export const getMemoryReceipt = (key: string, token: string) =>
++  memoryRequest<MemoryReceipt>("/api/memories/commands/" + key, token);
++export const getMemoryImpact = (id: string, revision: number, action: string, token: string) =>
++  memoryRequest<MemoryImpact>("/api/memories/" + id + "/impact?expected_revision=" + revision + "&action=" + action, token);
++export const postMemory = (command: MemoryCommand, token: string) =>
++  memoryRequest<MemoryReceipt>("/api/memories/commands", token, { method: "POST",
++    headers: { "Content-Type": "application/json" }, body: JSON.stringify(command) });
++

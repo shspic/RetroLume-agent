@@ -1,0 +1,35 @@
+{
+  "number": 1,
+  "purpose": "one targeted final-byte batch for F01 repair04",
+  "started_monotonic": 487429.062,
+  "started_wall": "2026-10-05T23:59:17.359640+08:00",
+  "timeout_seconds": 55,
+  "cwd": "D:\\shspic\\project_NO3_RetroLume-agent\\backend",
+  "status": "PASS",
+  "command": {
+    "argv": [
+      "D:\\shspic\\project_NO3_RetroLume-agent\\backend\\.venv\\Scripts\\python.exe",
+      "-B",
+      "-c",
+      "import json, pathlib, sys, unittest\nnames = json.loads(sys.argv[1])\noutput = pathlib.Path(sys.argv[2])\nclass ObservedResult(unittest.TextTestResult):\n    def __init__(self, *args, **kwargs):\n        super().__init__(*args, **kwargs)\n        self.methods = []\n        self.subtests = []\n    def startTest(self, test):\n        self.methods.append(test.id())\n        super().startTest(test)\n    def addSubTest(self, test, subtest, err):\n        self.subtests.append({\"method\": test.id(), \"subtest\": str(subtest), \"success\": err is None})\n        super().addSubTest(test, subtest, err)\nsuite = unittest.defaultTestLoader.loadTestsFromNames(names)\nresult = unittest.TextTestRunner(verbosity=2, resultclass=ObservedResult).run(suite)\nsummary = {\"selected_names\": names, \"testsRun_method_count\": result.testsRun, \"methods\": result.methods,\n    \"subtest_count\": len(result.subtests), \"subtests\": result.subtests,\n    \"failure_count\": len(result.failures), \"error_count\": len(result.errors), \"skip_count\": len(result.skipped),\n    \"expected_failure_count\": len(result.expectedFailures), \"unexpected_success_count\": len(result.unexpectedSuccesses),\n    \"successful\": result.wasSuccessful()}\noutput.write_text(json.dumps(summary, ensure_ascii=False, indent=2)+\"\\n\", encoding=\"utf-8\")\nsys.exit(0 if result.wasSuccessful() else 1)\n",
+      "[\"tests.test_teaching_policy\", \"tests.test_task100_answer_support\", \"tests.test_task100_repair.RepairOfflineTests.test_answer_value_unit_and_ambiguous_input_are_separate_from_reference\", \"tests.test_task100_repair.RepairOfflineTests.test_misleading_model_met_cannot_advance_numeric_conflict_or_unknown\"]",
+      "D:\\shspic\\project_NO3_RetroLume-agent\\DocuN\\evidence\\TASK-100\\answer-support-repair-04\\batch-01\\unittest-result.json"
+    ],
+    "cwd": "D:\\shspic\\project_NO3_RetroLume-agent\\backend",
+    "standard_unittest_only": true,
+    "observer": "counts actual startTest/addSubTest callbacks; no product mocks"
+  },
+  "started_process_monotonic": 487429.171,
+  "exit_code": 0,
+  "process_elapsed_seconds": 1.172000000020489,
+  "as_run_after_identical": true,
+  "ended_monotonic": 487430.359,
+  "ended_wall": "2026-10-05T23:59:18.651225+08:00",
+  "elapsed_seconds": 1.297000000020489,
+  "stdout": "stdout.txt",
+  "stderr": "stderr.txt",
+  "outer_shell_tool_elapsed_seconds": 1.6463436,
+  "offline_charged_seconds": 1.6463436,
+  "shell_overhead_seconds": 0.3493435999795109,
+  "shell_overhead_basis": "exec_command wall_time_seconds includes shell and waiting; child timeout55s; entire observed call below60s; no zero overhead claim"
+}

@@ -1,0 +1,23 @@
+--- pre/backend/app/activities/repository.py
++++ final/backend/app/activities/repository.py
+@@ -1060,7 +1060,8 @@
+     @staticmethod
+     async def _stored_payload_row(connection: object, call: dict) -> tuple[str, str, str] | None:
+         cursor = await connection.execute(
+-            """SELECT payload_format, payload, payload_sha256
++            """SELECT admission_id, execution_generation, scope_revision,
++                      payload_format, payload, payload_sha256
+                  FROM activity_operation_results
+                 WHERE activity_id = %s AND operation_id = %s""",
+             (call["activity_id"], call["operation_id"]),
+@@ -1068,6 +1069,10 @@
+         row = await cursor.fetchone()
+         if row is None:
+             return None
++        if any(row[name] != call[name] for name in (
++            "admission_id", "execution_generation", "scope_revision"
++        )):
++            raise AdmissionDenied("历史正文与操作权威绑定不一致")
+         return (row["payload_format"], row["payload"], row["payload_sha256"])
+ 
+     async def record_outcome(self, permit: AdmissionPermit, outcome: LedgerOutcome) -> RecordOutcome:

@@ -1,0 +1,23 @@
+--- pre/backend/app/data_exit/files.py
++++ final/backend/app/data_exit/files.py
+@@ -36,15 +36,19 @@
+     return info
+ 
+ 
+-def publish(temporary, destination):
++def publish(temporary, destination, *, check=lambda: None):
++    check()
+     temporary, destination = Path(temporary), Path(destination)
+     safe_root(temporary.parent)
+     safe_root(destination.parent)
+     regular(temporary)
+     with temporary.open("r+b") as stream:
++        check()
+         os.fsync(stream.fileno())
++    check()
+     os.link(temporary, destination)
+     regular(destination)
++    check()
+ 
+ 
+ def private_file(path,*,directory=False):

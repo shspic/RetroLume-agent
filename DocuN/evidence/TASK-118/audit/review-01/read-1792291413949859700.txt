@@ -1,0 +1,60 @@
+frontend/src/activities/memoryIntents.ts
+99:   });
+100: }
+101: 
+102: 
+103: 
+104: export async function submitTrackedMemory(command: import("./memoryApi").MemoryCommand, token: string) {
+105:   const api = await import("./memoryApi");
+106:   const owner = await memoryEditorOwner();
+107:   if (!owner) throw new api.MemoryApiError(0, "recovery_unavailable", "本机恢复身份未就绪，输入保留，未发出请求。");
+108:   const body = api.memoryCommandBody(command);
+109:   const digest = await api.memoryDigest(body);
+110:   const draftId = "intent|" + command.business_key + "|" + owner;
+111:   if (!await saveMemoryDraft({ id: draftId, memory_id: command.memory_id, owner, version: 0,
+112:     revision: command.expected_revision, body_sha: "", content: JSON.stringify(command) }))
+113:     throw new api.MemoryApiError(0, "recovery_unavailable", "本机正文保存失败，未发出请求。");
+114:   const intent: MemoryIntent = { key: command.business_key, action: command.action, memory_id: command.memory_id,
+115:     owner, request_sha: digest, draft_id: draftId, state: "pending", created_at: new Date().toISOString() };
+116:   if (!await appendMemoryIntent(intent) || !await updateMemoryIntent(intent.key, "submitted"))
+117:     throw new api.MemoryApiError(0, "recovery_unavailable", "恢复台账写入失败，未发出请求。");
+118:   try {
+119:     const receipt = await api.postMemory(command, token);
+120:     if (receipt.business_key !== command.business_key || receipt.memory_id !== command.memory_id ||
+121:       receipt.action !== command.action || receipt.request_sha256 !== digest)
+122:       throw new api.MemoryApiError(0, "receipt_mismatch", "回执身份未确认，原意图保留。");
+123:     if (receipt.status === "committed") {
+124:       await removeMemoryIntent(intent.key); await removeMemoryDraft(draftId);
+125:       if (command.action === "revoke") await clearMemoryDraftsForId(command.memory_id);
+126:     }
+127:     return receipt;
+128:   } catch (reason) {
+129:     await updateMemoryIntent(intent.key, reason instanceof api.MemoryApiError && reason.status > 0 ? "refused" : "unconfirmed");
+130:     throw reason;
+131:   }
+132: }
+133: 
+134: 
+135: export async function submitTrackedMemoryCreate(activityId: string, sourceIds: string[],
+136:   entries: import("./memoryApi").MemoryChoice[], token: string,expectedSources?:{source_id:string;version_id:string;revision:number}[]) {
+137:   const api = await import("./memoryApi");
+138:   const owner = await memoryEditorOwner();
+139:   if (!owner) throw new Error("本机恢复身份不可用，未创建活动。");
+140:   const identity = { activity_id: activityId, source_ids: [...sourceIds].sort(), memory_selection: { confirmed: true, entries } };
+141:   const body={...identity,...(expectedSources?{expected_sources:expectedSources}:{})};
+142:   const hash = await api.memoryDigest(identity);
+143:   const draftId = "create|" + activityId + "|" + owner;
+144:   if (!await saveMemoryDraft({ id: draftId, memory_id: activityId, owner, version: 0, revision: 0, body_sha: "",
+145:     content: JSON.stringify(body) }) || !await appendMemoryIntent({ key: activityId, memory_id: activityId, owner,
+146:       action: "create_activity", request_sha: hash, draft_id: draftId, state: "pending", created_at: new Date().toISOString() }) ||
+147:     !await updateMemoryIntent(activityId, "submitted")) throw new Error("恢复台账未保存，未创建活动。");
+148:   try {
+149:     const result = await api.memoryRequest<{ activity: { memory_selection?: { create_request_sha256: string } } }>("/api/activities", token,
+150:       { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+151:     if (result.activity.memory_selection?.create_request_sha256 !== hash) throw new Error("创建身份未确认，原意图保留。");
+152:     await removeMemoryIntent(activityId); await removeMemoryDraft(draftId); return result;
+153:   } catch (reason) {
+154:     await updateMemoryIntent(activityId, reason instanceof api.MemoryApiError && reason.status > 0 ? "refused" : "unconfirmed");
+155:     throw reason;
+156:   }
+157: }

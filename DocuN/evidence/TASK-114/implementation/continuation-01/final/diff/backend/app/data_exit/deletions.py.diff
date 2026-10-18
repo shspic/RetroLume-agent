@@ -1,0 +1,25 @@
+--- pre/backend/app/data_exit/deletions.py
++++ final/backend/app/data_exit/deletions.py
+@@ -99,8 +99,10 @@
+                             (source_id, expected_revision, business_key, impact_sha, Jsonb(impact["hash_size_targets"]), self.references.maintenance_key)).fetchone()["value"]
+                     # 这里只表示墓碑 COMMIT 已确认，物理结果和预览停止各自记录。
+                     return impact, value
++        tombstone_confirmed=False
+         try:
+             impact, tomb = await asyncio.to_thread(tombstone)
++            tombstone_confirmed=True
+             self.hub.commit("deletion.observe", plain(tomb))
+             self.hub.update_job(job["job_id"], job["revision"], state="deleted_pending", stage="cleanup_pending")
+             stop_state = "not_owned"
+@@ -129,7 +131,10 @@
+         except BaseException as error:
+             try:
+                 current = self.hub.get(job["job_id"])
+-                self.hub.update_job(job["job_id"], current["revision"], state="deletion_unconfirmed", stage="deletion_unconfirmed",
++                rejected=(not tombstone_confirmed and isinstance(error,DataError)
++                          and error.code in ('snapshot_changed','request_conflict','not_found','source_deleted'))
++                state='failed' if rejected else 'deletion_unconfirmed'
++                self.hub.update_job(job["job_id"], current["revision"], state=state, stage=state,
+                                     error_code=error.code if isinstance(error, DataError) else "storage_unavailable")
+             except (DataError, OSError): pass
+             raise

@@ -1,0 +1,27 @@
+Traceback (most recent call last):
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task114\c02_pg_run.py", line 136, in main
+    with asyncio.Runner(loop_factory=psycopg_compatible_loop_factory) as runner:result=runner.run(source_phase(rt,evidence))
+                                                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task114\c02_pg_run.py", line 51, in source_phase
+    fixture=await seed(rt);evidence.save('01-fixture',fixture)
+            ^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task114\c02_seed.py", line 70, in seed
+    permit=await ledger.admit(AdmissionIntent(CallContext(activity_id=aid,executor_id='c02-synthetic',operation_id=op,execution_generation=lease.execution_generation,scope_revision=1),Provider.DEEPSEEK_CHAT_COMPLETIONS,'c02-synthetic',32,128,()))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\activities\repository.py", line 1226, in admit
+    return await self._transaction(operation)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\activities\repository.py", line 372, in _transaction
+    else:result=await operation(guarded)
+                ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\activities\repository.py", line 1138, in operation
+    self._memory_require_call(activity,operation_id,intent.teaching_binding)
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\memory\repository.py", line 45, in _memory_require_call
+    raise AdmissionDenied('memory_profile_required')
+app.capabilities.contracts.AdmissionDenied: memory_profile_required

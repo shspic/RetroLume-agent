@@ -1,0 +1,354 @@
+{
+  "task": "TASK-103",
+  "round": "continuation-02",
+  "permit": "TASK-103-G9-C02-20261007",
+  "first_read_utc": "2026-10-07T06:01:36+00:00",
+  "start_ns": 624306212697000,
+  "deadline_ns": 631506212697000,
+  "mapping": "首读UTC映射单调基点另保守扣60秒，跨日不重置",
+  "counts": {
+    "offline": 3,
+    "build": 0,
+    "entry": 3,
+    "container_create": 0,
+    "volume_create": 0,
+    "role_create": 0,
+    "container_start": 2,
+    "listener_start": 2,
+    "sup": 0,
+    "browser": 2,
+    "driver": 2
+  },
+  "used_seconds": {
+    "offline": 7.9059999998426065,
+    "real": 50.232999999891035,
+    "cleanup": 2.687000000034459,
+    "metadata": 82.5
+  },
+  "limits": {
+    "offline": 600,
+    "real": 1200,
+    "cleanup": 300,
+    "metadata": 300
+  },
+  "actions": [
+    {
+      "kind": "charge",
+      "bucket": "metadata",
+      "seconds": 30,
+      "at": "2026-10-07T06:25:06.314258+00:00",
+      "detail": {
+        "scope": "首读／新合同与冻结基线／规则补读／源码选择器读取",
+        "kind": "conservative",
+        "exact_seconds_unknown": true
+      }
+    },
+    {
+      "kind": "offline",
+      "count": 1,
+      "at": "2026-10-07T06:25:06.330623+00:00",
+      "ns": 625776546000000,
+      "detail": {
+        "name": "offline-01-four-proof-preflight"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "offline",
+      "seconds": 7.375,
+      "at": "2026-10-07T06:25:13.712552+00:00",
+      "detail": {
+        "name": "offline-01-four-proof-preflight"
+      }
+    },
+    {
+      "kind": "offline",
+      "count": 2,
+      "at": "2026-10-07T06:26:32.873883+00:00",
+      "ns": 625863093000000,
+      "detail": {
+        "name": "offline-02-browser-syntax-correction"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "offline",
+      "seconds": 0.1869999999180436,
+      "at": "2026-10-07T06:26:33.081304+00:00",
+      "detail": {
+        "name": "offline-02-browser-syntax-correction"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 1,
+      "at": "2026-10-07T06:26:33.156146+00:00",
+      "ns": 625863375000000,
+      "detail": {
+        "name": "real-01-four-proof-composite"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 0.17099999997299165,
+      "at": "2026-10-07T06:26:33.338229+00:00",
+      "detail": {
+        "name": "real-01-four-proof-composite"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 2,
+      "at": "2026-10-07T06:28:26.021677+00:00",
+      "ns": 625976234000000,
+      "detail": {
+        "name": "real-02-permit-corrected-composite"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 1,
+      "at": "2026-10-07T06:28:29.020889+00:00",
+      "ns": 625979234000000,
+      "detail": {
+        "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11"
+      }
+    },
+    {
+      "kind": "listener_start",
+      "count": 1,
+      "at": "2026-10-07T06:28:34.722216+00:00",
+      "ns": 625984937000000,
+      "detail": {
+        "module": "tests.fixtures.task103.c02.server",
+        "port": 18103
+      }
+    },
+    {
+      "kind": "driver",
+      "count": 1,
+      "at": "2026-10-07T06:28:37.960770+00:00",
+      "ns": 625988171000000,
+      "detail": {
+        "script": "frontend/tests/task103-c02-browser.cjs"
+      }
+    },
+    {
+      "kind": "browser",
+      "count": 1,
+      "at": "2026-10-07T06:28:37.972621+00:00",
+      "ns": 625988187000000,
+      "detail": {
+        "profile": "workspace/browser-profile"
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-07T06:28:48.930845+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg1",
+          "volume": "retrolume-task-103-g9-pg1-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 1.375,
+      "at": "2026-10-07T06:28:48.966492+00:00",
+      "detail": {
+        "name": "real-02-permit-corrected-composite"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 23.030999999959022,
+      "at": "2026-10-07T06:28:49.063980+00:00",
+      "detail": {
+        "name": "real-02-permit-corrected-composite"
+      }
+    },
+    {
+      "kind": "offline",
+      "count": 3,
+      "at": "2026-10-07T06:39:29.602192+00:00",
+      "ns": 626639812000000,
+      "detail": {
+        "name": "offline-03-tail-direct-correction"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "offline",
+      "seconds": 0.34399999992456287,
+      "at": "2026-10-07T06:39:29.940563+00:00",
+      "detail": {
+        "name": "offline-03-tail-direct-correction"
+      }
+    },
+    {
+      "kind": "entry",
+      "count": 3,
+      "at": "2026-10-07T06:39:30.014343+00:00",
+      "ns": 626640234000000,
+      "detail": {
+        "name": "real-03-unique-target-tail"
+      }
+    },
+    {
+      "kind": "container_start",
+      "count": 2,
+      "at": "2026-10-07T06:39:31.984109+00:00",
+      "ns": 626642203000000,
+      "detail": {
+        "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11"
+      }
+    },
+    {
+      "kind": "listener_start",
+      "count": 2,
+      "at": "2026-10-07T06:39:37.613186+00:00",
+      "ns": 626647828000000,
+      "detail": {
+        "module": "tests.fixtures.task103.c02.server",
+        "port": 18103
+      }
+    },
+    {
+      "kind": "driver",
+      "count": 2,
+      "at": "2026-10-07T06:39:39.937217+00:00",
+      "ns": 626650156000000,
+      "detail": {
+        "script": "frontend/tests/task103-c02-browser.cjs"
+      }
+    },
+    {
+      "kind": "browser",
+      "count": 2,
+      "at": "2026-10-07T06:39:39.952413+00:00",
+      "ns": 626650171000000,
+      "detail": {
+        "profile": "workspace/browser-profile-02"
+      }
+    },
+    {
+      "kind": "observation",
+      "at": "2026-10-07T06:39:56.969109+00:00",
+      "detail": {
+        "cleanup_container": {
+          "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11",
+          "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+          "name": "retrolume-task-103-g9-pg1",
+          "volume": "retrolume-task-103-g9-pg1-data",
+          "running": false,
+          "pid": 0,
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "cleanup",
+      "seconds": 1.312000000034459,
+      "at": "2026-10-07T06:39:56.988677+00:00",
+      "detail": {
+        "name": "tail"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "real",
+      "seconds": 27.030999999959022,
+      "at": "2026-10-07T06:39:57.068210+00:00",
+      "detail": {
+        "name": "real-03-unique-target-tail"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "metadata",
+      "seconds": 30,
+      "at": "2026-10-07T06:44:50.313628+00:00",
+      "detail": {
+        "scope": "失败原件、当前DOM/API源码定位及末改fixture记录",
+        "kind": "conservative",
+        "exact_seconds_unknown": true
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "metadata",
+      "seconds": 2.5,
+      "at": "2026-10-07T06:46:27.633238+00:00",
+      "detail": {
+        "name": "C02-final-bytes-and-resource-inspect",
+        "kind": "measured"
+      }
+    },
+    {
+      "kind": "charge",
+      "bucket": "metadata",
+      "seconds": 20,
+      "at": "2026-10-07T06:53:15.736987+00:00",
+      "detail": {
+        "scope": "结果文档／末改fixture／闭账封装与最后读取",
+        "kind": "conservative",
+        "exact_seconds_unknown": true
+      }
+    }
+  ],
+  "resources": [
+    {
+      "slot": 1,
+      "name": "retrolume-task-103-g9-pg1",
+      "volume": "retrolume-task-103-g9-pg1-data",
+      "port": 55443,
+      "database": "retrolume_task103_g9_main",
+      "cid": "4889202d9a58c622fb7cd2bd3087e5bceb7ad20a049c6550f4bd3588ff66ac11"
+    },
+    {
+      "slot": 2,
+      "name": "retrolume-task-103-g9-pg2",
+      "volume": "retrolume-task-103-g9-pg2-data",
+      "port": 55444,
+      "database": "retrolume_task103_g9_upgrade",
+      "cid": "f96ac8dcb64648c76a2bc70f3f8b75969ada0ea0ea69b5896fe5ecb71affab85"
+    },
+    {
+      "slot": 3,
+      "name": "retrolume-task-103-g9-pg3",
+      "volume": "retrolume-task-103-g9-pg3-data",
+      "port": 55445,
+      "database": "retrolume_task103_g9_fault",
+      "cid": "4b813f9e4317aef9c613eb140fcb2d40c55a6bd98ee5d79807ea5851975d7f68"
+    }
+  ],
+  "allow_sup_preparation": false,
+  "previous_session_sha256": "18afe65131481ba044ebf104627df1ecb2365a92151e43e52c3f4c2bc1929866",
+  "previous_counts": {
+    "offline": 6,
+    "build": 1,
+    "entry": 12,
+    "container_create": 0,
+    "volume_create": 0,
+    "container_start": 14,
+    "listener_start": 3,
+    "sup": 22,
+    "browser": 3,
+    "driver": 3
+  },
+  "original_result_sha256": "fe80b6161bff72942a09bb3ef8cb5a61e507aa42015f149aa9e3495fed1591c3",
+  "closed": true,
+  "status": "PARTIAL_STOPPED",
+  "closed_at": "2026-10-07T06:53:20.401238+00:00",
+  "stop_reason": "真实入口3/3与offline3/3到限；late citation response未执行，末改library/default-list选择器NOT_RUN"
+}

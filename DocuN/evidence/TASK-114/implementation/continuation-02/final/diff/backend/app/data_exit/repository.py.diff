@@ -1,0 +1,61 @@
+--- pre/backend/app/data_exit/repository.py
++++ final/backend/app/data_exit/repository.py
+@@ -9,15 +9,17 @@
+         self._dsn = dsn
+ 
+     @contextmanager
+-    def connection(self, *, readonly=False, repeatable=False):
++    def connection(self, *, readonly=False, repeatable=False, operation=None):
+         import psycopg
+         from psycopg.rows import dict_row
+         try:
+-            with psycopg.connect(self._dsn, connect_timeout=3, row_factory=dict_row) as connection:
++            manager = operation.connection(self._dsn, row_factory=dict_row) if operation is not None else psycopg.connect(self._dsn, connect_timeout=3, row_factory=dict_row)
++            with manager as connection:
+                 if readonly:
+                     connection.execute("BEGIN ISOLATION LEVEL " + ("REPEATABLE READ" if repeatable else "READ COMMITTED") + " READ ONLY")
+-                connection.execute("SET LOCAL statement_timeout='30s'")
+-                connection.execute("SET LOCAL lock_timeout='3s'")
++                if operation is None:
++                    connection.execute("SET LOCAL statement_timeout='30s'")
++                    connection.execute("SET LOCAL lock_timeout='3s'")
+                 connection.execute("SET LOCAL idle_in_transaction_session_timeout='60s'")
+                 from .schema_checks import assert_data_schema_sync
+                 assert_data_schema_sync(connection)
+@@ -25,8 +27,8 @@
+         except psycopg.Error:
+             raise DataError("storage_unavailable", 503) from None
+ 
+-    def state(self):
+-        with self.connection(readonly=True) as connection:
++    def state(self, operation=None):
++        with self.connection(readonly=True, operation=operation) as connection:
+             state = connection.execute("SELECT public.data_state() AS value").fetchone()["value"]
+         if not isinstance(state, dict): raise DataError("mode_unknown", 503)
+         return state
+@@ -37,15 +39,15 @@
+         if row is None: raise DataError("mode_unknown", 503)
+         return row
+ 
+-    def observe_job(self, receipt):
++    def observe_job(self, receipt, operation=None):
+         from psycopg.types.json import Jsonb
+-        with self.connection() as connection:
++        with self.connection(operation=operation) as connection:
+             connection.execute("SELECT public.data_observe_job(%s)", (Jsonb(receipt),))
+ 
+-    def latest(self):
++    def latest(self, operation=None):
+         from .codec import plain
+         try:
+-            with self.connection(readonly=True, repeatable=True) as connection:
++            with self.connection(readonly=True, repeatable=True, operation=operation) as connection:
+                 point = connection.execute("SELECT CURRENT_TIMESTAMP AS utc,pg_current_snapshot()::text AS snapshot").fetchone()
+                 control=plain(connection.execute('SELECT * FROM public.data_export_control_v1').fetchone())
+                 tombstones = plain(connection.execute("SELECT * FROM public.data_export_tombstones_v1 ORDER BY entity_kind,entity_id,effective_revision").fetchall())
+@@ -59,4 +61,5 @@
+             return {"status": "known", "point": plain(point), 'source_control':control,"tombstones": tombstones,
+                     "accounting": accounting, "preview_accounting": previews}
+         except DataError:
++            if operation is not None: operation.check()
+             return {"status": "unknown", "tombstones": [], "accounting": None, "preview_accounting": None}

@@ -1,0 +1,34 @@
+--- first-pre/backend/app/learning/teaching_adapter.py
++++ current/backend/app/learning/teaching_adapter.py
+@@ -14,8 +14,8 @@
+     返回错误码或 None；与 learning adapter 同样只在受控链内调用。
+     """
+     try:
+-        from .teaching_contracts import TeachingMemoryProfile,parse_frozen_context,TeachingMemoryFrozenContext
+-        profile_type=TeachingMemoryProfile if request.teaching_profile.profile=='teaching.v2' else TeachingProfile
++        from .teaching_contracts import TeachingMemoryProfile,TeachingHybridProfile,parse_frozen_context,TeachingMemoryFrozenContext,TeachingHybridFrozenContext
++        profile_type=TeachingHybridProfile if request.teaching_profile.profile=='teaching.v3' else TeachingMemoryProfile if request.teaching_profile.profile=='teaching.v2' else TeachingProfile
+         profile = profile_type.model_validate(request.teaching_profile.model_dump())
+         if request.learning_profile is not None or request.allowed_tools:
+             return "invalid_teaching_profile"
+@@ -31,7 +31,7 @@
+             return "invalid_teaching_profile"
+         # 消息精确匹配（与实际 provider payload 投影一致）。
+         from app.capabilities.contracts import Message
+-        if profile.profile=='teaching.v2':
++        if profile.profile in ('teaching.v2','teaching.v3'):
+             from app.memory.context import materialize_recipe
+             from app.memory.contracts import MemoryRefusal
+             view=await ledger.read_teaching_command(context.activity_id,profile.command_key)
+@@ -42,7 +42,10 @@
+             selection=await ledger.read_memory_selection(context.activity_id,include_bodies=True)
+             if selection.get('selection_sha256')!=profile.memory_selection_sha256 or frozen.memory_refs!=profile.memory_refs:
+                 return 'memory_dependency_invalid'
+-            try: raw_expected=await materialize_recipe(ledger,frozen.recipe,frozen.catalog,selection)
++            if isinstance(frozen,TeachingHybridFrozenContext):
++                if frozen.retrieval_ref!=profile.retrieval_ref or request.retrieval_ref!=profile.retrieval_ref or frozen.memory_dependency_sha256!=profile.memory_dependency_sha256:
++                    return 'retrieval_ref_invalidated'
++            try: raw_expected=await materialize_recipe(ledger,frozen.recipe,frozen.catalog,selection) if frozen.recipe is not None else frozen.messages
+             except MemoryRefusal as exc:return exc.code
+             if sha(canonical([Message.model_validate(m).model_dump(mode='json',exclude_none=True) for m in raw_expected]))!=frozen.assembled_messages_sha256:
+                 return 'memory_dependency_invalid'

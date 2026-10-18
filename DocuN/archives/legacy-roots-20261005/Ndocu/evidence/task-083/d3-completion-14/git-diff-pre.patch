@@ -1,0 +1,755 @@
+diff --git a/backend/app/activities/__init__.py b/backend/app/activities/__init__.py
+index 6ab448c..9e1638c 100644
+--- a/backend/app/activities/__init__.py
++++ b/backend/app/activities/__init__.py
+@@ -4,18 +4,22 @@ from .repository import (
+     ActivityLease,
+     ActivityLedgerConflict,
+     ActivitySpec,
++    CloseResult,
+     PostgresAdmissionLedger,
+     SettleResult,
+     SourceSnapshot,
+     UnresolvedOperation,
++    WindowSnapshot,
+ )
+ 
+ __all__ = [
+     "ActivityLease",
+     "ActivityLedgerConflict",
+     "ActivitySpec",
++    "CloseResult",
+     "PostgresAdmissionLedger",
+     "SettleResult",
+     "SourceSnapshot",
+     "UnresolvedOperation",
++    "WindowSnapshot",
+ ]
+diff --git a/backend/app/activities/repository.py b/backend/app/activities/repository.py
+index 0a78d00..8a5dc74 100644
+--- a/backend/app/activities/repository.py
++++ b/backend/app/activities/repository.py
+@@ -31,6 +31,7 @@ _MAX_RESPONSE_BYTES = 67_108_864
+ # 时间账本（TASK-077）：M/R/S 计数上限与 004 迁移的 BIGINT CHECK 上界一致。
+ _MAX_RUNNING_SECONDS = 2_147_483_647
+ _MAX_WINDOW_SECONDS = 3_600
++_MAX_WINDOWS_SESSION_ID = 4_294_967_295
+ 
+ 
+ class ActivityLedgerConflict(RuntimeError):
+@@ -44,6 +45,22 @@ class SettleResult(enum.Enum):
+     ALREADY_SETTLED = "already_settled"
+ 
+ 
++class CloseResult(enum.Enum):
++    CLOSED = "closed"
++    ALREADY_CLOSED = "already_closed"
++
++
++@dataclass(frozen=True)
++class WindowSnapshot:
++    status: str
++    execution_generation: int
++    running_reserved_seconds: int
++    dispatch_closed: bool
++    running_owner_session_id: int | None = None
++    lease_recoverable: bool = False
++    sources_valid: bool = False
++
++
+ @dataclass(frozen=True)
+ class SourceSnapshot:
+     source_id: str
+@@ -75,6 +92,7 @@ class ActivityLease:
+     scope_revision: int
+     lease_expires_at: datetime
+     window_seconds: int
++    running_owner_session_id: int | None = None
+ 
+ 
+ @dataclass(frozen=True)
+@@ -301,6 +319,8 @@ class PostgresAdmissionLedger:
+         *,
+         lease_seconds: int,
+         window_seconds: int,
++        running_owner_session_id: int | None = None,
++        expected_previous_generation: int | None = None,
+     ) -> ActivityLease | None:
+         """认领活动租约并预扣时间预算；时间预算耗尽返回 None，其余冲突仍抛异常。
+ 
+@@ -317,6 +337,8 @@ class PostgresAdmissionLedger:
+           代次失效）同样 +1，返回 None，不以事务内异常回滚撤销折叠；
+         - 活动已是 pending 且 A=0：不写任何行、不递增代次，直接返回 None。
+ 
++        低层缺省 NULL 仅供合成调用兼容，不授予旧 Job 自动恢复资格；
++        生产 SUP 必须提供自身 Windows 会话号并先完成旧树核查。
+         过期 running 租约按既有接续规则处理：先把真实残留 R 全额保守折叠
+         入 S 并清零、关闭旧代次资格；已结算（pending、R=0）的窗口不折叠。
+         不得抢占有效租约。
+@@ -331,15 +353,30 @@ class PostgresAdmissionLedger:
+             or not 1 <= window_seconds <= _MAX_WINDOW_SECONDS
+         ):
+             raise ValueError("时间窗口必须在 1 到 3600 秒之间")
++        if running_owner_session_id is not None and (
++            type(running_owner_session_id) is not int
++            or not 0 <= running_owner_session_id <= _MAX_WINDOWS_SESSION_ID
++        ):
++            raise ValueError("Windows 会话号必须在 DWORD 域内")
++        if expected_previous_generation is not None and (
++            type(expected_previous_generation) is not int or expected_previous_generation < 0
++        ):
++            raise ValueError("旧执行代次必须是非负整数")
+ 
+         async def operation(connection: object) -> ActivityLease | None:
+             snapshots = await self._source_rows(connection, activity_id)
+             sources_valid = bool(snapshots) and await self._lock_sources(connection, snapshots)
+             cursor = await connection.execute("SELECT * FROM activities WHERE id = %s FOR UPDATE", (activity_id,))
+             row = await cursor.fetchone()
+-            now = datetime.now(timezone.utc)
++            now = datetime.now(timezone.utc)  # 来源及活动锁均已取得。
+             if row is None or not sources_valid:
+                 raise ActivityLedgerConflict("活动或来源快照不可用")
++            if expected_previous_generation is not None and (
++                row["status"] != "running"
++                or row["execution_generation"] != expected_previous_generation
++                or row["running_owner_session_id"] != running_owner_session_id
++            ):
++                raise ActivityLedgerConflict("已核查旧代次或会话身份已变化")
+             if row["status"] == "cancelled" or row["deadline_at"] <= now:
+                 raise ActivityLedgerConflict("活动已取消或过期")
+             if row["status"] == "running" and row["lease_expires_at"] is not None and row["lease_expires_at"] > now:
+@@ -362,6 +399,8 @@ class PostgresAdmissionLedger:
+                               SET status = 'pending',
+                                   execution_generation = execution_generation + 1,
+                                   executor_id = NULL, lease_expires_at = NULL,
++                                  running_owner_session_id = NULL,
++                                  dispatch_closed = TRUE,
+                                   running_reserved_seconds = 0,
+                                   running_settled_seconds = %s,
+                                   updated_at = CURRENT_TIMESTAMP
+@@ -376,9 +415,12 @@ class PostgresAdmissionLedger:
+                 """UPDATE activities
+                       SET status = 'running', executor_id = %s, execution_generation = %s,
+                           lease_expires_at = %s, running_reserved_seconds = %s,
++                          running_owner_session_id = %s,
++                          dispatch_closed = FALSE,
+                           running_settled_seconds = %s, updated_at = CURRENT_TIMESTAMP
+                     WHERE id = %s""",
+-                (executor_id, generation, lease_expires_at, effective_window, settled, activity_id),
++                (executor_id, generation, lease_expires_at, effective_window,
++                 running_owner_session_id, settled, activity_id),
+             )
+             return ActivityLease(
+                 activity_id,
+@@ -387,10 +429,74 @@ class PostgresAdmissionLedger:
+                 row["scope_revision"],
+                 lease_expires_at,
+                 effective_window,
++                running_owner_session_id,
++            )
++
++        return await self._transaction(operation)
++
++    async def inspect_window(self, activity_id: str) -> WindowSnapshot:
++        """恢复入口短事务快照；来源锁沿用 claim 顺序，调用方须持活动互斥。"""
++        activity_id = self._uuid(activity_id, "activity_id")
++
++        async def operation(connection: object) -> WindowSnapshot:
++            snapshots = await self._source_rows(connection, activity_id)
++            sources_valid = bool(snapshots) and await self._lock_sources(connection, snapshots)
++            cursor = await connection.execute(
++                """SELECT status, execution_generation, running_reserved_seconds, dispatch_closed,
++                          running_owner_session_id, lease_expires_at, deadline_at
++                     FROM activities WHERE id = %s FOR UPDATE""",
++                (activity_id,),
++            )
++            row = await cursor.fetchone()
++            if row is None:
++                raise ActivityLedgerConflict("活动不存在")
++            now = datetime.now(timezone.utc)  # 与 claim 一致，在锁后判断资格。
++            return WindowSnapshot(
++                row["status"], row["execution_generation"],
++                row["running_reserved_seconds"], row["dispatch_closed"],
++                row["running_owner_session_id"],
++                bool((row["lease_expires_at"] is None or row["lease_expires_at"] <= now)
++                     and row["deadline_at"] > now),
++                sources_valid,
+             )
+ 
+         return await self._transaction(operation)
+ 
++    async def begin_window_close(
++        self, activity_id: str, executor_id: str, execution_generation: int,
++    ) -> CloseResult:
++        """只关闭当前代次的出站门；不退款、不改预扣或代次。"""
++        activity_id = self._uuid(activity_id, "activity_id")
++        executor_id = self._bounded_name(executor_id, "executor_id")
++        if (
++            isinstance(execution_generation, bool)
++            or not isinstance(execution_generation, int)
++            or execution_generation < 0
++        ):
++            raise ValueError("执行代次必须是非负整数")
++
++        async def operation(connection: object) -> CloseResult:
++            snapshots = await self._source_rows(connection, activity_id)
++            await self._lock_sources(connection, snapshots)
++            cursor = await connection.execute("SELECT * FROM activities WHERE id = %s FOR UPDATE", (activity_id,))
++            row = await cursor.fetchone()
++            if (
++                row is None or row["status"] != "running"
++                or row["executor_id"] != executor_id
++                or row["execution_generation"] != execution_generation
++            ):
++                raise ActivityLedgerConflict("关闭请求与当前运行代次不匹配")
++            if row["dispatch_closed"]:
++                return CloseResult.ALREADY_CLOSED
++            await connection.execute(
++                """UPDATE activities SET dispatch_closed = TRUE, updated_at = CURRENT_TIMESTAMP
++                     WHERE id = %s""",
++                (activity_id,),
++            )
++            return CloseResult.CLOSED
++
++        return await self._transaction(operation)
++
+     async def settle_execution_window(
+         self,
+         activity_id: str,
+@@ -459,6 +565,7 @@ class PostgresAdmissionLedger:
+                 or row["executor_id"] != executor_id
+                 or row["execution_generation"] != execution_generation
+                 or row["running_reserved_seconds"] != window_seconds
++                or not row["dispatch_closed"]
+             ):
+                 raise ActivityLedgerConflict("执行窗口与当前运行代次不匹配")
+             await connection.execute(
+@@ -466,8 +573,10 @@ class PostgresAdmissionLedger:
+                       SET status = 'pending',
+                           execution_generation = execution_generation + 1,
+                           executor_id = NULL, lease_expires_at = NULL,
++                          running_owner_session_id = NULL,
+                           running_reserved_seconds = 0,
+                           running_settled_seconds = running_settled_seconds + %s,
++                          dispatch_closed = TRUE,
+                           last_settled_generation = %s, last_settled_seconds = %s,
+                           updated_at = CURRENT_TIMESTAMP
+                     WHERE id = %s""",
+@@ -499,6 +608,8 @@ class PostgresAdmissionLedger:
+                 """UPDATE activities
+                       SET status = 'cancelled', execution_generation = %s, executor_id = NULL,
+                           lease_expires_at = NULL, cancelled_at = CURRENT_TIMESTAMP,
++                          running_owner_session_id = NULL,
++                          dispatch_closed = TRUE,
+                           running_reserved_seconds = 0,
+                           running_settled_seconds = running_settled_seconds + running_reserved_seconds,
+                           updated_at = CURRENT_TIMESTAMP
+@@ -692,6 +803,7 @@ class PostgresAdmissionLedger:
+         context = intent.context
+         return (
+             activity["status"] == "running"
++            and not activity["dispatch_closed"]
+             and activity["executor_id"] == executor_id
+             and activity["execution_generation"] == context.execution_generation
+             and activity["scope_revision"] == context.scope_revision
+@@ -815,7 +927,10 @@ class PostgresAdmissionLedger:
+     async def mark_dispatch_started(self, permit: AdmissionPermit) -> None:
+         async def operation(connection: object) -> None:
+             activity, call, sources_valid = await self._locked_operation(connection, permit)
+-            if call["state"] != "reserved" or not self._operation_is_current(activity, call, sources_valid):
++            if (
++                call["state"] != "reserved" or activity["dispatch_closed"]
++                or not self._operation_is_current(activity, call, sources_valid)
++            ):
+                 raise AdmissionDenied("发送资格已消费或活动已失效")
+             await connection.execute(
+                 """UPDATE activity_operations
+diff --git a/backend/tests/test_activity_time_budget.py b/backend/tests/test_activity_time_budget.py
+index 47d876b..c9aa886 100644
+--- a/backend/tests/test_activity_time_budget.py
++++ b/backend/tests/test_activity_time_budget.py
+@@ -136,6 +136,16 @@ class ActivityTimeBudgetPostgresTests(PsycopgLoopIsolatedAsyncioTestCase):
+         )
+ 
+     async def settle(self, lease, *, elapsed_seconds, executor: str | None = None, window: int | None = None):
++        # 仅对仍是当前合法运行代次的基础合成用例先关门；旧幂等/旧代次请求不碰新门。
++        row = await self.budget_row()
++        if (
++            row["status"] == "running"
++            and row["execution_generation"] == lease.execution_generation
++            and row["executor_id"] == (executor or lease.executor_id)
++        ):
++            await self.ledger.begin_window_close(
++                self.activity_id, lease.executor_id, lease.execution_generation
++            )
+         return await self.ledger.settle_execution_window(
+             self.activity_id,
+             executor or lease.executor_id,
+diff --git a/docu/CHANGE.MD b/docu/CHANGE.MD
+index aab99d8..6d58403 100644
+--- a/docu/CHANGE.MD
++++ b/docu/CHANGE.MD
+@@ -476,3 +476,137 @@ CHG-0458 | 2026-09-23T16:59:14.1909751+08:00 | Ndocu/archives/TASK-080-before-re
+ CHG-0459 | 2026-09-23T16:59:14.1909751+08:00 | Ndocu/tasks/TASK-080.md | 更新 | 续作01精确排除与首提交范围准备，沿080实际新窗口
+ CHG-0460 | 2026-09-23T16:59:14.1909751+08:00 | docu/PROJECT_ARCHITECTURE.MD | 更新 | v0.33限定账本验证及Git实际状态
+ CHG-0461 | 2026-09-23T16:59:14.1909751+08:00 | docu/PROJECT_EXECUTE_STATE.MD | 更新 | v1.34回收079/080，停止偏差与续作明确
++CHG-0462 | 2026-09-23T23:25:47.6572230+08:00 | .gitignore | 更新登记 | 080续作01追加两份凭据原证据及079证据目录忽略，首提交前已完成
++CHG-0463 | 2026-09-23T23:25:47.6572230+08:00 | Ndocu/results/TASK-080-result.md | 更新登记 | 补登记续作01/02，599文件本地首提交完成，核验脚本多次修正偏差保留
++CHG-0464 | 2026-09-23T23:25:47.6572230+08:00 | Ndocu/evidence/task-080/revision-01/TASK-080-commit-authorized.md | 创建登记 | 补登记用户确认后的精确首提交合同，冻结期间位于排除目录
++CHG-0465 | 2026-09-23T23:25:47.6572230+08:00 | docu/PROJECT_ARCHITECTURE.MD | 更新 | v0.34同步Git首提交事实与授权边界
++CHG-0466 | 2026-09-23T23:25:47.6572230+08:00 | docu/PROJECT_EXECUTE_STATE.MD | 更新 | v1.35验收080，登记首提交与执行偏差，本轮文档未自动提交
++CHG-0467 | 2026-09-24T08:38:53.6888462+08:00 | Ndocu/tasks/TASK-081.md | 创建 | 基于已验证账本收敛监督停止协议，增强执行，待转交
++CHG-0468 | 2026-09-24T08:38:53.6888462+08:00 | docu/PROJECT_EXECUTE_STATE.MD | 更新 | v1.36登记081及设计边界，现有运行额度不重置
++CHG-0469 | 2026-09-24T08:57:57.4751419+08:00 | Ndocu/results/TASK-081-result.md | 创建登记 | 首轮设计未闭合，不进入实施，已验证账本事实仍保留
++CHG-0470 | 2026-09-24T08:57:57.4751419+08:00 | Ndocu/archives/TASK-081-before-revision01-20260924.md | 创建 | 首轮合同归档
++CHG-0471 | 2026-09-24T08:57:57.4751419+08:00 | Ndocu/tasks/TASK-081.md | 更新 | 定向纠正F1—F6，沿原增强窗口，不扩大运行
++CHG-0472 | 2026-09-24T08:57:57.4751419+08:00 | docu/PROJECT_EXECUTE_STATE.MD | 更新 | v1.37裁定081及修正轮路由，不提交或实施
++CHG-0473 | 2026-09-24T09:22:16.0577003+08:00 | Ndocu/results/TASK-081-result.md | 更新登记 | 修正轮01仍不通过设计门槛，停止原窗口修订
++CHG-0474 | 2026-09-24T09:22:16.0577003+08:00 | Ndocu/tasks/TASK-082.md | 创建 | 全新增强窗口独立诊断四问，不实施或重测账本
++CHG-0475 | 2026-09-24T09:22:16.0577003+08:00 | docu/PROJECT_EXECUTE_STATE.MD | 更新 | v1.38裁定081并登记082，005未获批准
++CHG-0476 | 2026-09-24T09:49:27.4765243+08:00 | Ndocu/results/TASK-082-result.md | 创建登记 | 限定独立诊断交付通过，未进行动态验证
++CHG-0477 | 2026-09-24T09:49:27.4765243+08:00 | Ndocu/results/TASK-082-work-decision.md | 创建 | 明确单关闭位、先预扣及停止后结算候选，待用户批准
++CHG-0478 | 2026-09-24T09:49:27.4765243+08:00 | docu/PROJECT_EXECUTE_STATE.MD | 更新 | v1.39裁定082，下一实施范围待具体批准
++CHG-0479 | 2026-09-24T09:54:56.5952439+08:00 | Ndocu/results/TASK-082-work-decision.md | 更新 | 登记用户明确批准内部单窗监督实施与合成验证
++CHG-0480 | 2026-09-24T09:54:56.5952439+08:00 | Ndocu/tasks/TASK-083.md | 创建 | 沿082增强窗口转实施，完整合同/限量合成验证/独立审计门
++CHG-0481 | 2026-09-24T09:54:56.5952439+08:00 | docu/PROJECT_ARCHITECTURE.MD | 更新 | v0.35新增关闭位与监督批准增量为计划中
++CHG-0482 | 2026-09-24T09:54:56.5952439+08:00 | docu/PROJECT_EXECUTE_STATE.MD | 更新 | v1.40登记083待转交及资源预算，PG/产品外接不启用
++CHG-0483 | 2026-09-24T10:58:38.8248881+08:00 | Ndocu/results/TASK-083-result.md | 创建登记 | 部分实现及7离线证据，Job初批失败/超时/身份缺口保留
++CHG-0484 | 2026-09-24T10:58:38.8248881+08:00 | Ndocu/archives/TASK-083-before-offline-repair-20260924.md | 创建 | 原实现与运行合同保留
++CHG-0485 | 2026-09-24T10:58:38.8248881+08:00 | Ndocu/tasks/TASK-083.md | 更新 | 原卡离线补足，冻结Job额度，后续独立审查
++CHG-0486 | 2026-09-24T10:58:38.8248881+08:00 | docu/PROJECT_ARCHITECTURE.MD | 更新 | v0.36记录关闭门及监督候选与实际缺口
++CHG-0487 | 2026-09-24T10:58:38.8248881+08:00 | docu/PROJECT_EXECUTE_STATE.MD | 更新 | v1.41裁定083与离线预算，真实Job/PG不运行
++CHG-0488 | 2026-09-24T14:03:00.1733259+08:00 | Ndocu/results/TASK-083-result.md | 更新登记 | 离线补足候选回收，最终hash一致，后补代码not_run
++CHG-0489 | 2026-09-24T14:03:00.1733259+08:00 | Ndocu/tasks/TASK-084.md | 创建 | 新增强独立审查最终源码/运行控制，Job与PG暂停
++CHG-0490 | 2026-09-24T14:03:00.1733259+08:00 | docu/PROJECT_ARCHITECTURE.MD | 更新 | v0.37增量入口与候选证据边界
++CHG-0491 | 2026-09-24T14:03:00.1733259+08:00 | docu/PROJECT_EXECUTE_STATE.MD | 更新 | v1.42回收083并登记084，保留预算和执行偏差
++CHG-0492 | 2026-09-24T14:56:01.4021976+08:00 | Ndocu/results/TASK-084-result.md | 创建登记 | 独立审查交付有效，代码/Job及PG运行门不通过
++CHG-0493 | 2026-09-24T14:56:01.4021976+08:00 | Ndocu/archives/TASK-083-before-audit-fixes-20260924.md | 创建 | 离线补足轮原合同归档
++CHG-0494 | 2026-09-24T14:56:01.4021976+08:00 | Ndocu/tasks/TASK-083.md | 更新 | 原卡审计修复轮02，D3越界先提案，真实运行冻结
++CHG-0495 | 2026-09-24T14:56:01.4021976+08:00 | docu/PROJECT_ARCHITECTURE.MD | 更新 | v0.38登记独立审查阻断，不放行候选
++CHG-0496 | 2026-09-24T14:56:01.4021976+08:00 | docu/PROJECT_EXECUTE_STATE.MD | 更新 | v1.43回收084与083离线修复路由、预算
++CHG-0497 | 2026-09-24T15:44:27.4119615+08:00 | Ndocu/results/TASK-083-result.md | 更新登记 | 修复轮02部分完成，最终05复检失败，D1/D3保持开放
++CHG-0498 | 2026-09-24T15:44:27.4119615+08:00 | Ndocu/archives/TASK-084-before-review02-20260924.md | 创建 | 保留首轮完整独立审计合同
++CHG-0499 | 2026-09-24T15:44:27.4119615+08:00 | Ndocu/tasks/TASK-084.md | 更新 | review02沿独立原窗口增量四问，无运行
++CHG-0500 | 2026-09-24T15:44:27.4119615+08:00 | docu/PROJECT_EXECUTE_STATE.MD | 更新 | v1.44停止实现试跑，D3扩展未批准，转084增量复核
++CHG-0501 | 2026-09-24T16:29:35.5765554+08:00 | Ndocu/results/TASK-084-result.md | 更新登记 | review02关闭部分静态项，D1/D3及04碰撞/05失败开放
++CHG-0502 | 2026-09-24T16:29:35.5765554+08:00 | Ndocu/archives/TASK-083-before-review02-followup-20260924.md | 创建 | 保留审计修复轮02合同
++CHG-0503 | 2026-09-24T16:29:35.5765554+08:00 | Ndocu/tasks/TASK-083.md | 更新 | 定向接续四项与有限事实取证，禁止新增持久状态及真实运行
++CHG-0504 | 2026-09-24T16:29:35.5765554+08:00 | docu/PROJECT_EXECUTE_STATE.MD | 更新 | v1.45采纳review02并沿083原窗口接续，旧预算不重置
++CHG-0505 | 2026-09-24T20:18:26.5854079+08:00 | Ndocu/results/TASK-083-result.md | 更新登记 | 定向接续03部分完成，最终9过1失败并停止，运行门冻结
++CHG-0506 | 2026-09-24T20:18:26.5854079+08:00 | Ndocu/archives/TASK-084-before-review03-20260924.md | 创建 | 保存review02原独立审计合同
++CHG-0507 | 2026-09-24T20:18:26.5854079+08:00 | Ndocu/tasks/TASK-084.md | 更新 | 原独立窗口review03复核控制增量/失败/恢复事实，不运行
++CHG-0508 | 2026-09-24T20:18:26.5854079+08:00 | docu/PROJECT_EXECUTE_STATE.MD | 更新 | v1.46回收083并转084定向独立复核，预算不重置
++CHG-0509 | 2026-09-24T20:49:07.9334559+08:00 | Ndocu/results/TASK-084-result.md | 更新登记 | review03接受，D1静态修复及三处夹具下一路径，真实运行冻结
++CHG-0510 | 2026-09-24T20:49:07.9334559+08:00 | Ndocu/archives/TASK-083-before-fixture-repair04-20260924.md | 创建 | 保留定向接续03合同与历史额度
++CHG-0511 | 2026-09-24T20:49:07.9334559+08:00 | Ndocu/tasks/TASK-083.md | 更新 | 原增强窗口三处夹具修正04，一次最终离线批，复用未变证据
++CHG-0512 | 2026-09-24T20:49:07.9334559+08:00 | docu/PROJECT_EXECUTE_STATE.MD | 更新 | v1.47接收084并沿083窄修正，D3不泛化阻断独立验证
++CHG-0513 | 2026-09-24T22:34:55.4863528+08:00 | Ndocu/results/TASK-083-result.md | 更新登记 | 修正04首命令3过2失败，D1期限证据接受，生命周期/05未验证
++CHG-0514 | 2026-09-24T22:34:55.4863528+08:00 | Ndocu/archives/TASK-083-before-stub-fix05-20260924.md | 创建 | 保留三项夹具原修正合同与已用额度
++CHG-0515 | 2026-09-24T22:34:55.4863528+08:00 | Ndocu/tasks/TASK-083.md | 更新 | 仅API替身修正与剩余三例，局部依赖未变证据复用
++CHG-0516 | 2026-09-24T22:34:55.4863528+08:00 | docu/PROJECT_EXECUTE_STATE.MD | 更新 | v1.48登记本轮失败与窄修正边界，真实运行冻结
++CHG-0517 | 2026-09-25T00:28:55.1185091+08:00 | Ndocu/results/TASK-083-result.md | 更新登记 | 替身05首例身份失败停批，两例未运行，静态三尝试偏差保留
++CHG-0518 | 2026-09-25T00:28:55.1185091+08:00 | Ndocu/archives/TASK-084-before-review04-20260925.md | 创建 | 保存review03独立审计合同
++CHG-0519 | 2026-09-25T00:28:55.1185091+08:00 | Ndocu/tasks/TASK-084.md | 更新 | review04一次诊断夹具完整流程与累积增量，不运行
++CHG-0520 | 2026-09-25T00:28:55.1185091+08:00 | docu/PROJECT_EXECUTE_STATE.MD | 更新 | v1.49停止逐点修正试跑，转原084增强独立窗口
++CHG-0521 | 2026-09-25T00:53:13.2876674+08:00 | Ndocu/results/TASK-084-result.md | 更新登记 | review04完整流程诊断接受，三处替身缺陷合并修正
++CHG-0522 | 2026-09-25T00:53:13.2876674+08:00 | Ndocu/archives/TASK-083-before-fixture-completion06-20260925.md | 创建 | 保留替身修正05合同与历史额度
++CHG-0523 | 2026-09-25T00:53:13.2876674+08:00 | Ndocu/tasks/TASK-083.md | 更新 | 原窗口合并三处修正及一次三例离线验证
++CHG-0524 | 2026-09-25T00:53:13.2876674+08:00 | docu/PROJECT_EXECUTE_STATE.MD | 更新 | v1.50接收084诊断并推进083完整夹具修正，真实门不放行
++CHG-0525 | 2026-09-25T09:07:49.1855296+08:00 | Ndocu/results/TASK-083-result.md | 更新登记 | 修正06三例通过，静态解释器偏差保留，真实门不变
++CHG-0526 | 2026-09-25T09:07:49.1855296+08:00 | Ndocu/archives/TASK-084-before-review05-20260925.md | 创建 | 保存review04完整流程诊断合同
++CHG-0527 | 2026-09-25T09:07:49.1855296+08:00 | Ndocu/tasks/TASK-084.md | 更新 | 原独立窗口review05确认三处差异/三例证据与分项运行门
++CHG-0528 | 2026-09-25T09:07:49.1855296+08:00 | docu/PROJECT_EXECUTE_STATE.MD | 更新 | v1.51回收三例有效通过并转最终增量确认
++CHG-0529 | 2026-09-25T13:52:48.2671769+08:00 | Ndocu/results/TASK-084-result.md | 更新登记 | review05验收，三处替身关闭与三例证据接受
++CHG-0530 | 2026-09-25T13:52:48.2671769+08:00 | Ndocu/archives/TASK-083-before-job-run07-20260925.md | 创建 | 保留修正06合同及有限验证记录
++CHG-0531 | 2026-09-25T13:52:48.2671769+08:00 | Ndocu/tasks/TASK-083.md | 更新 | 原窗口一次五场景受控真实Job，限定解冻及精确清理
++CHG-0532 | 2026-09-25T13:52:48.2671769+08:00 | docu/PROJECT_EXECUTE_STATE.MD | 更新 | v1.52推进真实Job局部验证，PG/新D1/D3单列保留
++CHG-0533 | 2026-09-25T14:49:00.8850531+08:00 | Ndocu/results/TASK-083-result.md | 更新登记 | Job07五场景限定行为接受，身份落盘缺项如实限制
++CHG-0534 | 2026-09-25T14:49:00.8850531+08:00 | Ndocu/archives/TASK-083-before-pg-run08-20260925.md | 创建 | 保存Job07一次运行合同
++CHG-0535 | 2026-09-25T14:49:00.8850531+08:00 | Ndocu/tasks/TASK-083.md | 更新 | 原窗口六例真实PG08，全新合成容器隔离与停止保留
++CHG-0536 | 2026-09-25T14:49:00.8850531+08:00 | docu/PROJECT_EXECUTE_STATE.MD | 更新 | v1.53验收Job局部证据并限定解冻PG六例
++CHG-0537 | 2026-09-25T15:50:05.5472863+08:00 | Ndocu/results/TASK-083-result.md | 更新登记 | PG08六例证据接受，三批与执行窗口授权记录如实保留
++CHG-0538 | 2026-09-25T15:50:05.5472863+08:00 | Ndocu/archives/TASK-083-before-launcher-prep09-20260925.md | 创建 | 保留PG08合同与资源边界
++CHG-0539 | 2026-09-25T15:50:05.5472863+08:00 | Ndocu/tasks/TASK-083.md | 更新 | 原窗口固定launcher真实验证夹具准备09，动态0
++CHG-0540 | 2026-09-25T15:50:05.5472863+08:00 | docu/PROJECT_ARCHITECTURE.MD | 更新 | v0.39登记Job/PG限定验证与固定入口/恢复缺口
++CHG-0541 | 2026-09-25T15:50:05.5472863+08:00 | docu/PROJECT_EXECUTE_STATE.MD | 更新 | v1.54回收PG并推进新入口准备，历史尝试不重置
++CHG-0542 | 2026-09-25T16:01:56.1126622+08:00 | Ndocu/archives/TASK-083-prep09-unstarted-superseded-20260925.md | 创建 | 用户确认未启动，旧准备卡归档作废且未消耗额度
++CHG-0543 | 2026-09-25T16:01:56.1126622+08:00 | Ndocu/tasks/TASK-083.md | 重编 | 完整成果09卡内连续实施验证修复，D3具体决策并入，保留关键门及最终独立审计
++CHG-0544 | 2026-09-25T16:01:56.1126622+08:00 | docu/PROJECT_EXECUTE_STATE.MD | 更新 | v1.55执行用户纠偏，撤销碎拆前置，明确完整成果预算
++CHG-0545 | 2026-09-25T17:32:43.3804782+08:00 | Ndocu/results/TASK-083-result.md | 更新登记 | 09四场景与D3候选回收，四容器/日志覆盖偏差不抹除
++CHG-0546 | 2026-09-25T17:32:43.3804782+08:00 | Ndocu/archives/TASK-084-before-review06-20260925.md | 创建 | 保存review05有效增量合同
++CHG-0547 | 2026-09-25T17:32:43.3804782+08:00 | Ndocu/tasks/TASK-084.md | 更新 | review06一次终审D1真实边界与D3一列充分性，动态0
++CHG-0548 | 2026-09-25T17:32:43.3804782+08:00 | docu/PROJECT_EXECUTE_STATE.MD | 更新 | v1.56统一回收09并转必要独立终审，未批准字段扩展
++CHG-0549 | 2026-09-25T18:25:59.5125151+08:00 | Ndocu/results/TASK-084-result.md | 更新登记 | review06限定验收D1并采纳D3三项实施条件，保留偏差
++CHG-0550 | 2026-09-25T18:25:59.5125151+08:00 | Ndocu/results/TASK-083-D3-work-decision.md | 创建 | 一列恢复及单机限制具体待批准范围，完整实施验证方案
++CHG-0551 | 2026-09-25T18:25:59.5125151+08:00 | docu/PROJECT_ARCHITECTURE.MD | 更新 | v0.40登记D1实际验收及D3待批准边界
++CHG-0552 | 2026-09-25T18:25:59.5125151+08:00 | docu/PROJECT_EXECUTE_STATE.MD | 更新 | v1.57结束09循环，D3一次具体批准门，容器停止保留
++CHG-0553 | 2026-09-25T18:35:37.7306449+08:00 | Ndocu/results/TASK-083-D3-work-decision.md | 更新 | 记录用户明确批准一列恢复及单机限制
++CHG-0554 | 2026-09-25T18:35:37.7306449+08:00 | Ndocu/archives/TASK-083-before-d3-implementation10-20260925.md | 创建 | 保留09完整成果合同与已消费预算
++CHG-0555 | 2026-09-25T18:35:37.7306449+08:00 | Ndocu/tasks/TASK-083.md | 更新 | 原增强窗口完整D3实施10，实施验证修正一次交付
++CHG-0556 | 2026-09-25T18:35:37.7306449+08:00 | docu/PROJECT_ARCHITECTURE.MD | 更新 | v0.41登记D3已批准计划和三项恢复前提
++CHG-0557 | 2026-09-25T18:35:37.7306449+08:00 | docu/PROJECT_EXECUTE_STATE.MD | 更新 | v1.58登记批准及完整执行卡，限定新资源与预算
++CHG-0558 | 2026-09-25T19:31:22.4739355+08:00 | Ndocu/results/TASK-083-result.md | 更新登记 | D3候选/离线返回，匿名卷误判资源停批，真实0
++CHG-0559 | 2026-09-25T19:31:22.4739355+08:00 | Ndocu/archives/TASK-083-d3-10-before-resource-continuation-20260925.md | 创建 | 保留原D3完整合同及单容器门
++CHG-0560 | 2026-09-25T19:31:22.4739355+08:00 | Ndocu/tasks/TASK-083.md | 更新 | 同卡资源接续，明确一个替补容器与未用真实额度，离线不重跑
++CHG-0561 | 2026-09-25T19:31:22.4739355+08:00 | docu/PROJECT_EXECUTE_STATE.MD | 更新 | v1.59核实资源误判及停止记录，继续完整任务不拆审计
++
++CHG-0562 | 2026-09-25T20:37:05.5619263+08:00 | Ndocu/results/TASK-083-result.md | 更新登记 | 替补PG首批夹具失败、复验选项阻断，两容器停止且额度耗尽
++CHG-0563 | 2026-09-25T20:37:05.5619263+08:00 | Ndocu/archives/TASK-084-before-review07-20260925.md | 创建 | 保留review06已完成审计合同
++CHG-0564 | 2026-09-25T20:37:05.5619263+08:00 | Ndocu/tasks/TASK-083.md | 更新 | 暂停真实运行并冻结被审快照，既有成果与预算保留
++CHG-0565 | 2026-09-25T20:37:05.5619263+08:00 | Ndocu/tasks/TASK-084.md | 更新 | review07前移必需D3代码审计并一次审完整夹具和runner，动态0
++CHG-0566 | 2026-09-25T20:37:05.5619263+08:00 | docu/PROJECT_ARCHITECTURE.MD | 更新 | v0.42登记D3候选落地及真实恢复未验，批准范围不变
++CHG-0567 | 2026-09-25T20:37:05.5619263+08:00 | docu/PROJECT_EXECUTE_STATE.MD | 更新 | v1.60回收替补停批与资源账，原084待转交，不追加容器
++
++CHG-0568 | 2026-09-25T21:34:18.2918965+08:00 | Ndocu/results/TASK-084-result.md | 更新登记 | review07独立审计交付接受，P1/P2/F1与R1—R3阻断及精确续验路径记录
++CHG-0569 | 2026-09-25T21:34:18.2918965+08:00 | Ndocu/archives/TASK-083-before-review07-repair11-20260925.md | 创建 | 保存D3原合同和两容器停止边界
++CHG-0570 | 2026-09-25T21:34:18.2918965+08:00 | Ndocu/tasks/TASK-083.md | 更新 | 修复11一次合并产品/夹具/runner及定向离线，真实冻结
++CHG-0571 | 2026-09-25T21:34:18.2918965+08:00 | docu/PROJECT_ARCHITECTURE.MD | 更新 | v0.43登记确定产品缺陷与最窄修正，D3批准模型不变
++CHG-0572 | 2026-09-25T21:34:18.2918965+08:00 | docu/PROJECT_EXECUTE_STATE.MD | 更新 | v1.61回收review07、原083修复11待转交及独立运行控制门
++
++CHG-0573 | 2026-09-26T12:50:02.9500399+08:00 | Ndocu/results/TASK-083-result.md | 更新登记 | 修复11候选与三批离线回收，真实资源未启动
++CHG-0574 | 2026-09-26T12:50:02.9500399+08:00 | Ndocu/archives/TASK-084-before-review08-20260926.md | 创建 | 保留review07完整审计合同
++CHG-0575 | 2026-09-26T12:50:02.9500399+08:00 | Ndocu/tasks/TASK-084.md | 更新 | review08仅审修复增量及新控制层完整路径，动态0
++CHG-0576 | 2026-09-26T12:50:02.9500399+08:00 | docu/PROJECT_ARCHITECTURE.MD | 更新 | v0.44登记修复11候选与实际未验边界
++CHG-0577 | 2026-09-26T12:50:02.9500399+08:00 | docu/PROJECT_EXECUTE_STATE.MD | 更新 | v1.62回收离线证据，原084待转交，真实资源继续冻结
++
++CHG-0578 | 2026-09-26T14:16:17.1709851+08:00 | Ndocu/results/TASK-084-result.md | 更新登记 | review08静态运行门接受，八项关闭、证据分级和场景数笔误限定
++CHG-0579 | 2026-09-26T14:16:17.1709851+08:00 | Ndocu/archives/TASK-083-before-real-continuation12-20260926.md | 创建 | 保存修复11及真实冻结合同
++CHG-0580 | 2026-09-26T14:16:17.1709851+08:00 | Ndocu/tasks/TASK-083.md | 更新 | 真实验证12授权精确同容器认证轮换及完整8场景，900秒余2批
++CHG-0581 | 2026-09-26T14:16:17.1709851+08:00 | docu/PROJECT_ARCHITECTURE.MD | 更新 | v0.45登记静态门通过，动态与完整交付仍未验
++CHG-0582 | 2026-09-26T14:16:17.1709851+08:00 | docu/PROJECT_EXECUTE_STATE.MD | 更新 | v1.63原083真实验证12待转交，预算不重置、不新增容器
++
++CHG-0583 | 2026-09-27T17:12:17.6176084+08:00 | Ndocu/results/TASK-083-result.md | 更新登记 | 12预检缺键BLOCKED、未启动测试，诊断耗时与范围偏差保留
++CHG-0584 | 2026-09-27T17:12:17.6176084+08:00 | Ndocu/archives/TASK-083-before-inspect-continuation13-20260927.md | 创建 | 保存验证12精确资源和预算合同
++CHG-0585 | 2026-09-27T17:12:17.6176084+08:00 | Ndocu/tasks/TASK-083.md | 更新 | 最小inspect兼容修复、一次检查和真实接续合并13，保留身份安全条件
++CHG-0586 | 2026-09-27T17:12:17.6176084+08:00 | docu/PROJECT_EXECUTE_STATE.MD | 更新 | v1.64登记预检未过与耗时占账，60秒准备加600秒续跑
++
++CHG-0587 | 2026-09-27T17:44:20.7250891+08:00 | Ndocu/archives/TASK-083-before-strong-completion14-20260927.md | 创建 | 保存13旧卡，未发现回传不推定实时运行状态
++CHG-0588 | 2026-09-27T17:44:20.7250891+08:00 | Ndocu/tasks/TASK-083.md | 重编 | 用户指定最强模型新窗口完整收尾14，普通修复卡内完成，关键边界保留
++CHG-0589 | 2026-09-27T17:44:20.7250891+08:00 | docu/PROJECT_EXECUTE_STATE.MD | 更新 | v1.65最强模型路由及完整成果授权，原窗口停止独占，预算不重置
+diff --git a/docu/PROJECT_ARCHITECTURE.MD b/docu/PROJECT_ARCHITECTURE.MD
+index 8da4837..eedd172 100644
+--- a/docu/PROJECT_ARCHITECTURE.MD
++++ b/docu/PROJECT_ARCHITECTURE.MD
+@@ -1,17 +1,45 @@
+ # PROJECT_ARCHITECTURE
+ 
+ ### 开发与部署工具交付安排（2026-09-23用户指令，当前有效）
+-- Git：STEP-002新增工程管理补项TASK-080/R-074，近期执行，历史002工程验收不被重写为失败。本轮建立本地仓库/忽略边界及候选清单；首提交须在具体清单核对与提交授权覆盖后续原卡完成。未提交前不称版本历史齐备，不设置远端、不推送。后续开发卡必须保护既有差异并记录适用提交/差异/hash。
++- Git：STEP-002新增工程管理补项TASK-080/R-074，近期执行，历史002工程验收不被重写为失败。已完成仓库/忽略边界及用户确认的599文件本地首提交；未设远端、未推送，后续保持精确范围及敏感排除。后续开发卡必须保护既有差异并记录适用提交/差异/hash。
+ - Compose：纳入STEP-018服务集成前段，编排在该阶段出完整部署集成卡，不提前创建空配置。计划正式位置deploy/compose.yaml、deploy/.env.example；固定镜像版本/摘要、独立项目名、仅loopback端口、健康检查、持久卷及备份恢复、占用与停止策略。先协调已采用PG/必要Redis，API/worker是否容器化按届时实际监督机制决定；不能把Windows Job监督直接搬到Linux。验收含配置解析、合成数据下启动/就绪/停止/重启持久化及失败定位，不复跑无关业务套件，不接用户库。079一次性合成容器不迁入长期Compose、不改其预算。
+ - Linux：STEP-018记录平台依赖与适配缺口，STEP-020运行交接必须明确“Windows已验证/Linux未验证”及未来部署前置；完整Linux应用部署属于后续Linux交付批次，目标发行版/宿主/权限明确后再出卡，不扩大首版Windows目标。正式配置预计deploy/linux/；实际验收必须覆盖路径/权限/进程树终止/worker监督及持久化恢复，不能以Linux PG容器运行代替应用兼容通过。
+ - Nginx：STEP-018按实际静态资源/API/SSE入口判定必要性；需要时在同一集成卡落deploy/nginx/配置并验证代理路由、流式响应、上传限制和入口权限，无此需要则STEP-020记录直接本地入口及不启用理由。Linux部署批次重新评估Nginx或平台等效代理；HTTPS在实际远程入口需要时验证，不为本地loopback先建公网/域名。代理、安全权限或监督边界改变时保留STEP-019独立审计，不以部署配置检查代替。
+ - STEP-020/08交接引用确切Git版本、部署配置与适用运行证据、密钥注入位置、备份恢复和停止步骤；生产发布/远程修改/安装/服务重启仍需对应执行授权。以上为计划，未生成配置、未安装或运行，编排统一负责届时出卡和验收。
++### D3静态门通过、进入受控验证（2026-09-26，v0.45，当前优先）
++review08独立确认修复11八项问题关闭，未变D3主体结论继续有效；产品及运行控制静态条件已具备。真实006完整迁移、claim/锁屏障、旧G Windows恢复与外层嵌套Job仍需实证。编排在原D3批准范围内授权083验证12复用精确停止容器、一次受限认证/新测试口令轮换和完整8场景；不扩大一列模型、单机信任边界、用户库或真实业务接线。猝死悬停孤儿限制和旧证据范围保留，动态通过及M-1/STEP008仍未成立。
++### D3修复11候选回收（2026-09-26，v0.44，历史）
++锁后主机UTC判断与inspect锁序、旧running账目None/旧树未知清理及测试运行控制均已修改为候选，三批定向离线有原始通过证据；原review07缺陷是否关闭待review08独立增量裁定。新增测试专用外层Job控制/结果契约/runner并不等于真实Windows或PG恢复通过；悬停至Assign崩溃边界及资源复用条件须如实审核。006与单机一列信任合同不变，真实资源继续冻结，无第三容器或用户库授权。既有有效行为按未变依赖复用，D3动态验收、M-1/STEP008/真实接线未完成。
++### D3审计阻断与修复裁定（2026-09-25，v0.43，历史）
++review07确认D3主体在受信单机单会话条件下静态骨架成立，但P1使用事务起点时间判锁后截止、P2旧树清理未知可能误报完整为确定产品缺陷；代码不通过。修复合同采用锁后主机UTC资格判断并对齐inspect，旧running未确认账目使用None、旧树未知不签清理完整；不改一列持久模型、退款/保守折叠或单机信任边界。R1—R3验证控制及F1夹具同时合并修复；真实PG/Windows恢复仍未验证，已审无关代码和历史证据按范围复用。修复11完成后独立增量核查运行控制再解冻真实资源；没有新容器或用户库操作授权。
++### D3候选落地与验证断点（2026-09-25，v0.42，历史）
++006/running_owner_session_id、claim原子会话号、SUP可信身份、严格Open错误分类及受部署声明约束的恢复已为候选实现，独立代码审计未完成。claim改DB时间判断租约列入实际控制差异重点审查，不因候选落地默认符合。
++离线证据保留；真实PG仅空表006执行及负SID拒绝有局部事实，夹具/runner失败中断，真实claim及Windows旧G恢复未验。两合成容器停止记录保留、额度已用；当前083暂停，084 review07审候选及完整验证链，不追加第三容器。单主机/单交互会话是显式部署信任前提，numeric SID不证明跨主机身份；不扩大用户已批准的一列恢复合同。旧Job07/PG08/09证据按未变依赖复用，M-1/STEP008/真实业务接线均未完成。
++### D3恢复增量已批准（2026-09-25，v0.41，历史批准记录）
++用户明确批准TASK-083-D3-work-decision：006仅增running_owner_session_id，可信SUP会话号随claim/G原子写入；仅在单机部署前提、匹配会话、精确Job不存在或已证树空、原租约规则及互斥覆盖提交成立时全额折叠。异号/NULL/其他Open错误失败关闭，有效旧租约不得先杀再报冲突。原关闭门/有限幂等/不部分退款不变。实施TASK083完整10卡，尚未实现或验证；一个新合成资源内定向验证/有限修正后独立增量审计。该批准不包含用户库迁移、多主机或真实业务接线。
++### 09独立终审后的边界（2026-09-25，v0.40历史）
++固定launcher四场景按084 review-06分层证据限定验收通过：正常真实PG闭环、注入的管理截止保守出口、Resume前父死与Resume后父死正常结算。B控制者持Job句柄改变最后句柄条件，不作为生产停止失效证据；C2不证明同链挂死截止。无新确定代码缺陷，旧局部证据复用，不追加全套测试。
++D3自动恢复推荐一列running_owner_session_id，须单机部署约束、精确Open错误分类及互斥覆盖DB提交；方案/实施验证范围见Ndocu/results/TASK-083-D3-work-decision.md，状态待用户批准，不是已实现/已验证。未验证one_call及旧G恢复、整体M-1/STEP008继续保留；既有合成容器停止保留，不额外删除。
++### 083限定运行证据更新（2026-09-25，v0.39历史）
++Job07当前冻结控制器下五个合成场景真实运行exit0，限定Job停止/后代/碰撞/单进程最后句柄行为可用；账本为替身，部分PID/创建时间未完整落盘的证据限制保留。PG08最终专用合成库六例真实运行全部OK：005空表/非空回滚、关闭门与admit/mark、合法outcome、旧G/C受限幂等、锁交错、取消全额折叠与UNKNOWN收敛。取消S=90是账面折叠，不是整树停止证明。原始stderr+exit优先于runner错误摘要。
++两次PG前置停批及后续例外授权记录见manifest/执行状态，三个合成容器停止保留；只最终批六例产生业务验证证据，不重置历史。新固定run_supervised_window→SUP真实OS/PG组合尚未覆盖，D3旧G命名空间化身及自动恢复仍开放；本增量不宣布M-1/STEP008完成，不新增字段或平台。
+ ## 当前验证增量（2026-09-23）
+-时间账本基础切片077结合078独立代码审计、079当前快照22例真实PG及004/约束证据，限定实现已验证；不等于worker监督、M-1或STEP008完成。079失败后重启续跑的执行纪律偏差见执行状态，保留有效业务证据且不重跑。Git本地main仓库已初始化，无提交/无远端；080继续首提交范围准备，版本历史尚未建立。以下无.git等记述为历史时点。
+-
++时间账本基础切片077结合078独立代码审计、079当前快照22例真实PG及004/约束证据，限定实现已验证；不等于worker监督、M-1或STEP008完成。079失败后重启续跑的执行纪律偏差见执行状态，保留有效业务证据且不重跑。Git本地main仓库已有首提交45951501d2741630a229762d6b2d3f4b34d7f702，599文件与批准manifest逐条一致，无远端/未推送；080已完成本地版本管理准备与首提交，后续提交另按授权范围执行。以下无.git等记述为历史时点。
++
++## 已批准增量：内部单窗监督（2026-09-24，计划中）
++用户批准082-work-decision：新增005候选dispatch_closed及begin_window_close，claim新代次开门、admit/mark检查、首次settle需已关门，旧幂等确认不伤新窗；004及既有次数/费用/恢复纪律保留。先claim预扣后启动单窗Job，t0认领前至t1整树退出计入C，Job外可信SUP才可部分退款；C0仅保留仓储合成合同、真实会话禁止免费结算。未知树/响应丢失/超窗失败关闭。具体批准边界见Ndocu/results/TASK-082-work-decision.md，完整实施合同TASK083。
++以上均计划中：尚无005/worker新增实现或动态证据。实施窗口由082诊断者转实现者，后续安全审计另新窗口；定向PG另卡，真实模型/HTTP/用户库未接线。独立审计重点包括关门与在途竞态、角色权限、Job身份与最后句柄、跨恢复计费。历史“无worker授权”仅指先前账本批次，不覆盖本次明确批准的内部切片；不扩大到完整产品worker接线。
++## 083当前实现增量（2026-09-24，候选/部分验证）
++005候选关闭位、repository.begin_window_close/inspect_window及claim/admit/mark/settle门检查已有代码；新增worker/gate.py、worker_main.py、windows_job.py、session.py形成内部候选。repository当前hash929320ba…5b20；005 26b71a83…50eb，迁移未执行/PG未验证。7项离线替身通过仅限调用序；Job初批3/5局部通过且归属不足，场景/命令超时与04清理正证据缺口保留，不能标监督完整已验证。
++command_for_lease未独立限时、SUP管理生命周期、finally结果失真、内部门连接和PG可执行测试准备须083离线补足。真实Job额度冻结，原修正已发生但复检未启动；原始失败和字段结果不可被新日志覆盖。按原批准范围继续实现，不接产品外部入口，不宣告M-1/STEP008完成。
++## 083离线补足候选快照（2026-09-24）
++新增worker/command.py的WorkerCommand与launcher.py的run_supervised_window专用进程入口；session.py结果移至收尾后并区分settled/reserved/pending_fold与未知，gate/worker_main内部关闭链及Job精确控制夹具已补；PG可执行准备在tests/fixtures/task083/pg_close.py、pg_migration.py。代码为候选，final-hashes.txt16文件现场复算相符，不能沿用旧静态或单元日志宣称全部最终代码验证通过。
++纯单元初批9/10、失败项修正复检1/1后仍有源码补正，最终动态未验；Job/PG均未恢复运行，原04归属/超时缺口保留。下一TASK084新窗口独立代码与运行控制审查，原实现窗口不得自审；M-1/STEP008仍未完成。
++## 084独立审查限制（2026-09-24，当前有效）
++关闭门/005主要静态事务有条件通过，真实PG未验；内部监督候选不能放行：launcher启动/IPC/收尾总期限缺口、任意命令可绕过worker门、外层未知树误报清理完成、Job已消失后running/R无法恢复、Job测试控制及PG隔离/并发夹具缺陷。详见TASK084结果D1—D8。083原窗口离线修复，Job/PG持续冻结；D3若需要新增持久证明须具体变更批准，当前单关闭位授权不自动扩大。尚无完整已验证监督或恢复能力。
+ ## 1. 文档信息
+ 
+-- 项目：RetroLume / 溯光教育Agent；文档v0.33；2026-09-23（Asia/Shanghai）；最近关联CHG-0460。记录045行段定位、046受控入口和047PDF组件，完整集成/安全审计仍未完成。
++- 项目：RetroLume / 溯光教育Agent；文档v0.45；2026-09-23（Asia/Shanghai）；最近关联CHG-0581。记录045行段定位、046受控入口和047PDF组件，完整集成/安全审计仍未完成。
+ - 当前有效规划—依据用户本轮V3委托，沿用既有需求v1.0目标行为（文档LATER_REQUIREMENTS.MD v1.1）。文档交付不表示产品完成；后续开发已获用户明确授权，按执行文档当前入口接续。
+ - 唯一架构事实源；原根目录旧文档已移到Ndocu/archives/，只读保留。当前规则由根AGENTS.md映射至外部公共AGENTS/WORK，项目docu旧副本仅历史；流程与文件导航在PROJECT_EXECUTE_STATE.MD，不再双写FLOW/INDEX。
+ - 项目根D:/shspic/project_NO3_RetroLume-agent；**现有资料切片代码已归入本项目backend/frontend/deploy**；原D:/shuice12/RetroLume只读保留。10项历史hash匹配，两份启动器仅变更配置路径；新路径合成health/静态入口有TASK-043记录，未重跑PG/真实资料。私有配置和数据未复制，模型/学习/面试仍未实现。
+@@ -401,5 +429,13 @@ B-01保持开放：“创建后暂停再关闭”与“创建前拒绝”不同
+ 
+ 
+ 
++
++
++
++
++
++
++
++
+ 
+ 
+diff --git a/docu/PROJECT_EXECUTE_STATE.MD b/docu/PROJECT_EXECUTE_STATE.MD
+index b202ff3..209df23 100644
+--- a/docu/PROJECT_EXECUTE_STATE.MD
++++ b/docu/PROJECT_EXECUTE_STATE.MD
+@@ -2,7 +2,7 @@
+ 
+ ## 1. 当前总览：手动转交模式
+ 
+-文档v1.34；2026-09-23T15:04:32.5552684+08:00；需求文档v1.1（目标v1.0）、架构v0.33，需求不变。实际根D:/shspic/project_NO3_RetroLume-agent。仍处07，尚不能宣布本版本或08完成。
++文档v1.65；2026-09-27T17:44:20.7250891+08:00；需求文档v1.1（目标v1.0）、架构v0.45，需求不变。实际根D:/shspic/project_NO3_RetroLume-agent。仍处07，尚不能宣布本版本或08完成。
+ 
+ 用户最新决定：Astra完整出卡→用户转交指定Agent→用户回传结果→Astra核对验收并给下一批。Astra仅作编排、少量必要阅读/差异/证据核对和共享文档维护；不自动派发子Agent、不代做实现/调研/实验/测试/审计，除非用户具体指定。旧一般开发授权保留范围，不再代表包办执行。转交等待不是重复审批。
+ 规则已从D:/spiritice/AA文件/MS_spi knowledge libraay/obsidian_1/&职业相关/项目流程/项目开发提示词V3同步AGENTS、WORK、任务模板及适用05—09提示词。切换前文件快照Ndocu/archives/manual-handoff-20260920-164921；没有复制库历史CHANGE/检查报告。
+@@ -10,12 +10,36 @@
+ ### 模式切换时安全衔接（历史快照，不代表当前进程或Docker状态）
+ 本次Agent清单仅主窗口，无活跃执行Agent。未发现8000/55433/55434监听及筛选到的项目python/node进程。Docker API不可用，未启动Docker，因此不能宣称容器当前状态已独立核实。055原始证据确认当时048容器停止；054第二次Agent报告停止，当前仅保留该声明和失败日志。未启动新业务/实验/测试，未回滚、删除、提交或修改个人数据库。旧13元实验费用已用尽，不新增真实模型调用。
+ 
++### 用户要求最强模型完整收尾14（2026-09-27，当前优先）
++用户明确要求最强模型一次完成，编排改派当前客户端最强可用模型/最高可用推理档的新执行窗口，沿083/R077，原窗口停止写入/运行，新窗先核在途不重复启动。现场仅见最新12结果和旧inspect模板，未发现13回传/证据，不能推为实时没有执行；13待转交卡由14覆盖并归档。
++14合并D3必要实现/runner/夹具修复、定向离线、同精确容器真实8场景及收尾一次交付；撤销普通runner修改即退卡、逐检查失败即转交等碎片门，允许同批准安全模型内完整处理。真实边界/归属unknown/连续两次有据修正核心仍败/预算保留，最终仍由084只核实际差异与动态，执行者不得自签独立验收。不自动派发、不代用户开新窗口。
++原实际资源和预算不清零，不增第三容器；当前资源余660秒含准备与runner/收尾，原真实余2批/2PG，指定CID与认证授权不变。新增必要离线运行累计10分钟、命令60秒，仅影响相关检查，不回归全套。架构v0.45未变；D3动态未验、M-1/STEP008未完成。TASK083卡已完整保存，待用户转交最强窗口。
++### 12预检回收与inspect兼容接续13（2026-09-27，历史）
++12唯一runner在首inspect失败、attempts空，未start/认证/PG/Windows；具体缺键错误由只读探针定界。接受本机投影兼容问题，不采未经源码核实的Docker内部路径推论；review08其他静态结论不失效。报告0消耗仅计数，约4.4秒及12探针+5预检仍占资源时间；跨首容器额外只读探针/诊断次数与缺完整计时保留偏差，不追加重跑。容器停止仅结果日志时点；诊断抄写镜像行有重复片段，执行采用原精确hash不使用该摘要。
++原083接续13待转交：授权runner第14字段缺键安全读取，保留真实配置Mounts与全部14字段/valid_identity契约，禁止固定None、顶层替代或完整Env回读。一批≤60秒实际投影/有限合成拒绝验证通过即在同卡继续已授权精确容器真实链，不为等价读取补一轮前置独立审计；最终084只核新差异和动态。只这一处放开runner禁改，不涉及进程控制/产品。
++预算不重置：历史10占900，12含未完整计时诊断暂保守占240（非实耗宣称，有更高实据据实扣），本次准备60+runner600；已用真实1批1PG0Windows仍余2批2PG，容器2不增。原900参数改600，普通PG夹具一次有据复验规则保留，Windows开始后失败/unknown停。架构v0.45不变，D3动态与M-1/STEP008未完成。
++### review08接受与真实验证12（2026-09-26，历史）
++084 review08已返回，静态运行门通过：P1/P2/F1/F2/F3/R1/R2/R3全部关闭，无新增确定阻断；接受独立性披露（实际GLM-5.3-Flash，新隔离Session）及离线证据分级，不因标签重审。场景计数9为文字笔误，contracts实际8个ID（migration3+ledger4+windows1），按精确列表执行。Assign前猝死可能留下悬停孤儿属已披露可管理边界，不当已清理；清理必须精确句柄或PID+创建时间，不能采用裸PID。
++原083增强窗口真实验证12待转交：明确授权只复用CID85242648…，在已审runner内核身份/停止/端口→start→一次本地测试角色认证及stdin新随机口令轮换→loopback核身份→完整8场景→stop保留；不得读取旧secret、降认证或建第三容器。认证/当前资源状态未知，失败收尾不反复试环境。
++新入口runner.py --authorized-reuse --total-seconds 900；历史已知89.624秒加未知另行收尾原样保留，历史部分按900秒保守占账（非实耗认定），本次资源总窗900秒，原30分钟总限不重置。已用1批1PG0Windows，本轮至多2批2PG，普通可解释PG夹具失败且cleanup全证才同runner一次受影响parts及未运行后继复验；Windows已启动失败或unknown一律停。无新增离线预算，不重跑旧证据。完成后084仅审新动态/实际修正；当前未执行本卡，D3动态/M-1/STEP008未通过。
++### 修复11回收与review08（2026-09-26，历史）
++083修复11已返回，候选及离线证据接受入审，不签缺陷全部关闭。编排现场复算8个当前改动hash与final-hashes一致，三批原始meta/stderr核16/5/2项OK、exit0，合计4.3922103秒；不重跑、不把计数合并冒充23个独立用例。006/windows_job等未变范围沿review07证据待审适用性，旧Job07/PG08/09不机械重跑。
++P1锁后UTC/inspect、P2旧running账目None及旧树未知清理、F1同SID与上界分离，以及新controlled_child/contracts/runner为本轮增量。运行控制声明仍待独立判断，尤其悬停创建至Assign间崩溃、真实嵌套Job、绝对期限与逐项结果协议。真实PG/Windows、容器重启/认证轮换一概未执行；现有停止只是旧日志时点。
++原084独立增强窗口review08待转交，只审修复实际增量、新控制层完整路径与证据适用；目标明确关闭或给完整最小阻断，并裁定能否按精确资源进入真实验证。083本轮完成后暂停写入，被审快照冻结；三批离线额度已用，不给新测试额度。两容器/原真实1批1PG0Windows账不变、无第三容器或本地认证执行授权。通过后由编排一次具体资源接续，不提前堆串行卡。架构v0.45，D3动态/M-1/STEP008仍未完成。
++### review07回收与D3合并修复11（2026-09-25，历史）
++084 review07已返回，独立审计交付接受；代码及真实运行门不通过。编排按源码定位复核P1事务起点时间用于锁后截止、P2旧Job未知清理漏报，采纳F1跨SID成功夹具错误及R1进程归属/整树收尾、R2逐项结果/非零退出、R3绝对期限/优化断言缺口。006与D3主体静态已审部分、旧Job07/PG08/09与有效离线证据继续限定复用；产品缺陷不否定此前未受影响行为。
++原083增强窗口修复11待转交：一张卡合并P1/P2/F1/R1—R3及定向离线验证、完整真实夹具与同容器续接runner准备。P1采用原锁后主机UTC口径，inspect对齐，不拓新DB时间模型；P2明确旧树unknown和账目None。新增离线首次+最多两次有据复检共3批，每批60秒、合计180秒，原离线3批继续计账。旧runner/证据不覆盖，新证据d3-repair-11。
++真实PG/Windows与Docker仍冻结；两容器已耗尽，账面余2真实批/2PG/12Windows不构成解冻。拟复用精确85242648…容器仅准备本地认证/测试角色新口令轮换方案，不读取旧secret；认证/权限尚未知，失败关闭，不授权此刻启动或创建第三容器。修复后原084只审实际增量，控制门确认后编排一次授权余下验证。此处独立门针对已证不安全的运行控制，不能用实现者自检替代，也不再拆逐问题修补卡。架构v0.45；STEP008/M-1未完成。
++### D3替补停批裁定与review07（2026-09-25，历史）
++083部分完成并停止。编排核最新结果、原始stderr、runner-state及container-final、六项当前hash：候选产品四文件不漂移；006空表执行与负SID被CHECK拒绝可作局部事实，捕获异常类错误使首PG批exit1。其后runner选项白名单拒绝全量复验，第二PG测试进程未启动；修正后夹具及runner均未实测。真实claim/Windows恢复仍未验证，未据此发现产品运行失败。
++两容器额度全部消费；替补85242648…在日志时点stop exit0/Running=false/cleanup_incomplete=false，首容器停止记录保持。编排本轮未调用Docker，不声称实时监控。离线3批、真实批/PG进程1、Windows0；尚余2批/2PG/12Windows只是账面，不构成资源解冻。7.859秒+原精确收尾+81.765秒保留，30分钟总额度不重置；旧13元耗尽。
++不再追加第三容器，不默许重新取回/重置口令。原083暂停、当前快照冻结；原084增强独立窗口review07待转交，一次完成D3产品合同与全部夹具/runner静态审查、证据边界及具体资源续接建议。将既定必需审计前移是对接连验证工具失败的路由调整，不新增全仓审计；今后只对真实修改和新动态证据补判。本轮不执行产品测试或接管实现。用户D3批准不变，架构v0.45更新实际候选/未验状态；M-1/STEP008继续未完。
+ ### 当前阶段、导航、资源与进度（本节为当前视图）
+ - 00—04阶段材料已交付，03旧实验有范围限制；05/06规划已完成且持续维护；07进行中，08未开始，09无获准OPT。详见docu/STAGE_PROMPT_REVIEW.MD；不把文档交付等同功能完成。
+-- 复杂度高、风险高、不确定性中（HTML局部高），保留原校准；架构v0.33、执行状态v1.34。需求目标未变。
++- 复杂度高、风险高、不确定性中（HTML局部高），保留原校准；架构v0.45、执行状态v1.65。需求目标未变。
+ - 当前规则只读来源：D:/spiritice/AA文件/MS_spi knowledge libraay/obsidian_1/&职业相关/项目流程/项目开发提示词V3。AGENTS 2026-09-23T09:02:19.8371311+08:00、WORK 2026-09-23T09:04:14.5455941+08:00；模板及07同日09:02:19。根AGENTS.md负责映射，项目docu旧规则和Ndocu旧提示词副本仅历史，不作当前规则入口。
+ - 编排保持本窗口；执行分常规/增强，依难度/推理/风险/可验证程度；用户要求以成果验收、不因模型名称重做。Work Buddy各轮实际身份见TASK/R记录；只在任务未完成或能力存在实质缺口时升级。手动转交方式不变。
+-- 实际源码根为本项目backend/frontend/deploy；Git本地仓库已初始化（main，无提交/无远端）。外部旧源只作历史，用户资料/备份边界不变。没有提交/推送/发布或新增真实付费授权；旧13元已耗尽。079预算已消费，专用容器在结果日志时点已停止保留。
++- 实际源码根为本项目backend/frontend/deploy；Git已建立本地版本历史（main，首提交4595150，无远端）。外部旧源只作历史，用户资料/备份边界不变。已完成明确授权的一次本地首提交；没有后续提交/推送/发布或新增真实付费授权；旧13元已耗尽。079预算已消费，专用容器在结果日志时点已停止保留。
+ 
+ | 当前导航 | 用途/版本/读取时机 |
+ | --- | --- |
+@@ -23,8 +47,8 @@
+ | docu/LATER_REQUIREMENTS.MD | v1.1，目标v1.0；当前需求/验收基线 |
+ | docu/OPEN_SOURCE_RESEARCH.MD | v0.2；历史五候选/当前采用决定，新组件采用前核相关固定版 |
+ | docu/TECHNICAL_FEASIBILITY.MD | v0.24；历史HYP/SPIKE结论与局部限制，不重跑 |
+-| docu/PROJECT_ARCHITECTURE.MD | v0.33；唯一架构及实际核心代码地图 |
+-| docu/PROJECT_EXECUTE_STATE.MD | v1.34；唯一当前流程/资源/STEP/TASK/R入口；下方历史追踪矩阵继续作需求/依赖依据，旧状态不覆盖本节 |
++| docu/PROJECT_ARCHITECTURE.MD | v0.45；唯一架构及实际核心代码地图 |
++| docu/PROJECT_EXECUTE_STATE.MD | v1.65；唯一当前流程/资源/STEP/TASK/R入口；下方历史追踪矩阵继续作需求/依赖依据，旧状态不覆盖本节 |
+ | docu/CHANGE.MD | 按实际写入追加CHG，不重编 |
+ | docu/STAGE_PROMPT_REVIEW.MD | v1.0；本次00—09履行核对及未完成项 |
+ | Ndocu/tasks/TASK-079.md、Ndocu/results/TASK-079-result.md | 079完整合同/预检阻塞结果；环境恢复后原卡接续 |
+@@ -49,13 +73,111 @@
+ - Nginx：STEP-018按实际静态资源/API/SSE入口判定必要性；需要时在同一集成卡落deploy/nginx/配置并验证代理路由、流式响应、上传限制和入口权限，无此需要则STEP-020记录直接本地入口及不启用理由。Linux部署批次重新评估Nginx或平台等效代理；HTTPS在实际远程入口需要时验证，不为本地loopback先建公网/域名。代理、安全权限或监督边界改变时保留STEP-019独立审计，不以部署配置检查代替。
+ - STEP-020/08交接引用确切Git版本、部署配置与适用运行证据、密钥注入位置、备份恢复和停止步骤；生产发布/远程修改/安装/服务重启仍需对应执行授权。以上为计划，未生成配置、未安装或运行，编排统一负责届时出卡和验收。
+ 
+-TASK-080当前待转交/未验收：接收Work Buddy常规执行，优先043原工程窗口；原窗口不可用才新开，不占用079窗口。允许隔离并行，080无暂存/提交、不改079产品或证据。079保持原卡/窗口/剩余预算，收到实际新结果再裁定。
++TASK-080已沿实际Work Buddy新工程窗口完成并验收，当前无080待转交卡；079已回收，预算已消费，禁止自行重启续跑。
+ 
+-### 079/080结果裁定（2026-09-23，本轮有效）
++### TASK-080最终裁定（2026-09-23，覆盖前述准备状态）
++已返回/通过（本地版本管理范围）。用户确认精确599文件首提交，执行者沿080实际Work Buddy窗口完成；main唯一根提交45951501d2741630a229762d6b2d3f4b34d7f702，tree 9126846ac139047a37aa9297e3c2c5e307c76dd9，无远端、未推送。采纳staged-check-r02与post-commit-check-r02的599路径及blob原字节hash匹配证据；编排只读核对当前HEAD、提交数1、远端空及维护前已跟踪工作树无差异，没有重跑核验脚本或产品测试。
++两份073/074凭据原证据与全部079证据仍忽略；29判定排除中28作为未跟踪文件保留，另1已被079目录忽略。续作日志/结果未纳入首提交，47项未跟踪有分类依据，不为清洁状态删除文件。
++偏差保留：执行报告披露多处核验脚本修正复检，超过卡中最多一次修正复检口径，执行纪律不判全合规；最终确定性Git内容证据有效，不因此撤销提交或重复测试。今后脚本仍失败须交回，不能按每个新脚本重新计算限额。
++本轮更新架构/状态/CHANGE为提交之后的正常文档差异，尚未提交；用户本次授权仅一次首提交，不自动追加commit/amend/push。TASK080关闭，无需恢复043旧窗口。Compose服务集成仍在STEP018、Linux/Nginx阶段仍按架构执行；079业务证据及运行偏差结论不变，STEP008整体未完。首提交冻结期间延迟的续作卡与结果登记本轮补齐，历史原文保留。
++### 079/080前轮结果裁定（历史，080状态以最终裁定为准）
+ TASK-079已返回：部分通过。业务证据采纳：当前8冻结hash现场复算一致；真实22例OK/无skip，004空库成功、非空拒绝回滚、18项约束反例/正例、budget六表归零、ledger合法残留和容器停止日志有效。077时间账本基础切片结合078独立代码审计与079动态证据，限定实现验证通过；STEP008、M-1、worker监督及完整项目仍未完成。
+ 运行纪律不通过：part1在reject步骤遗漏后FAIL并于15:14:48停止容器；part2于15:18:46自行重启同ID、重置合成账号口令并重新起计时，15:19:02收尾。没有新的续作授权证据，不接受“同容器所以没有重试”的解释。两段记录跨度约4分26秒，现有时间戳不支持报告“原窗已超时”的说法；但part2确实没有继承原单调截止，不能宣称运行控制合规。有效业务证据不作废、不重跑；资源预算已消费，禁止自行追加。停止状态是日志时点证据，并非本轮实时查询Docker。
+ TASK-080已返回：部分通过，仓库准备采纳；.gitignore现场hash一致，当前根正确、暂存为空，原13项检查证据保留，不重跑。首提交未做。两份073/074含合成凭据证据裁定永久排除原件纳管，不能凭据称容器销毁解除；079证据本首提交整体排除，保留本地原件。原结果4份迁移实际包含001—004，纠正文案。
+ 080续作01已写回同卡待转交，沿实际完成080的新Work Buddy工程窗口：精确忽略高风险文件、刷新逐文件hash清单、准备literal pathspec及具体首提交方案。不重新init，不add/commit/push；准备齐备后再请求覆盖精确范围的本地提交授权。无需现在让用户审批未冻结的598项旧清单；不新增TASK。Compose/Linux/Nginx既定阶段不变。
++### 下一批：081监督协议（2026-09-24）
++Git本地首提交080已完成；回STEP008尚未闭合的监督与停止结算边界。TASK081/R075待转交增强执行，优先076原方案窗口，不可用则新开。只读设计与最小实施提案，不重新审计或测试077—079，不授权worker/HTTP/真实模型接线；主要字段/语义变化先交具体裁决。编排保留实现后的独立增强审计。没有新运行或付费预算，不重置079停止偏差。
++
++### R-075首轮裁定（2026-09-24）
++TASK081已返回，设计不通过实施门槛；接收修正轮01仍沿原增强Work Buddy/GLM-5.3窗口，待转交。未因模型标签重审。已核对实际结果、需求NFR003/SEC002、settle及PDF Job等待代码；repository/004当前hash仍与077—079相符，无代码或运行改动。
++确定设计缺口：S5 unknown/账本失资格不能证明退款前本地在途执行已关闭；每会话τ_total与重复额外开销无跨恢复不可重置控制；主句柄退出证据不能推出完整树已确认；多窗与一次上报/截止规则冲突；T2末行S100+R0+A0不等于M200；SUP绝不能碰账本不是SEC002原文要求。启动器健康检查属于新增责任，不能当未增加监督的现成能力。保留有限故障模型及有效账本证据，拒绝先请用户接受上述正确性缺口，不批准worker实现。
++本轮081卡只做F1—F6定向纠正，允许明确提出最小持久/角色变更候选而不实施；无法闭合即具体交回，禁止无限加层或重测。后续实现及独立审计门保留。架构现行已批准边界不因提案改变，Compose/Git计划不变。
++### R-075修正轮01裁定与独立诊断（2026-09-24）
++081修正轮01已返回，仍不通过设计门槛；停止原窗口继续修改，不批准005/worker。采纳F5算术修正、单窗/ack方向与SEC002归属纠正，但F1“在途必阻止新发送”有反例（剩余90/超时10/margin5）；WCC表空与账面终态不能独立证明传输任务已退出。F2窗数≤M推导不成立（C0可退款），新增持久会话预算可能有价值但还没证明其启动顺序、参数不变性及与用户可见时间上限关系。F2要求spawn前登记与F4的resume后登记矛盾；F3树确认仍为待核事实，跨重启找回旧树证据机制未明确。不能把这些都转为用户批准风险。
++新TASK082/R076独立增强诊断，推荐Codex Sol或同等强能力全新隔离窗口，不能沿081实施推理窗口；这是未闭合方案的独立诊断，不是对已完成账本的重审。先需求/源码独立推导再对照081，有限官方文档核对Windows/Python决定性事实，无动态运行预算。081原结果与所有有效证据保留，082待转交。
++### R-076裁定与下一批准点（2026-09-24）
++TASK082已返回/通过（限定独立诊断交付）。实际GPT-6未知后缀，已读独立初判与源码依据，不因型号重审。推荐先预扣后创建单窗Job，启动至整树退出计费，Job外可信SUP结算；采用一个dispatch_closed候选，081会话数两列不采纳。诊断不是动态或安全通过，现有代码/数据库未改变。
++具体实施边界见Ndocu/results/TASK-082-work-decision.md：明确claim新代次开DB门、本地armed门区分，关闭幂等/旧代次拒绝/settle受限确认保留，真实C0禁止及超窗失败关闭。005与时间语义/worker接线属于原076批准之外主要变化，待用户具体批准后出TASK083，不先实施。独立增强审计及按真实依赖选择的PG回归保留，不承诺受影响079用例永不再验；运行预算尚未新增。
++### 内部单窗监督批准与083登记（2026-09-24，当前有效）
++用户已对082-work-decision明确“批准”；不是笼统接受风险。TASK083/R077待转交，沿082实际GPT-6增强诊断窗口转实现以保留上下文，无法续用才另开同等增强窗口。该窗口从此不能承担本实现的独立安全审计，历史独立诊断证据保留。
++范围为一个持久关闭位/关闭接口、内部Job监督与发送门、整树退出后结算及合成验证；允许首批≤8个受控Job场景和一次失败定向复检，最多16次、每批10分钟，单场景30秒并保留收尾；无PG/Docker/外发/安装/付费预算。源码独占，不并行测试未冻结代码。实际测试尚未开始，不能写已消费；079历史额度不重置。
++任务完成后原始结果统一回传，编排核对再派独立增强审计与必要PG，不默认重跑或永不重跑079受影响用例。架构v0.45已记批准计划，未记已实现；用户库/HTTP/真实模型仍未授权接线。
++### R-077首轮裁定及离线补足（2026-09-24）
++083已返回/部分通过：产品候选与7离线局部证据接受，005/PG未运行，监督实现与真实Job不通过。编排读取session代码及job-initial/cleanup/pg-plan并复算repository/005吻合报告；未运行测试/查杀进程。Job初批5场景共141.328秒，01/04失败，第04与整命令突破30/60秒子上限；02/03/05缺完整身份日志只作局部证据，cleanup筛选count0不证明04 Job空。
++一次修正已改FakeLedger取整与解释器转发器，Job复检未启动，不称修复通过。当前真实Job运行冻结；本轮不要求用户重新授权既定范围内离线修复，不新增TASK。083原增强窗口收到离线补足轮01后只补command回调/管理期限、最终清理结果、内部门连接、精确句柄/管道控制与可执行PG准备。新增离线验证额度一纯单元批次加最多一次定向复检，各180秒累计360秒，单命令60秒，不spawn/PG/联网。
++离线完成后新窗口独立增强审查最终实现与运行控制，再定实际Job恢复范围/额度和PG卡；不把原剩余数额视为自动可运行。预算/修正次数不按新脚本清零，旧PG079不覆盖新门。无需当下重跑或删除任何现场。
++### 083离线补足回收与084独立审查（2026-09-24）
++083离线补足已返回，部分通过/待独立审查；编排核对实际结果、原始unit-initial/recheck、manifest与final-hashes，16文件现场hash一致，另核activities导出/两测试快照。候选实现可交独立审查，不据此确认功能安全。初批10项9过及单失败复检通过为当时证据，之后claim未知/loop/夹具补正未测试、旧AST不覆盖最终快照，明示未验证。
++执行者声明自动审核用量阻塞导致离线墙钟跨限、用户随后要求继续；仅作为执行者事件声明登记，不冒称本编排独立取得该审核或聊天原证据。无本轮Job/PG启动证据，运行额度保持冻结；原初批Job失败/清理缺证不清零。后补代码不以尚有额度为由追加试跑。
++TASK084/R078待转交：全新增强独立窗口，未参与082→083；只读最终源码/原始失败/运行控制，判定代码与Job/PG可运行性并给最小测试清单。不得沿083原窗口自审，不提前发运行卡；产品外接继续阻塞。正式文档本轮改动未提交，不触发第二次Git提交授权。
++### R-078审查裁定与083审计修复（2026-09-24）
++084已返回，独立审查交付有效；被审候选代码/Job运行门不通过，PG夹具不可运行。编排读取实际审查及launcher、session、pg_close、offline_unit定位，D1/D2/D4—D8接受为原范围修复；D3作为恢复正确性/可用性缺口接受，涉及新增持久证明则先给具体变更，不凭Open失败放行。
++083原增强实现窗口沿原编号审计修复轮02待转交，Job/PG继续冻结；新增限定纯单元批次及一次失败复检，累计实际运行360秒、单命令60秒，最终AST/hash在最后补正后执行。原所有失败和偏差保留。D3待决不阻塞七项安全离线修复；修后由原084独立窗口增量复核，不能由实现者自审。
++084无运行/新数据修改，005及仓储门主要静态事务判断有条件通过保留，不将此写成真实PG通过；产品接线、M-1与STEP008仍阻塞。当前无需用户审批不具体的新增持久证明方案。
++### 083修复轮02回收与084 review-02（2026-09-24）
++083已回传/部分完成并停止；D1/D3未闭合，最终纯单元复检3项2过1失败，05为elapsed_violation_full_reservation而期望settled。编排已读unit-recheck原始失败及meta(exit1)，不能延用初批14PASS给最终快照。最终静态13文件AST通过是执行者日志证据，不等同动态；fixture.py旧字节副本遗漏，diff对空不能当新增。仓储/005未改的结论继续保留。
++原实现窗口不再自行修正或运行，额度已用尽；Job/PG为0启动且持续冻结。新增持久witness/epoch/独立见证者只是提案，不在005单列授权内，尚未证明必要与充分，暂不向用户索取空泛批准。
++084原独立增强窗口review-02待转交：增量核D1/D2/D4—D8、05失败静态追因、D1替换控制结构与D3最小必要方案；不重审未变仓储、不给运行预算。区分恢复全额折叠与部分退款所需证据强度，避免为恢复无限叠加见证服务。审查后编排再定具体实施/批准范围。
++### D3实施10资源前置回收与原卡接续（2026-09-25，历史）
++006/claim/session/Open分类候选实现和离线检查已返回，尚无真实PG/Windows证据，独立审计未启动。编排核四主要产品hash及runner日志、准确容器ID/标签stop exit0→Running=false记录。错误是runner把镜像自带匿名volume误作宿主挂载，非已观察产品失败；runner退出0只说明流程已退出。原容器1086a37d…停止保留，执行者按单容器门停下合规。
++编排明确调增D3资源总容器上限至2，允许原083窗口一个替补新runTag容器继续原完整10卡；非用户新增模型审批，旧容器不接管/取口令。原离线3命令批已用完不重跑；真实批/PG进程/Windows场景仍0，原3批/3进程/12场景额度保持未用，剩余真实资源窗保守28分钟且全轮仍30分钟。替补runner创建前先文本核匿名卷/SQL/端口/日志/finally与保管凭据生命周期，不能先跑再因丢口令加第三容器。
++字段/快照候选不签通过，新增DB时间租约判定需在最终独立审查突出其实际差异影响。完整真实证据回收后一次084增量审计，不在资源runner问题上追加全审/拆实现轮。架构v0.45批准边界不变，M-1/STEP008未完成。
++### D3用户批准与完整实施10（2026-09-25，历史裁定）
++用户本窗口明确“批准”D3-work-decision，一列与单机恢复语义授权登记，不再等待该决定。TASK083沿原增强窗口一张完整实施10卡：006/claim身份/错误分类/恢复部署前提/调用方/单元及真实PG+Windows恢复/有限修正，完成统一回传；原084最后一次独立增量审计。旧D1/Job/PG有效证据按实际依赖复用，不碎拆。
++运行资源仅一个新D3容器loopback55439，不可再以runner/口令问题新建；≤3真实批/12Windows场景/3PG测试进程、累计真实30分钟，精确上限与一次生命周期持有凭据见卡。attempt独立日志不覆盖；归属清理未知停，核心两轮修正仍败/根因不稳交回。已有容器继续停止保留，不提交Git/用户库迁移/产品接线。
++架构v0.45仅登记已批准计划，D3未实施未验证、STEP008未完成；task/R编号不变、旧尝试费用不清零。正式决策已更新批准记录。
++### 084 review-06裁定与D3具体批准门（2026-09-25，历史裁定）
++编排核终审正式报告、条件原文及两新增文件hash一致。09内部D1四场景按分层实际范围验收通过，无需再补测无阻断项；Job07/PG08和有效纯单元复用。B观察者效应与C2早退限制保留；执行资源/日志偏差不抹去，不以“口令不可恢复”泛化为新增容器许可。
++D3推荐一列及同机同会话恢复，必须单机部署/错误码分类/互斥提交顺序三条件，详见TASK-083-D3-work-decision.md；新增持久字段超原082单列关闭位范围，等待用户一次具体批准。批准后原083一张完整实施/验证/修正卡，末次独立增量审计；当前不执行006或恢复改动。四容器维持停止保留，无需用户额外清理决定。
++审计窗口聊天称另写工作日志及MEMORY，超本卡“两处结果/证据”写入范围，登记为执行者声明，未据此读取/维护记忆或扩大授权；正式有效审计仅以项目结果与证据为准。历史已验工作不因此重审。架构v0.45仅更新验收/待批边界，M-1/STEP008未完成。
++### 083完整成果09回收与084一次终审（2026-09-25，历史裁定）
++09已返回：新增两个launcher夹具，四场景最终all_pass及D3一列session_id提案为执行者结论，待一次独立终审，不先签全通过或请用户批准字段。编排核两新增文件现场hash吻合，读取D3材料及收尾清单；A真实正常入口/PG、B/C注入和观察者效应由084统一裁定。尤其B控制者持Job句柄可能改变最后句柄行为，不能从SUP死后worker存活直接推出生产停止失效；保守结果与外层接管须分开。
++执行偏差如实保留：卡定1容器实际4、runner总窗改660、首批汇总日志被后批覆盖、复验重复已过场景；实际2真实批8场景及余证不能被最终PASS替代，具体超限/证据适用性由终审核实。旧PG08例外授权不继承本轮。资源记录称4容器均停止保留，本编排未再次启动或查杀任何对象。
++083停止追加运行/实现，原084增强独立窗口review06一次审新增diff、实际OS/PG证据、D3充分性及完整下一路径；允许最多6页微软官方决定性核对，动态0。D3需真实具体充分性结论后才提交用户一列/部署限制批准，未实施006。有效Job07/PG08与既有审查复用；架构v0.45不变，STEP008未完成。
++### 用户纠偏：撤销未启动准备09，改完整成果卡（2026-09-25，历史裁定）
++用户确认准备09尚未开始并要求重新编排减少往返。旧卡归档标记未执行/被替代，不消耗额度。TASK083同编号/原增强窗口改为launcher完整组合验证与D3决策：准备、范围内实现/夹具修复、真实OS+专用PG、最多两轮定向修正同卡连续交付；完成后原084一次独立增量终审。
++撤销编排自行增加的普通步骤逐次回传及任何新夹具都先审后跑前置。既有D1/Job静态审查复用；改变停止退款权限/信任或持久模型仍先交具体决策，清理归属未知立即停真实运行，公共规则核心两次修正仍败/根因不稳停止保留。不是降低安全标准或取消独立审计。
++新限定预算/资源详见卡：一个全新D1合成容器loopback55438、最多3真实批/12场景、累计真实30分钟、每场景30秒/命令60秒；离线5分钟/最多3命令批。旧运行历史不重置、旧容器不接管。D3同卡只读给具体方案，越界实施待批准；Job07/PG08及有效审计不重做。架构v0.45批准合同不扩。
++### 083 PG08裁定与固定launcher准备09（2026-09-25，历史裁定）
++编排核原始stderr六行ok/Ran6/OK及meta exit0（命令2.781秒），最终容器b8b7982f…Running=false与冻结hash记录：限定六例真实PG证据接受，不追加重测。runner-state误标失败因只查stdout，不能覆盖原始输出。cancel S90是保守折叠，不称整树结算或物理停止。
++实际三次资源批：前两次就绪SQL/current_user()及宿主/容器端口混淆导致前置停批，只有第三次启动六例。manifest/执行结果记用户15:10、15:15例外授权；这是执行窗口记录，本编排未直接看到原授权消息，不补造已独立核实。保留三容器历史和资源，不把报告写成一次创建；最终批停止由脱敏inspect支持，前两批停止依据执行记录，旧文件完整性不凭转述扩张。后续不自动继承例外重跑许可。
++原083增强窗口准备09：交付真实固定launcher受控验证夹具与完整审查包（新增测试文件/一次离线语法检查，动态0），不只交设计；由原084审新增控制后另卡运行。Job07/PG08已验范围复用，PG/Job不续跑，旧容器不接管。D3恢复来源仍为另一待决路线；架构更新v0.39只登记验证状态不扩批准模型。STEP008整体未完成。
++### 083 Job07裁定与PG08（2026-09-25，历史裁定）
++编排读五条原始JSON、meta及收尾记录：Job07五场景均observed，exit0/14.122011秒，无本批超时；01/02/03/05确切Job末态0、04单进程最后句柄关闭后worker signaled且末态查询null。限定五场景行为证据接受，不追加同批重跑。03/05原始输出缺worker PID/创建时间、01/02未输出创建时间，现场核验发生于已审控制器但落盘身份记录不完整，作为证据限制保留，不能伪称逐项完整身份日志；清理扫描只作旁证。合成账本结果不等于PG退款验证。
++原083窗口转真实PG08：按084已审六例一次新批，专用全新容器/库/逐例schema、固定本地镜像、loopback55437、无旧资源接管；一次unittest failfast，预算/限时/精确finally收尾见完整卡。仅此六例解冻PG，不恢复079额度，不再运行Job。环境缺失一次预检即停，不安装/拉取/擅启服务。
++Job07实现文件未改，现有静态独立结论复用，无新产品风险无需默认重审五场景。新D1固定launcher真实入口仍须准备审查，D3命名空间化身事实决策仍待编排，二者不由本批替代。架构v0.45批准合同未扩；整体083/STEP008仍未完成。
++### 084 review-05验收与083真实Job07（2026-09-25，历史裁定）
++review-05增量确认接受：三处替身缺陷关闭，三例纯单元最终快照证据及旧D1期限/碰撞局部不变性有效；不再追加夹具修正/纯单元重测。编排读取当前Job模块入口与原批准，四份运行链hash吻合。历史Job并非从未运行：旧5场景尝试及超时/缺证均保留；当前冻结快照真实验证尚待本批。
++按用户082已批准合成验证范围，编排仅解冻TASK083 Job01/02/03/05/04一次受控真实Windows批，原083增强窗口执行；最多5场景、脚本55秒/命令60秒/场景30秒、整体含准备收尾10分钟，失败或归属/清理未知即停，无修正复跑。证据job-run-07，详细合同见TASK083。PG仍冻结，新D1固定launcher入口及D3旧G恢复不在本批；不因D3未闭合阻塞干净合成活动的局部验证。
++剩余路线明确保留：专用PG六例另卡预算/资源、新D1真实入口先准备审查再运行、D3化身来源只读事实决策；未派发不冒称在途。架构v0.45批准合同未扩，旧费用与运行预算不重置。Job全部通过也不签M-1/STEP008完成。
++### 083修正06回收与084 review-05（2026-09-25，历史裁定）
++编排核当前三文件hash及两份原始日志/meta：生命周期2例与05一例均实际OK，两命令exit0，2.478099+0.883416秒；三处替身修正候选接受，待原084只作增量确认。04控制器与offline05未变，focused_unit最终dfaaf814…5259；三例是纯离线替身证据，不能解释为真实Windows/PG通过。D1期限/碰撞旧PASS按未变依赖复用。
++静态一次使用托管3.13.12而非卡定venv再次记为执行偏差；真实三例使用项目venv且日志有效，不因AST解释器不同机械重跑。旧失败及全部尝试原样保留，运行预算不重置。083本轮实现与有限验证已返回，不继续修码或试跑。
++原084独立增强窗口review-05待转交，只确认三缺陷关闭/证据适用，并分项判断现有Job01—05、新D1固定入口、PG六例及D3恢复的剩余门。Job/PG仍冻结，D3与新D1实际OS缺口保留；架构v0.45无扩展。后续按独立确认分别编排真实验证，非再全面审计。
++### 084 review-04回收与083完整夹具修正06（2026-09-25，历史裁定）
++review-04独立诊断交付接受，三文件现场hash吻合：确认替身身份硬编码、open_existing断言身份、starter/kernel句柄撞号三处同链缺陷；04控制器句柄合同与05局部时钟静态满足，运行仍未证。独立审查实际GLM-5.3-Flash如实记，不因标签重新审查。
++沿083原增强窗口一次合并修三处，仅StartLifecycleTests局部，采用从spawn实参派生身份及分离句柄基址；不取消身份校验，不改产品/控制器/05。新增一次最终三方法离线批累计120秒、单命令60秒；一次静态60秒；失败即停无追加复检。D1期限/碰撞等未变PASS按review-04确认复用。修后原084只增量核差异/日志，不重复全审。
++Job/PG维持冻结，D3恢复可用性与新D1真实固定入口验证缺口保留；架构v0.45无新批准。review-04把生命周期/05列在真实OS分类中仅为报告排版，二者待运行的是纯替身测试，不混作真实Windows证据。本轮不新增持久字段或重置旧预算。
++### 083替身修正05回收与084 review-04（2026-09-25，历史裁定）
++编排核三文件现场hash与回传一致，原始unit-lifecycle-01仅运行1例FAIL（failfast），不是运行2例；身份回执与控制器随机身份不匹配，另两例not_run。partial兼容修复推进了失败位置，不证明生命周期通过。D1期限及碰撞旧PASS按局部未变性保留待084确认；05确定时钟未验证。
++本轮静态实际3次尝试，超过卡定一次；检查脚本错误及临时docstring缩进修正如实登记，最终ALL_PASS不抹去偏差。实际模型GLM-5.3-Flash如实记，不因此重审有效工作。原运行失败即停已遵守；不再沿083开逐点试跑修正批。
++原084独立增强窗口review-04待转交，一次审生命周期夹具全流程、04控制器句柄增量、05时钟作用域及证据适用性，给可合并实施的最小完整修正清单。运行额度0，无产品/测试改写。Job/PG持续冻结；D3恢复、新D1真实OS证据及整体交付缺口不变，架构v0.45不扩。
++### 083夹具修正04回收与替身修正05（2026-09-24，历史裁定）
++编排核对三个当前hash与原始日志一致：04轮首命令5例3过2失败，生命周期两例在API绑定方法argtypes赋值处失败，未到被测流程；D1 Resume前截止首次有效替身PASS，碰撞两例PASS；05第二命令not_run。三项候选不签功能通过。静态由托管3.13.12代替指定venv是执行偏差，证据可按实际解释器记载，不追溯伪称合规，也不重跑无关静态。
++原083增强窗口仅修StartLifecycleTests局部API替身，新增一次三方法定向批（两生命周期+未运行05），累计120秒、单命令60秒，失败即停无复检。旧碰撞/D1通过项按方法和依赖未变复用，不采纳实现方“同文件hash变化就全部复跑”的建议。实际依赖改变需具体说明，不能机械失效所有证据。此次再失败直接交原084增量诊断；成功则084一次审三文件累积增量。
++Job/PG仍冻结，D3恢复和新D1实际OS证据缺口未消除；本轮不扩架构、不新增持久模型/运行授权，历史尝试与费用不重置。
++### 084 review-03裁定与083夹具修正04（2026-09-24，历史裁定）
++084独立交付接受；D1旧Process/Pipe无界用户态路径静态修复有条件通过，不等于真实OS通过。编排核对review-03原报告/hash及04 Start提前关闭和期限夹具第三检查源码，三改动对象hash匹配。04碰撞关闭，但父Start句柄在子Open前释放有确定竞态；期限失败为夹具错排，生产分支不因此重写；05旧根因未证，允许仅测试局部确定正耗时，不再无限复现旧失败。
++083原增强窗口夹具修正04待转交：只修04句柄生命周期、期限夹具、05局部确定时钟；新增一次最终离线批≤6方法/120秒、每命令60秒，失败停批无复检；静态≤60秒。第12项及其他未受影响证据按084确认复用。真实Job/PG保持冻结，后由084定向复核三处增量。
++D3命名空间化身可靠来源未取得，两列不批准；保持安全失败关闭及恢复可用性缺口。D3只阻断旧G恢复与整体完成，不自动阻断隔离干净新活动/独立PG验证。新D1固定launcher真实入口另需受控场景，现有Job01—05不覆盖它；该运行准备及D3事实决策仍待后续编排，不据本轮自动解冻。架构v0.45批准合同不变。
++### 083定向接续03回收与084 review-03（2026-09-24，历史裁定）
++083部分完成、停止本轮；编排读取实际回传、最终10项原始日志（9过1失败）和05一次诊断（PASS），现场七文件hash均与final-hashes一致。04碰撞为代码候选；D1改为固定悬停SUP/限长映射候选但最终前Resume截止测试失败，不能按实现者夹具解释签通过。05本次C1/W6不解释旧失败，最终session快照另变；第12项not_run，已有证据仅按适用快照保留。
++D3本轮未取得可靠启动/会话化身来源，两列提案不具备批准基础；保持未知恢复失败关闭，不新增持久字段。083本轮诊断及最终纯单元额度已消费，失败即停，无追加修正/复检授权。真实Job/PG为0且继续冻结，旧运行/失败/费用不重置。
++沿084原独立增强窗口review-03一次复核D1新结构、04修复、前Resume夹具与05证据、D3最窄出口；不给任何运行预算，不重审未变关闭项。架构v0.45合同未改，新的控制结构仍为候选；下一步以独立结果裁定最小修正或运行门，而非继续无证试跑。公共AGENTS/WORK修改时间核对未变，沿既有版本。
++### 084 review-02裁定与定向接续（2026-09-24）
++已回收review02，独立审查交付有效；代码/Job仍不通过，PG未放行。D2/D5/D6静态关闭，D7静态有条件关闭、D8返回值修复受D1约束；D4仅剩04 Start事件碰撞确定缺陷。05最终失败缺t0/t1等原值无法静态唯一归因，不猜C0。D1在既有父/SUP两层采用悬停精确句柄与有界IPC建议作为原范围修复；不是默认增加第三看门。
++D3逐阶段witness/独立持句柄服务不采纳为默认必需；最窄候选为运行owner启动纪元/session随G持久绑定，但可靠纪元来源和命名空间证明未核实，不能直接请用户批准两列。原083增强窗口focused-repair-03待转交，四项连续完成：04碰撞、05一次值取证、D1替换、D3有限官方事实核对。可完成不受阻项，不新增持久字段。
++新增额度仅05一次诊断60秒+最终定向纯单元批次180秒（单命令60秒，失败即停无二次修正复检）+最终静态60秒；真实Job/PG持续冻结，旧失败不清零。完成后原084独立增量复核，不重审已关闭未改部分。
+ ### 本批正式任务登记与轮次
+ | TASK / R | STEP / 父TASK | 调度 | Work验收 | 目标/资源 |
+ | --- | --- | --- | --- | --- |
+@@ -83,7 +205,11 @@ TASK-080已返回：部分通过，仓库准备采纳；.gitignore现场hash一
+ | TASK-078 / R-072 | 008 / 077 | 已返回 | 通过 | review03限定代码增量复核及review02未变结论采纳；N1关闭，独立性披露保留，PG条件另列 |
+ | TASK-079 / R-073 | 008 / 077 | 已返回 | 部分通过 | 22例及迁移证据采纳；失败后自行重启续跑违反停止条款，预算已消费 |
+ 
+-| TASK-080 / R-074 | 002补项 / 043关联 | 续作01待转交 | 部分通过 | 已初始化无提交；沿实际080新窗口补排除规则与精确清单 |
++| TASK-080 / R-074 | 002补项 / 043关联 | 已返回 | 通过 | 599文件本地首提交4595150，执行复检偏差保留；无远端/未推送 |
++| TASK-081 / R-075 | 008 / 076 | 已返回/停止修订 | 不通过（设计） | 修正轮01仍有关闭/累计/启动顺序缺口，转082独立诊断 |
++| TASK-082 / R-076 | 008 / 081 | 已返回 | 通过（诊断） | 内部切片已获用户批准；实施另083，未实施 |
++| TASK-083 / R-077 | 008 / 082 | 最强模型完整收尾14待转交新窗口 | 合并范围内修复/离线/真实验证及收尾 | 原窗口让出独占；预算不重置，最后一次独立验收保留 |
++| TASK-084 / R-078 | 008 / 083 | review-08已返回/通过 | 八项阻断关闭，静态运行门具备 | 后续仅新动态证据及实际修正增量，不全量重审 |
+ 
+ ### 本轮Work裁定（2026-09-20T19:25:15.2619531+08:00）
+ 057与058均由用户回传，实际结果文件存在；057两脚本和058账本关键hash已只读复算吻合。057语法检查初检后修摘要再复检的偏差保留，不追加检查；这不是运行通过。058独立性按结果声明和只读证据包记录，不由Work自查冒充独立审计。原报告不覆盖。
+@@ -268,7 +394,7 @@ TASK079/R073已保存完整卡并待转交：优先Work Buddy的077轮02执行
+ 
+ ### 当前下一入口
+ 079保持原任务/执行窗口和完整卡，等待Docker Linux engine恢复信息；届时仅执行一次必要续作预检并沿剩余一次预算继续，不自动启动Desktop/循环重试、不另出重复任务卡。公共提示词只读，本轮没有新执行任务、产品改动或测试。
+-下一可用TASK-081、R-075、CHG-0462；最近CHG-0461。08/09未启用，079和完整主链未完成不能宣告全项目通过。
++下一可用TASK-085、R-079、CHG-0562；最近CHG-0561。08/09未启用，079和完整主链未完成不能宣告全项目通过。
+ ## 切换前总览与历史（原样保留，不作为当前调度状态）
+ # PROJECT_EXECUTE_STATE
+ 
+@@ -2390,7 +2516,7 @@ TASK-001～029、R-001～023已占用，下一未占TASK-030/R-024/SPIKE-017。
+ 1. **任务目标**：证明原008两页可经独立Docker画面/有限输入正常交互，并取得新宿主网络/导航拒绝、卡死/监督失联后真实结束证据；不开发产品。
+ 2. **当前问题**：原iframe不能作为新容器宿主证据；Docker客户端可读，Linux引擎管道当前不可用，镜像是否缓存未知。
+ 3. **必要背景**：用户批准独立预览路线，FR-009/SEC-003不变；原008能源/概率两页及数值正反例保留；无模型再生成。
+-4. **允许修改/访问范围**：待批准后仅新建D:/shuice12/RetroLume-SPIKE-017，读008原两页及现有playwright/playwright-core1.62.1。下载mcr.microsoft.com/playwright:v1.62.1-noble，固定linux/amd64 digest sha256:c091b21d9fae78c76e85cd4356431e9b016402f172a214fc7d7a5e9a7e29d8ac；若本机已有同digest则复用，不重复下载。复制现成两个Node包及其许可到实验派生镜像，不运行npm安装/更新或下载浏览器。镜像层存Docker配置的数据盘，D:/shuice12仅存实验文件，不假称镜像也放在该路径。
++4. **允许修改/访问范围**：待批准后仅新建D:/shuice12/RetroLume-SPIKE-017，读008原两页及现有playwright/playwright-core1.62.1。下载mcr.microsoft.com/playwright:v1.65.1-noble，固定linux/amd64 digest sha256:c091b21d9fae78c76e85cd4356431e9b016402f172a214fc7d7a5e9a7e29d8ac；若本机已有同digest则复用，不重复下载。复制现成两个Node包及其许可到实验派生镜像，不运行npm安装/更新或下载浏览器。镜像层存Docker配置的数据盘，D:/shuice12仅存实验文件，不假称镜像也放在该路径。
+ 5. **禁止范围**：不安装Redis/正式依赖、不调用模型/API/凭据、不外发真实资料、不改008/需求/业务代码；不挂载宿主目录/socket、不开放端口、不使用host网络/IPC、SYS_ADMIN、privileged或关闭浏览器sandbox；不自动删除容器/镜像。
+ 6. **必要上下文**：AGENTS、架构v0.4 FLOW-006及12.3、原008manifest/HTML/数值预期，TASK-029限定审计；官方Playwright Docker安全说明。所有版本/hash先记录，命令/退出与原始输出保存。
+ 7. **实现约束**：最多4个顺序专用实验容器同时仅1个运行；networknone、非root、cap-drop ALL、no-new-privileges、只读根、受限tmpfs/独立shm，总内存2GiB、CPU2、PIDs256，每例30秒监督、全套120秒（下载/构建另限15分钟，超时停）。需要user namespace的seccomp仅采用核对后的官方1.62.1策略，记录hash；禁止临时增权求通过。不设回环监听服务。复制包/HTML构建派生镜像只在隔离实验中，敏感数据不进入。外部可信监督器按唯一容器ID终止/确认，结束后停止并保留。
+@@ -2401,7 +2527,7 @@ TASK-001～029、R-001～023已占用，下一未占TASK-030/R-024/SPIKE-017。
+ 
+ 最少用户操作：打开Docker Desktop，等待Engine running；若Linux engine仍不可用，回传非敏感错误文本，不提供账号/密钥。单独批准上述固定镜像下载、现有包复制构建和最多4个隔离容器小实验；不增加API费用。镜像下载占本地磁盘，实际大小待Docker可用后核实；15分钟超时停止，不无限重试。失败无需用户手工写代码或删数据，Work按原始证据诊断。
+ 2026-09-10用户明确“Docker已启动，批准上述实验”，对应TASK-030完整提案：固定镜像下载、现有包复制构建、最多4个顺序隔离容器及原合成页/无害探针已授权。实际只读确认Docker Server29.7.2可用，image ls只列原pgvector镜像，017目录尚不存在。按合同分发执行；原总13元API账不动。批准不包含增权、关闭sandbox、改变镜像版本或真实资料。
+-2026-09-11接续修正：首次下载exit1/not found；执行Agent额度中断，未建容器。Work只读官方v1.62.1-noble标签得到HTTP200，索引digest与原记录完全相同；linux/amd64真实digest为sha256:c091b21d9fae78c76e85cd4356431e9b018402f172a214fc7d7a5e9a7e29d8ac。原合同将其中b018402误抄为b016402，属于校验码转录错误，并非更换批准版本或扩大依赖。以官方响应evidence/registry-followup.json及registry-amd64.json为修正依据，保留原合同和失败日志，沿TASK-030一次有据修正继续；新准备批次仍15分钟/最多4容器/原全部隔离限制，无API调用。原manifest保留，在revision1记录更正及预期，首次未运行交互实验，不将其记为安全测试失败或通过。
++2026-09-11接续修正：首次下载exit1/not found；执行Agent额度中断，未建容器。Work只读官方v1.65.1-noble标签得到HTTP200，索引digest与原记录完全相同；linux/amd64真实digest为sha256:c091b21d9fae78c76e85cd4356431e9b018402f172a214fc7d7a5e9a7e29d8ac。原合同将其中b018402误抄为b016402，属于校验码转录错误，并非更换批准版本或扩大依赖。以官方响应evidence/registry-followup.json及registry-amd64.json为修正依据，保留原合同和失败日志，沿TASK-030一次有据修正继续；新准备批次仍15分钟/最多4容器/原全部隔离限制，无API调用。原manifest保留，在revision1记录更正及预期，首次未运行交互实验，不将其记为安全测试失败或通过。
+ 
+ ### TASK-031：SPIKE-017启动失败独立只读诊断
+ 
+@@ -2642,7 +2768,7 @@ Work接受该限定结论：RISK-001/002/004原设计缺口关闭但风险状态
+ 
+ 用户明确回复“同意这两个方案”：独立Docker画面预览路线、Redis8按RSALv2用于个人本地缓存并保留声明，不对第三方提供Redis服务，未来上线/分发重新评估。ADR-006/008取舍已确认，状态计划中；Redis具体补丁版本仍待选定，HTML宿主仍需最小验证。本决定不等于下载/安装/运行批准，也不等于整体架构批准；不再重复索取上述方案确认。
+ 
+-只读环境核查：Docker客户端29.7.2存在，但desktop-linux引擎管道不存在，当前不能访问daemon或枚举镜像；不因此断言镜像未安装。现有playwright/playwright-core均1.62.1；原008两页hash已读取，未修改。官方registry实际返回v1.62.1-noble清单HTTP200，索引digest sha256:dcc5531e97840b9b5e794f2814476b21571c5124a3fca2267d73041f56e7580e，linux/amd64清单digest sha256:c091b21d9fae78c76e85cd4356431e9b016402f172a214fc7d7a5e9a7e29d8ac。只读清单不是已下载镜像或兼容运行证明。
++只读环境核查：Docker客户端29.7.2存在，但desktop-linux引擎管道不存在，当前不能访问daemon或枚举镜像；不因此断言镜像未安装。现有playwright/playwright-core均1.62.1；原008两页hash已读取，未修改。官方registry实际返回v1.65.1-noble清单HTTP200，索引digest sha256:dcc5531e97840b9b5e794f2814476b21571c5124a3fca2267d73041f56e7580e，linux/amd64清单digest sha256:c091b21d9fae78c76e85cd4356431e9b016402f172a214fc7d7a5e9a7e29d8ac。只读清单不是已下载镜像或兼容运行证明。
+ 
+ 最小实验合同见FLOW第10节TASK-030/SPIKE-017（沿HYP-005，不新增重复假设）。当前用户只需启动Docker并单独批准固定镜像/隔离环境运行；Work承担实验编写、验证和后续独立审计。安装正式依赖、Redis服务或产品部署均不在本次提案内。
+ ### 12.4 新宿主实测与当前唯一入口（2026-09-11）
+@@ -2831,6 +2957,31 @@ R-030入口：[TASK-036候选裁定与准备要求](D:/shuice12/RetroLume-SPIKE-
+ 
+ 
+ 
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
+ 
+ 
+ 

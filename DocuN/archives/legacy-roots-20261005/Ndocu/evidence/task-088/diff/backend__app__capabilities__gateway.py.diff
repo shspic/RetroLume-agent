@@ -1,0 +1,103 @@
+--- pre/backend/app/capabilities/gateway.py
++++ post/backend/app/capabilities/gateway.py
+@@ -7,6 +7,7 @@
+ import logging
+ import math
+ import re
++from dataclasses import replace
+ from typing import Any, Mapping
+ from uuid import uuid4
+ 
+@@ -23,9 +24,11 @@
+     ModelCallRequest,
+     ModelCallResult,
+     ModelServiceConfig,
++    RecordOutcome,
+     RejectingAdmissionLedger,
+     ResponseMode,
+     Usage,
++    build_business_payload,
+ )
+ from .tools import ToolRegistry, ToolValidationError
+ from .transport import DeliveryUnknown, HttpxModelTransport, ModelTransport, RequestNotSent, TransportResponse
+@@ -249,6 +252,25 @@
+             )
+             return await self._finish(permit, context, outcome, CallStatus.FAILED)
+ 
++        payload_format: str | None = None
++        payload: str | None = None
++        payload_sha256: str | None = None
++        if result.status is CallStatus.SUCCEEDED:
++            try:
++                payload_format, payload, payload_sha256 = build_business_payload(
++                    text=result.text, json_object=result.json_object
++                )
++            except (ValueError, TypeError, RecursionError) as exc:
++                # 封套先拒后写：超限/非法正文转为 received 失败，不持久化正文。
++                error_code = "payload_limit" if str(exc) == "payload_limit" else "invalid_payload"
++                outcome = LedgerOutcome(
++                    LedgerDisposition.RECEIVED,
++                    error_code=error_code,
++                    remote_request_id=remote_request_id,
++                    response_bytes=response.response_bytes,
++                )
++                return await self._finish(permit, context, outcome, CallStatus.FAILED)
++
+         outcome = LedgerOutcome(
+             LedgerDisposition.RECEIVED,
+             remote_request_id=remote_request_id,
+@@ -257,12 +279,15 @@
+             prompt_tokens=result.usage.prompt_tokens if result.usage else None,
+             completion_tokens=result.usage.completion_tokens if result.usage else None,
+             response_bytes=response.response_bytes,
++            payload_format=payload_format,
++            payload=payload,
++            payload_sha256=payload_sha256,
+         )
+-        final = await self._finish(permit, context, outcome, result.status)
+-        if final.status == CallStatus.UNKNOWN:
++        final = await self._finish(permit, context, outcome, result.status, result=result)
++        if final.status is CallStatus.UNKNOWN:
+             return final
+         del parsed
+-        return result
++        return final
+ 
+     def _parse_success(
+         self,
+@@ -378,11 +403,32 @@
+         context: CallContext,
+         outcome: LedgerOutcome,
+         status: CallStatus,
++        *,
++        result: ModelCallResult | None = None,
+     ) -> ModelCallResult:
+-        try:
+-            await self._ledger.record_outcome(permit, outcome)
++        """记账并按提交确认三分类映射最终状态。
++
++        AdmissionDenied → 事务确定回滚：UNKNOWN + record_denied；
++        其他异常（含 AdmissionUnavailable 与意外异常）或返回非法枚举/None →
++        提交结果未确认：UNKNOWN + record_unconfirmed。两处 UNKNOWN 都不否定
++        同键历史持久正文；恢复由 record 幂等与只读接口承担，不重发、不补写。
++        SUCCEEDED 仅在合法正文获 RECORDED/ALREADY_PRESENT 确认后返回，实际
++        返回对象携带 payload_sha256；TOOL_PLAN 不持久化业务正文、不自动执行。
++        """
++        try:
++            confirmation = await self._ledger.record_outcome(permit, outcome)
++        except AdmissionDenied:
++            return self._result(context, CallStatus.UNKNOWN, "record_denied")
+         except Exception:
+-            return self._result(context, CallStatus.UNKNOWN, "ledger_record_failed")
++            return self._result(context, CallStatus.UNKNOWN, "record_unconfirmed")
++        if not isinstance(confirmation, RecordOutcome):
++            return self._result(context, CallStatus.UNKNOWN, "record_unconfirmed")
++        if result is not None:
++            if result.status is CallStatus.SUCCEEDED:
++                if not isinstance(outcome.payload_sha256, str):
++                    return self._result(context, CallStatus.UNKNOWN, "record_unconfirmed")
++                return replace(result, payload_sha256=outcome.payload_sha256)
++            return result
+         return self._result(
+             context,
+             status,

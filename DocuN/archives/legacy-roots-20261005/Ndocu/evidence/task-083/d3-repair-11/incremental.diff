@@ -1,0 +1,1138 @@
+--- pre/backend/app/activities/repository.py
++++ backend/app/activities/repository.py
+@@ -366,9 +366,9 @@
+         async def operation(connection: object) -> ActivityLease | None:
+             snapshots = await self._source_rows(connection, activity_id)
+             sources_valid = bool(snapshots) and await self._lock_sources(connection, snapshots)
+-            cursor = await connection.execute("SELECT *, CURRENT_TIMESTAMP AS database_now FROM activities WHERE id = %s FOR UPDATE", (activity_id,))
++            cursor = await connection.execute("SELECT * FROM activities WHERE id = %s FOR UPDATE", (activity_id,))
+             row = await cursor.fetchone()
+-            now = row["database_now"] if row is not None else None
++            now = datetime.now(timezone.utc)  # 来源及活动锁均已取得。
+             if row is None or not sources_valid:
+                 raise ActivityLedgerConflict("活动或来源快照不可用")
+             if expected_previous_generation is not None and (
+@@ -443,21 +443,20 @@
+             sources_valid = bool(snapshots) and await self._lock_sources(connection, snapshots)
+             cursor = await connection.execute(
+                 """SELECT status, execution_generation, running_reserved_seconds, dispatch_closed,
+-                          running_owner_session_id,
+-                          (lease_expires_at IS NULL OR lease_expires_at <= CURRENT_TIMESTAMP)
+-                              AS lease_recoverable,
+-                          (deadline_at > CURRENT_TIMESTAMP) AS deadline_live
+-                     FROM activities WHERE id = %s""",
++                          running_owner_session_id, lease_expires_at, deadline_at
++                     FROM activities WHERE id = %s FOR UPDATE""",
+                 (activity_id,),
+             )
+             row = await cursor.fetchone()
+             if row is None:
+                 raise ActivityLedgerConflict("活动不存在")
++            now = datetime.now(timezone.utc)  # 与 claim 一致，在锁后判断资格。
+             return WindowSnapshot(
+                 row["status"], row["execution_generation"],
+                 row["running_reserved_seconds"], row["dispatch_closed"],
+                 row["running_owner_session_id"],
+-                bool(row["lease_recoverable"] and row["deadline_live"]),
++                bool((row["lease_expires_at"] is None or row["lease_expires_at"] <= now)
++                     and row["deadline_at"] > now),
+                 sources_valid,
+             )
+ 
+--- pre/backend/app/worker/session.py
++++ backend/app/worker/session.py
+@@ -77,7 +77,7 @@
+     job_name: str | None = None
+     pid: int | None = None
+     active_processes_at_end: int | None = None
+-    settled_seconds: int | None = None  # 已确认写入 S；未知时为 None。
++    settled_seconds: int | None = None  # 本次新窗已确认结算；旧 G 折叠不在此字段，未知为 None。
+     reserved_seconds: int | None = None  # 已确认仍占 R；结算响应未知时为 None。
+     pending_fold_seconds: int | None = None  # 以后按原规则保守折叠，未计入 S。
+     elapsed_seconds: float | None = None
+@@ -151,6 +151,8 @@
+         t0_ns: int | None = None
+         tree_empty = False
+         created_job = False
++        old_running = False
++        old_tree_confirmed = False
+         state = "not_started"
+         error_type: str | None = None
+         cleanup_errors: list[str] = []
+@@ -173,6 +175,8 @@
+                 state = "cancelled"
+                 raise _StopSession
+             if snapshot.status == "running":
++                old_running = True
++                settled_seconds = reserved_seconds = pending_fold_seconds = None
+                 # 部署声明仅是已配置的运维前提；numeric ID 不能证明同一主机。
+                 if not config.single_host_single_session_recovery:
+                     raise JobUnknown("未配置单主机单交互会话恢复前提")
+@@ -186,6 +190,7 @@
+                     if exc.code != ERROR_FILE_NOT_FOUND:
+                         raise
+                     old = None
++                    old_tree_confirmed = True
+                 if old is not None:
+                     old_failure: BaseException | None = None
+                     try:
+@@ -204,6 +209,7 @@
+                             cleanup_errors.append(type(exc).__name__)
+                     if old_failure is not None:
+                         raise old_failure
++                    old_tree_confirmed = True
+             elif snapshot.status != "pending":
+                 raise JobUnknown("未知活动状态")
+ 
+@@ -217,11 +223,14 @@
+                 expected_previous_generation=(snapshot.execution_generation if snapshot.status == "running" else None),
+             ), manager_deadline_ns)
+             if lease is None:
++                # 旧 G 的折叠提交已由仓储返回确认，但本结果未读取提交后的 S/R。
++                # 旧 running 的账目字段继续为未知，避免冒用快照值。
+                 state = "budget_exhausted"
+                 raise _StopSession
+             if lease.running_owner_session_id != session_id:
+                 raise JobUnknown("新代次持久会话身份与 SUP 不一致")
+             window = lease.window_seconds
++            settled_seconds = 0
+             reserved_seconds = window
+             pending_fold_seconds = window
+             deadline_ns = t0_ns + window * 1_000_000_000
+@@ -328,7 +337,7 @@
+             except BaseException as exc:
+                 cleanup_errors.append(f"local_owner_release:{type(exc).__name__}")
+ 
+-        incomplete = (created_job and not tree_empty) or bool(cleanup_errors)
++        incomplete = (old_running and not old_tree_confirmed) or (created_job and not tree_empty) or bool(cleanup_errors)
+         if incomplete and state == "settled":
+             state = "settled_cleanup_error"  # 已确认结算不能伪装成未结算。
+         elif incomplete and state not in ("settlement_unconfirmed", "cancelled_by_caller"):
+--- pre/backend/tests/test_d3_recovery.py
++++ backend/tests/test_d3_recovery.py
+@@ -3,6 +3,7 @@
+ 
+ import asyncio
+ from dataclasses import replace
++from datetime import datetime, timedelta, timezone
+ from pathlib import Path
+ import sys
+ import time
+@@ -13,7 +14,7 @@
+ BACKEND = Path(__file__).resolve().parents[1]
+ sys.path.insert(0, str(BACKEND))
+ 
+-from app.activities import WindowSnapshot
++from app.activities import ActivityLedgerConflict, PostgresAdmissionLedger, WindowSnapshot
+ from app.worker.command import WorkerCommand
+ from app.worker.session import SessionConfig, SingleWindowSupervisor
+ from app.worker.windows_job import (
+@@ -48,19 +49,28 @@
+ 
+ 
+ class OldJob:
+-    def __init__(self, events):
++    def __init__(self, events, *, wait_result=True, wait_error=None, close_error=None, terminate_error=None):
+         self.events = events
++        self.wait_result = wait_result
++        self.wait_error = wait_error
++        self.close_error = close_error
++        self.terminate_error = terminate_error
+ 
+     def terminate(self):
+         self.events.append("terminate")
++        if self.terminate_error:
++            raise self.terminate_error
+ 
+     def wait_empty_until(self, deadline_ns):
+-        self.events.append("tree_zero")
+-        return True
++        self.events.append("tree_query")
++        if self.wait_error:
++            raise self.wait_error
++        return self.wait_result
+ 
+     def close(self):
+         self.events.append("old_close")
+-
++        if self.close_error:
++            raise self.close_error
+ 
+ class D3RecoveryGuards(unittest.IsolatedAsyncioTestCase):
+     def config(self, enabled=True):
+@@ -69,7 +79,7 @@
+             startup_limit_seconds=2, single_host_single_session_recovery=enabled,
+         )
+ 
+-    async def run_case(self, snapshot, *, enabled=True, open_effect=None, claim_error=None):
++    async def run_case(self, snapshot, *, enabled=True, open_effect=None, claim_error=None, old_job_options=None):
+         events = []
+         Owner.events = events
+         ledger = Ledger(snapshot, events, claim_error)
+@@ -77,7 +87,7 @@
+             events.append("open")
+             if isinstance(open_effect, BaseException):
+                 raise open_effect
+-            return OldJob(events)
++            return OldJob(events, **(old_job_options or {}))
+         with patch("app.worker.session.current_process_session_id", return_value=7), patch(
+             "app.worker.session.ActivityMutex", Owner
+         ), patch("app.worker.session.NamedJob.open_existing", side_effect=opening), patch(
+@@ -121,7 +131,7 @@
+         outcome, events = await self.run_case(snapshot)
+         self.assertEqual(outcome.state, "budget_exhausted")
+         self.assertEqual(events, ["mutex_acquire", "inspect", "open", "terminate",
+-                                  "tree_zero", "old_close", ("claim", 7, 4), "mutex_release"])
++                                  "tree_query", "old_close", ("claim", 7, 4), "mutex_release"])
+ 
+     async def test_claim_response_lost_does_not_spawn_and_releases_mutex(self):
+         snapshot = WindowSnapshot("running", 4, 6, False, 7, True, True)
+@@ -132,6 +142,98 @@
+         self.assertEqual(outcome.state, "failed_closed")
+         self.assertEqual(events[-2:], [("claim", 7, 4), "mutex_release"])
+ 
++
++    async def test_running_refusal_reports_unknown_accounting_and_unconfirmed_tree(self):
++        baseline = WindowSnapshot("running", 1, 6, False, 7, True, True)
++        for snapshot, enabled in (
++            (baseline, False),
++            (replace(baseline, running_owner_session_id=None), True),
++            (replace(baseline, running_owner_session_id=8), True),
++            (replace(baseline, lease_recoverable=False), True),
++            (replace(baseline, sources_valid=False), True),
++        ):
++            outcome, events = await self.run_case(snapshot, enabled=enabled)
++            self.assertEqual(outcome.state, "failed_closed")
++            self.assertTrue(outcome.cleanup_incomplete)
++            self.assertEqual((outcome.settled_seconds, outcome.reserved_seconds, outcome.pending_fold_seconds), (None, None, None))
++            self.assertEqual(events, ["mutex_acquire", "inspect", "mutex_release"])
++
++    async def test_old_tree_failures_never_claim_or_report_clean(self):
++        snapshot = WindowSnapshot("running", 4, 6, False, 7, True, True)
++        for options in (
++            {"terminate_error": JobUnknown("terminate")},
++            {"wait_error": JobUnknown("query")},
++            {"wait_result": False},
++            {"close_error": JobUnknown("close")},
++        ):
++            with self.subTest(options=options):
++                outcome, events = await self.run_case(snapshot, old_job_options=options)
++                self.assertEqual(outcome.state, "failed_closed")
++                self.assertTrue(outcome.cleanup_incomplete)
++                self.assertEqual((outcome.settled_seconds, outcome.reserved_seconds, outcome.pending_fold_seconds), (None, None, None))
++                self.assertNotIn("claim", [e[0] if isinstance(e, tuple) else e for e in events])
++                self.assertNotIn("create", events)
++                self.assertEqual(events[-1], "mutex_release")
++
++    async def test_open_unknown_has_unconfirmed_tree_and_no_accounting(self):
++        snapshot = WindowSnapshot("running", 4, 6, False, 7, True, True)
++        for error in (JobOpenError(ERROR_ACCESS_DENIED), JobOpenError(87), JobUnknown("query")):
++            with self.subTest(error=error):
++                outcome, events = await self.run_case(snapshot, open_effect=error)
++                self.assertTrue(outcome.cleanup_incomplete)
++                self.assertEqual((outcome.settled_seconds, outcome.reserved_seconds, outcome.pending_fold_seconds), (None, None, None))
++                self.assertEqual(events, ["mutex_acquire", "inspect", "open", "mutex_release"])
++class D3ClockOrder(unittest.IsolatedAsyncioTestCase):
++    async def _case(self, method):
++        events = []
++        sampled = datetime(2026, 9, 25, tzinfo=timezone.utc)
++        class Clock:
++            @staticmethod
++            def now(tz):
++                assert tz is timezone.utc
++                events.append("clock")
++                assert events[:3] == ["source_lock", "activity_select", "activity_fetch"]
++                return sampled
++        row = {
++            "status": "pending", "execution_generation": 0, "running_reserved_seconds": 0,
++            "running_settled_seconds": 0, "running_owner_session_id": None,
++            "dispatch_closed": False, "lease_expires_at": sampled - timedelta(seconds=1),
++            "deadline_at": sampled - timedelta(seconds=1) if method == "claim" else sampled + timedelta(seconds=1),
++            "max_running_seconds": 6, "scope_revision": 1,
++        }
++        class Cursor:
++            async def fetchone(self):
++                events.append("activity_fetch")
++                return row
++        class Connection:
++            async def execute(self, query, params):
++                assert "FROM activities" in query and "FOR UPDATE" in query
++                events.append("activity_select")
++                return Cursor()
++        async def source_lock(*args):
++            events.append("source_lock")
++            return True
++        async def transact(operation):
++            return await operation(Connection())
++        ledger = PostgresAdmissionLedger("postgresql://unused")
++        with patch.object(ledger, "_source_rows", return_value=[{"source_id": "synthetic"}]), patch.object(
++            ledger, "_lock_sources", side_effect=source_lock
++        ), patch.object(ledger, "_transaction", side_effect=transact), patch(
++            "app.activities.repository.datetime", Clock
++        ):
++            if method == "claim":
++                with self.assertRaises(ActivityLedgerConflict):
++                    await ledger.claim_lease(str(uuid4()), "worker", lease_seconds=6, window_seconds=6, running_owner_session_id=0)
++            else:
++                snapshot = await ledger.inspect_window(str(uuid4()))
++                self.assertTrue(snapshot.lease_recoverable)
++        self.assertEqual(events, ["source_lock", "activity_select", "activity_fetch", "clock"])
++
++    async def test_claim_samples_after_both_locks(self):
++        await self._case("claim")
++
++    async def test_inspect_samples_after_both_locks(self):
++        await self._case("inspect")
+ 
+ class WindowsOpenErrorTests(unittest.TestCase):
+     def test_open_keeps_exact_code(self):
+--- pre/backend/tests/fixtures/task083/d3_pg_windows.py
++++ backend/tests/fixtures/task083/d3_pg_windows.py
+@@ -2,6 +2,7 @@
+ from __future__ import annotations
+ 
+ import asyncio
++from concurrent.futures import ThreadPoolExecutor
+ from dataclasses import asdict
+ from datetime import datetime, timedelta, timezone
+ import json
+@@ -91,6 +92,7 @@
+ 
+ 
+ def migration_cases():
++    emit({"phase":"scenario_start","scenario":"migration_empty"})
+     name, scoped = make_schema("empty", migrate=False)
+     with psycopg.connect(scoped, autocommit=True) as conn:
+         before={r[0] for r in conn.execute("SELECT column_name FROM information_schema.columns WHERE table_schema=%s AND table_name='activities'",(name,))}
+@@ -114,6 +116,7 @@
+         assert conn.execute("SELECT running_owner_session_id FROM activities WHERE id=%s",(activity,)).fetchone()[0]==4294967295
+     emit({"phase":"migration_empty","schema":name,"added":sorted(added),"valid":[0,4294967295],"invalid":[-1,4294967296]})
+ 
++    emit({"phase":"scenario_start","scenario":"migration_old"})
+     name, scoped = make_schema("old", migrate=False)
+     activity=str(uuid4())
+     with psycopg.connect(scoped, autocommit=True) as conn:
+@@ -127,6 +130,7 @@
+         assert old==("running",6,None),old
+     emit({"phase":"migration_old","schema":name,"activity":activity,"row":old})
+ 
++    emit({"phase":"scenario_start","scenario":"migration_rollback"})
+     name, scoped = make_schema("rollback", migrate=False)
+     migration=MIGRATIONS[5].read_text(encoding="utf-8")
+     broken=migration.replace("COMMIT;", "ALTER TABLE activities ADD CONSTRAINT deliberate_failure CHECK (missing_column = 1);\nCOMMIT;")
+@@ -141,6 +145,7 @@
+ 
+ 
+ def ledger_cases():
++    emit({"phase":"scenario_start","scenario":"ledger_active_lease_rejected"})
+     name, scoped=make_schema("ledger")
+     ledger,activity=run_async(build(scoped,maximum=12))
+     for invalid in (True,-1,4294967296,1.5,"1"):
+@@ -160,16 +165,18 @@
+     else: raise AssertionError("active database lease was stolen")
+     assert row(scoped,"SELECT status,execution_generation,running_reserved_seconds,running_settled_seconds,running_owner_session_id FROM activities WHERE id=%s",(activity,))==before
+     emit({"phase":"ledger_active_lease_rejected","schema":name,"activity":activity,"row":before})
++    emit({"phase":"scenario_start","scenario":"ledger_new_g"})
+     expire(scoped,activity)
+     try:
+         run_async(ledger.claim_lease(activity,"wrong_owner",lease_seconds=6,window_seconds=6,
+                                      running_owner_session_id=8,expected_previous_generation=first.execution_generation))
+     except ActivityLedgerConflict: pass
+     else: raise AssertionError("mismatched old session was accepted")
+-    second=run_async(ledger.claim_lease(activity,"new",lease_seconds=6,window_seconds=6,running_owner_session_id=4294967295,expected_previous_generation=first.execution_generation))
++    second=run_async(ledger.claim_lease(activity,"new",lease_seconds=6,window_seconds=6,running_owner_session_id=0,expected_previous_generation=first.execution_generation))
+     assert second and second.execution_generation==first.execution_generation+1
+-    after=row(scoped,"SELECT status,execution_generation,running_reserved_seconds,running_settled_seconds,running_owner_session_id FROM activities WHERE id=%s",(activity,))
+-    assert (after["running_reserved_seconds"],after["running_settled_seconds"],after["running_owner_session_id"])==(6,6,4294967295),after
++    after=row(scoped,"SELECT status,execution_generation,running_reserved_seconds,running_settled_seconds,running_owner_session_id,dispatch_closed FROM activities WHERE id=%s",(activity,))
++    assert (after["running_reserved_seconds"],after["running_settled_seconds"],after["running_owner_session_id"])==(6,6,0),after
++    assert after["dispatch_closed"] is False,after
+     for attempt in (
+         lambda: run_async(ledger.claim_lease(activity,"late",lease_seconds=6,window_seconds=6,running_owner_session_id=0,expected_previous_generation=first.execution_generation)),
+         lambda: run_async(ledger.begin_window_close(activity,"old",first.execution_generation)),
+@@ -179,10 +186,17 @@
+         try: attempt()
+         except ActivityLedgerConflict: pass
+         else: raise AssertionError("old generation was accepted")
+-    assert row(scoped,"SELECT running_owner_session_id,running_reserved_seconds,running_settled_seconds FROM activities WHERE id=%s",(activity,))=={
+-        k:after[k] for k in ("running_owner_session_id","running_reserved_seconds","running_settled_seconds")}
+-    emit({"phase":"ledger_new_g","schema":name,"activity":activity,"old":before,"new":after})
+-
++    assert row(scoped,"SELECT running_owner_session_id,running_reserved_seconds,running_settled_seconds,dispatch_closed FROM activities WHERE id=%s",(activity,))=={
++        k:after[k] for k in ("running_owner_session_id","running_reserved_seconds","running_settled_seconds","dispatch_closed")}
++    upper_ledger,upper_activity=run_async(build(scoped,maximum=6))
++    upper=run_async(upper_ledger.claim_lease(upper_activity,"upper",lease_seconds=6,window_seconds=6,running_owner_session_id=4294967295))
++    upper_row=row(scoped,"SELECT status,execution_generation,running_owner_session_id FROM activities WHERE id=%s",(upper_activity,))
++    assert upper and upper.running_owner_session_id==4294967295
++    assert upper_row["status"]=="running" and upper_row["execution_generation"]==upper.execution_generation
++    assert upper_row["running_owner_session_id"]==4294967295,upper_row
++    emit({"phase":"ledger_new_g","schema":name,"activity":activity,"old":before,"new":after,"upper_pending_claim":upper_row})
++
++    emit({"phase":"scenario_start","scenario":"ledger_exhausted"})
+     name, scoped=make_schema("exhaust")
+     ledger,activity=run_async(build(scoped,maximum=6))
+     first=run_async(ledger.claim_lease(activity,"old",lease_seconds=6,window_seconds=6,running_owner_session_id=7))
+@@ -193,7 +207,75 @@
+     emit({"phase":"ledger_exhausted","schema":name,"activity":activity,"after":after})
+ 
+ 
++def observe_source_lock_wait(scoped, application_name):
++    until=time.monotonic()+.9
++    with psycopg.connect(scoped,autocommit=True) as observer:
++        while time.monotonic()<until:
++            count=observer.execute("""SELECT count(*) FROM pg_stat_activity
++                WHERE application_name=%s AND wait_event_type='Lock'
++                  AND query LIKE '%%material_sources%%'""",(application_name,)).fetchone()[0]
++            if count:
++                return True
++            time.sleep(.05)
++    raise AssertionError("source row lock wait was not observed")
++
++def lock_barrier_case():
++    emit({"phase":"scenario_start","scenario":"ledger_lock_barrier"})
++    started=time.monotonic()
++    name,scoped=make_schema("lock_barrier")
++    ledger,activity=run_async(build(scoped,maximum=12))
++    source=row(scoped,"SELECT source_id FROM activity_scope_sources WHERE activity_id=%s",(activity,))["source_id"]
++    deadline=datetime.now(timezone.utc)+timedelta(seconds=1.4)
++    with psycopg.connect(scoped,autocommit=True) as conn:
++        conn.execute("UPDATE activities SET deadline_at=%s WHERE id=%s",(deadline,activity))
++    before=row(scoped,"SELECT status,execution_generation,running_reserved_seconds,running_settled_seconds FROM activities WHERE id=%s",(activity,))
++    claim_app="task083_claim_"+uuid4().hex[:8]
++    barrier_ledger=PostgresAdmissionLedger(make_conninfo(scoped,application_name=claim_app))
++    with psycopg.connect(scoped) as holder:
++        holder.execute("SELECT id FROM material_sources WHERE id=%s FOR UPDATE",(source,)).fetchone()
++        with ThreadPoolExecutor(max_workers=1) as pool:
++            future=pool.submit(lambda: run_async(barrier_ledger.claim_lease(activity,"after_deadline",lease_seconds=6,window_seconds=6,running_owner_session_id=0)))
++            claim_wait=observe_source_lock_wait(scoped,claim_app)
++            claim_wait_at=datetime.now(timezone.utc)
++            assert claim_wait_at<deadline,"claim wait was only observed after deadline"
++            assert not future.done(),"source lock did not block claim"
++            time.sleep(max(0,(deadline-datetime.now(timezone.utc)).total_seconds()+.2))
++            holder.commit()
++            try: future.result(timeout=4)
++            except ActivityLedgerConflict: pass
++            else: raise AssertionError("claim crossed deadline while source lock was held")
++    after=row(scoped,"SELECT status,execution_generation,running_reserved_seconds,running_settled_seconds FROM activities WHERE id=%s",(activity,))
++    assert after==before,(before,after)
++
++    lease_ledger,lease_activity=run_async(build(scoped,maximum=12))
++    first=run_async(lease_ledger.claim_lease(lease_activity,"old",lease_seconds=6,window_seconds=6,running_owner_session_id=0))
++    assert first
++    lease_source=row(scoped,"SELECT source_id FROM activity_scope_sources WHERE activity_id=%s",(lease_activity,))["source_id"]
++    expiry=datetime.now(timezone.utc)+timedelta(seconds=1.4)
++    with psycopg.connect(scoped,autocommit=True) as conn:
++        conn.execute("UPDATE activities SET lease_expires_at=%s WHERE id=%s",(expiry,lease_activity))
++    inspect_app="task083_inspect_"+uuid4().hex[:8]
++    inspect_ledger=PostgresAdmissionLedger(make_conninfo(scoped,application_name=inspect_app))
++    with psycopg.connect(scoped) as holder:
++        holder.execute("SELECT id FROM material_sources WHERE id=%s FOR UPDATE",(lease_source,)).fetchone()
++        with ThreadPoolExecutor(max_workers=1) as pool:
++            future=pool.submit(lambda: run_async(inspect_ledger.inspect_window(lease_activity)))
++            inspect_wait=observe_source_lock_wait(scoped,inspect_app)
++            inspect_wait_at=datetime.now(timezone.utc)
++            assert inspect_wait_at<expiry,"inspect wait was only observed after expiry"
++            assert not future.done(),"source lock did not block inspect"
++            time.sleep(max(0,(expiry-datetime.now(timezone.utc)).total_seconds()+.2))
++            holder.commit()
++            snapshot=future.result(timeout=4)
++    assert snapshot.status=="running" and snapshot.lease_recoverable,snapshot
++    emit({"phase":"ledger_lock_barrier","schema":name,"deadline":deadline,"expiry":expiry,
++          "claim_before":before,"claim_after":after,"claim_lock_wait_observed":claim_wait,
++          "claim_wait_at":claim_wait_at,"inspect_wait_at":inspect_wait_at,
++          "inspect_lock_wait_observed":inspect_wait,"snapshot_recoverable":snapshot.lease_recoverable,
++          "elapsed_seconds":time.monotonic()-started})
++
+ def windows_case():
++    emit({"phase":"scenario_start","scenario":"windows_recovery"})
+     scene_started=time.monotonic()
+     name, scoped=make_schema("windows")
+     ledger,activity=run_async(build(scoped,maximum=12))
+@@ -237,18 +319,26 @@
+     assert scene_elapsed<=30,scene_elapsed
+     emit({"phase":"windows_recovery","schema":name,"activity":activity,"old":old_record,
+           "pre":pre,"new_outcome":asdict(outcome),"final":final,"elapsed_seconds":elapsed,
+-          "transaction_committed":True,"scene_seconds":scene_elapsed,
+-          "mutex_release":"SUP outcome returned after DB settlement"})
++          "transaction_committed":True,"scene_seconds":scene_elapsed})
++
++
++def require_assertions(level):
++    if level != 0:
++        raise RuntimeError("D3 assertions require optimize=0")
+ 
+ 
+ def main():
+-    parts=set(os.environ.get("D3_PARTS","migration,ledger,windows").split(","))
++    require_assertions(sys.flags.optimize)
++    requested=os.environ.get("D3_PARTS","migration,ledger,windows").split(",")
++    if len(set(requested)) != len(requested):
++        raise ValueError("duplicate D3 part selection")
++    parts=set(requested)
+     if not parts or not parts <= {"migration","ledger","windows"}:
+         raise ValueError("invalid D3 part selection")
+     if "migration" in parts: migration_cases()
+-    if "ledger" in parts: ledger_cases()
++    if "ledger" in parts: ledger_cases(); lock_barrier_case()
+     if "windows" in parts: windows_case()
+-    emit({"phase":"complete","all_pass":True,"parts":sorted(parts)})
++    emit({"phase":"complete","all_pass":True,"parts":[p for p in ("migration","ledger","windows") if p in parts]})
+ 
+ 
+ if __name__=="__main__":
+--- /dev/null
++++ backend/tests/test_d3_runner_control.py
+@@ -0,0 +1,116 @@
++"""Pure D3 controller substitutes: no Job, process, Docker, or PG."""
++import ctypes
++import importlib.util
++import json
++import os
++from pathlib import Path
++import sys
++import time
++import unittest
++from unittest.mock import patch
++ROOT=Path(__file__).resolve().parents[2]
++sys.path[:0]=[str(ROOT/"backend"),str(ROOT/"Ndocu/evidence/task-083/d3-repair-11")]
++from contracts import deadline_left,expected_scenarios,parse_parts,validate_records
++from controlled_child import ControlledChild,OwnershipUnknown
++from app.worker.windows_job import _BASIC_ACCOUNTING,_PROCESS_INFORMATION,_FILETIME
++
++class Kernel:
++    def __init__(self,fail=None): self.fail=fail; self.events=[]; self.active=0; self.query_fail=False; self.close_fail=False
++    def CreateJobObjectW(self,*a): self.events.append("job"); return 100
++    def SetInformationJobObject(self,*a): return 1
++    def CreateProcessW(self,*a):
++        self.events.append("create")
++        if self.fail=="create": return 0
++        p=ctypes.cast(a[-1],ctypes.POINTER(_PROCESS_INFORMATION)).contents
++        p.hProcess=201; p.hThread=202; p.dwProcessId=203
++        return 1
++    def GetProcessTimes(self,h,created,*a):
++        self.events.append("identity")
++        if self.fail=="identity": return 0
++        ctypes.cast(created,ctypes.POINTER(_FILETIME)).contents.dwLowDateTime=1234
++        return 1
++    def AssignProcessToJobObject(self,*a):
++        self.events.append("assign")
++        if self.fail=="assign": return 0
++        self.active=1; return 1
++    def QueryInformationJobObject(self,h,k,data,*a):
++        if self.query_fail: return 0
++        ctypes.cast(data,ctypes.POINTER(_BASIC_ACCOUNTING)).contents.ActiveProcesses=self.active
++        return 1
++    def ResumeThread(self,*a): self.events.append("resume"); return 1
++    def TerminateProcess(self,*a): self.events.append("terminate_exact"); return 1
++    def TerminateJobObject(self,*a): self.events.append("terminate_outer"); self.active=0; return 1
++    def WaitForSingleObject(self,*a): return 0
++    def GetExitCodeProcess(self,h,p): ctypes.cast(p,ctypes.POINTER(ctypes.c_ulong)).contents.value=0; return 1
++    def CloseHandle(self,*a): return 0 if self.close_fail else 1
++
++class ControllerTests(unittest.TestCase):
++    def test_pre_resume_failures(self):
++        for failure in ("create","identity","assign"):
++            with self.subTest(failure=failure):
++                api=Kernel(failure); child=ControlledChild(api)
++                with self.assertRaises(OwnershipUnknown):
++                    child.start([sys.executable],cwd=ROOT,env={"X":"1"},deadline=time.monotonic()+5)
++                self.assertNotIn("resume",api.events)
++                if failure!="create": self.assertIn("terminate_exact",api.events)
++                self.assertTrue(child.cleanup_confirmed)
++    def test_deadline_and_query_unknown(self):
++        api=Kernel(); child=ControlledChild(api)
++        with self.assertRaises(TimeoutError):
++            child.start([sys.executable],cwd=ROOT,env={},deadline=time.monotonic()-1)
++        self.assertEqual(api.events,[])
++        identity=child.start([sys.executable],cwd=ROOT,env={},deadline=time.monotonic()+5)
++        self.assertEqual(identity,{"pid":203,"created_100ns":1234})
++        self.assertLess(api.events.index("identity"),api.events.index("assign"))
++        self.assertLess(api.events.index("assign"),api.events.index("resume"))
++        api.query_fail=True
++        with self.assertRaises(OwnershipUnknown): child.stop(time.monotonic()+5)
++        self.assertFalse(child.cleanup_confirmed)
++        child.close()
++    def test_close_failure_marks_cleanup_unknown(self):
++        api=Kernel(); child=ControlledChild(api)
++        child.start([sys.executable],cwd=ROOT,env={},deadline=time.monotonic()+5)
++        child.stop(time.monotonic()+5)
++        self.assertTrue(child.cleanup_confirmed)
++        api.close_fail=True
++        with self.assertRaises(OwnershipUnknown): child.close()
++        self.assertFalse(child.cleanup_confirmed)
++    def test_exact_results_and_deadlines(self):
++        parts=parse_parts("migration,ledger")
++        lines=[]
++        for name in expected_scenarios(parts):
++            lines += [json.dumps({"phase":"scenario_start","scenario":name}),json.dumps({"phase":name})]
++        lines.append(json.dumps({"phase":"complete","all_pass":True,"parts":list(parts)}))
++        raw="\n".join(lines)+"\n"
++        self.assertTrue(validate_records(raw,parts,0,cleanup_confirmed=True)["pass"])
++        for bad in (raw.replace('"all_pass": true','"all_pass": false'),raw+lines[1]+"\n",
++                    raw.replace('"phase": "complete"','"phase": "unknown"'),"\n".join(lines[:2]+lines[-1:])):
++            self.assertFalse(validate_records(bad,parts,0,cleanup_confirmed=True)["pass"])
++        for exit_code,clean in ((1,True),(0,False)):
++            self.assertFalse(validate_records(raw,parts,exit_code,cleanup_confirmed=clean)["pass"])
++        self.assertFalse(validate_records(raw,parts,0,cleanup_confirmed=True,timed_out=True)["pass"])
++        with self.assertRaises(ValueError): parse_parts("migration,migration")
++        with self.assertRaises(TimeoutError): deadline_left(time.monotonic()+.2,reserve=1)
++    def test_runner_import_does_not_touch_resources(self):
++        with patch("subprocess.run",side_effect=AssertionError("resource command on import")), patch(
++            "psycopg.connect",side_effect=AssertionError("PG connect on import")
++        ):
++            import runner
++        self.assertEqual(runner.CID,"85242648b70dc11839a93de29a51bc7e492390d8ad479036c141f37b26f4f6a7")
++    def test_unknown_cleanup_and_windows_start_block_retry(self):
++        import runner
++        base={"contract":{"pass":False},"outer_tree_zero":True,"cleanup_error":None,"windows_started":False}
++        self.assertTrue(runner.retry_allowed(base))
++        for changed in ({"outer_tree_zero":False},{"cleanup_error":"query unknown"},{"windows_started":True}):
++            case=dict(base,**changed)
++            self.assertFalse(runner.retry_allowed(case))
++    def test_optimization_guard(self):
++        path=ROOT/"backend/tests/fixtures/task083/d3_pg_windows.py"
++        spec=importlib.util.spec_from_file_location("d3_offline_guard",path)
++        module=importlib.util.module_from_spec(spec)
++        with patch.dict(os.environ,{"RETROLUME_TASK_083_D3_DATABASE_URL":"postgresql://synthetic"}):
++            spec.loader.exec_module(module)
++        module.require_assertions(0)
++        with self.assertRaises(RuntimeError): module.require_assertions(1)
++
++if __name__=="__main__": unittest.main(verbosity=2)--- /dev/null
++++ Ndocu/evidence/task-083/d3-repair-11/controlled_child.py
+@@ -0,0 +1,196 @@
++"""Test-only suspended child and outer Windows Job owner; never owns a business Job handle."""
++from __future__ import annotations
++
++import ctypes
++from ctypes import wintypes
++import msvcrt
++import os
++from pathlib import Path
++import queue
++import subprocess
++import threading
++import time
++
++from app.worker.windows_job import (
++    _BASIC_ACCOUNTING, _EXTENDED_LIMIT, _FILETIME, _PROCESS_INFORMATION,
++    _STARTUPINFOW, _kernel, CREATE_NO_WINDOW, CREATE_SUSPENDED,
++    JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION_CLASS, JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,
++    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, WAIT_OBJECT_0,
++)
++
++CREATE_UNICODE_ENVIRONMENT = 0x00000400
++STARTF_USESTDHANDLES = 0x00000100
++
++
++class OwnershipUnknown(RuntimeError):
++    pass
++
++
++def remaining(deadline: float, *, reserve: float = 0) -> float:
++    value = deadline - time.monotonic() - reserve
++    if value <= 0:
++        raise TimeoutError("absolute deadline or cleanup reserve exhausted")
++    return value
++
++
++class ControlledChild:
++    def __init__(self, api=None):
++        self.api = api or _kernel()
++        self.job = None
++        self.process = _PROCESS_INFORMATION()
++        self.assigned = False
++        self.resumed = False
++        self.created_100ns = None
++        self.cleanup_confirmed = False
++        self.lines = queue.Queue()
++        self.readers = []
++        self._reads = []
++
++    @staticmethod
++    def _error(operation):
++        return OwnershipUnknown(f"{operation} Windows error {ctypes.get_last_error()}")
++
++    def active(self):
++        if not self.job:
++            raise OwnershipUnknown("outer Job handle unavailable")
++        info = _BASIC_ACCOUNTING()
++        if not self.api.QueryInformationJobObject(self.job, JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION_CLASS,
++                                                   ctypes.byref(info), ctypes.sizeof(info), None):
++            raise self._error("QueryInformationJobObject")
++        return int(info.ActiveProcesses)
++
++    def _creation_time(self):
++        values = [_FILETIME() for _ in range(4)]
++        if not self.api.GetProcessTimes(self.process.hProcess, *(ctypes.byref(x) for x in values)):
++            raise self._error("GetProcessTimes")
++        return (int(values[0].dwHighDateTime) << 32) | int(values[0].dwLowDateTime)
++
++    def _read_stream(self, fd: int, label: str):
++        try:
++            with os.fdopen(fd, "rb", buffering=0) as stream:
++                for raw in stream:
++                    self.lines.put((label, raw.decode("utf-8", errors="replace")))
++        finally:
++            self.lines.put((label, None))
++
++    def start(self, command: list[str], *, cwd: Path, env: dict[str, str], deadline: float):
++        """Create suspended, record exact identity, assign outer Job, then Resume."""
++        remaining(deadline, reserve=1)
++        if not command or not Path(command[0]).is_absolute() or not cwd.is_dir():
++            raise ValueError("absolute executable and existing cwd required")
++        if self.job or self.process.hProcess:
++            raise OwnershipUnknown("controlled child already started")
++        self.job = self.api.CreateJobObjectW(None, None)  # unnamed, non-inheritable, distinct from business Job
++        if not self.job:
++            raise self._error("CreateJobObjectW")
++        limits = _EXTENDED_LIMIT()
++        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
++        if not self.api.SetInformationJobObject(self.job, JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,
++                                                 ctypes.byref(limits), ctypes.sizeof(limits)):
++            error = self._error("SetInformationJobObject")
++            self.close()
++            raise error
++        writes = []
++        devnull = None
++        try:
++            devnull = open(os.devnull, "rb", buffering=0)
++            os.set_handle_inheritable(msvcrt.get_osfhandle(devnull.fileno()), True)
++            for label in ("stdout", "stderr"):
++                read_fd, write_fd = os.pipe()
++                self._reads.append((read_fd, label))
++                writes.append(write_fd)
++                os.set_handle_inheritable(msvcrt.get_osfhandle(write_fd), True)
++            startup = _STARTUPINFOW()
++            startup.cb = ctypes.sizeof(startup)
++            startup.dwFlags = STARTF_USESTDHANDLES
++            startup.hStdInput = msvcrt.get_osfhandle(devnull.fileno())
++            startup.hStdOutput = msvcrt.get_osfhandle(writes[0])
++            startup.hStdError = msvcrt.get_osfhandle(writes[1])
++            cmdline = ctypes.create_unicode_buffer(subprocess.list2cmdline(command))
++            env_block = ctypes.create_unicode_buffer("\0".join(f"{k}={v}" for k, v in sorted(env.items())) + "\0\0")
++            remaining(deadline, reserve=1)
++            if not self.api.CreateProcessW(None, cmdline, None, None, True,
++                                           CREATE_SUSPENDED | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
++                                           ctypes.cast(env_block, ctypes.c_void_p), str(cwd),
++                                           ctypes.byref(startup), ctypes.byref(self.process)):
++                raise self._error("CreateProcessW")
++            self.created_100ns = self._creation_time()
++            if not self.created_100ns or not self.process.dwProcessId:
++                raise OwnershipUnknown("suspended child identity unavailable")
++            if not self.api.AssignProcessToJobObject(self.job, self.process.hProcess):
++                raise self._error("AssignProcessToJobObject")
++            self.assigned = True
++            if self.active() != 1:
++                raise OwnershipUnknown("outer Job did not report suspended child")
++            remaining(deadline, reserve=1)
++            if self.api.ResumeThread(self.process.hThread) == 0xFFFFFFFF:
++                raise self._error("ResumeThread")
++            self.resumed = True
++            for read_fd, label in self._reads:
++                reader = threading.Thread(target=self._read_stream, args=(read_fd, label), daemon=True)
++                reader.start()
++                self.readers.append(reader)
++            self._reads = []
++            return {"pid": int(self.process.dwProcessId), "created_100ns": self.created_100ns}
++        except BaseException:
++            try:
++                self.stop(deadline)
++            finally:
++                self.close()
++            raise
++        finally:
++            for fd in writes:
++                os.close(fd)
++            if devnull is not None:
++                devnull.close()
++
++    def exit_code(self):
++        if not self.process.hProcess or self.api.WaitForSingleObject(self.process.hProcess, 0) != WAIT_OBJECT_0:
++            return None
++        code = wintypes.DWORD()
++        if not self.api.GetExitCodeProcess(self.process.hProcess, ctypes.byref(code)):
++            raise self._error("GetExitCodeProcess")
++        return int(code.value)
++
++    def stop(self, deadline: float):
++        """Terminate only owned handles and prove outer Job ActiveProcesses==0."""
++        if self.process.hProcess and not self.assigned:
++            if not self.api.TerminateProcess(self.process.hProcess, 1):
++                raise self._error("TerminateProcess(suspended)")
++            ms = int(remaining(deadline) * 1000)
++            if ms < 1:
++                raise TimeoutError("suspended child cleanup deadline")
++            if self.api.WaitForSingleObject(self.process.hProcess, ms) != WAIT_OBJECT_0:
++                raise OwnershipUnknown("unassigned suspended child exit not confirmed")
++        if self.assigned:
++            if self.active() and not self.api.TerminateJobObject(self.job, 1):
++                raise self._error("TerminateJobObject(outer)")
++            while self.active():
++                time.sleep(min(.05, remaining(deadline)))
++        self.cleanup_confirmed = True
++        return True
++
++    def wait_empty(self, deadline: float):
++        while True:
++            exit_code = self.exit_code()
++            count = self.active()
++            if exit_code is not None and count == 0:
++                self.cleanup_confirmed = True
++                return exit_code
++            time.sleep(min(.05, remaining(deadline)))
++
++    def close(self):
++        errors = []
++        for holder, field in ((self.process, "hThread"), (self.process, "hProcess"), (self, "job")):
++            handle = getattr(holder, field)
++            if handle:
++                if self.api.CloseHandle(handle):
++                    setattr(holder, field, None)
++                else:
++                    errors.append(field)
++        for fd, _ in self._reads:
++            os.close(fd)
++        self._reads = []
++        if errors:
++            self.cleanup_confirmed = False
++            raise OwnershipUnknown("CloseHandle failed: " + ",".join(errors))--- /dev/null
++++ Ndocu/evidence/task-083/d3-repair-11/contracts.py
+@@ -0,0 +1,75 @@
++"""Exact D3 scenario and deadline contracts, shared by the test runner and pure tests."""
++from __future__ import annotations
++
++import json
++import time
++
++SCENARIOS = {
++    "migration": ("migration_empty", "migration_old", "migration_rollback"),
++    "ledger": ("ledger_active_lease_rejected", "ledger_new_g", "ledger_exhausted", "ledger_lock_barrier"),
++    "windows": ("windows_recovery",),
++}
++PART_ORDER = tuple(SCENARIOS)
++
++
++def parse_parts(value: str) -> tuple[str, ...]:
++    items = value.split(",")
++    if not items or any(item not in SCENARIOS for item in items) or len(set(items)) != len(items):
++        raise ValueError("invalid or duplicate D3 part selection")
++    return tuple(item for item in PART_ORDER if item in items)
++
++
++def expected_scenarios(parts: tuple[str, ...]) -> tuple[str, ...]:
++    return tuple(name for part in parts for name in SCENARIOS[part])
++
++
++def validate_records(raw_stdout: str, parts: tuple[str, ...], exit_code: int,
++                     *, cleanup_confirmed: bool, timed_out: bool = False) -> dict:
++    expected = expected_scenarios(parts)
++    starts, completed, all_completes = [], [], []
++    active = None
++    errors = []
++    for line in raw_stdout.splitlines():
++        try:
++            record = json.loads(line)
++        except json.JSONDecodeError:
++            continue
++        if not isinstance(record, dict):
++            continue
++        phase = record.get("phase")
++        if phase == "scenario_start":
++            scene = record.get("scenario")
++            if scene not in expected or scene in starts or active is not None:
++                errors.append(f"unknown, duplicate, or overlapping scenario start: {scene}")
++            starts.append(scene)
++            active = scene
++        elif phase in expected:
++            if phase != active or phase in completed:
++                errors.append(f"unpaired or duplicate result: {phase}")
++            completed.append(phase)
++            active = None
++        elif phase == "complete":
++            if active is not None or tuple(completed) != expected:
++                errors.append("complete arrived before all selected scenarios")
++            all_completes.append(record)
++        elif phase not in ("schema",):
++            errors.append(f"unknown phase: {phase}")
++    if tuple(starts) != expected or tuple(completed) != expected or active is not None:
++        errors.append("selected scenario sequence incomplete or out of order")
++    if len(all_completes) != 1 or all_completes[0].get("all_pass") is not True or all_completes[0].get("parts") != list(parts):
++        errors.append("complete/all_pass/parts contract failed")
++    if exit_code != 0:
++        errors.append(f"child exit={exit_code}")
++    if timed_out:
++        errors.append("child timeout")
++    if not cleanup_confirmed:
++        errors.append("outer tree cleanup not confirmed")
++    return {"pass": not errors, "expected": list(expected), "started": starts,
++            "completed": completed, "complete_count": len(all_completes), "errors": errors}
++
++
++def deadline_left(*deadlines: float, reserve: float = 0) -> float:
++    value = min(deadlines) - time.monotonic() - reserve
++    if value <= 0:
++        raise TimeoutError("deadline or cleanup reserve exhausted")
++    return value--- /dev/null
++++ Ndocu/evidence/task-083/d3-repair-11/runner.py
+@@ -0,0 +1,260 @@
++"""Future-only D3 continuation; requires separate resource authorization. Never creates a container."""
++from __future__ import annotations
++import argparse
++from datetime import datetime, timezone
++import hashlib
++import json
++import os
++from pathlib import Path
++import queue
++import secrets
++import socket
++import subprocess
++import sys
++import time
++from uuid import uuid4
++import psycopg
++ROOT=Path(r"D:/shspic/project_NO3_RetroLume-agent")
++sys.path.insert(0,str(ROOT/"backend"))
++from contracts import deadline_left, parse_parts, validate_records
++from controlled_child import ControlledChild, OwnershipUnknown
++EVID=ROOT/"Ndocu/evidence/task-083/d3-repair-11"
++PY=ROOT/"backend/.venv/Scripts/python.exe"
++FIXTURE=ROOT/"backend/tests/fixtures/task083/d3_pg_windows.py"
++CID="85242648b70dc11839a93de29a51bc7e492390d8ad479036c141f37b26f4f6a7"
++IMAGE="sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f"
++VOLUME="11140b6c41401e2cef58ef2743357938db543c5891a3a8d68fce87a60cb85e07"
++NAME="/retrolume-task-083-d3-20260925-195448"
++DB="retrolume_task083_d3"
++USER="task083_d3"
++PORT=55439
++
++
++def docker(args, deadlines, *, input_text=None, reserve=60, limit=30):
++    timeout=min(float(limit),deadline_left(*deadlines,reserve=reserve))
++    return subprocess.run(["docker",*args],input=input_text,capture_output=True,text=True,timeout=timeout,check=False)
++
++
++def inspect(deadlines, *, reserve=60, limit=30):
++    # A formatted projection keeps Config.Env (and the old password) out of the CLI output.
++    fields=("{{.Id}}","{{.Name}}","{{.Image}}","{{json .Config.Labels}}",
++            "{{.State.Running}}","{{json .Mounts}}","{{.HostConfig.NanoCpus}}",
++            "{{.HostConfig.Memory}}","{{.HostConfig.PidsLimit}}",
++            "{{.HostConfig.RestartPolicy.Name}}","{{.HostConfig.NetworkMode}}",
++            "{{json .HostConfig.PortBindings}}","{{json .HostConfig.Binds}}",
++            "{{json .HostConfig.Mounts}}")
++    result=docker(["inspect","--format","|".join(fields),CID],deadlines,reserve=reserve,limit=limit)
++    if result.returncode!=0: raise RuntimeError(f"inspect exit={result.returncode}")
++    pieces=result.stdout.strip().split("|")
++    if len(pieces)!=len(fields): raise RuntimeError("selected inspect cardinality unknown")
++    return {"id":pieces[0],"name":pieces[1],"image":pieces[2],
++            "labels":json.loads(pieces[3]),"running":pieces[4]=="true",
++            "mounts":json.loads(pieces[5]),"nano_cpus":int(pieces[6]),"memory":int(pieces[7]),
++            "pids":int(pieces[8]),"restart":pieces[9],"network":pieces[10],
++            "port_bindings":json.loads(pieces[11]),"binds":json.loads(pieces[12]),
++            "configured_mounts":json.loads(pieces[13])}
++
++def valid_identity(value):
++    labels=value["labels"] or {}; mounts=value["mounts"] or []
++    bindings=(value["port_bindings"] or {}).get("5432/tcp") or []
++    return (value["id"]==CID and value["name"]==NAME and value["image"]==IMAGE
++            and labels.get("retrolume-task")=="083" and labels.get("phase")=="d3-10"
++            and labels.get("run")=="20260925-195448"
++            and len(mounts)==1 and mounts[0].get("Type")=="volume" and mounts[0].get("Name")==VOLUME
++            and mounts[0].get("Destination")=="/var/lib/postgresql/data"
++            and value["nano_cpus"]==1_000_000_000 and value["memory"]==536_870_912
++            and value["pids"]==128 and value["restart"]=="no" and value["network"]=="bridge"
++            and value["binds"] is None and value["configured_mounts"] in (None,[])
++            and bindings==[{"HostIp":"127.0.0.1","HostPort":str(PORT)}])
++
++
++def local_auth_and_rotate(deadlines):
++    base=["exec","-i","--user","postgres",CID,"psql","-X","-qAt",
++          "-v","ON_ERROR_STOP=1","-U",USER,"-d",DB]
++    identity=docker(base,deadlines,input_text="SELECT current_user,current_database();\n")
++    if identity.returncode!=0 or identity.stdout.strip()!=f"{USER}|{DB}":
++        raise RuntimeError("local test-role auth or identity unavailable")
++    password=secrets.token_hex(32)
++    result=docker(base,deadlines,input_text=f"ALTER ROLE {USER} PASSWORD '{password}';\n")
++    if result.returncode!=0: raise RuntimeError("local test-role password rotation failed")
++    dsn=f"postgresql://{USER}:{password}@127.0.0.1:{PORT}/{DB}"
++    timeout=min(3,int(deadline_left(*deadlines,reserve=60)))
++    if timeout<1: raise TimeoutError("loopback auth deadline")
++    try:
++        with psycopg.connect(dsn,connect_timeout=timeout) as conn:
++            row=conn.execute("SELECT current_user,current_database(),inet_server_port()").fetchone()
++    except BaseException:
++        raise RuntimeError("loopback new-credential authentication failed") from None
++    if row!=(USER,DB,5432): raise RuntimeError("loopback new-credential identity mismatch")
++    return dsn,password,{"database":row[1],"user":row[0],"internal_port":row[2]}
++
++def run_batch(parts,number,dsn,password,run_dir,deadlines):
++    attempt=run_dir/f"attempt-{number:02d}"
++    attempt.mkdir(exist_ok=False)
++    script=FIXTURE.read_bytes()
++    (attempt/"as-run.py").write_bytes(script)
++    (attempt/"as-run.sha256").write_text(hashlib.sha256(script).hexdigest()+"  d3_pg_windows.py\n",encoding="utf-8")
++    started=time.monotonic()
++    batch_deadline=min(*deadlines,started+600)
++    command_deadline=min(batch_deadline-60,started+60)
++    deadline_left(command_deadline,reserve=5)
++    env=os.environ.copy()
++    env.pop("RETROLUME_TASK_083_DATABASE_URL",None)
++    env["RETROLUME_TASK_083_D3_DATABASE_URL"]=dsn
++    env["D3_PARTS"]=",".join(parts)
++    env["PYTHONOPTIMIZE"]="0"
++    env["PYTHONDONTWRITEBYTECODE"]="1"
++    child=ControlledChild()
++    streams={"stdout":[],"stderr":[]}
++    active_scene=None; scene_deadline=None; timed_out=False; windows_started=False
++    error=None; cleanup_error=None; identity=None; exit_code=None
++    try:
++        identity=child.start([str(PY),"-B",str(FIXTURE)],cwd=ROOT/"backend/tests",
++                             env=env,deadline=command_deadline-5)
++        while True:
++            limit=min(command_deadline-5,scene_deadline or command_deadline)
++            if time.monotonic()>=limit:
++                timed_out=True
++                raise TimeoutError("command or 30-second scenario deadline")
++            try:
++                label,line=child.lines.get(timeout=min(.05,deadline_left(limit)))
++                if line is not None:
++                    streams[label].append(line)
++                    if label=="stdout":
++                        try: event=json.loads(line)
++                        except json.JSONDecodeError: event=None
++                        if isinstance(event,dict):
++                            phase=event.get("phase")
++                            if phase=="scenario_start":
++                                if active_scene is not None: raise RuntimeError("overlapping scenarios")
++                                active_scene=event.get("scenario")
++                                if active_scene=="windows_recovery": windows_started=True
++                                scene_deadline=time.monotonic()+30
++                            elif phase==active_scene:
++                                active_scene=None; scene_deadline=None
++            except queue.Empty: pass
++            exit_code=child.exit_code()
++            if exit_code is not None and child.active()==0:
++                child.cleanup_confirmed=True
++                break
++        for reader in child.readers:
++            reader.join(timeout=deadline_left(command_deadline,reserve=1))
++            if reader.is_alive(): raise OwnershipUnknown("output pipe did not reach EOF")
++    except BaseException as exc:
++        error=f"{type(exc).__name__}: {exc}"
++        try:
++            if not child.cleanup_confirmed: child.stop(command_deadline)
++        except BaseException as cleanup_exc:
++            cleanup_error=f"{type(cleanup_exc).__name__}: {cleanup_exc}"
++    finally:
++        try: child.close()
++        except BaseException as cleanup_exc:
++            cleanup_error=f"{type(cleanup_exc).__name__}: {cleanup_exc}"
++    while not child.lines.empty():
++        label,line=child.lines.get_nowait()
++        if line is not None: streams[label].append(line)
++    raw_out,raw_err="".join(streams["stdout"]),"".join(streams["stderr"])
++    leaked=password in raw_out or password in raw_err
++    (attempt/"stdout.log").write_text(raw_out.replace(password,"[REDACTED]"),encoding="utf-8")
++    (attempt/"stderr.log").write_text(raw_err.replace(password,"[REDACTED]"),encoding="utf-8")
++    contract=validate_records(raw_out,parts,exit_code if exit_code is not None else -1,
++                              cleanup_confirmed=child.cleanup_confirmed and cleanup_error is None,
++                              timed_out=timed_out)
++    if leaked:
++        contract["pass"]=False
++        contract["errors"].append("credential appeared in child output and was redacted")
++    if error or cleanup_error: contract["pass"]=False
++    meta={"parts":list(parts),"identity":identity,"exit_code":exit_code,
++          "seconds":time.monotonic()-started,"timeout":timed_out,"windows_started":windows_started,
++          "error":error,"cleanup_error":cleanup_error,
++          "outer_tree_zero":child.cleanup_confirmed,"contract":contract}
++    (attempt/"meta.json").write_text(json.dumps(meta,ensure_ascii=False,indent=2),encoding="utf-8")
++    return meta
++
++
++def retry_allowed(meta):
++    return (not meta["contract"]["pass"] and meta["outer_tree_zero"]
++            and meta["cleanup_error"] is None and not meta["windows_started"])
++
++
++def stop_exact_container(deadlines,state):
++    try:
++        cleanup_deadline=min(*deadlines,time.monotonic()+60)
++        before=inspect((cleanup_deadline,),reserve=0,limit=10)
++        if not valid_identity(before): raise RuntimeError("stop refused: exact identity/config mismatch")
++        state["stop_pre_identity"]=before
++        if before["running"]:
++            result=docker(["stop","--timeout","10",CID],(cleanup_deadline,),reserve=0,limit=20)
++            state["stop_exit"]=result.returncode
++            if result.returncode!=0:
++                result=docker(["kill",CID],(cleanup_deadline,),reserve=0,limit=10)
++                state["kill_exit"]=result.returncode
++        after=inspect((cleanup_deadline,),reserve=0,limit=10)
++        state["stop_post_identity"]=after
++        if not valid_identity(after) or after["running"]:
++            raise RuntimeError("container stop not confirmed")
++        state["container_stopped"]=True
++    except BaseException as exc:
++        state["cleanup_incomplete"]=True
++        state["cleanup_error"]=f"{type(exc).__name__}: {exc}"
++
++def main():
++    parser=argparse.ArgumentParser()
++    parser.add_argument("--authorized-reuse",action="store_true",help="future separate resource approval required")
++    parser.add_argument("--total-seconds",type=int,default=900)
++    args=parser.parse_args()
++    if not args.authorized_reuse or not 120<=args.total_seconds<=1200:
++        raise SystemExit("separate reuse authorization and bounded remaining total required")
++    run_dir=EVID/("continuation-"+datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")+"-"+uuid4().hex[:8])
++    run_dir.mkdir(exist_ok=False)
++    for source in (Path(__file__),EVID/"controlled_child.py",EVID/"contracts.py"):
++        data=source.read_bytes()
++        (run_dir/(source.stem+"-as-run.py")).write_bytes(data)
++        (run_dir/(source.stem+".sha256")).write_text(hashlib.sha256(data).hexdigest()+"\n",encoding="utf-8")
++    total_deadline=time.monotonic()+args.total_seconds
++    state={"resource_id":CID,"attempts":[],"cleanup_incomplete":False,
++           "container_stopped":False,"verdict":"NOT_RUN"}
++    password=None; touched=False
++    try:
++        before=inspect((total_deadline,))
++        if not valid_identity(before) or before["running"]:
++            raise RuntimeError("stopped exact reuse resource not confirmed")
++        state["pre_identity"]=before
++        with socket.socket() as sock: sock.bind(("127.0.0.1",PORT))
++        others=docker(["ps","--filter","label=retrolume-task=083","--format","{{.ID}}"],(total_deadline,))
++        if others.returncode!=0 or others.stdout.strip():
++            raise RuntimeError("other active task resource or task ownership unavailable")
++        touched=True
++        started=docker(["start",CID],(total_deadline,))
++        if started.returncode!=0: raise RuntimeError("exact container start failed")
++        after=inspect((total_deadline,))
++        if not valid_identity(after) or not after["running"]:
++            raise RuntimeError("started resource identity mismatch")
++        dsn,password,state["new_pg_identity"]=local_auth_and_rotate((total_deadline,))
++        for number in (1,2):  # original attempt 1 consumed; two remaining maximum
++            parts=parse_parts("migration,ledger,windows") if number==1 else None
++            if number==2:
++                go=run_dir/"attempt-02.go"
++                while not go.exists():
++                    time.sleep(min(.2,deadline_left(total_deadline,reserve=120)))
++                parts=parse_parts(go.read_text(encoding="utf-8").strip())
++            meta=run_batch(parts,number,dsn,password,run_dir,(total_deadline,))
++            state["attempts"].append(meta)
++            (run_dir/"state.json").write_text(json.dumps(state,ensure_ascii=False,indent=2),encoding="utf-8")
++            if meta["contract"]["pass"]:
++                state["verdict"]="PASS"; break
++            if not retry_allowed(meta):
++                state["verdict"]="FAILED_STOP"; break
++            state["verdict"]="FAILED_WAITING_CORRECTION"
++    except BaseException as exc:
++        if not state["attempts"]: state["verdict"]="BLOCKED"
++        message=f"{type(exc).__name__}: {exc}"
++        state["error"]=message.replace(password,"[REDACTED]") if password else message
++    finally:
++        if touched: stop_exact_container((total_deadline,),state)
++        (run_dir/"state.json").write_text(json.dumps(state,ensure_ascii=False,indent=2),encoding="utf-8")
++    return 0 if state["verdict"]=="PASS" and state["container_stopped"] and not state["cleanup_incomplete"] else 1
++
++
++if __name__=="__main__":
++    sys.exit(main())

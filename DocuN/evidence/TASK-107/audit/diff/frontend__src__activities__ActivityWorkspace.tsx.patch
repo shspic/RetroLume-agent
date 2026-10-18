@@ -1,0 +1,128 @@
+--- pre/frontend/src/activities/ActivityWorkspace.tsx
++++ current/frontend/src/activities/ActivityWorkspace.tsx
+@@ -3,6 +3,7 @@
+ import { isLearningDocument, LearningResult } from "./LearningResult";
+ import { compareLearningIntent } from "./learningIntentMatch";
+ import { TeachingWorkspace } from "./TeachingWorkspace";
++import { InterviewWorkspace } from "./InterviewWorkspace";
+ import { MemoryWorkspace } from "./MemoryWorkspace";
+ import type { MemoryChoice } from "./memoryApi";
+ import { submitTrackedMemoryCreate } from "./memoryIntents";
+@@ -19,8 +20,8 @@
+   continue: { available: boolean; reason: string | null };
+   learning?: { available: boolean; reason: string | null; max_input_chars: number; max_output_tokens: number | null };
+   teaching?: { available: boolean; reason: string | null; profile: string; max_output_tokens: number | null };
+-  teaching_calculation?: { available: boolean; reason: string | null; tool: string };
+-  memory_model?: { available: boolean; reason: string | null };
++  teaching_calculation?: { available: boolean; reason: string | null; tool: string };
++  memory_model?: { available: boolean; reason: string | null };
+   quota_preview: Record<string, number | string[] | null> | null;
+   provider: { provider: string; model: string } | null;
+   supervision_management_budget_seconds: number;
+@@ -38,8 +39,9 @@
+   max_tool_calls: number | null; tools_reserved: number;
+   source_count: number; source_titles: string[];
+   allowed_models?: { provider: string; model: string }[];
+-  sources?: { source_id: string; title: string; valid: boolean }[];
+-  memory_selection?: { selected: boolean; eligible: boolean } | null;
++  sources?: { source_id: string; title: string; valid: boolean }[];
++  memory_selection?: { selected: boolean; eligible: boolean } | null;
++  business_domain?: "interview" | "unknown";
+ };
+ 
+ type OperationRow = {
+@@ -112,8 +114,8 @@
+     case "committed_current": return "已提交，正文可回查";
+     case "committed_history_cancelled": return "已提交（活动已取消，仅供历史查看）";
+     case "invalidated_scope_changed": return "已失效，活动范围已变化";
+-    case "invalidated_source": return "已失效，资料已被替换或移除";
+-    case "invalidated_memory": return "已失效，所选学习记忆或其依据已变化";
++    case "invalidated_source": return "已失效，资料已被替换或移除";
++    case "invalidated_memory": return "已失效，所选学习记忆或其依据已变化";
+     case "unresolved": return row.state === "unknown" ? "结果未知，可能已发出；不会自动重发" : "进行中，结果尚未提交";
+     case "terminal_without_payload": return "已结束但无正文记录";
+     default: return "尚无此项操作";
+@@ -141,7 +143,7 @@
+   return status === "running" ? "运行中" : status === "cancelled" ? "已取消" : "空闲";
+ }
+ 
+-export function ActivityWorkspace({ token }: { token: string }) {
++export function ActivityWorkspace({ token, variant = "learning" }: { token: string; variant?: "learning" | "interview" }) {
+   const [caps, setCaps] = useState<Capabilities | null>(null);
+   const [capsError, setCapsError] = useState("");
+   const [items, setItems] = useState<ActivityFacts[]>([]);
+@@ -677,7 +679,7 @@
+       <header>
+         <div>
+           <p className="eyebrow">YOUR ACTIVITIES, IN FACTS</p>
+-          <h1>学习活动</h1>
++          <h1>{variant === "interview" ? "模拟面试" : "学习活动"}</h1>
+           <p className="subtitle">每次活动限定资料范围与有限预算；这里查看活动、四类预算与每次运行的事实结果。</p>
+         </div>
+         <button className="secondary" onClick={() => { void refreshCapabilities(); void refreshList(); void loadMaterials(); if (selectedId) void refreshDetail(selectedId); }}>刷新</button>
+@@ -743,9 +745,9 @@
+         </section>
+       )}
+ 
+-      {caps?.storage_ready && (
+-        <>
+-        <MemoryWorkspace token={token} choices={memoryChoices} onChoicesChange={setMemoryChoices} />
++      {caps?.storage_ready && (
++        <>
++        {variant === "learning" && <MemoryWorkspace token={token} choices={memoryChoices} onChoicesChange={setMemoryChoices} />}
+         <section className="ws-create">
+           <h2>新建活动</h2>
+           <p className="quiet">新建只确定资料范围与有限预算，不会立即产生模型调用。创建后确认目标并显式开始学习。</p>
+@@ -785,11 +787,11 @@
+           ) : (
+             <p className="quiet">新建未开放：{reasonText(caps.create.reason)}。只读与取消不受影响。</p>
+           )}
+-        </section>
+-        </>
+-      )}
+-
+-      <div className="content-grid">
++        </section>
++        </>
++      )}
++
++      <div className="content-grid">
+         <section className="library">
+           <div className="section-title"><h2>活动列表</h2><span>{items.length} 项{listCursor ? " +" : ""}</span></div>
+           {listError && <p role="alert" className="failure">{listError}</p>}
+@@ -803,7 +805,7 @@
+           <ul>
+             {items.map(item => (
+               <li key={item.activity_id}>
+-                <button className={`material ${selectedId === item.activity_id ? "selected" : ""}`} onClick={() => void selectActivity(item.activity_id)}>
++                <button data-activity-id={item.activity_id} className={`material ${selectedId === item.activity_id ? "selected" : ""}`} onClick={() => void selectActivity(item.activity_id)}>
+                   <span className="format">{statusBadge(item.status)}</span>
+                   <span className="material-name">
+                     <strong>{activityLabel(item)}</strong>
+@@ -840,6 +842,7 @@
+                 </div>
+               )}
+ 
++              {(variant === "interview" || detail.business_domain === "interview") ? detail.activity_id === selectedId ? <InterviewWorkspace key={detail.activity_id} activityId={detail.activity_id} token={token} scopeRevision={detail.scope_revision} onChanged={() => { void refreshDetail(detail.activity_id, true); }}/> : <p role="status">正在读取选中的面试活动…</p> : detail.business_domain === "unknown" ? <p role="alert">活动领域资格不可核对，保持只读；请核对服务状态。</p> : <>
+               <div className="ws-block">
+                 <h4>资料范围 · 范围修订 {detail.scope_revision}</h4>
+                 {(detail.sources ?? []).map(source => (
+@@ -899,8 +902,8 @@
+                   token={token}
+                   scopeRevision={detail.scope_revision}
+                   teachingAvailable={Boolean(caps?.teaching?.available)}
+-                  calculationAvailable={Boolean(caps?.teaching_calculation?.available)}
+-                  memoryModelAvailable={Boolean(caps?.memory_model?.available)}
++                  calculationAvailable={Boolean(caps?.teaching_calculation?.available)}
++                  memoryModelAvailable={Boolean(caps?.memory_model?.available)}
+                   seed={teachingSeed?.activity_id===detail.activity_id?teachingSeed:null}
+                 />
+                 {!caps?.teaching?.available && (
+@@ -984,6 +987,7 @@
+                 </ul>
+                 {opsCursor && <button className="secondary" onClick={() => void loadMoreOperations()}>加载更多操作</button>}
+               </div>
++              </>}
+             </>
+           )}
+         </section>

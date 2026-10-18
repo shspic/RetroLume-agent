@@ -1,0 +1,24 @@
+TASK-071 未运行用例清单（本卡仅编写，不运行 PG/unittest）
+
+backend/tests/test_activity_recovery.py 全部 7 个用例均未运行（类级 skipUnless
+RETROLUME_TASK_068_DATABASE_URL 未提供，且本卡明令不运行 PG/unittest）：
+
+  1. test_01_valid_lease_does_not_block_finding_and_converging_old_generation
+     （原 068 用例；依赖默认 limit=100 覆盖 2 个旧项，未改）
+  2. test_02_repeat_converge_is_noop_and_invalid_input_rejected
+     （原 068 用例；未改）
+  3. test_03_existing_terminals_kept_and_reservation_not_refunded
+     （原 068 用例；未改）
+  4. test_04_listing_is_bounded_paginated_and_isolated_per_activity
+     （原 068 用例；未改）
+  5. test_05_late_permit_cannot_overwrite_recovered_unknown
+     （原 068 用例；未改）
+  6. test_06_bounded_single_batch_converges_incrementally
+     （TASK-071 新增：5 旧未决项 + 当后代次对照，limit=2 连续收敛 2/2/1/0，
+      逐批仅已选项变 unknown，代次/预算不变，limit 的 0/201/bool/非int 拒绝）
+  7. （模块级）PsycopgLoopIsolatedAsyncioTestCase 基类与 skip 装饰逻辑未运行
+
+本卡已执行的唯一动态检查：backend/.venv/Scripts/python.exe 对两个修改文件
+做 compile() 语法检查（不写 pyc），见 compile-check.txt。
+
+静态正确不等于真实通过；真实 PG 验证与 068/071 定向审计复核由 Astra 后续安排。

@@ -1,0 +1,95 @@
+--- first-pre/frontend/src/activities/InterviewWorkspace.tsx
++++ current/frontend/src/activities/InterviewWorkspace.tsx
+@@ -5,6 +5,9 @@
+ import {interviewEditorOwner,loadInterviewIntents,readInterviewDraft,saveInterviewIntent,noteInterviewReceipt,type InterviewIntent} from "./interviewIntents";
+ import {InterviewCitations} from "./InterviewCitations";
+ import "./interview-workspace.css";
++import {RetrievalPanel} from './RetrievalPanel';
++import {retrieveForCommand,retrievalChains,storeRetrievalChain,type RetrievalChain} from './retrieval-api';
++import type {InterviewCommand} from './interviewApi';
+ 
+ const PHASE:Record<string,string>={needs_goal:"请补充具体目标",ready:"可开始提问",question_ready:"等待你的回答",answer_ready:"回答已保存，可请求追问或反馈",feedback_ready:"本轮反馈已保存",ended:"本场次已结束，只读历史"};
+ const ROLES:Record<MaterialRole,string>={unspecified:"用途未定（按自报）",reference:"概念对照资料",resume:"简历（自报）",experience:"经历（自报）",measurement:"测量／收益（自报）"};
+@@ -21,6 +24,7 @@
+   const panel=useRef(0),active=useRef({activityId,token,owner:null as string|null,viewToken:""}),controllers=useRef(new Set<AbortController>());
+   const draftIdentity=useRef<{key:string;hash:string;text:string}|null>(null),viewRef=useRef<InterviewWorkspaceView|null>(null);
+   const readGeneration=useRef(0),reconciliation=useRef<string|null>(null);
++  const [retrievalMode,setRetrievalMode]=useState<'hybrid'|'terms'>('hybrid');
+   active.current={activityId,token,owner,viewToken:view?.view_token??""};viewRef.current=view;
+   const alive=(stamp:number,aid=activityId)=>panel.current===stamp&&active.current.activityId===aid;
+   function controller(){const c=new AbortController();controllers.current.add(c);return c;}
+@@ -57,10 +61,22 @@
+   },[activityId,token]);
+ 
+   function goal():InterviewGoal{return {target,focus:focus.trim()?focus:null,clarifications:[],material_roles:(view?.sources??[]).map(s=>({source_id:s.source_id,role:roles[s.source_id]??"unspecified"}))};}
+-  async function submit(action:InterviewAction,body:Record<string,unknown>){
++  async function submit(action:InterviewAction,body:Record<string,unknown>,recovered?:RetrievalChain){
+     if(busy||!owner||!view)return;
+     const expectedOwner=owner,stamp=panel.current,aid=activityId,expectedView=view.view_token;
+-    const command=makeInterviewCommand(action,view.head,view.head?.scope_revision??scopeRevision,body);
++    let command=makeInterviewCommand(action,view.head,view.head?.scope_revision??scopeRevision,body,recovered?String(recovered.domain_input.business_key):crypto.randomUUID(),view.head?view.profile==='interview.v2':retrievalMode==='hybrid');
++    if(command.schema==='interview.command.v2'&&['ask','review'].includes(action)){
++      const currentGoal=view.head?.goal_record_id?details[view.head.goal_record_id]?.body?.value.goal:null;
++      if(!currentGoal?.target?.trim()){setError('当前目标正文尚未核对完成，请等待读取后再明确提交');return;}
++      setBusy(true);setError('');
++      try{
++        if(recovered&&requestText(aid,command)!==requestText(aid,recovered.domain_input as InterviewCommand))throw new Error('原动作版本不同，不能改绑');
++        const result=await retrieveForCommand(token,aid,expectedOwner,'interview',command as unknown as Record<string,unknown>,view.head?.scope_revision??scopeRevision,view.head?.revision??0,[currentGoal.target,currentGoal.focus].filter(Boolean).join(' ').slice(0,1024),()=>alive(stamp,aid)&&active.current.owner===expectedOwner&&active.current.viewToken===expectedView,recovered);
++        if(!result.ref||!alive(stamp,aid)||active.current.owner!==expectedOwner||active.current.viewToken!==expectedView)return;
++        command={...command,retrieval_ref:result.ref};
++      }catch(e){if(alive(stamp,aid))setError((e as Error).message);return;}
++      finally{if(alive(stamp,aid))setBusy(false);}
++    }
+     const text=requestText(aid,command);draftIdentity.current={key:command.business_key,hash:"",text};setBusy(true);setError("");setNotice("");
+     const synchronous=()=>alive(stamp,aid)&&active.current.owner===expectedOwner&&active.current.viewToken===expectedView&&draftIdentity.current?.key===command.business_key&&draftIdentity.current.text===text;
+     try{
+@@ -72,6 +88,9 @@
+       const afterSaveOwner=await interviewEditorOwner();if(!stillCurrent()||afterSaveOwner!==expectedOwner)return;
+       // No await between this last identity check and POST.
+       if(!stillCurrent())return;
++      for(const row of (await retrievalChains(aid)).filter(row=>row.domain_input.business_key===command.business_key))await storeRetrievalChain({...row,domain_sent:true});
++      if(!stillCurrent())return;
++      const lastOwner=await interviewEditorOwner();if(!stillCurrent()||lastOwner!==expectedOwner)return;
+       const c=controller();let receipt:InterviewReceipt;
+       try{receipt=await postInterview(token,aid,command,c.signal,stillCurrent);}finally{controllers.current.delete(c);}
+       if(!stillCurrent()||receipt.business_key!==command.business_key||receipt.activity_id!==aid||receipt.request_sha256!==hash)return;
+@@ -151,6 +170,7 @@
+   async function moreHistory(){if(!history?.next_before_seq||!view)return;const stamp=panel.current,expected=view.view_token,c=controller();try{const next=await getInterviewHistory(token,activityId,expected,history.next_before_seq,c.signal,()=>alive(stamp)&&active.current.viewToken===expected);if(alive(stamp)&&active.current.viewToken===expected)setHistory({...next,records:[...history.records,...next.records]});}catch(reason){if(alive(stamp)&&!c.signal.aborted)setError(reason instanceof Error?reason.message:"历史游标已变化，请重新读取");}finally{controllers.current.delete(c);}}
+ 
+   const head=view?.head,question=head?.current_question_id?details[head.current_question_id]:null,savedAnswer=head?.current_answer_id?details[head.current_answer_id]:null,feedback=head?.current_feedback_id?details[head.current_feedback_id]:null;
++  const modelGoalReady=view?.profile!=='interview.v2'||Boolean(head?.goal_record_id&&details[head.goal_record_id]?.body?.value.goal?.target?.trim());
+   const finished=head?.phase==="ended",pending=Boolean(view?.pending),activityClosed=view&&(view.budget.status==="cancelled"||Date.parse(String(view.budget.deadline_at))<=Date.now()),writeDisabled=busy||!owner||finished||Boolean(activityClosed);
+   function detailCard(item:InterviewDetail|null|undefined){
+     if(!item)return null;const value=item.body?.value;
+@@ -163,24 +183,25 @@
+         {item.body?.catalog?.length&&owner?<InterviewCitations key={`${activityId}:${item.record.record_id}:${owner}:${view?.view_token}`} token={token} activityId={activityId} recordId={item.record.record_id} viewToken={view?.view_token??""} catalog={item.body.catalog} owner={owner}/>:null}</>}
+     </article>;
+   }
+-  return <div className="interview-workspace" aria-label="文字模拟面试工作区" data-interview-activity-id={activityId}><h3>文字模拟面试</h3><p>首版只在未选择记忆的全新活动开始；不固定学科、岗位或总题数。模型反馈是建议，经历与收益保留自报身份。</p>
++  return <div className="interview-workspace" aria-label="文字模拟面试工作区" data-interview-activity-id={activityId}><h3>文字模拟面试</h3><p>新混合检索场次可明确选择最多四条学习记忆作低信任背景。经历与收益保留自报身份；模型反馈是建议。</p>
++    <RetrievalPanel token={token} activityId={activityId} scopeRevision={view?.head?.scope_revision??scopeRevision} domainRevision={view?.head?.revision??0} owner={owner} mode={retrievalMode} indexAllowed={Boolean(head)} onMode={mode=>{if(!view?.head)setRetrievalMode(mode);}} onContinue={chain=>{const saved=chain.domain_input;void submit(saved.action as InterviewAction,saved.body as Record<string,unknown>,chain);}}/>
+     {error&&<p role="alert" className="failure">{error}</p>}{notice&&<p role="status">{notice}</p>}<button type="button" onClick={()=>void refresh()}>只读刷新／恢复场次</button>
+     {!owner&&<p>本机编辑身份或锁不可用，保持只读。可以复制自己的草稿。</p>}
+     {view&&<><section><h4>本次资料范围与预算</h4>{view.sources.map(s=><p key={s.source_id}>{s.title} · 版本{s.source_revision} · {s.valid?"当前可用":"已更新，须重新确认范围"}</p>)}
+       <p>次数：{view.budget.requests_reserved} / {view.budget.max_requests}；费用预留：{view.budget.cost_reserved_microunits} / {view.budget.max_cost_microunits}微单位，单次最多{view.budget.reserve_cost_microunits}微单位。</p><p>时间：已结算{view.budget.running_settled_seconds}秒，预留{view.budget.running_reserved_seconds}秒，上限{view.budget.max_running_seconds}秒；工具已用{view.budget.tools_reserved}，本面试不使用工具。</p>
+-      <p>本场次不使用已保存记忆。外发仅含当前目标、必要回答版本与有界资料片段。</p>
++      <p>{view.profile==='interview.v2'?'本场次按创建时明确选择的版本使用低信任学习背景，不作为资料证据或测量事实。':'旧场次不消费已保存记忆。'}外发仅含当前目标、必要回答版本与有界资料片段。</p>
+       <button type="button" disabled={busy||finished} onClick={()=>void loadRange()}>读取当前资料，明确更新范围</button>{materials.length>0&&<div>{materials.map(m=><label key={m.id}><span><input type="checkbox" disabled={busy||finished} checked={rangeIds.includes(m.id)} onChange={e=>setRangeIds(ids=>e.target.checked?[...ids,m.id]:ids.filter(id=>id!==m.id))}/>{m.title} · 当前版本{m.revision}</span></label>)}<button type="button" disabled={writeDisabled} onClick={()=>void bindRange()}>确认新的资料范围</button></div>}
+     </section><section><h4>目标{head?` v${head.goal_version}`:""}与资料用途</h4><label>希望针对哪个主题、角色或场景练习？<textarea aria-label="面试目标" value={target} disabled={writeDisabled} maxLength={1024} onChange={e=>setTarget(e.target.value)}/></label><label>具体重点或同名澄清<textarea aria-label="面试重点" value={focus} disabled={writeDisabled} maxLength={1024} onChange={e=>setFocus(e.target.value)}/></label>
+       {view.sources.map(s=><label key={s.source_id}>{s.title}的用途<select aria-label={`${s.title}的面试用途`} disabled={writeDisabled} value={roles[s.source_id]??"unspecified"} onChange={e=>setRoles(r=>({...r,[s.source_id]:e.target.value as MaterialRole}))}>{(Object.keys(ROLES) as MaterialRole[]).map(r=><option key={r} value={r}>{ROLES[r]}</option>)}</select></label>)}
+       {head?<button type="button" disabled={writeDisabled||!target.trim()} onClick={()=>void submit("goal",{goal:goal()})}>保存修正目标（另存版本）</button>:<button type="button" disabled={writeDisabled||view.domain!=="none"} onClick={()=>void submit("start",{goal:target.trim()?goal():null})}>开始场次</button>}
+-      {view.domain==="existing"&&<p>已有学习／教学／运行事实的活动不能转成面试，请新建未选择记忆的活动。</p>}
++      {view.domain==="existing"&&<p>已有学习／教学／运行事实的活动不能转成面试，请新建独立面试活动。</p>}
+     </section>{head&&<><p role="status">{pending?`原动作${view.pending?.status==="unknown"?"未确认":"处理中"}，请核对原提交`:PHASE[head.phase]??head.phase}</p>
+       {!view.capabilities.model&&<p>模型动作未开放：{view.capabilities.model_reason}；本地答案与只读核对仍按当前资格可用。</p>}
+       {detailCard(question)}{detailCard(savedAnswer)}{(head.phase==="question_ready"||head.phase==="answer_ready"||head.phase==="feedback_ready")&&<section><label>{head.phase==="question_ready"?"你的回答":"修改当前回答（另存新版本）"}<textarea aria-label="面试回答" value={answer} maxLength={4096} disabled={writeDisabled} onChange={e=>setAnswer(e.target.value)}/></label><button type="button" disabled={writeDisabled||!answer.trim()||(!head.current_question_id)} onClick={()=>void submit(head.current_answer_id?"correct_answer":"answer",head.current_answer_id?{answer_record_id:head.current_answer_id,expected_answer_version:savedAnswer?.record.answer_version??1,text:answer}:{question_record_id:head.current_question_id,text:answer})}>保存回答{head.current_answer_id?"新版本":""}（不调用模型）</button></section>}
+       {detailCard(feedback)}<div className="interview-actions">
+-        {head.phase==="ready"&&<button type="button" disabled={writeDisabled||pending} onClick={()=>void submit("ask",{mode:"first"})}>开始提问</button>}
+-        {head.phase==="answer_ready"&&<button type="button" disabled={writeDisabled||pending} onClick={()=>void submit("review",{question_record_id:head.current_question_id,answer_record_id:head.current_answer_id})}>获取必要追问或反馈</button>}
+-        {head.phase==="feedback_ready"&&<button type="button" disabled={writeDisabled||pending} onClick={()=>void submit("ask",{mode:"next",parent_feedback_id:head.current_feedback_id})}>继续下一题（显式调用）</button>}
++        {head.phase==="ready"&&<button type="button" disabled={writeDisabled||pending||!modelGoalReady} onClick={()=>void submit("ask",{mode:"first"})}>开始提问</button>}
++        {head.phase==="answer_ready"&&<button type="button" disabled={writeDisabled||pending||!modelGoalReady} onClick={()=>void submit("review",{question_record_id:head.current_question_id,answer_record_id:head.current_answer_id})}>获取必要追问或反馈</button>}
++        {head.phase==="feedback_ready"&&<button type="button" disabled={writeDisabled||pending||!modelGoalReady} onClick={()=>void submit("ask",{mode:"next",parent_feedback_id:head.current_feedback_id})}>继续下一题（显式调用）</button>}
+         {pending&&<button type="button" disabled={writeDisabled} onClick={()=>void submit("abandon",{pending_key:head.pending_key})}>显式放弃原意图（不退款／不重发）</button>}
+         {!finished&&<button type="button" disabled={writeDisabled||pending} onClick={()=>void submit("finish",{})}>结束本场次</button>}
+       </div></>}

@@ -1,0 +1,259 @@
+"""TASK090 Windows-only completion; exact existing target, one authorized role rotation, outer Job."""
+from pathlib import Path
+from datetime import datetime, timezone
+import json
+import os
+import queue
+import secrets
+import shutil
+import socket
+import subprocess
+import sys
+import time
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parents[3]
+BACKEND = ROOT / "backend"
+sys.path.insert(0, str(BACKEND))
+import importlib.machinery, hashlib
+loaded_bytes={}
+original_get_code=importlib.machinery.SourceFileLoader.get_code
+def capture_code(self, fullname):
+    if fullname == "app" or fullname.startswith("app."):
+        path=Path(self.get_filename(fullname)).resolve()
+        raw=self.get_data(str(path))
+        loaded_bytes[path.relative_to(ROOT).as_posix()]=hashlib.sha256(raw).hexdigest()
+        return self.source_to_code(raw,str(path))
+    return original_get_code(self,fullname)
+importlib.machinery.SourceFileLoader.get_code=capture_code
+from controlled_child import ControlledChild
+from offline import hashes, write
+
+EVIDENCE = ROOT / "Ndocu/evidence/task-090"
+CID = "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4"
+IMAGE = "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f"
+NAME = "retrolume-task-088-g3-w1"
+VOLUME = NAME + "-data"
+DB = "retrolume_task090_scope"
+ROLE = "retrolume_task090_synth"
+ADMIN = "retrolume_task088_synth"
+KEYS = ("Id", "Name", "Image", "Mounts", "HostConfig.PortBindings", "HostConfig.NanoCpus",
+        "HostConfig.Memory", "HostConfig.PidsLimit", "HostConfig.RestartPolicy.Name",
+        "HostConfig.Privileged", "State.Running", "State.Pid", "State.StartedAt")
+FORMAT = "|".join("{{json ." + key + "}}" for key in KEYS)
+
+
+def cases(folder, phase):
+    import psycopg
+    os.environ["TASK090_EVIDENCE"]=str(folder)
+    before=hashes();write(folder/"as-run-hashes.json",before)
+    with psycopg.connect(os.environ["RETROLUME_SCOPE_TEST_DATABASE_URL"],autocommit=True) as conn:
+        assert conn.execute("SELECT current_database(),current_user").fetchone()==(DB,ROLE)
+        if os.environ.get("TASK090_NEW_DB")=="1":
+            for path in sorted((BACKEND/"migrations").glob("00[1-7]_*.sql")):
+                conn.execute(path.read_text(encoding="utf-8"))
+                print(json.dumps({"event":"synthetic_baseline_applied","file":path.name}),flush=True)
+        assert conn.execute("SELECT to_regclass('activity_operation_results')").fetchone()[0]
+    code=0
+    try:
+        if phase in ("all","pg"):
+            from offline import test_child
+            # 旧回归变量仅映射同一090库，不读取任何用户连接。
+            for key in ("RETROLUME_ACTIVITY_RESULTS_TEST_DATABASE_URL","RETROLUME_TASK_068_DATABASE_URL","RETROLUME_TIME_BUDGET_TEST_DATABASE_URL"):
+                os.environ[key]=os.environ["RETROLUME_SCOPE_TEST_DATABASE_URL"]
+            targets=["tests.test_activity_scope.ScopePostgresTests","tests.test_activity_continuation.ContinuationPostgresTests",
+                "tests.test_activity_results.ActivityResultsPostgresTests.test_03_atomic_commit_idempotent_retry_and_conflict",
+                "tests.test_activity_recovery.ActivityRecoveryPostgresTests.test_01_valid_lease_does_not_block_finding_and_converging_old_generation",
+                "tests.test_activity_time_budget.ActivityTimeBudgetPostgresTests.test_01_settle_normal_path_and_idempotent_retry",
+                "tests.test_activity_time_budget.ActivityTimeBudgetPostgresTests.test_03_stale_residual_fully_folded_on_reclaim"]
+            if len(sys.argv)>4: targets=sys.argv[4:]
+            code=test_child(folder,targets)
+            if code:return code
+        if phase in ("all","windows"):
+            print(json.dumps({"event":"windows_session_attempt","count":1}),flush=True)
+            import win_chain
+            code=win_chain.main()
+            records=[json.loads(p.read_text()) for p in folder.glob("bootstrap-*.json")]
+            assert len(records)==2 and {x["mode"] for x in records}=={"sup","worker"}
+            for record in records:
+                assert record["source_unchanged"]
+                assert all(before[k]==v for k,v in record["loaded_source_bytes"].items())
+                if record["mode"]=="worker":
+                    assert record["transport_sends"]==1 and record["parent_low_trust_verified"] and record["reference_excluded_verified"]
+                if record["mode"]=="sup":assert record["session_line_trace"]
+        return code
+    finally:
+        write(folder/"parent-loaded-source.json",loaded_bytes)
+        write(folder/"post-hashes.json",hashes())
+        assert before==hashes(), "source changed during real batch"
+
+
+def main(phase):
+    budget_file = EVIDENCE / "budget-manifest.json"
+    budget = json.loads(budget_file.read_text(encoding="utf-8-sig"))
+    if len(budget["real_attempts"]) >= 3 or budget["real_used_seconds"] + 600 > 2400:
+        raise RuntimeError("real budget unavailable")
+    folder=EVIDENCE/("real-"+str(len(budget["real_attempts"])+1).zfill(2))
+    folder.mkdir(exist_ok=False)
+    attempt=len(budget["real_attempts"])+1
+    start = time.monotonic()
+    deadline = start + 600
+    state = {"attempt": attempt, "phase":phase, "utc": datetime.now(timezone.utc).isoformat(), "cid": CID,
+             "commands": [], "cleanup_incomplete": False, "exit": None,
+             "new_containers": 0, "new_volumes": 0, "windows_sessions": 0,
+             "credential_lifecycle": "explicitly authorized task role password rotation only owner memory, psql stdin and controlled child env; never argv/log; no old Env read"}
+    budget["real_attempts"].append({"attempt": attempt, "path": folder.relative_to(ROOT).as_posix(), "state": "preflight"})
+    write(budget_file, budget)
+    child = None
+    started_owned = False
+    password = secrets.token_hex(24)
+    docker_path = shutil.which("docker")
+    if not docker_path:
+        docker_path = "docker"
+
+    def docker(args, *, input_text=None, cleanup=False, timeout=20, allow_failure=False):
+        allowed_until = deadline if cleanup else deadline - 180
+        remaining = allowed_until - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("batch cleanup reserve reached")
+        began = time.monotonic()
+        entry = {"args": args, "started_utc": datetime.now(timezone.utc).isoformat()}
+        state["commands"].append(entry)
+        write(folder / "manifest.json", state)
+        try:
+            result = subprocess.run([docker_path, *args], input=input_text, text=True, encoding="utf-8",
+                                    capture_output=True, timeout=min(timeout, remaining),
+                                    creationflags=subprocess.CREATE_NO_WINDOW)
+            entry["exit"] = result.returncode
+            if result.returncode and not allow_failure:
+                # 不写psql错误文本/输入，避免角色DDL中的新口令进入证据。
+                raise RuntimeError("docker step failed: " + args[0])
+            return result.returncode if allow_failure else result.stdout.strip()
+        finally:
+            entry["seconds"] = time.monotonic() - began
+            write(folder / "manifest.json", state)
+
+    def inspect(cid, cleanup=False):
+        raw = docker(["inspect", cid, "--format", FORMAT], cleanup=cleanup)
+        return dict(zip(KEYS, [json.loads(x) for x in raw.split("|")], strict=True))
+
+    try:
+        current = inspect(CID)
+        state["preflight"] = current
+        expected = {"Id": CID, "Name": "/" + NAME, "Image": IMAGE,
+                    "HostConfig.PortBindings": {"5432/tcp": [{"HostIp": "127.0.0.1", "HostPort": "55441"}]},
+                    "HostConfig.NanoCpus": 1000000000, "HostConfig.Memory": 536870912,
+                    "HostConfig.PidsLimit": 128, "HostConfig.RestartPolicy.Name": "no",
+                    "HostConfig.Privileged": False, "State.Running": False, "State.Pid": 0}
+        if any(current.get(key) != value for key, value in expected.items()):
+            raise RuntimeError("exact resource safety configuration mismatch")
+        mounts = current["Mounts"]
+        if len(mounts) != 1 or any(mounts[0].get(key) != value for key, value in {
+                "Type": "volume", "Name": VOLUME, "Destination": "/var/lib/postgresql/data", "RW": True}.items()):
+            raise RuntimeError("exact mount safety configuration mismatch")
+        with socket.socket() as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            sock.bind(("127.0.0.1", 55441))
+        # 标记先于启动，启动响应丢失也只对已核停止且获准CID作收尾。
+        started_owned = True
+        docker(["start", CID])
+        state["started"] = inspect(CID)
+        ready_until = min(deadline - 180, time.monotonic() + 25)
+        while docker(["exec", CID, "pg_isready", "-U", ADMIN, "-d", "postgres"], allow_failure=True, timeout=5):
+            if time.monotonic() >= ready_until: raise TimeoutError("database readiness")
+            time.sleep(.25)
+        psql = ["exec", "-i", "-e", "PGOPTIONS=-c statement_timeout=10000 -c lock_timeout=2000",
+                CID, "psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", "-U", ADMIN, "-d", "postgres"]
+        psql += ["-t", "-A"]
+        probe="SELECT json_build_object('owner',(SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname='retrolume_task090_scope'),'role',(SELECT json_build_array(rolcanlogin,rolsuper,rolcreatedb,rolcreaterole,rolreplication,rolbypassrls,rolinherit) FROM pg_roles WHERE rolname='retrolume_task090_synth'),'sessions',(SELECT count(*) FROM pg_stat_activity WHERE datname='retrolume_task090_scope' OR usename='retrolume_task090_synth'),'memberships',(SELECT count(*) FROM pg_auth_members WHERE member=(SELECT oid FROM pg_roles WHERE rolname='retrolume_task090_synth')));"
+        identity=json.loads(docker(psql,input_text=probe))
+        state["database_preflight"]=identity
+        new_db=False
+        prior_states=[]
+        for prior in budget["real_attempts"][:-1]:
+            record=ROOT/prior["path"]
+            if record.is_dir():prior_states.append(json.loads((record/"manifest.json").read_text()))
+        if identity["owner"] is None and identity["role"] is None and not any(x.get("setup_ddl_intent") for x in prior_states):
+            state["setup_ddl_intent"]={"database":DB,"role":ROLE}
+            write(folder/"manifest.json",state)
+            docker(psql,input_text=f"CREATE ROLE {ROLE} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '{password}';\nCREATE DATABASE {DB} OWNER {ROLE};")
+            state["new_database"]=DB;state["new_role"]=ROLE;new_db=True
+        else:
+            prior_owned=any(x.get("new_database")==DB for x in prior_states)
+            if not prior_owned or identity!={"owner":ROLE,"role":[True,False,False,False,False,False,False],"sessions":0,"memberships":0}:
+                raise RuntimeError("existing target ownership or privilege mismatch")
+            docker(psql,input_text=f"ALTER ROLE {ROLE} PASSWORD '{password}';")
+        state["credential_initialized_or_rotated_once"]=True
+        from psycopg.conninfo import make_conninfo
+        dsn = make_conninfo(host="127.0.0.1", port=55441, dbname=DB, user=ROLE, password=password,
+                           connect_timeout=2, options="-c statement_timeout=15000 -c lock_timeout=10000")
+        env = {k: v for k, v in os.environ.items()
+               if not (k.startswith("RETROLUME_") and ("DSN" in k or "DATABASE" in k))}
+        env["RETROLUME_SCOPE_TEST_DATABASE_URL"] = dsn
+        env["TASK090_NEW_DB"]="1" if new_db else "0"
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        env["PYTHONIOENCODING"] = "utf-8"
+        child = ControlledChild()
+        state["process"] = child.start([sys.executable, "-B", str(Path(__file__).resolve()), "--cases", str(folder), phase, *sys.argv[3:]],
+                                       cwd=BACKEND, env=env, deadline=deadline - 180)
+        budget["active_processes"] = [state["process"]]
+        write(budget_file, budget)
+        write(folder / "manifest.json", state)
+        state["exit"] = child.wait_empty(deadline - 180)
+    except BaseException as exc:
+        state["error_type"] = type(exc).__name__
+        if type(exc) in (RuntimeError, TimeoutError): state["error"] = str(exc)
+    finally:
+        if child is not None:
+            try:
+                child.stop(deadline - 30)
+                state["outer_tree_zero"] = child.active() == 0
+                child.close()
+                state["outer_handles_closed"] = True
+            except BaseException as exc:
+                state["cleanup_incomplete"] = True
+                state["child_cleanup_error"] = type(exc).__name__
+            for reader in child.readers: reader.join(timeout=1)
+            logs = {"stdout": [], "stderr": []}
+            while True:
+                try: label, line = child.lines.get_nowait()
+                except queue.Empty: break
+                if line is not None: logs[label].append(line.replace(password, "[redacted]"))
+            for label, lines in logs.items():
+                (folder / (label + ".log")).write_text("".join(lines), encoding="utf-8")
+            state["windows_sessions"] = sum('"windows_session_attempt"' in line for line in logs["stdout"])
+            state["process_events"] = child.events
+        if started_owned:
+            try:
+                docker(["stop", "--time", "10", CID], cleanup=True, timeout=25)
+                state["final_resource"] = inspect(CID, cleanup=True)
+                state["container_stopped"] = state["final_resource"]["State.Running"] is False and state["final_resource"]["State.Pid"] == 0
+                if not state["container_stopped"]: state["cleanup_incomplete"] = True
+            except BaseException as exc:
+                state["cleanup_incomplete"] = True
+                state["container_cleanup_error"] = type(exc).__name__
+        else:
+            state["container_started_by_task"] = False
+        state["seconds"] = time.monotonic() - start
+        state["end_utc"] = datetime.now(timezone.utc).isoformat()
+        write(folder / "manifest.json", state)
+        budget["real_used_seconds"] += state["seconds"]
+        budget["windows_sessions"] += state["windows_sessions"]
+        budget["real_attempts"][-1].update(state="finished", seconds=state["seconds"], exit=state["exit"],
+                                            cleanup_incomplete=state["cleanup_incomplete"])
+        if not state["cleanup_incomplete"]: budget["active_processes"] = []
+        write(budget_file, budget)
+    print(json.dumps({k: state.get(k) for k in ("exit", "error_type", "error", "seconds", "outer_tree_zero",
+                    "outer_handles_closed", "container_stopped", "cleanup_incomplete", "windows_sessions")}))
+    return 0 if state["exit"] == 0 and state.get("container_stopped") and not state["cleanup_incomplete"] else 1
+
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--cases":
+        try: code=cases(Path(sys.argv[2]),sys.argv[3])
+        except BaseException as exc:
+            print(json.dumps({"event":"case_error","type":type(exc).__name__,"label":str(exc) if type(exc) is AssertionError else None}),flush=True)
+            code=1
+        raise SystemExit(code)
+    if len(sys.argv)<3 or sys.argv[1]!="--phase" or sys.argv[2] not in ("all","pg","windows"):raise SystemExit(2)
+    raise SystemExit(main(sys.argv[2]))

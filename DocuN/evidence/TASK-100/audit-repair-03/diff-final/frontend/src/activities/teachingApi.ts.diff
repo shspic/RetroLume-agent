@@ -1,0 +1,49 @@
+--- pre/frontend/src/activities/teachingApi.ts
++++ post/frontend/src/activities/teachingApi.ts
+@@ -77,7 +77,8 @@
+   sources?: { source_id: string; version_id: string; valid: boolean; title: string | null; format: string | null }[];
+   budgets: Record<string, number | string | null>;
+   pending: { business_key: string; action: string; status: string; error_code?: string | null; created_at: string }[];
+-  history: { record_id: string; kind: string; seq: number; goal_version: number; label: string; created_at: string }[];
++  history: TeachingHistoryItem[];
++  next_cursor?: string | null;
+   limits: Record<string, number>;
+ };
+ 
+@@ -134,14 +135,28 @@
+   return data as unknown as TeachingWorkspace;
+ }
+ 
+-export async function getTeachingHistory(activityId: string, token: string, beforeSeq?: number) {
+-  const query = beforeSeq ? `?before_seq=${beforeSeq}` : "";
+-  return request(`/api/activities/${activityId}/teaching/history${query}`, token);
+-}
+-
+-export async function getTeachingRecord(activityId: string, recordId: string, token: string) {
+-  return request(`/api/activities/${activityId}/teaching/records/${recordId}`, token);
+-}
++export type TeachingHistoryItem = { record_id: string; kind: string; seq: number; goal_version: number;
++  label: string; created_at: string; qualification?: string };
++export type TeachingHistoryPage = { items: TeachingHistoryItem[]; next_cursor: string | null; view_token: string };
++
++export async function getTeachingHistory(activityId: string, token: string, cursor?: string, signal?: AbortSignal): Promise<TeachingHistoryPage> {
++  const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
++  return await request(`/api/activities/${activityId}/teaching/history${query}`, token, { signal }) as unknown as TeachingHistoryPage;
++}
++
++export async function getTeachingRecord(activityId: string, recordId: string, token: string, signal?: AbortSignal) {
++  return request(`/api/activities/${activityId}/teaching/records/${recordId}`, token, { signal });
++}
++
++export type TeachingSeed = { activity_id: string; goal: string; operation_id: string; payload_sha256: string };
++export async function getTeachingSeed(activityId: string, operationId: string, token: string): Promise<TeachingSeed> {
++  return await request(`/api/activities/${activityId}/teaching/seeds/${encodeURIComponent(operationId)}`, token) as unknown as TeachingSeed;
++}
++export type TeachingCitation = { citation_id: string; source_id: string; version_id: string; source_revision: number;
++  title: string; format: string; origin_kind: string; physical_page: number | null; start_line: number; end_line: number; text: string };
++export async function getTeachingCitation(activityId: string, recordId: string, id: string, token: string, signal?: AbortSignal) {
++  return await request(`/api/activities/${activityId}/teaching/records/${recordId}/citations/${encodeURIComponent(id)}`, token, {signal}) as unknown as {citation:TeachingCitation;read_at:string};
++}
+ 
+ export async function getTeachingCapabilities(token: string) {
+   return request("/api/activities/capabilities", token);

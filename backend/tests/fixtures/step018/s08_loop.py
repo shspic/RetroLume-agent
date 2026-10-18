@@ -1,0 +1,29 @@
+"""只用于无实际I/O的有限协程夹具；保留asyncio调度/timeout，拒绝注册真实fd。"""
+import asyncio
+import selectors
+import time
+import unittest
+
+
+class ClosedSelector(selectors.SelectSelector):
+    def register(self,*args,**kwargs):raise RuntimeError('纯离线夹具不允许实际I/O')
+    def select(self,timeout=None):
+        if timeout and timeout>0:time.sleep(timeout)
+        return []
+
+
+class ClosedLoop(asyncio.SelectorEventLoop):
+    def __init__(self):super().__init__(selector=ClosedSelector())
+    def _make_self_pipe(self):self._ssock=self._csock=None
+    def _close_self_pipe(self):pass
+    def _write_to_self(self):pass
+
+
+def run_no_io(awaitable):
+    with asyncio.Runner(loop_factory=ClosedLoop) as runner:return runner.run(awaitable)
+
+
+class ClosedAsyncTestCase(unittest.IsolatedAsyncioTestCase):
+    def _setupAsyncioRunner(self):
+        assert self._asyncioRunner is None
+        self._asyncioRunner=asyncio.Runner(debug=True,loop_factory=ClosedLoop)

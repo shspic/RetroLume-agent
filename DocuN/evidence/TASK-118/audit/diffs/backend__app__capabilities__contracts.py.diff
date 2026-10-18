@@ -1,0 +1,76 @@
+--- first-pre/backend/app/capabilities/contracts.py
++++ current/backend/app/capabilities/contracts.py
+@@ -12,14 +12,16 @@
+ from uuid import UUID
+ 
+ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
+-from app.learning.contracts import LearningProfile
+-from app.interview.contracts import InterviewProfile, InterviewCallBinding
+-from app.learning.teaching_contracts import TeachingCallBinding, TeachingProfile, TeachingMemoryCallBinding, TeachingMemoryProfile
++from app.learning.contracts import LearningProfile,LearningHybridProfile
++from app.interview.contracts import InterviewProfile, InterviewHybridProfile,InterviewCallBinding
++from app.learning.teaching_contracts import TeachingCallBinding, TeachingProfile, TeachingMemoryCallBinding, TeachingMemoryProfile,TeachingHybridCallBinding,TeachingHybridProfile
+ from app.preview.business_contracts import HtmlProfile, HtmlCallBinding
++from app.retrieval.contracts import RetrievalRef
+ 
+ 
+ class Provider(StrEnum):
+     DEEPSEEK_CHAT_COMPLETIONS = "deepseek_chat_completions"
++    ZHIPU_EMBEDDINGS = "zhipu_embeddings"
+ 
+ 
+ class ThinkingMode(StrEnum):
+@@ -46,6 +48,8 @@
+     max_output_tokens_limit: int = Field(default=8192, ge=1, le=32768)
+     max_request_bytes: int = Field(default=262_144, ge=1024, le=2_097_152)
+     max_response_bytes: int = Field(default=1_048_576, ge=1024, le=4_194_304)
++    outbound_grant: dict | None = Field(default=None, repr=False)
++    outbound_source_manifest: dict | None = Field(default=None, repr=False)
+ 
+     @field_validator("base_url")
+     @classmethod
+@@ -129,10 +133,11 @@
+ class ModelCallRequest(BaseModel):
+     model_config = ConfigDict(extra="forbid", frozen=True)
+ 
++    retrieval_ref: RetrievalRef | None = Field(default=None, repr=False)
+     input_result: ResultConsumptionRef | None = Field(default=None, repr=False)
+-    learning_profile: LearningProfile | None = Field(default=None, repr=False)
+-    teaching_profile: TeachingProfile | TeachingMemoryProfile | None = Field(default=None, repr=False)
+-    interview_profile: InterviewProfile | None = Field(default=None, repr=False)
++    learning_profile: LearningProfile | LearningHybridProfile | None = Field(default=None, repr=False)
++    teaching_profile: TeachingProfile | TeachingMemoryProfile | TeachingHybridProfile | None = Field(default=None, repr=False)
++    interview_profile: InterviewProfile | InterviewHybridProfile | None = Field(default=None, repr=False)
+     html_profile: HtmlProfile | None = Field(default=None, repr=False)
+     messages: tuple[Message, ...] = Field(min_length=1, max_length=128)
+     max_output_tokens: int = Field(ge=1)
+@@ -205,6 +210,9 @@
+     teaching_binding: TeachingCallBinding | TeachingMemoryCallBinding | None = None
+     interview_binding: InterviewCallBinding | None = None
+     html_binding: HtmlCallBinding | None = None
++    retrieval_ref: RetrievalRef | None = None
++    outbound_grant: dict | None = field(default=None, repr=False)
++    outbound_source_manifest: dict | None = field(default=None, repr=False)
+ 
+ 
+ @dataclass(frozen=True)
+@@ -242,12 +250,18 @@
+ 
+ def _walk_payload_value(value: Any) -> None:
+     """封套 value 的类型/有限数/深度/节点复查；与 gateway 成功解析不变式同界。"""
++    # 仅独立embedding值允许4×512项；旧模型正文仍是原2000节点上限。
++    maximum = 2000
++    if isinstance(value, dict) and value.get('profile') == 'embedding.v1':
++        from .embedding import validate_stored_value
++        validate_stored_value(value)
++        maximum = 3072
+     nodes = 0
+ 
+     def visit(item: Any, depth: int) -> None:
+         nonlocal nodes
+         nodes += 1
+-        if nodes > 2000 or depth > 12:
++        if nodes > maximum or depth > 12:
+             raise ValueError("payload_structure_limit")
+         if isinstance(item, dict):
+             for key, child in item.items():

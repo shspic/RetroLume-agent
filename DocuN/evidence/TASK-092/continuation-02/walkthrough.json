@@ -1,0 +1,21 @@
+{
+  "kind": "续作02剩余路径一次走查记录（同窗口静态核对，执行前）",
+  "utc": "2026-10-01T01:28:40.616830+08:00",
+  "s1": {
+    "preconditions": "来源version/revision=1有效；活动pending→claim(legacy092,租约30s/窗10s)；allowed_models配对存在；tool_names=finite_calculate为allowed_tools子集；requests/cost余量足够；工具拒绝探针在租约存活期内、键T1自身上下文（real-04缺陷已修）",
+    "expect": "tool_limit_unconfigured为事务前拒绝→键T1与tools_reserved零副作用；重复008在独立连接上命中008自身“已有痕迹”RAISE(P0001)，主连接与数据不变",
+    "search_path": "DSN options强制search_path=s1；失败连接finally关闭（aborted事务随close回滚）"
+  },
+  "s2": {
+    "preconditions": "独立基线001-007；删除原成本CHECK并替换为篡改定义（含OR IS NULL）；合成旧行+正文写入",
+    "expect": "008在DO唯一识别阶段RAISE(P0001,唯一识别)；显式BEGIN事务整笔回滚：无五新列、无008具名约束、旧行与正文逐字节不变、篡改约束仍在",
+    "note": "失败连接独立且finally关闭；主连接只做前后投影查询"
+  },
+  "s3": {
+    "preconditions": "独立空schema（零对象已断言）",
+    "expect": "008早期门禁to_regclass为NULL即RAISE(P0001,前置不存在)，ALTER前拒绝；事后仍零表/列/约束/序列",
+    "note": "失败连接独立且finally关闭"
+  },
+  "negative_identification": "三者均断言SQLSTATE=P0001且isinstance RaiseException且命中008自身识别文本，排除DSN/权限/语法/夹具表缺失类错误；布尔标记废弃",
+  "budget": "real-05业务180s+收尾120s=总截止300s；batch/start上限4→6；Windows业务会话新增0；容器完整ID e49d…白名单先核"
+}

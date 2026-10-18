@@ -1,0 +1,674 @@
+
+DocuN/evidence/TASK-118/audit/diffs/backend__app__activities__teaching_repository.py.diff
+1: --- first-pre/backend/app/activities/teaching_repository.py
+2: +++ current/backend/app/activities/teaching_repository.py
+3: @@ -14,6 +14,14 @@
+4:  
+5: 
+6:  # head 指针哨兵：显式置空；None 表示本次不改动该列。
+7: 
+8:  _HEAD_CLEAR = "__clear__"
+9: 
+10: +
+11: 
+12: +
+13: 
+14: +def _progress_reason(status, candidate):
+15: 
+16: +    if status != 'evidence_sufficient':
+17: 
+18: +        return '保留当前节点；独立实例不足、存在辅助或争议时不推定长期掌握。'
+19: 
+20: +    if candidate is None:
+21: 
+22: +        return '当前节点已有足够的独立实例证据，但没有满足前置条件的待推进节点；保留当前节点，不推定长期掌握。'
+23: 
+24: +    return '按当前评价已有两个不同的独立实例，含复测，可有限前进；不推定长期掌握。'
+25: 
+26:  
+27: 
+28:  from app.capabilities.contracts import LedgerDisposition
+29: 
+30:  
+31: 
+32: @@ -38,6 +46,7 @@
+33:      TeachingCommandReceipt,
+34: 
+35:      TeachingFrozenContext,
+36: 
+37:      TeachingMemoryFrozenContext,
+38: 
+39: +    TeachingHybridFrozenContext,
+40: 
+41:      parse_frozen_context,
+42: 
+43:      TeachingRefusal,
+44: 
+45:      semantic_slot,
+46: 
+47: @@ -331,11 +340,17 @@
+48:              raise TeachingRefusal("version_conflict", "教学绑定已改变")
+49: 
+50:          if not activity.get('_memory_eligible',True):
+51: 
+52:              raise TeachingRefusal('memory_dependency_invalid','所选学习背景已更新或撤销')
+53: 
+54: -        if isinstance(frozen,TeachingMemoryFrozenContext):
+55: 
+56: +        if isinstance(frozen,TeachingMemoryFrozenContext) and frozen.memory_selection_sha256 is not None:
+57: 
+58:              cursor=await connection.execute("SELECT selection_sha256 FROM public.activity_memory_bindings WHERE activity_id=%s",(str(activity['id']),))
+59: 
+60:              selected=await cursor.fetchone()
+61: 
+62:              if selected is None or selected['selection_sha256']!=frozen.memory_selection_sha256:
+63: 
+64:                  raise TeachingRefusal('memory_dependency_invalid','固定背景选择不符')
+65: 
+66: +        if isinstance(frozen,TeachingHybridFrozenContext):
+67: 
+68: +            from app.capabilities.contracts import AdmissionDenied
+69: 
+70: +            try:
+71: 
+72: +                await self._require_retrieval_ref(connection,activity,frozen.retrieval_ref,domain='learning',expected_revision=command['expected_revision'])
+73: 
+74: +                if frozen.memory_dependency_sha256!=activity.get('_memory_dependency_sha256'):raise AdmissionDenied('memory_dependency_invalid')
+75: 
+76: +            except AdmissionDenied as exc:raise TeachingRefusal(str(exc),'本轮检索或背景身份不符') from None
+77: 
+78:          if frozen.operation_id != command["operation_id"]:
+79: 
+80:              raise TeachingRefusal("unknown_slot", "冻结操作身份不一致")
+81: 
+82:          from app.learning.teaching_contracts import frozen_context_digest
+83: 
+84: @@ -974,7 +989,7 @@
+85:                      raise TeachingRefusal('memory_dependency_invalid','所选学习背景已更新或撤销')
+86: 
+87:                  if frozen.kind=='model' and not isinstance(frozen,TeachingMemoryFrozenContext):
+88: 
+89:                      raise TeachingRefusal('memory_profile_required','本活动须使用明确学习背景协议')
+90: 
+91: -            elif isinstance(frozen,TeachingMemoryFrozenContext):
+92: 
+93: +            elif isinstance(frozen,TeachingMemoryFrozenContext) and frozen.memory_selection_sha256 is not None:
+94: 
+95:                  raise TeachingRefusal('memory_profile_required','本活动未明确选用背景')
+96: 
+97:  
+98: 
+99:              if existing is not None:
+100: 
+101: @@ -1190,6 +1205,9 @@
+102:              if (getattr(binding,'memory_selection_sha256',None)!=frozen.memory_selection_sha256
+103: 
+104:                      or getattr(binding,'assembled_messages_sha256',None)!=frozen.assembled_messages_sha256):
+105: 
+106:                  raise TeachingRefusal('memory_profile_required','背景消息受信绑定不符')
+107: 
+108: +        if isinstance(frozen,TeachingHybridFrozenContext) and binding is not None:
+109: 
+110: +            if getattr(binding,'retrieval_ref',None)!=frozen.retrieval_ref or getattr(binding,'memory_dependency_sha256',None)!=frozen.memory_dependency_sha256:
+111: 
+112: +                raise TeachingRefusal('retrieval_ref_invalidated','本轮检索受信绑定不符')
+113: 
+114:          if phase != "result":
+115: 
+116:              await self._teaching_verify_current(connection,activity,head,command,frozen)
+117: 
+118:          return command
+119: 
+120: @@ -1298,7 +1316,7 @@
+121:                          and all(projection["nodes"][f"n{p+1}"]["status"] == "evidence_sufficient" for p in n["prerequisites"])),None)
+122: 
+123:                  progress_id = str(uuid4())
+124: 
+125:                  seq += 1
+126: 
+127: -                reason = "按当前评价已有两个不同的独立实例，含复测，可有限前进。" if candidate else "保留当前节点；独立实例不足、存在辅助或争议时不推定长期掌握。"
+128: 
+129: +                reason = _progress_reason(current_node['status'], candidate)
+130: 
+131:                  progress_body = canonical({"feedback_record_id":record_id,"answer_record_id":body["answer_record_id"],
+132: 
+133:                      "advance":bool(candidate),"node_before":head["node_id"],"node_after":candidate or head["node_id"],
+134: 
+135:                      "reason":reason,"observations":current_node,"support_checks":derive_support_checks(
+136: 
+
+DocuN/evidence/TASK-118/audit/diffs/backend__app__activities__interview_repository.py.diff
+1: --- first-pre/backend/app/activities/interview_repository.py
+2: +++ current/backend/app/activities/interview_repository.py
+3: @@ -10,6 +10,7 @@
+4:      MAX_REVISION, PREFIX, canonical, sha, load_json, operation_id, profile_for)
+5:  from app.interview.policy import transition
+6:  from app.interview.views import plain, token, verified_body, bounded_wire
+7: +from app.interview.contracts import (InterviewHybridContext,InterviewHybridCallBinding,parse_context,parse_command)
+8:  
+9:  TABLES=('interview_heads','interview_commands','interview_records')
+10:  FUNCTIONS=('interview_record_insert_guard','interview_record_immutable_guard','interview_command_guard','interview_head_guard','interview_result_eligible')
+11: @@ -76,9 +77,9 @@
+12:              cursor=await connection.execute('SELECT EXISTS(SELECT 1 FROM public.interview_heads WHERE activity_id=%s) AS found',(activity_id,))
+13:              if (await cursor.fetchone())['found']: return 'interview'
+14:              return 'existing'
+15: -        cursor=await connection.execute("""SELECT EXISTS(SELECT 1 FROM public.activity_operations WHERE activity_id=%s AND left(operation_id,7)='int10m.')
+16: +        cursor=await connection.execute("""SELECT EXISTS(SELECT 1 FROM public.activity_operations WHERE activity_id=%s AND left(operation_id,7) IN ('int10m.','int18m.'))
+17:            OR EXISTS(SELECT 1 FROM public.activity_operation_results WHERE activity_id=%s AND
+18: -          CASE WHEN payload_format='json' THEN payload::jsonb->'value'->>'profile'='interview.v1' ELSE false END) AS found""",(activity_id,activity_id))
+19: +          CASE WHEN payload_format='json' THEN payload::jsonb->'value'->>'profile' IN ('interview.v1','interview.v2') ELSE false END) AS found""",(activity_id,activity_id))
+20:          residual=(await cursor.fetchone())['found']
+21:          if residual or schema=='damaged':
+22:              if for_write: raise InterviewRefusal('interview_schema_not_ready','面试领域资格无法核对',503)
+23: @@ -101,10 +102,12 @@
+24:          aid=str(activity['id'])
+25:          try:domain=await self._interview_domain(connection,aid,for_write=True)
+26:          except InterviewRefusal as exc:raise AdmissionDenied(exc.code) from None
+27: -        if op.startswith(PREFIX) or domain=='interview':
+28: -            if domain!='interview' or tool or not op.startswith(PREFIX): raise AdmissionDenied('interview_profile_required')
+29: +        if op.startswith((PREFIX,'int18m.')) or domain=='interview':
+30: +            if domain!='interview' or tool or not op.startswith((PREFIX,'int18m.')): raise AdmissionDenied('interview_profile_required')
+31:              if not activity.get('_memory_eligible',True): raise AdmissionDenied('interview_memory_dependency_invalid')
+32: -            if activity.get('_memory_selected'): raise AdmissionDenied('interview_memory_not_supported')
+33: +            if op.startswith('int18m.'):
+34: +                if type(binding) is not InterviewHybridCallBinding or binding.memory_selection_sha256!=activity.get('_memory_selection_sha256') or binding.memory_dependency_sha256!=activity.get('_memory_dependency_sha256'):raise AdmissionDenied('interview_binding_invalid')
+35: +            elif activity.get('_memory_selected'): raise AdmissionDenied('interview_memory_not_supported')
+36:              if binding is None: raise AdmissionDenied('interview_profile_required')
+37:  
+38:      async def _interview_lock(self,connection,aid,extra_sources=()):
+39: @@ -116,13 +119,17 @@
+40:          state['head']=await cursor.fetchone()
+41:          cursor=await connection.execute('SELECT * FROM public.interview_commands WHERE activity_id=%s ORDER BY business_key FOR UPDATE',(aid,))
+42:          state['commands']=await cursor.fetchall()
+43: +        start=next((c for c in state['commands'] if c['action']=='start' and c['effect_applied'] and c['duplicate_of'] is None),None)
+44: +        state['profile']='interview.command.v2' if start and load_json(start['request_body']).get('schema')=='interview.command.v2' else 'interview.command.v1'
+45:          return state
+46:  
+47:      @staticmethod
+48: -    def _interview_gate(state,action):
+49: +    def _interview_gate(state,action,profile=None):
+50:          a=state['activity']
+51: +        profile=profile or state.get('profile','interview.command.v1')
+52: +        if state.get('head') is not None and profile!=state.get('profile','interview.command.v1'):raise InterviewRefusal('interview_profile_conflict')
+53:          if not state['eligible']: raise InterviewRefusal('interview_memory_dependency_invalid','活动记忆资格不可核对')
+54: -        if state['selected']: raise InterviewRefusal('interview_memory_not_supported','首版面试需要未选择记忆的新活动')
+55: +        if state['selected'] and profile!='interview.command.v2': raise InterviewRefusal('interview_memory_not_supported','首版面试需要未选择记忆的新活动')
+56:          if action in ('finish','abandon'):return
+57:          if a['status']=='cancelled': raise InterviewRefusal('cancelled','活动已取消')
+58:          if a['status'] not in ('pending','running') or a['deadline_at']<=datetime.now(timezone.utc): raise InterviewRefusal('activity_expired','活动已过期')
+59: @@ -151,7 +158,7 @@
+60:            execution_kind,context_body,context_sha256,operation_id,status,duplicate_of,retry_of,before_revision,goal_version,scope_revision)
+61:            VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",(aid,command.business_key,command.action,
+62:            command.request_body(aid),command.request_hash(aid),slot,kind,context,sha(context) if context else None,
+63: -          operation_id(command.business_key) if kind=='model' and not duplicate else None,
+64: +          operation_id(command.business_key,command.schema_id) if kind=='model' and not duplicate else None,
+65:            'committed' if duplicate else 'accepted',duplicate,command.body.get('retry_of'),command.expected_head_revision,
+66:            command.expected_goal_version,command.expected_scope_revision))
+67:  
+68: @@ -237,7 +244,7 @@
+69:              state=await self._interview_lock(connection,aid,extra)
+70:              replay=await self._interview_replay(connection,state,aid,command)
+71:              if replay:return
+72: -            self._interview_cas(state,command); self._interview_gate(state,command.action)
+73: +            self._interview_cas(state,command); self._interview_gate(state,command.action,command.schema_id)
+74:              transition(command.action,state['head'],command.body)
+75:              h=plain(state['head']) if state['head'] else dict(revision=0,goal_version=0,phase='needs_goal',last_seq=0,round_index=0,probe_depth=0,
+76:                  goal_record_id=None,root_question_id=None,current_question_id=None,current_answer_id=None,current_feedback_id=None,pending_key=None,
+77: @@ -354,6 +361,11 @@
+78:  
+79:      async def _interview_verify_frozen(self,connection,state,command,frozen, *, check_budget=True):
+80:          a=state['activity'];h=state['head']
+81: +        if isinstance(frozen,InterviewHybridContext):
+82: +            from app.capabilities.contracts import AdmissionDenied
+83: +            if command.schema_id!='interview.command.v2' or frozen.retrieval_ref!=command.retrieval_ref or frozen.memory_selection_sha256!=a.get('_memory_selection_sha256') or frozen.memory_dependency_sha256!=a.get('_memory_dependency_sha256'):raise InterviewRefusal('interview_binding_invalid')
+84: +            try:await self._require_retrieval_ref(connection,a,frozen.retrieval_ref,domain='interview',expected_revision=command.expected_head_revision)
+85: +            except AdmissionDenied as exc:raise InterviewRefusal(str(exc)) from None
+86:          if h is None or frozen.activity_id!=str(a['id']) or frozen.business_key!=command.business_key \
+87:              or frozen.request_sha256!=command.request_hash(str(a['id'])) or frozen.action!=command.action \
+88:              or frozen.expected_head_revision!=h['revision'] or frozen.expected_goal_version!=h['goal_version'] \
+89: @@ -403,7 +415,7 @@
+90:              state=await self._interview_lock(connection,aid)
+91:              replay=await self._interview_replay(connection,state,aid,command)
+92:              if replay:return
+93: -            self._interview_cas(state,command);self._interview_gate(state,command.action)
+94: +            self._interview_cas(state,command);self._interview_gate(state,command.action,command.schema_id)
+95:              transition(command.action,state['head'],command.body)
+96:              retry=command.body.get('retry_of')
+97:              cursor=await connection.execute("SELECT EXISTS(SELECT 1 FROM public.activity_operations WHERE activity_id=%s AND state IN ('reserved','dispatched','unknown')) AS unresolved",(aid,))
+98: @@ -434,10 +446,10 @@
+99:              c=next((c for c in state['commands'] if str(c['business_key'])==key),None)
+100:              if not c or c['request_sha256']!=request_sha:raise InterviewRefusal('interview_key_conflict')
+101:              if c['duplicate_of'] or c['status']!='accepted' or c['launch_claimed'] or c['obsolete']:return {'launch_allowed':False}
+102: -            frozen=InterviewContext.model_validate(load_json(c['context_body']))
+103: +            frozen=parse_context(load_json(c['context_body']))
+104:              req=load_json(c['request_body']);req.pop('activity_id');req['business_key']=key
+105: -            command=InterviewCommandInput.model_validate(req)
+106: -            self._interview_cas(state,command);self._interview_gate(state,command.action)
+107: +            command=parse_command(req)
+108: +            self._interview_cas(state,command);self._interview_gate(state,command.action,command.schema_id)
+109:              if str(state['head']['pending_key'])!=key:raise InterviewRefusal('interview_parent_invalid')
+110:              await self._interview_verify_frozen(connection,state,command,frozen)
+111:              await connection.execute("UPDATE public.interview_commands SET launch_claimed=true,status='started',updated_at=CURRENT_TIMESTAMP WHERE activity_id=%s AND business_key=%s",(aid,key))
+112: @@ -451,16 +463,19 @@
+113:          c=next((c for c in commands if c['operation_id']==op),None)
+114:          if h is None or c is None or c['status']!='started' or not c['launch_claimed'] or c['obsolete'] or c['duplicate_of'] or str(h['pending_key'])!=str(c['business_key']):
+115:              raise InterviewRefusal('interview_binding_invalid')
+116: -        frozen=InterviewContext.model_validate(load_json(c['context_body']))
+117: +        frozen=parse_context(load_json(c['context_body']))
+118:          if sha(c['context_body'])!=c['context_sha256'] or sha(c['request_body'])!=c['request_sha256']:
+119:              raise InterviewRefusal('interview_binding_invalid')
+120: -        expected=InterviewCallBinding(business_key=str(c['business_key']),request_sha256=c['request_sha256'],context_sha256=c['context_sha256'],
+121: -            expected_head_revision=c['before_revision'],goal_version=c['goal_version'])
+122: +        hybrid=isinstance(frozen,InterviewHybridContext)
+123: +        expected=(InterviewHybridCallBinding if hybrid else InterviewCallBinding)(business_key=str(c['business_key']),request_sha256=c['request_sha256'],context_sha256=c['context_sha256'],
+124: +            expected_head_revision=c['before_revision'],goal_version=c['goal_version'],**({'retrieval_ref':frozen.retrieval_ref,'memory_selection_sha256':frozen.memory_selection_sha256,'memory_dependency_sha256':frozen.memory_dependency_sha256} if hybrid else {}))
+125:          if binding is not None and binding!=expected:raise InterviewRefusal('interview_binding_invalid')
+126: -        state={'activity':activity,'head':h,'commands':commands,'eligible':activity.get('_memory_eligible',True),'selected':activity.get('_memory_selected',False),'sources_valid':True}
+127: +        start=next((x for x in commands if x['action']=='start' and x['effect_applied'] and x['duplicate_of'] is None),None)
+128: +        state={'activity':activity,'head':h,'commands':commands,'eligible':activity.get('_memory_eligible',True),'selected':activity.get('_memory_selected',False),'sources_valid':True,
+129: +            'profile':load_json(start['request_body']).get('schema','interview.command.v1') if start else 'interview.command.v1'}
+130:          req=load_json(c['request_body']);req.pop('activity_id');req['business_key']=str(c['business_key'])
+131: -        command=InterviewCommandInput.model_validate(req)
+132: -        self._interview_cas(state,command);self._interview_gate(state,command.action)
+133: +        command=parse_command(req)
+134: +        self._interview_cas(state,command);self._interview_gate(state,command.action,command.schema_id)
+135:          # Admit checks remaining allowance; mark/result verify the already-reserved call
+136:          # without pretending that the last legitimately admitted call is over budget.
+137:          await self._interview_verify_frozen(connection,state,command,frozen,check_budget=(stage=='admit'))
+138: @@ -472,8 +487,8 @@
+139:              c=next((c for c in state['commands'] if str(c['business_key'])==profile.business_key),None)
+140:              if not c:raise InterviewRefusal('interview_binding_invalid')
+141:              h,c,current=await self._locked_interview_binding(connection,state['activity'],context.operation_id,
+142: -                InterviewCallBinding(business_key=profile.business_key,request_sha256=profile.request_sha256,context_sha256=profile.context_sha256,
+143: -                    expected_head_revision=profile.expected_head_revision,goal_version=profile.goal_version),'admit')
+144: +                (InterviewHybridCallBinding if profile.schema_id=='interview.v2' else InterviewCallBinding)(business_key=profile.business_key,request_sha256=profile.request_sha256,context_sha256=profile.context_sha256,
+145: +                    expected_head_revision=profile.expected_head_revision,goal_version=profile.goal_version,**({'retrieval_ref':profile.retrieval_ref,'memory_selection_sha256':profile.memory_selection_sha256,'memory_dependency_sha256':profile.memory_dependency_sha256} if profile.schema_id=='interview.v2' else {})),'admit')
+146:              if profile_for(current)!=profile or current!=frozen:raise InterviewRefusal('interview_binding_invalid')
+147:          await self._transaction(validate)
+148:  
+149: @@ -493,7 +508,7 @@
+150:          h,c,frozen=await self._locked_interview_binding(connection,activity,op,None,'result')
+151:          document=load_json(payload[1])
+152:          stored=document.get('value',{})
+153: -        if document.get('format')!='json' or stored.get('profile')!='interview.v1' or stored.get('context_sha256')!=c['context_sha256'] or stored.get('request_sha256')!=c['request_sha256']:
+154: +        if document.get('format')!='json' or stored.get('profile')!=('interview.v2' if isinstance(frozen,InterviewHybridContext) else 'interview.v1') or stored.get('context_sha256')!=c['context_sha256'] or stored.get('request_sha256')!=c['request_sha256']:
+155:              raise InterviewRefusal('interview_binding_invalid')
+156:          value=stored['value'];kind=value['type']; head=plain(h);old=head['revision'];head['revision']=old+1;head['pending_key']=None
+157:          if c['action']=='ask':
+158: @@ -560,20 +575,21 @@
+159:      async def _interview_result_sql(self,connection,sql):
+160:          if '/*interview*/' not in sql:return sql
+161:          schema=await self._interview_schema_info(connection)
+162: -        marker="(left(o.operation_id,7)='int10m.')"
+163: +        marker="(left(o.operation_id,7) IN ('int10m.','int18m.'))"
+164:          if 'THEN r.payload' in sql:
+165: -            marker="(left(o.operation_id,7)='int10m.' OR COALESCE(CASE WHEN r.payload_format='json' THEN r.payload::jsonb->'value'->>'profile'='interview.v1' ELSE false END,false))"
+166: +            marker="(left(o.operation_id,7) IN ('int10m.','int18m.') OR COALESCE(CASE WHEN r.payload_format='json' THEN r.payload::jsonb->'value'->>'profile' IN ('interview.v1','interview.v2') ELSE false END,false))"
+167:          guard=f'(NOT {marker} OR public.interview_result_eligible(o.activity_id,o.operation_id))' if schema=='ready' else f'(NOT {marker})' if schema=='absent' else 'FALSE'
+168:          return sql.replace('/*interview*/TRUE',guard)
+169:  
+170:      async def _interview_snapshot(self,connection,aid, *, key=None,rid=None,limit=20,before=None,details=False):
+171:          if await self._interview_schema_info(connection)!='ready':raise InterviewRefusal('interview_schema_not_ready','面试持久层未就绪',503)
+172:          memory=await self._memory_sql_guard(connection,'a.id');selected=await self._memory_selected_sql(connection,'a.id')
+173: +        supported="EXISTS(SELECT 1 FROM public.interview_commands sc WHERE sc.activity_id=a.id AND sc.action='start' AND sc.effect_applied AND sc.duplicate_of IS NULL AND sc.request_body::jsonb->>'schema'='interview.command.v2')"
+174:          # Body columns exist only in the explicitly requested single-record branch.
+175:          meta="""ir.record_id,ir.seq,ir.business_key,ir.ordinal,ir.kind,ir.origin,ir.goal_version,ir.scope_revision,
+176:            ir.round_index,ir.probe_depth,ir.answer_version,ir.parent_ids,ir.question_record_id,ir.supersedes_record_id,
+177:            ir.source_refs,ir.body_sha256,ir.operation_id,ir.payload_sha256,ir.created_at"""
+178: -        base=f"(ir.goal_version=h.goal_version AND ir.scope_revision=a.scope_revision AND a.status<>'cancelled' AND sg.valid AND ({memory}) AND NOT ({selected}) AND NOT c.obsolete)"
+179: +        base=f"(ir.goal_version=h.goal_version AND ir.scope_revision=a.scope_revision AND a.status<>'cancelled' AND sg.valid AND ({memory}) AND (NOT ({selected}) OR ({supported})) AND NOT c.obsolete)"
+180:          eligible=f"(CASE WHEN ir.origin='model' THEN {base} AND public.interview_result_eligible(ir.activity_id,ir.operation_id) WHEN ir.kind IN ('question','probe','feedback') THEN {base} ELSE true END)"
+181:          correctable=f"""(ir.kind='answer' AND {base} AND h.phase<>'ended'
+182:            AND a.status IN ('pending','running') AND a.deadline_at>CURRENT_TIMESTAMP
+183: @@ -610,7 +626,7 @@
+184:            effect_record AS (SELECT ir.goal_version,ir.scope_revision FROM public.interview_records ir
+185:              WHERE ir.activity_id=%s AND ir.record_id=ANY(COALESCE((SELECT result_record_ids FROM original),(SELECT result_record_ids FROM cmd))) ORDER BY ir.seq DESC LIMIT 1)
+186:            SELECT to_jsonb(a) AS activity,(SELECT to_jsonb(h) FROM h) AS head,(SELECT valid FROM sg) AS sources_valid,
+187: -            ({memory}) AS memory_eligible,({selected}) AS memory_selected,
+188: +            ({memory}) AS memory_eligible,({selected}) AS memory_selected,({supported}) AS memory_supported,
+189:              COALESCE((SELECT jsonb_agg(x ORDER BY x->>'source_id') FROM (SELECT jsonb_build_object('source_id',s.source_id::text,
+190:                'version_id',s.version_id::text,'source_revision',s.source_revision,'original_sha256',v.sha256,'title',v.filename,'format',v.format,
+191:                'valid',m.current_version=s.version_id AND m.revision=s.source_revision) AS x FROM public.activity_scope_sources s
+192: @@ -633,11 +649,12 @@
+193:          budget={k:a[k] for k in ('max_requests','requests_reserved','max_cost_microunits','cost_reserved_microunits','reserve_cost_microunits',
+194:              'max_running_seconds','running_reserved_seconds','running_settled_seconds','max_tool_calls','tools_reserved','deadline_at','status')}
+195:          fresh=(h is None and not snapshot['other_started'] and a['status']=='pending' and a['execution_generation']==0)
+196: -        safe=snapshot['memory_eligible'] and not snapshot['memory_selected'] and snapshot['sources_valid']
+197: -        reason='interview_memory_dependency_invalid' if not snapshot['memory_eligible'] else 'interview_memory_not_supported' if snapshot['memory_selected'] else 'source_invalid' if not snapshot['sources_valid'] else None
+198: +        supported=snapshot.get('memory_supported',False)
+199: +        safe=snapshot['memory_eligible'] and (not snapshot['memory_selected'] or supported or fresh) and snapshot['sources_valid']
+200: +        reason='interview_memory_dependency_invalid' if not snapshot['memory_eligible'] else 'interview_memory_not_supported' if snapshot['memory_selected'] and not supported and not fresh else 'source_invalid' if not snapshot['sources_valid'] else None
+201:          view=dict(schema='interview.view.v1',activity_id=a['id'],domain='interview' if h else 'none' if fresh else 'existing',head=h,
+202:              sources=snapshot['sources'],budget=budget,pending=snapshot['pending'],records=current,
+203: -            memory={'selected':snapshot['memory_selected'],'eligible':snapshot['memory_eligible'],'supported':False},
+204: +            memory={'selected':snapshot['memory_selected'],'eligible':snapshot['memory_eligible'],'supported':supported},profile='interview.v2' if supported else 'interview.v1',
+205:              qualification='current' if safe else 'invalid',suppression_reason=reason,
+206:              capabilities={'local':True,'model':False,'model_reason':'interview_not_configured'})
+207:          view['view_token']=token(dict(head=h,sources=view['sources'],memory=view['memory'],pending=view['pending'],budget=budget,
+208: @@ -677,7 +694,7 @@
+209:              if c is None:return None
+210:              if c['request_body']!=request_body or c['request_sha256']!=sha(request_body):raise InterviewRefusal('interview_key_conflict')
+211:              if c['status']=='accepted' and not c['launch_claimed'] and not c['obsolete'] and c['duplicate_of'] is None:
+212: -                return InterviewContext.model_validate(load_json(c['context_body'])) if c['context_body'] else None
+213: +                return parse_context(load_json(c['context_body'])) if c['context_body'] else None
+214:              return False
+215:          return await self._transaction(read)
+216:  
+
+DocuN/evidence/TASK-118/audit/diffs/backend__app__memory__repository.py.diff
+1: --- first-pre/backend/app/memory/repository.py
+2: +++ current/backend/app/memory/repository.py
+3: @@ -40,6 +40,10 @@
+4:          if activity.get('_memory_selected'):
+5:              if tool:
+6:                  if not operation_id.startswith('teach8t.'):
+7: +                    raise AdmissionDenied('memory_profile_required')
+8: +            elif operation_id.startswith('int18m.'):
+9: +                from app.interview.contracts import InterviewHybridCallBinding
+10: +                if type(binding) is not InterviewHybridCallBinding or binding.memory_selection_sha256!=activity.get('_memory_selection_sha256') or binding.memory_dependency_sha256!=activity.get('_memory_dependency_sha256'):
+11:                      raise AdmissionDenied('memory_profile_required')
+12:              elif not operation_id.startswith('teach8m.') or not getattr(binding,'memory_selection_sha256',None):
+13:                  raise AdmissionDenied('memory_profile_required')
+14: @@ -168,9 +172,9 @@
+15:          cursor=await connection.execute("SELECT to_regclass('public.activity_operation_results') IS NOT NULL AS results,to_regclass('public.teaching_commands') IS NOT NULL AS commands")
+16:          objects=await cursor.fetchone();parts=[]
+17:          if objects['results']:
+18: -            parts.append(f"NOT EXISTS(SELECT 1 FROM public.activity_operation_results mr WHERE mr.activity_id={expression} AND mr.payload_format='json' AND mr.payload::jsonb->'value'->>'profile'='teaching.v2')")
+19: +            parts.append(f"NOT EXISTS(SELECT 1 FROM public.activity_operation_results mr WHERE mr.activity_id={expression} AND mr.payload_format='json' AND mr.payload::jsonb->'value'->>'profile' IN ('teaching.v2','teaching.v3','interview.v2'))")
+20:          if objects['commands']:
+21: -            parts.append(f"NOT EXISTS(SELECT 1 FROM public.teaching_commands mt WHERE mt.activity_id={expression} AND mt.context_body IS NOT NULL AND mt.context_body::jsonb->>'schema'='teaching.context.v2')")
+22: +            parts.append(f"NOT EXISTS(SELECT 1 FROM public.teaching_commands mt WHERE mt.activity_id={expression} AND mt.context_body IS NOT NULL AND mt.context_body::jsonb->>'schema' IN ('teaching.context.v2','teaching.context.v3'))")
+23:          return ' AND '.join(parts) or 'TRUE'
+24:  
+25:      async def _memory_selected_sql(self,connection,expression):
+26: @@ -281,8 +285,18 @@
+27:          if row is not None:
+28:              row["_memory_eligible"]=bool(state["valid"])
+29:              row["_memory_selected"]=bool(state.get("selected"))
+30: +            row['_memory_selection_sha256'],row['_memory_dependency_sha256']=await self._memory_binding_identity(connection,activity_id) if schema=='ready' else (None,None)
+31:          return {"activity":row,"snapshots":hint,"sources_valid":valid,"selected":bool(state.get("selected")),
+32:                  "eligible":bool(state["valid"]),"activities":activities,"dependencies":deps}
+33: +
+34: +    async def _memory_binding_identity(self,connection,activity_id):
+35: +        cursor=await connection.execute('SELECT selection_sha256 FROM activity_memory_bindings WHERE activity_id=%s',(activity_id,))
+36: +        binding=await cursor.fetchone()
+37: +        if binding is None:return None,None
+38: +        cursor=await connection.execute('''SELECT c.memory_id,c.version,c.selected_revision,c.body_sha256,r.dependencies_sha256
+39: +          FROM activity_memory_choices c JOIN learning_memory_revisions r ON r.memory_id=c.memory_id AND r.version=c.version
+40: +          WHERE c.activity_id=%s ORDER BY c.ordinal''',(activity_id,))
+41: +        return binding['selection_sha256'],sha(canonical(plain(await cursor.fetchall())))
+42:  
+43:      async def _memory_revision_rows(self,connection,memory_id,version=None):
+44:          cursor=await connection.execute("""SELECT h.*,r.claim_kind,r.uncertainty,r.policy_version,r.body_sha256,
+45: @@ -620,6 +634,7 @@
+46:                  valid=bool((await cursor.fetchone())['valid'])
+47:                  return {"selected":not valid,"eligible":valid,"selection_sha256":None,"entries":[]}
+48:              value=plain(row);value["selected"]=True
+49: +            _,value['dependency_sha256']=await self._memory_binding_identity(connection,activity_id)
+50:              for entry in value["entries"]:
+51:                  if entry["body"]:entry["body"]=json.loads(entry["body"])
+52:                  if not include_bodies:entry.pop("body",None)
+
+DocuN/evidence/TASK-118/audit/diffs/backend__app__memory__context.py.diff
+1: --- first-pre/backend/app/memory/context.py
+2: +++ current/backend/app/memory/context.py
+3: @@ -109,3 +109,22 @@
+4:      if cfg.reserved_output_tokens>snapshot["max_output_tokens"] or cfg.reserved_output_tokens>service.max_output_tokens_limit:
+5:          raise MemoryRefusal("memory_context_limit","活动输出容量与背景配置不兼容")
+6:      return cfg
+7: +
+8: +
+9: +def interview_background(selection,frozen):
+10: +    """v2只材料化固定已选版本；旧作答不是新表现，也不进入源引用目录。"""
+11: +    if frozen.memory_selection_sha256 is None:
+12: +        if selection.get('selected'):raise MemoryRefusal('memory_dependency_invalid','场次背景身份已变化')
+13: +        return []
+14: +    if (not selection.get('eligible') or selection.get('selection_sha256')!=frozen.memory_selection_sha256
+15: +        or selection.get('dependency_sha256')!=frozen.memory_dependency_sha256):raise MemoryRefusal('memory_dependency_invalid','原背景资格已变化')
+16: +    refs=[{k:x[k] for k in ('memory_id','version','revision','body_sha256')} for x in selection['entries']]
+17: +    if refs!=[r.model_dump() for r in frozen.memory_refs]:raise MemoryRefusal('memory_dependency_invalid','原背景版本已变化')
+18: +    result=[]
+19: +    for entry in selection['entries']:
+20: +        body=entry.get('body')
+21: +        if body is None or sha(canonical(body))!=entry['body_sha256']:raise MemoryRefusal('memory_dependency_invalid','原背景正文不可核对')
+22: +        result.append({'memory_id':entry['memory_id'],'version':entry['version'],'kind':body['kind'],'uncertainty':body['uncertainty'],
+23: +          'title':body['title'],'text':body['text'],'use':'仅低信任背景；不作为资料引用、测量、经历核实或本活动新独立表现。'})
+24: +    if len(result)>4 or len(canonical(result).encode('utf-8'))>16384:raise MemoryRefusal('memory_context_limit','背景超过有限容量')
+25: +    return result
+
+DocuN/evidence/TASK-118/audit/diffs/backend__app__learning__teaching_service.py.diff
+1: --- first-pre/backend/app/learning/teaching_service.py
+2: +++ current/backend/app/learning/teaching_service.py
+3: @@ -33,6 +33,8 @@
+4:      TeachingFrozenContext,
+5: 
+6:      TeachingMemoryFrozenContext,
+7: 
+8:      TeachingMemoryProfile,
+9: 
+10: +    TeachingHybridFrozenContext,
+11: 
+12: +    TeachingHybridProfile,
+13: 
+14:      parse_frozen_context,
+15: 
+16:      TeachingRefusal,
+17: 
+18:      ToolFrozenCall,
+19: 
+20: @@ -140,7 +142,7 @@
+21:              identity = {name: head.get(name) for name in ('goal_record_id', 'goal_version',
+22: 
+23:                          'path_record_id', 'node_id', 'exercise_record_id', 'answer_record_id')}
+24: 
+25:              identity['correction_record_id'] = command.body.get('correction_record_id')
+26: 
+27: -        if isinstance(frozen,TeachingMemoryFrozenContext):
+28: 
+29: +        if isinstance(frozen,TeachingMemoryFrozenContext) and frozen.recipe is not None:
+30: 
+31:              from app.memory.context import materialize_recipe,check_capacity
+32: 
+33:              from app.memory.contracts import MemoryRefusal
+34: 
+35:              try:
+36: 
+37: @@ -159,7 +161,8 @@
+38:          request = ModelCallRequest(
+39: 
+40:              messages=[{"role": m["role"], "content": m["content"]} for m in messages],
+41: 
+42:              max_output_tokens=frozen.max_output_tokens,
+43: 
+44: -            allowed_tools=frozenset(), teaching_profile=profile)
+45: 
+46: +            allowed_tools=frozenset(), teaching_profile=profile,
+47: 
+48: +            retrieval_ref=frozen.retrieval_ref if isinstance(frozen,TeachingHybridFrozenContext) else None)
+49: 
+50:          service = config.model_service
+51: 
+52:          try:
+53: 
+54:              OneCallInput(command.operation_id(activity_id), request, service).to_wire()
+55: 
+56: @@ -260,7 +263,12 @@
+57:          snapshot["teaching_query"] = facts["goal_text"].split("；",1)[0]
+58: 
+59:          query = self._context_query(command, snapshot, facts)
+60: 
+61:          units = await asyncio.to_thread(load_units, snapshot, self.materials, self.originals)
+62: 
+63: -        catalog = assemble_teaching_catalog(query, units, request_sha)
+64: 
+65: +        if command.retrieval_ref is not None:
+66: 
+67: +            from app.retrieval.service import RetrievalService
+68: 
+69: +            from app.retrieval.contracts import RetrievalRefusal
+70: 
+71: +            try:catalog=await RetrievalService(self.ledger,self.materials,self.originals).catalog(activity_id,command.retrieval_ref,request_sha,top_k=4,max_chars=4000,max_bytes=8000)
+72: 
+73: +            except RetrievalRefusal as exc:raise TeachingRefusal(exc.code,'本轮资料检索已失效，请核对原操作') from None
+74: 
+75: +        else:catalog = assemble_teaching_catalog(query, units, request_sha)
+76: 
+77:          document = self._stored_document(command, snapshot, catalog, identity, facts)
+78: 
+79:          messages = messages_for_teaching(command.action, document)
+80: 
+81:          if len(messages) > 3:
+82: 
+83: @@ -289,9 +297,20 @@
+84:                   'max_output_tokens':tokens,'catalog':[e.model_dump() for e in catalog],
+85: 
+86:                   'recipe':recipe,'memory_selection_sha256':selection['selection_sha256'],'memory_refs':refs,
+87: 
+88:                   'assembled_messages_sha256':sha(canonical(messages))}
+89: 
+90: +                if command.retrieval_ref is not None:
+91: 
+92: +                    value.update(schema='teaching.context.v3',profile_version='teaching.v3',prompt_version='teaching-hybrid-prompt-v1',
+93: 
+94: +                        memory_dependency_sha256=selection['dependency_sha256'],retrieval_ref=command.retrieval_ref.model_dump(),messages=None)
+95: 
+96:                  value['context_sha256']=sha(canonical(value))
+97: 
+98: -                return TeachingMemoryFrozenContext.model_validate(value),identity
+99: 
+100: +                return (TeachingHybridFrozenContext if command.retrieval_ref is not None else TeachingMemoryFrozenContext).model_validate(value),identity
+101: 
+102:              except MemoryRefusal as exc:raise TeachingRefusal(exc.code,exc.message) from None
+103: 
+104: +        if command.retrieval_ref is not None:
+105: 
+106: +            value={'schema':'teaching.context.v3','kind':'model','reference_hashes':[r.model_dump() for r in references],
+107: 
+108: +              'operation_id':command.operation_id(activity_id),'profile_version':'teaching.v3','prompt_version':'teaching-hybrid-prompt-v1',
+109: 
+110: +              'projection_policy_version':'teaching.memory.recipe.v1','max_output_tokens':tokens,'catalog':[e.model_dump() for e in catalog],
+111: 
+112: +              'recipe':None,'messages':messages,'memory_selection_sha256':None,'memory_dependency_sha256':None,'memory_refs':[],
+113: 
+114: +              'assembled_messages_sha256':sha(canonical(messages)),'retrieval_ref':command.retrieval_ref.model_dump()}
+115: 
+116: +            value['context_sha256']=sha(canonical(value))
+117: 
+118: +            return TeachingHybridFrozenContext.model_validate(value),identity
+119: 
+120:          context_value = {
+121: 
+122:              "schema": "teaching.context.v1", "kind": "model",
+123: 
+124:              "reference_hashes": [r.model_dump() for r in references],
+125: 
+126: @@ -540,7 +559,7 @@
+127:          ordered = [seen[k] for k in sorted(seen)]
+128: 
+129:          # DEF-004：profile 携带真实当前教学身份（goal/路径/题/答/纠错），
+130: 
+131:          # 全零占位与 CAS 猜测值不再出现；admit 锁内再据 DB 复核。
+132: 
+133: -        profile_type=TeachingMemoryProfile if isinstance(frozen,TeachingMemoryFrozenContext) else TeachingProfile
+134: 
+135: +        profile_type=TeachingHybridProfile if isinstance(frozen,TeachingHybridFrozenContext) else TeachingMemoryProfile if isinstance(frozen,TeachingMemoryFrozenContext) else TeachingProfile
+136: 
+137:          return profile_type(
+138: 
+139:              action=command.action if command.action in ("plan", "exercise", "evaluate") else "plan",
+140: 
+141:              command_key=command.business_key,
+142: 
+143: @@ -561,7 +580,8 @@
+144:              messages_sha256=frozen.assembled_messages_sha256 if isinstance(frozen,TeachingMemoryFrozenContext) else sha(canonical(frozen.messages or [])),
+145: 
+146:              max_output_tokens=frozen.max_output_tokens or 256,
+147: 
+148:              **({"memory_selection_sha256":frozen.memory_selection_sha256,"memory_refs":frozen.memory_refs,
+149: 
+150: -                "assembled_messages_sha256":frozen.assembled_messages_sha256} if isinstance(frozen,TeachingMemoryFrozenContext) else {}))
+151: 
+152: +                "assembled_messages_sha256":frozen.assembled_messages_sha256} if isinstance(frozen,TeachingMemoryFrozenContext) else {}),
+153: 
+154: +            **({'retrieval_ref':frozen.retrieval_ref,'memory_dependency_sha256':frozen.memory_dependency_sha256} if isinstance(frozen,TeachingHybridFrozenContext) else {}))
+155: 
+156:  
+157: 
+158:      # --- 工具动作：沿 G5 原链（ActivityService.execute_tool_action） ---
+159: 
+160:  
+161: 
+
+DocuN/evidence/TASK-118/audit/diffs/backend__app__interview__service.py.diff
+1: --- first-pre/backend/app/interview/service.py
+2: +++ current/backend/app/interview/service.py
+3: @@ -9,7 +9,7 @@
+4:  from app.worker.one_call import OneCallInput,run_one_call
+5:  from app.worker.session import SessionConfig
+6:  from .contracts import (InterviewContext,InterviewLimits,GoalBody,SourceBinding,SourceRole,RecordRef,
+7: -    InterviewRefusal,profile_for,operation_id,canonical,load_json,sha)
+8: +    InterviewRefusal,profile_for,operation_id,canonical,load_json,sha,InterviewHybridContext,InterviewCatalogEntry)
+9:  from .prompt import messages
+10:  from .policy import transition
+11:  from .evidence import load_units,assemble_catalog,verify_citation
+12: @@ -42,7 +42,14 @@
+13:          g=GoalBody.model_validate(goal['body']['value']['goal'])
+14:          snapshot=await self.ledger.read_learning_snapshot(aid)
+15:          units=await asyncio.to_thread(load_units,snapshot,self.materials,self.originals)
+16: -        catalog=assemble_catalog(g.target+' '+(g.focus or '')+' '+' '.join(g.clarifications),units,command.request_hash(aid))
+17: +        hybrid=command.schema_id=='interview.command.v2'
+18: +        if hybrid:
+19: +            from app.retrieval.service import RetrievalService
+20: +            from app.retrieval.contracts import RetrievalRefusal
+21: +            try:entries=await RetrievalService(self.ledger,self.materials,self.originals).catalog(aid,command.retrieval_ref,command.request_hash(aid),top_k=4,max_chars=4000,max_bytes=8000)
+22: +            except RetrievalRefusal as exc:raise InterviewRefusal(exc.code,'本轮检索已失效') from None
+23: +            catalog=[InterviewCatalogEntry.model_validate({**e.model_dump(),'citation_id':'ic_'+sha(command.request_hash(aid)+e.evidence_id)[:24]}) for e in entries]
+24: +        else:catalog=assemble_catalog(g.target+' '+(g.focus or '')+' '+' '.join(g.clarifications),units,command.request_hash(aid))
+25:          refs=[]
+26:          if command.action=='review':
+27:              # Only this round's question/answer chain. No unbounded prior history.
+28: @@ -63,11 +70,18 @@
+29:          limits=InterviewLimits(max_output_tokens=getattr(config,'interview_output_tokens',0) or 1,
+30:              max_followups_per_round=getattr(config,'interview_followups',0) or 1)
+31:          identity={'provider':config.provider,'model':config.model} if config.provider and config.model else await self.ledger.read_interview_identity(aid)
+32: -        frozen=InterviewContext(activity_id=aid,business_key=command.business_key,request_sha256=command.request_hash(aid),action=command.action,
+33: +        extra={}
+34: +        if hybrid:
+35: +            selection=await self.ledger.read_memory_selection(aid,include_bodies=True)
+36: +            if not selection.get('eligible'):raise InterviewRefusal('interview_memory_dependency_invalid')
+37: +            memory_refs=[{k:x[k] for k in ('memory_id','version','revision','body_sha256')} for x in selection['entries']]
+38: +            extra=dict(retrieval_ref=command.retrieval_ref,memory_recipe={'policy':'interview.memory.recipe.v1','activity_id':aid,'refs':memory_refs} if memory_refs else None,
+39: +                memory_refs=memory_refs,memory_selection_sha256=selection['selection_sha256'],memory_dependency_sha256=selection.get('dependency_sha256'))
+40: +        frozen=(InterviewHybridContext if hybrid else InterviewContext)(activity_id=aid,business_key=command.business_key,request_sha256=command.request_hash(aid),action=command.action,
+41:              expected_head_revision=command.expected_head_revision,expected_goal_version=command.expected_goal_version,expected_scope_revision=command.expected_scope_revision,
+42:              goal_record_id=h['goal_record_id'],goal_body=g,sources=[SourceBinding.model_validate({k:s[k] for k in ('source_id','version_id','source_revision','original_sha256')}) for s in view['sources']],
+43:              material_roles=g.material_roles,round_index=h['round_index'],probe_depth=h['probe_depth'],parent_record_refs=refs,catalog=catalog,
+44: -            identity=identity,limits=limits)
+45: +            identity=identity,limits=limits,**extra)
+46:          return frozen
+47:  
+48:      @owned_service
+49: @@ -90,11 +104,20 @@
+50:              return await self.ledger.apply_interview_local(aid,command,application_value=value)
+51:          layer=getattr(config,'interview_model_layer',None)
+52:          if not layer or not layer.available or config.model_service is None:raise InterviewRefusal(layer.reason if layer else 'interview_not_configured','面试模型配置未就绪',503)
+53: -        request=ModelCallRequest(interview_profile=profile_for(frozen),messages=tuple(Message.model_validate(m) for m in messages(frozen)),
+54: -            max_output_tokens=frozen.limits.max_output_tokens,allowed_tools=frozenset())
+55: +        background=None
+56: +        if isinstance(frozen,InterviewHybridContext):
+57: +            from app.memory.context import interview_background,check_capacity
+58: +            from app.memory.contracts import MemoryRefusal
+59: +            try:
+60: +                selection=await self.ledger.read_memory_selection(aid,include_bodies=True)
+61: +                background=interview_background(selection,frozen)
+62: +                if selection.get('selected'):check_capacity(messages(frozen,background),selection,config.memory_context,await self.ledger.read_learning_snapshot(aid),config.model_service)
+63: +            except MemoryRefusal as exc:raise InterviewRefusal(exc.code,exc.message) from None
+64: +        request=ModelCallRequest(interview_profile=profile_for(frozen),messages=tuple(Message.model_validate(m) for m in messages(frozen,background)),
+65: +            max_output_tokens=frozen.limits.max_output_tokens,allowed_tools=frozenset(),retrieval_ref=frozen.retrieval_ref if isinstance(frozen,InterviewHybridContext) else None)
+66:          service=config.model_service;session=self.session_config or SessionConfig()
+67:          if service.timeout_seconds>session.request_timeout_seconds:raise InterviewRefusal('interview_config_invalid','模型超时超过监督窗口',503)
+68: -        try:OneCallInput(operation_id(command.business_key),request,service).to_wire()
+69: +        try:OneCallInput(operation_id(command.business_key,command.schema_id),request,service).to_wire()
+70:          except (ValueError,TypeError):raise InterviewRefusal('interview_context_too_large','完整受控请求超过通道上限',422) from None
+71:          receipt=await self.ledger.accept_interview_command(aid,command,frozen) if stored is None else await self.ledger.read_interview_command(aid,command.business_key)
+72:          if receipt['status']!='accepted' or receipt['duplicate_of']:return receipt

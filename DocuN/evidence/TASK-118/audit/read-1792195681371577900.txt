@@ -1,0 +1,414 @@
+
+backend/tests/test_step018_control_snapshot.py
+1: """真实文件锁内校验当前字节，缓存不能隐藏修订、取消和损坏。"""
+2: from pathlib import Path
+3: from tempfile import mkdtemp
+4: import os
+5: import time
+6: import unittest
+7: from uuid import uuid4
+8: from app.data_exit.control import ControlHub
+9: from app.data_exit.contracts import DataContext, DataJobCommand, DataError
+10: from app.data_exit.operations import Operation, request_cancel
+11: 
+12: 
+13: class SnapshotTests(unittest.TestCase):
+14:     def setUp(self):
+15:         self.root = Path(mkdtemp(prefix='retrolume-snapshot-check-'))
+16:         self.hub = ControlHub(self.root)
+17:         context = DataContext(self.hub.control_id, 0, str(uuid4()), str(uuid4()), 'normal')
+18:         self.job = self.hub.create_or_get_job(DataJobCommand('restore', str(uuid4()), {'plan_id':str(uuid4()), 'plan_sha256':'0'*64}), context)
+19:         self.op = Operation(self.hub, self.job['job_id'], 60, 'snapshot-test')
+20:         self.op.check()
+21: 
+22:     def tearDown(self):
+23:         self.hub.lock.close(); self.hub.operation_lock.close()
+24: 
+25:     def test_returned_state_is_detached_and_peer_cancel_is_current(self):
+26:         value = self.hub.state()
+27:         value['jobs'][self.job['job_id']]['state'] = 'failed'
+28:         self.op.check()
+29:         peer = ControlHub(self.root)
+30:         try:
+31:             request_cancel(peer, self.job['job_id'])
+32:             with self.assertRaises(DataError) as caught: self.op.check()
+33:             self.assertEqual(caught.exception.code, 'operation_cancelled')
+34:         finally: peer.lock.close(); peer.operation_lock.close()
+35: 
+36:     def test_same_size_same_mtime_tamper_is_rejected(self):
+37:         path = self.hub.path; info = path.stat(); raw = bytearray(path.read_bytes())
+38:         raw[40] ^= 1; path.write_bytes(raw); os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns))
+39:         with self.assertRaises(DataError): self.op.check()
+40: 
+41:     def test_truncation_cannot_keep_old_execution(self):
+42:         self.hub.path.write_bytes(b'')
+43:         with self.assertRaises((DataError, KeyError)): self.op.check()
+44: 
+45:     def test_new_revision_and_clock_authority_still_fail_closed(self):
+46:         self.hub.change_job(self.job['job_id'], lambda j: {'stage': 'peer-revised'})
+47:         with self.assertRaises(DataError) as caught: self.op.check()
+48:         self.assertEqual(caught.exception.code, 'request_conflict')
+49:         self.hub.change_job(self.job['job_id'], lambda j: {'execution': {**j['execution'], 'clock_domain': 'foreign-domain'}})
+50:         with self.assertRaises(DataError) as caught: self.op.check()
+51:         self.assertEqual(caught.exception.code, 'operation_authority_unknown')
+52: 
+53:     def test_file_replacement_and_expired_deadline_are_not_cached(self):
+54:         original = self.hub.path.read_bytes(); other = self.root/'replacement.bin'
+55:         other.write_bytes(original); os.replace(other, self.hub.path)
+56:         self.op.check()
+57:         self.op.deadline_ns = time.monotonic_ns()-1
+58:         with self.assertRaises(DataError): self.op.check()
+59: 
+60:     def test_writable_snapshot_rejects_new_tail_even_after_read_cache(self):
+61:         self.hub.assert_writable()
+62:         with self.hub.path.open('ab') as stream: stream.write(b'\x00\x00')
+63:         self.hub.state()  # GET may expose only the last complete committed prefix.
+64:         with self.assertRaises(DataError) as caught: self.hub.assert_writable()
+65:         self.assertEqual(caught.exception.code, 'control_tail_unconfirmed')
+66: 
+67:     def test_valid_foreign_hub_replacement_cannot_keep_writable_identity(self):
+68:         self.hub.assert_writable()
+69:         foreign=ControlHub(Path(mkdtemp(prefix='retrolume-foreign-hub-')))
+70:         try:
+71:             self.hub.path.write_bytes(foreign.path.read_bytes())
+72:             with self.assertRaises(DataError):self.hub.assert_writable()
+73:         finally:foreign.lock.close();foreign.operation_lock.close()
+74: 
+75:     def test_writable_snapshot_observes_peer_fence_and_current_tamper(self):
+76:         self.hub.assert_writable()
+77:         peer = ControlHub(self.root)
+78:         try:
+79:             peer.commit('maintenance.fence', {'state':'frozen'})
+80:             self.assertEqual(self.hub.assert_writable()['fence'], {'state':'frozen'})
+81:             path=self.hub.path; info=path.stat(); raw=bytearray(path.read_bytes())
+82:             raw[40] ^= 1; path.write_bytes(raw); os.utime(path, ns=(info.st_atime_ns,info.st_mtime_ns))
+83:             with self.assertRaises(DataError): self.hub.assert_writable()
+84:         finally: peer.lock.close(); peer.operation_lock.close()
+85: 
+86: 
+87: if __name__ == '__main__': unittest.main()
+
+backend/app/data_exit/control.py
+180:                 receipt.update(state='activation_unconfirmed', stage='selector_committed')
+181:         return receipt
+182: 
+183:     def create_or_get_job(self, command, origin_context):
+184:         request_sha = digest(command.normalized())
+185:         key = business_key(command.business_key)
+186:         with self.lock.acquire(True, timeout=1):
+187:             events, tail = self._read()
+188:             state = self.replay(events)
+189:             for job in state["jobs"].values():
+190:                 if job["business_key"] == key:
+191:                     if job["request_sha256"] != request_sha or job["kind"] != command.kind:
+192:                         raise DataError("request_conflict")
+193:                     return self.current_receipt(state, job)
+194:             if tail:
+195:                 raise DataError("control_tail_unconfirmed", 503)
+196:             if len(state["jobs"]) >= 256:
+197:                 raise DataError("capacity_exceeded", 413)
+198:             now = datetime.now(timezone.utc).isoformat()
+199:             job = {"job_id": str(uuid4()), "business_key": key, "kind": command.kind,
+200:                    "request_sha256": request_sha, "scope": command.scope,
+201:                    "origin": origin_context.public(), "state": "prepared", "stage": "prepared",
+202:                    "revision": 1, "created_at": now, "updated_at": now, "execution_protocol": 2, "completion_protocol": 1}
+203:             event = self._append(events, "job.create", job)
+204:             return self.receipt({**job, "control_seq": event["seq"]})
+205: 
+206:     def update_job(self, job_id, expected_revision, *, expected_states=None, validate=None, **changes):
+207:         uuid(job_id)
+208:         changes.pop("control_seq", None)
+209:         forbidden = {"business_key", "kind", "request_sha256", "origin", "scope", "job_id", "revision"}
+210:         if forbidden.intersection(changes):
+211:             raise ValueError("不可改写操作身份")
+212:         payload = {"job_id": job_id, **changes, "revision": expected_revision + 1,
+213:                    "updated_at": datetime.now(timezone.utc).isoformat()}
+214:         def check(state):
+215:             job = state["jobs"].get(job_id)
+216:             if job is None or job["revision"] != expected_revision:
+217:                 raise DataError("request_conflict")
+218:             if expected_states is not None and job['state'] not in expected_states:
+219:                 raise DataError('request_conflict')
+220:             if job['state'] in ('cancelled', 'cancel_requested') and changes.get('state', job['state']) not in ('cancel_requested', 'cancelled', 'cleanup_unconfirmed'):
+221:                 raise DataError('operation_cancelled')
+222:             if changes.get('state') in ('published', 'received', 'verified', 'active_readonly', 'deleted', 'deleted_pending'):
+223:                 from .operations import validate_success
+224:                 if job.get('execution_protocol') != 2 or validate is None or expected_states != ('committing',):
+225:                     raise DataError('operation_authority_unknown')
+226:                 validate_success(job, changes['state'])
+227:             if validate is not None:
+228:                 validate(job)
+229:         self.commit("job.update", payload, validate=check)
+230:         return self.get(job_id)
+231: 
+232:     def change_job(self, job_id, decide):
+233:         """短锁内读取、验证与CAS；decide仅计算字段，不能进行I/O。"""
+234:         uuid(job_id)
+235:         with self.lock.acquire(True, timeout=1):
+236:             events, tail = self._read()
+237:             if tail: raise DataError('control_tail_unconfirmed', 503)
+238:             state = self.replay(events)
+239:             job = state['jobs'].get(job_id)
+240:             if job is None: raise DataError('not_found', 404)
+241:             changes = decide(job)
+242:             if changes:
+243:                 payload = {'job_id': job_id, **changes, 'revision': job['revision'] + 1,
+244:                            'updated_at': datetime.now(timezone.utc).isoformat()}
+245:                 event = self._append(events, 'job.update', payload)
+246:                 job = {**job, **payload, 'control_seq': event['seq']}
+247:             return self.current_receipt(state, job)
+248: 
+249:     def get(self, job_id):
+250:         state = self.state()
+251:         job = state["jobs"].get(uuid(job_id))
+252:         if job is None:
+253:             raise DataError("not_found", 404)
+254:         return self.current_receipt(state, job)
+255: 
+256:     def get_by_key(self, key, kind=None):
+257:         business_key(key)
+258:         state = self.state()
+259:         for job in state["jobs"].values():
+260:             if job["business_key"] == key and (kind is None or kind == job["kind"]):
+261:                 return self.current_receipt(state, job)
+262:         raise DataError("not_found", 404)
+263: 
+264:     def reconcile(self, job_id):
+265:         return {**self.get(job_id), "reconcile": "journal_confirmed"}
+266: 
+267:     def artifact_path(self, category, identity):
+268:         if category not in ("plans", "credentials", "overlays", "receipts"):
+269:             raise ValueError("私有类别未受信")
+270:         uuid(identity)
+271:         return self.root / f"{category}-{identity}.bin"
+272: 
+273:     def save_artifact(self, category, identity, data, check=lambda: None):
+274:         check()
+275:         path = self.artifact_path(category, identity)
+276:         temporary = path.with_suffix(".pending")
+277:         with temporary.open("xb") as stream:
+278:             check()
+279:             stream.write(data); stream.flush(); os.fsync(stream.fileno())
+280:         check()
+281:         private_file(temporary)
+282:         publish(temporary, path, check=check)
+283:         # 只删除本调用准确临时文件，发布原件保留。
+284:         temporary.unlink()
+285:         check()
+286:         return digest(data)
+287: 
+288:     def read_artifact(self, category, identity, expected_sha=None, limit=64 * 1024**2):
+289:         path = self.artifact_path(category, identity)
+290:         if regular(path).st_size > limit:
+291:             raise DataError("capacity_exceeded", 413)
+292:         data = path.read_bytes()
+293:         if expected_sha is not None and digest(data) != expected_sha:
+294:             raise DataError("integrity_failed", 422)
+295:         return data
+296: 
+297: 
+298: class CredentialVault:
+299:     """只读凭据仅以当前 Windows 用户的 DPAPI 密文持久保存。"""
+300:     def __init__(self, hub):
+301:         self.hub = hub
+302: 
+303:     @staticmethod
+304:     def _crypt(data, decrypt=False):
+305:         if os.name != "nt":
+306:             raise DataError("credential_unavailable", 503)
+307:         from ctypes import wintypes
+308:         class Blob(ctypes.Structure):
+309:             _fields_ = [("size", wintypes.DWORD), ("data", ctypes.POINTER(ctypes.c_ubyte))]
+310:         buf = ctypes.create_string_buffer(data)
+311:         incoming = Blob(len(data), ctypes.cast(buf, ctypes.POINTER(ctypes.c_ubyte)))
+312:         outgoing = Blob()
+313:         dll = ctypes.WinDLL("crypt32", use_last_error=True)
+314:         function = dll.CryptUnprotectData if decrypt else dll.CryptProtectData
+315:         function.argtypes = [ctypes.POINTER(Blob), ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(Blob)]
+316:         if not function(ctypes.byref(incoming), None, None, None, None, 1, ctypes.byref(outgoing)):
+317:             raise DataError("credential_unavailable", 503)
+318:         try:
+319:             return ctypes.string_at(outgoing.data, outgoing.size)
+320:         finally:
+321:             kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+322:             kernel.LocalFree.argtypes = [ctypes.c_void_p]
+323:             kernel.LocalFree(outgoing.data)
+324: 
+325:     def save(self, credentials):
+326:         identity = str(uuid4())
+327:         encrypted = self._crypt(canonical(credentials).encode("utf-8"))
+328:         sha = self.hub.save_artifact("credentials", identity, encrypted)
+329:         return {"id": identity, "sha256": sha}
+330: 
+331:     def read(self, reference):
+332:         try:
+333:             encrypted = self.hub.read_artifact("credentials", reference["id"], reference["sha256"], 65536)
+334:             return json.loads(self._crypt(encrypted, True))
+335:         except (OSError, ValueError, KeyError):
+336:             raise DataError("credential_unavailable", 503) from None
+
+backend/app/data_exit/maintenance.py
+1: """全部写入口、跨进程维护围栏和真实自有工作登记。"""
+2: from contextlib import contextmanager
+3: import contextvars
+4: from dataclasses import dataclass
+5: import re
+6: import time
+7: from uuid import uuid4
+8: from .contracts import DataContext, DataError
+9: from .files import RootLease
+10: 
+11: CURRENT_PERMIT = contextvars.ContextVar("retrolume_data_permit", default=None)
+12: CLOSE_LANE = contextvars.ContextVar("retrolume_data_close_lane", default=None)
+13: 
+14: NEW_WORK = frozenset(('create_activity','revise_scope','claim_lease','admit','admit_tool_operation','mark_tool_started',
+15:                      'mark_dispatch_started','apply_teaching_local','accept_teaching_command','claim_teaching_launch',
+16:                      'apply_interview_local','accept_interview_command','claim_interview_launch','accept_html_command',
+17:                      'claim_html_command','reserve_html_preview','apply_memory_command',
+18:                      'retrieval_freeze','retrieval_claim','admit_embedding','mark_embedding_dispatch_started'))
+19: 
+20: 
+21: def outgoing_operation(operation):
+22:     parts = operation.__qualname__.split('.<locals>.')[0].split('.')
+23:     return parts[-1] in NEW_WORK
+24: 
+25: 
+26: def worker_gate(value):
+27:     from .control import ControlHub
+28:     from .contracts import uuid
+29:     if not isinstance(value, dict) or set(value) != {'root','control_id','origin','owned_id'}:
+30:         raise DataError('worker_control_invalid',503)
+31:     root = value['root']
+32:     from pathlib import Path
+33:     if not (Path(root)/'journal.bin').is_file():raise DataError('control_unavailable',503)
+34:     hub = ControlHub(root)
+35:     origin = value['origin']
+36:     if hub.control_id!=value['control_id'] or not isinstance(origin,dict):raise DataError('worker_control_invalid',503)
+37:     owned_id = uuid(value['owned_id'])
+38:     owned = hub.state()['owned'].get(owned_id)
+39:     if owned is None or owned.get('state')!='registered' or owned.get('origin')!=origin:
+40:         raise DataError('owned_work_unknown',503)
+41:     context = DataContext(hub.control_id,origin['selection_generation'],origin['dataset_id'],origin['instance_id'],'normal')
+42:     def current():
+43:         state = hub.state()
+44:         selection = state['selection']
+45:         if selection:return DataContext(hub.control_id,selection['generation'],selection['dataset_id'],selection['instance_id'],'restored_readonly',selection['target_id'])
+46:         if state['fence'] is not None and state['fence']['state']=='frozen':
+47:             return DataContext(hub.control_id,context.generation,context.dataset_id,context.instance_id,'frozen')
+48:         return context
+49:     return MutationGate(hub,current),owned_id
+50: 
+51: 
+52: @dataclass
+53: class MutationPermit:
+54:     gate: object
+55:     context: DataContext
+56:     lease: object
+57:     owned_id: str | None = None
+58:     live: bool = True
+59:     operation: object | None = None
+60: 
+61:     def check(self, *, outgoing=False):
+62:         if self.operation is not None:self.operation.check()
+63:         if not self.live: raise DataError("mutation_permit_closed", 503)
+64:         self.lease.check()
+65:         state = self.gate.hub.assert_writable()
+66:         current = self.gate.context()
+67:         if (current.control_id, current.generation, current.dataset_id, current.instance_id) != (
+68:             self.context.control_id, self.context.generation, self.context.dataset_id, self.context.instance_id):
+69:             raise DataError("selection_changed")
+70:         if current.mode != "normal": raise DataError("data_readonly")
+71:         if state["fence"] is not None:
+72:             owner = state["owned"].get(CLOSE_LANE.get())
+73:             if outgoing or owner is None or owner.get("state") != "registered" or owner.get("origin") != self.context.public():
+74:                 raise DataError("maintenance_unconfirmed", 503)
+75:         validate=getattr(self.gate,'validate_source',None)
+76:         if validate is not None:
+77:             if self.operation is not None:validate(self.context,operation=self.operation)
+78:             else:validate(self.context)
+79: 
+80: 
+81: class MutationGate:
+82:     def __init__(self, hub, context):
+83:         self.hub, self.context = hub, context
+84:         self.lock = RootLease(hub.root, ".mutation.lock")
+85:         self.admission_lock = RootLease(hub.root, '.admission.lock')
+86: 
+87:     @contextmanager
+88:     def outgoing_section(self):
+89:         with self.admission_lock.acquire():
+90:             with self.acquire(outgoing=True) as permit:yield permit
+91: 
+92:     @contextmanager
+93:     def acquire(self, *, outgoing=False, expected=None, operation=None):
+94:         if operation is not None:operation.check()
+95:         inherited = CURRENT_PERMIT.get()
+96:         if inherited is not None and inherited.gate is self:
+97:             inherited.check(outgoing=outgoing)
+98:             if expected is not None and inherited.context != expected: raise DataError("selection_changed")
+99:             yield inherited
+100:             return
+101:         with self.lock.acquire(timeout=operation.remaining(30) if operation else 30) as lease:
+102:             permit = MutationPermit(self, self.context(), lease,operation=operation)
+103:             if expected is not None and permit.context != expected: raise DataError("selection_changed")
+104:             permit.check(outgoing=outgoing)
+105:             token = CURRENT_PERMIT.set(permit)
+106:             try: yield permit
+107:             finally:
+108:                 permit.live = False
+109:                 CURRENT_PERMIT.reset(token)
+110: 
+111:     def register_owned(self, kind, identity):
+112:         permit = CURRENT_PERMIT.get()
+113:         if permit is None or permit.gate is not self: raise DataError("mutation_permit_required", 503)
+114:         permit.check(outgoing=True)
+115:         owned_id = str(uuid4())
+116:         def check(state):
+117:             if state['fence'] is not None:raise DataError('maintenance_unconfirmed',503)
+118:             selected=state['selection']
+119:             if selected is not None:raise DataError('data_readonly')
+120:         self.hub.commit("owned.begin", {"owned_id": owned_id, "kind": kind, "identity": identity,
+121:                                        "origin": permit.context.public(), "state": "registered", "parent_owned_id": CLOSE_LANE.get()},validate=check)
+122:         return owned_id
+123: 
+124:     def end_owned(self, owned_id, *, confirmed, proof_sha256=None):
+125:         self.hub.commit("owned.end", {"owned_id": owned_id,
+126:                                      "state": "ended" if confirmed else "unknown", "proof_sha256": proof_sha256})
+127: 
+128:     @contextmanager
+129:     def close_lane(self, owned_id):
+130:         token = CLOSE_LANE.set(owned_id)
+131:         try: yield
+132:         finally: CLOSE_LANE.reset(token)
+133: 
+134: 
+135: WRITE_SQL = re.compile(r"\b(INSERT|UPDATE|DELETE|TRUNCATE|ALTER|CREATE|DROP|GRANT|REVOKE|COPY)\b", re.I)
+136: WRITE_FUNCTION = re.compile(r"\b(html_(?:accept_command|claim_command|commit_artifact|finish_command|reserve_preview|update_preview)|purge_learning_memory|data_(?:reference|source_delete|control_frozen|observe_job))\s*\(", re.I)
+137: 
+138: 
+139: def sql_writes(sql):
+140:     text = sql if isinstance(sql,str) else sql.as_string() if hasattr(sql,'as_string') else str(sql)
+141:     text = re.sub(r"'(?:''|[^'])*'|/\*.*?\*/|--[^\n]*", " ", text, flags=re.S)
+142:     text = re.sub(r"\bFOR\s+(?:KEY\s+)?(?:UPDATE|SHARE)(?:\s+OF\s+[\w,]+)?", " ", text, flags=re.I)
+143:     return bool(WRITE_SQL.search(text) or WRITE_FUNCTION.search(text))
+144: 
+145: 
+146: class GuardedAsyncConnection:
+147:     """在第一次业务写之前取得 permit，并持有至真实事务退出。"""
+148:     def __init__(self, connection, gate, readonly=False):
+149:         self.connection, self.gate, self.readonly = connection, gate, readonly
+150:         self._context = None
+151: 
+152:     def _check(self, sql):
+153:         if sql_writes(sql):
+154:             if self.readonly or self.gate is None: raise DataError("data_readonly")
+155:             if self._context is None:
+156:                 self._context = self.gate.acquire()
+157:                 self._permit = self._context.__enter__()
+158:             self._permit.check()
+159: 
+160:     async def execute(self, sql, *args, **kwargs):
+161:         self._check(sql)
+162:         if self.readonly and not sql_writes(sql):
+163:             sql = re.sub(r"\s+FOR\s+(?:KEY\s+)?(?:UPDATE|SHARE)(?:\s+OF\s+[\w,]+)?", "", str(sql), flags=re.I)
+164:         return await self.connection.execute(sql, *args, **kwargs)

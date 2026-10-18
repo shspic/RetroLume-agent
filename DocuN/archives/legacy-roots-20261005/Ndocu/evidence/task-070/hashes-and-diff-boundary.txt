@@ -1,0 +1,30 @@
+# TASK-070 生产哈希与差异边界核验原始输出
+# 采集时间: 2026-09-21 (Asia/Shanghai)  采集方式: 只读命令
+
+$ sha256sum backend/app/activities/repository.py backend/app/activities/__init__.py
+cc7fddd4e685e1d3af859c7b402d0734354cef5675ed72f2f8acb83c92e6dcc7 *backend/app/activities/repository.py
+31d0b60cfc644c797a04fb31e9c3a4da242969abbe0e5b54648b1d18f19f1d2a *backend/app/activities/__init__.py
+
+卡片冻结值:
+  repository.py  cc7fddd4e685e1d3af859c7b402d0734354cef5675ed72f2f8acb83c92e6dcc7
+  __init__.py    31d0b60cfc644c797a04fb31e9c3a4da242969abbe0e5b54648b1d18f19f1d2a
+  判定: 两项均一致(见下方逐项比对)
+
+$ sha256sum backend/migrations/002_activities.sql
+3a9c5855aa9ddc54a03666327267ff3b7cb81eafa931a9f260c5637922b2dda6 *backend/migrations/002_activities.sql
+051/055 记录基线: 3a9c5855aa9ddc54a03666327267ff3b7cb81eafa931a9f260c5637922b2dda6  backend/migrations/002_activities.sql
+判定: 一致(DDL未变)
+
+$ diff -u Ndocu/evidence/task-068/repository.py.pre-task068 backend/app/activities/repository.py | grep -c '^-[^-]'
+0
+(删除行数; 0 = 纯新增)
+$ ... | grep -c '^+[^+]'
+92
+(新增行数)
+$ ... | grep -c '^@@'
+2
+(hunk 数)
+
+$ diff -u Ndocu/evidence/task-068/__init__.py.pre-task068 backend/app/activities/__init__.py | grep -c '^-[^-]'
+0
+(删除行数)

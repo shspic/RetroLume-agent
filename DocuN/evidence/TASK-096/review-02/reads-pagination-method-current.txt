@@ -1,0 +1,35 @@
+    async def test_activity_list_pagination_cursor(self):
+        second = await self.new_activity()
+        third = await self.new_activity()
+        first_page = await self.ledger.list_activities(limit=2)
+        self.assertEqual(len(first_page), 2)
+        anchor = first_page[-1]
+        second_page = await self.ledger.list_activities(
+            limit=2, after_created_at=anchor.created_at, after_activity_id=anchor.activity_id,
+        )
+        seen = [item.activity_id for item in first_page] + [item.activity_id for item in second_page]
+        self.assertEqual(len(seen), len(set(seen)))
+        # 续作01 夹具适配：专用库中存在 095 批次3 运行期返工中断的残留合成行
+        # （本用例首次在非空库上运行暴露）。库内既有行按卡不删除；游标语义
+        # 断言改为：本用例试例必须全部遍历到、首页只含本用例最新创建的行、
+        # 全局倒序与无重复保持——翻页正确性验证不弱化。
+        self.assertTrue(
+            {self.activity, second, third} <= set(seen),
+            f"本用例活动必须全部被翻页遍历：seen={sorted(set(seen))}",
+        )
+        self.assertTrue(
+            {item.activity_id for item in first_page} <= {self.activity, second, third},
+            "首页必须只含本用例最新创建的行（残留行不得挤占首页）",
+        )
+        keys = [
+            (item.created_at, item.activity_id)
+            for item in list(first_page) + list(second_page)
+        ]
+        self.assertEqual(keys, sorted(keys, reverse=True))
+        with self.assertRaises(ValueError):
+            await self.ledger.list_activities(limit=2, after_created_at=anchor.created_at)
+        with self.assertRaises(ValueError):
+            await self.ledger.list_activities(limit=0)
+        with self.assertRaises(ValueError):
+            await self.ledger.list_activities(limit=201)
+

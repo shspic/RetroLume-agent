@@ -1,0 +1,65 @@
+--- audit-initial/backend/tests/test_activity_continuation.py
++++ incremental-01/backend/tests/test_activity_continuation.py
+@@ -85,6 +85,62 @@
+                 self.assertTrue(ended.is_set())
+             finally:release.set();await asyncio.gather(task,return_exceptions=True)
+         req=captured[0];self.assertEqual([m.role for m in req.messages],['assistant','user']);self.assertEqual(req.messages[0].content,'{"parent":"低信任历史"}');self.assertFalse(req.allowed_tools)
++    def current_parent_ledger(self):
++        a=str(uuid4());fmt,payload,sha=build_business_payload(json_object={'parent':'low trust'})
++        snap=CommittedResultSnapshot(a,'P',ResultReadStatus.COMMITTED_CURRENT,scope_revision=1,payload_format=fmt,payload=payload,payload_sha256=sha)
++        class ReadLedger:
++            _bounded_name=staticmethod(PostgresAdmissionLedger._bounded_name)
++            def __init__(self):self.reads=[]
++            async def read_committed_result(self,activity,key):
++                self.reads.append(key)
++                return snap if key=='P' else CommittedResultSnapshot(a,key,ResultReadStatus.NO_OPERATION)
++        return a,ReadLedger()
++
++    async def test_cancel_after_parent_read_preserves_confirmed_supervision(self):
++        # 替身只复现服务已读P后SUP确认取消的返回边界；不代替真实PG取消证明。
++        from app.worker.session import SessionOutcome
++        a,ledger=self.current_parent_ledger()
++        supervision=SessionOutcome('run090','cancelled',a,settled_seconds=None,reserved_seconds=0,pending_fold_seconds=0)
++        def cancelled_after_read(*args,**kw):
++            self.assertEqual(ledger.reads,['Q','P'])
++            return supervision
++        with patch('app.worker.one_call.run_one_call',side_effect=cancelled_after_read) as invoke:
++            result=await ActivityService(ledger).continue_from_result(a,'P','Q','followup',service(),SessionConfig(),'executor','run090')
++        self.assertEqual(invoke.call_count,1)
++        self.assertEqual(result.status,'cancelled')
++        self.assertEqual(result.business.status,'no_operation')
++        self.assertEqual(ledger.reads,['Q','P','Q'])
++        self.assertIs(result.supervision,supervision)
++        self.assertIsNone(result.settlement.settled_seconds)
++        self.assertEqual(result.settlement.reserved_seconds,0)
++        self.assertEqual(result.settlement.pending_fold_seconds,0)
++        self.assertFalse(result.settlement.cleanup_incomplete)
++
++    async def test_known_timeout_conflicts_reject_before_supervision(self):
++        for model,config in ((service(timeout_seconds=30),SessionConfig(request_timeout_seconds=10)),
++                             (service(),SessionConfig(window_seconds=200,request_timeout_seconds=121))):
++            with self.subTest(model_timeout=model.timeout_seconds,session_timeout=config.request_timeout_seconds):
++                a,ledger=self.current_parent_ledger()
++                with patch('app.worker.one_call.run_one_call') as invoke:
++                    result=await ActivityService(ledger).continue_from_result(a,'P','Q','followup',model,config,'executor','run090')
++                    invoke.assert_not_called()
++                self.assertEqual(result.status,'invalid_input')
++                self.assertEqual(ledger.reads,['Q','P'])
++                self.assertIsNone(result.supervision)
++                self.assertIsNone(result.settlement)
++
++    async def test_unexpected_supervision_error_remains_unknown_no_resend(self):
++        a,ledger=self.current_parent_ledger()
++        with patch('app.worker.one_call.run_one_call',side_effect=ValueError('synthetic supervisor response lost')) as invoke:
++            result=await ActivityService(ledger).continue_from_result(a,'P','Q','followup',service(),SessionConfig(),'executor','run090')
++            self.assertEqual(invoke.call_count,1)
++            self.assertEqual((await ActivityService(ledger).resume_result(a,'Q')).status,'no_operation')
++            self.assertEqual(invoke.call_count,1)
++        self.assertEqual(result.status,'supervision_unknown')
++        self.assertEqual(result.business.status,'no_operation')
++        self.assertIsNone(result.supervision)
++        self.assertIsNone(result.settlement)
++
+     async def test_too_large_before_supervision(self):
+         a=str(uuid4());fmt,payload,sha=build_business_payload(text='x'*70000)
+         class ReadLedger:

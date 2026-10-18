@@ -1,0 +1,35 @@
+--- pre/backend/tests/test_capabilities.py
++++ post/backend/tests/test_capabilities.py
+@@ -19,6 +19,7 @@
+     ModelCallRequest,
+     ModelServiceConfig,
+     Provider,
++    RecordOutcome,
+     RequestNotSent,
+     ResponseMode,
+     TOOL_NAME,
+@@ -108,6 +109,7 @@
+         self.outcomes.append((permit, outcome))
+         if self.fail_record:
+             raise RuntimeError("db unavailable")
++        return RecordOutcome.RECORDED
+ 
+ 
+ class FakeTransport:
+@@ -163,6 +165,7 @@
+         self.assertEqual(CallStatus.SUCCEEDED, result.status)
+         self.assertEqual({"answer": 42}, result.json_object)
+         self.assertEqual("returned-model", result.returned_model)
++        self.assertRegex(result.payload_sha256 or "", r"^[0-9a-f]{64}$")
+         self.assertEqual(1, len(transport.calls))
+         sent = transport.calls[0]
+         self.assertEqual(40, sent["payload"]["max_tokens"])
+@@ -303,7 +306,7 @@
+         ledger, transport = RecordingLedger(fail_record=True), normal_transport()
+         result = await ControlledModelGateway(config(), ledger=ledger, transport=transport).call(context(), request())
+         self.assertEqual(CallStatus.UNKNOWN, result.status)
+-        self.assertEqual("ledger_record_failed", result.error_code)
++        self.assertEqual("record_unconfirmed", result.error_code)
+ 
+     async def test_tool_suggestion_is_validated_and_only_returns_plan(self):
+         tool_calls = [{

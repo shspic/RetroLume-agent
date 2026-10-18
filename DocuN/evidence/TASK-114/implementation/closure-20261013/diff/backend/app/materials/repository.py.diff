@@ -1,0 +1,138 @@
+--- before/backend/app/materials/repository.py
++++ final/backend/app/materials/repository.py
+@@ -14,9 +14,18 @@
+ class PostgresMaterials:
+     def __init__(self, dsn: str):
+         self.dsn = dsn
++        self.mutation_gate = None
++        self.reference_coordinator = None
++        self.data_enabled = False
++
++    def configure_data_exit(self, gate, references=None):
++        self.mutation_gate, self.reference_coordinator, self.data_enabled = gate, references, True
++        self.CANDIDATE_SELECT = type(self).CANDIDATE_SELECT.replace(
++            "JOIN material_sources s ON s.id=c.source_id",
++            "JOIN material_sources s ON s.id=c.source_id AND NOT EXISTS(SELECT 1 FROM data_tombstones dt WHERE dt.entity_kind='source' AND dt.entity_id=s.id)")
+ 
+     @contextmanager
+-    def connection(self):
++    def connection(self, *, writable=False, reference_pin=None):
+         try:
+             import psycopg
+             from psycopg.rows import dict_row
+@@ -24,6 +33,18 @@
+             raise DatabaseUnavailable("尚未安装PostgreSQL驱动") from None
+         try:
+             with psycopg.connect(self.dsn, connect_timeout=3, row_factory=dict_row) as conn:
++                if writable:
++                    if self.data_enabled and self.mutation_gate is None:
++                        from app.data_exit.contracts import DataError
++                        raise DataError("data_readonly")
++                    if self.mutation_gate is not None:
++                        with self.mutation_gate.acquire():
++                            if reference_pin is not None: reference_pin.bind(conn)
++                            else:conn.execute('SELECT public.data_mutation_enter()')
++                            yield conn
++                            if reference_pin is not None: reference_pin.commit(conn)
++                            conn.commit()
++                        return
+                 yield conn
+         except psycopg.Error:
+             # 不向用户返回连接串、SQL或服务器内部错误。
+@@ -51,8 +72,9 @@
+         with self.connection() as conn:
+             return self.normalize(conn.execute(self.SELECT + " WHERE s.id=%s", (source_id,)).fetchone())
+ 
+-    def save(self, *, source_id, expected_version, filename, format, sha256, size):
+-        with self.connection() as conn:
++    def save(self, *, source_id, expected_version, filename, format, sha256, size, reference_pin=None, prepared_ids=None):
++        self._require_reference(reference_pin, prepared_ids)
++        with self.connection(writable=True, reference_pin=reference_pin) as conn:
+             if source_id:
+                 source = conn.execute("SELECT id,current_version FROM material_sources WHERE id=%s FOR UPDATE", (source_id,)).fetchone()
+                 if source is None:
+@@ -60,9 +82,9 @@
+                 if str(source["current_version"]) != expected_version:
+                     raise VersionConflict()
+             else:
+-                source_id = str(uuid4())
++                source_id = prepared_ids.source_id if prepared_ids is not None else str(uuid4())
+                 conn.execute("INSERT INTO material_sources(id,title,revision) VALUES(%s,%s,0)", (source_id, filename))
+-            version_id = str(uuid4())
++            version_id = prepared_ids.version_id if prepared_ids is not None else str(uuid4())
+             conn.execute("INSERT INTO material_versions(id,source_id,filename,format,sha256,size) VALUES(%s,%s,%s,%s,%s,%s)", (version_id, source_id, filename, format, sha256, size))
+             conn.execute("UPDATE material_sources SET current_version=%s,revision=revision+1,title=%s WHERE id=%s", (version_id, filename, source_id))
+             return self.normalize(conn.execute(self.SELECT + " WHERE s.id=%s", (source_id,)).fetchone())
+@@ -73,6 +95,13 @@
+                            FROM pdf_review_candidates c
+                            JOIN material_versions v ON v.id=c.version_id
+                            JOIN material_sources s ON s.id=c.source_id"""
++
++    def _require_reference(self, pin, prepared):
++        if self.data_enabled:
++            from app.data_exit.contracts import DataError
++            if self.reference_coordinator is None or pin is None or prepared is None or pin.coordinator is not self.reference_coordinator:
++                raise DataError("reference_pin_required")
++            pin.check(self.reference_coordinator.root, prepared)
+ 
+     def create_pdf_candidate(
+         self,
+@@ -84,8 +113,11 @@
+         sha256,
+         size,
+         extraction,
++        reference_pin=None,
++        prepared_ids=None,
+     ):
+-        with self.connection() as conn:
++        self._require_reference(reference_pin, prepared_ids)
++        with self.connection(writable=True, reference_pin=reference_pin) as conn:
+             if source_id:
+                 source = conn.execute(
+                     "SELECT id,current_version,revision FROM material_sources WHERE id=%s FOR UPDATE",
+@@ -98,12 +130,12 @@
+             else:
+                 if expected_version is not None or expected_revision != 0:
+                     raise VersionConflict()
+-                source_id = str(uuid4())
++                source_id = prepared_ids.source_id if prepared_ids is not None else str(uuid4())
+                 conn.execute(
+                     "INSERT INTO material_sources(id,title,revision) VALUES(%s,%s,0)",
+                     (source_id, filename),
+                 )
+-            version_id, candidate_id = str(uuid4()), str(uuid4())
++            version_id, candidate_id = (prepared_ids.version_id, prepared_ids.candidate_id) if prepared_ids is not None else (str(uuid4()), str(uuid4()))
+             conn.execute(
+                 "INSERT INTO material_versions(id,source_id,filename,format,sha256,size) VALUES(%s,%s,%s,'pdf',%s,%s)",
+                 (version_id, source_id, filename, sha256, size),
+@@ -172,6 +204,9 @@
+ 
+     def get_pdf_candidate_original(self, candidate_id):
+         with self.connection() as conn:
++            if self.data_enabled:
++                visible = conn.execute(self.CANDIDATE_SELECT + " WHERE c.id=%s", (candidate_id,)).fetchone()
++                if visible is None: return None
+             row = conn.execute(
+                 """SELECT v.filename,v.sha256,v.size
+                    FROM pdf_review_candidates c JOIN material_versions v ON v.id=c.version_id
+@@ -180,8 +215,9 @@
+             ).fetchone()
+             return self.normalize(row)
+ 
+-    def confirm_pdf_candidate(self, *, candidate_id, version_id, pages):
+-        with self.connection() as conn:
++    def confirm_pdf_candidate(self, *, candidate_id, version_id, pages, reference_pin=None):
++        self._require_reference(reference_pin, None if reference_pin is None else reference_pin.prepared)
++        with self.connection(writable=True, reference_pin=reference_pin) as conn:
+             candidate_hint = conn.execute(
+                 "SELECT source_id FROM pdf_review_candidates WHERE id=%s",
+                 (candidate_id,),
+@@ -237,7 +273,7 @@
+             return self.normalize(conn.execute(self.SELECT + " WHERE s.id=%s", (source["id"],)).fetchone())
+ 
+     def skip_pdf_candidate(self, candidate_id):
+-        with self.connection() as conn:
++        with self.connection(writable=True) as conn:
+             hint = conn.execute(
+                 "SELECT source_id FROM pdf_review_candidates WHERE id=%s",
+                 (candidate_id,),

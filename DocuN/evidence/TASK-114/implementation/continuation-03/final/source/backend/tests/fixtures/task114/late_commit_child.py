@@ -1,0 +1,23 @@
+"""合成client在COMMIT已flush但未读取回包时退出，不把退出当rollback。"""
+import io,json,os,sys
+from budget import ROOT
+sys.path.insert(0,str(ROOT/'backend'))
+from continue_run import runtime_for
+from app.data_exit.contracts import digest
+import psycopg
+payload=json.loads(sys.stdin.readline())
+app,runtime=runtime_for(payload['credentials'],None)
+raw=payload['content'].encode('utf-8')
+prepared=runtime.references.prepare_reference(digest(raw),len(raw),source_id=payload['source_id'],version_id=payload['version_id'])
+with runtime.references.acquire_shared(prepared) as pin:
+    app.state.originals.put(io.BytesIO(raw),max_bytes=5*1024**2,reference_pin=pin)
+    connection=psycopg.connect(payload['credentials']['app_dsn'],connect_timeout=3)
+    pin.bind(connection)
+    connection.execute('INSERT INTO public.material_sources(id,title,revision) VALUES(%s,%s,0)',(prepared.source_id,'C01 client退出后确认'))
+    connection.execute("INSERT INTO public.material_versions(id,source_id,filename,format,sha256,size) VALUES(%s,%s,'C01迟到.md','md',%s,%s)",(prepared.version_id,prepared.source_id,prepared.sha256,prepared.size))
+    connection.execute('UPDATE public.material_sources SET current_version=%s,revision=1 WHERE id=%s',(prepared.version_id,prepared.source_id))
+    pin.commit(connection)
+    connection.pgconn.send_query(b'SELECT pg_sleep(0.25); COMMIT')
+    while connection.pgconn.flush():pass
+    print(json.dumps({'commit_message_flushed':True,'response_read':False,'source_id':prepared.source_id,'version_id':prepared.version_id}),flush=True)
+    os._exit(0)

@@ -1,0 +1,58 @@
+--- pre/frontend/src/explanations/HtmlExplanationPanel.tsx
++++ post/frontend/src/explanations/HtmlExplanationPanel.tsx
+@@ -20,6 +20,7 @@
+   const [pollEpoch,setPollEpoch]=useState(0);
+   const generation=useRef(0),owner=useRef<string|null>(null),current=useRef<HtmlPreview|null>(null),seq=useRef(0),frameSeq=useRef(0),control=useRef<AbortController|null>(null);
+   const artifactVersion=useRef(0),citationVersion=useRef(0);
++  const leavingDocument=useRef(false);
+   const parentKey=api.canonical(parent);
+   useEffect(()=>{
+     const version=++generation.current;control.current?.abort();const abort=new AbortController();control.current=abort;
+@@ -27,14 +28,18 @@
+     artifactVersion.current++;citationVersion.current++;setCaps(null);setSaved([]);setPending([]);setValues({});setNotice("");
+     setReceipt(null);setItem(null);setRunning(null);setPicture(null);setAck(null);setCitation(null);setError("");setBusy(false);
+     try{setPending(readIntents().filter(x=>x.activity_id===activityId));}catch(reason){setError(String(reason));}
++    const leaving=()=>{leavingDocument.current=true;generation.current++;citationVersion.current++;owner.current=null;control.current?.abort();};
++    const restored=()=>{leavingDocument.current=false;};
++    window.addEventListener("beforeunload",leaving);window.addEventListener("pagehide",leaving);window.addEventListener("pageshow",restored);
+     void api.capabilities(activityId,token,abort.signal).then(data=>{if(version===generation.current&&!abort.signal.aborted)setCaps(data);}).catch(reason=>{if(version===generation.current&&!abort.signal.aborted)setError(String(reason));});
+     void api.history(activityId,token,abort.signal).then(data=>{if(version===generation.current&&!abort.signal.aborted)setSaved(data.items);}).catch(()=>{});
+     const visibility=()=>{if(document.hidden){generation.current++;citationVersion.current++;abort.abort();control.current=new AbortController();setPicture(null);setAck(null);setCitation(null);owner.current=null;setBusy(false);setPollEpoch(old=>old+1);
+       setRunning(old=>old&&!TERMINAL.has(old.state)?{...old,state:"stopping"}:old);
+-      const live=current.current;if(live&&!TERMINAL.has(live.state))void api.stop(activityId,token,live).catch(()=>{});}};
++      const live=current.current;if(!leavingDocument.current&&live&&!TERMINAL.has(live.state))void api.stop(activityId,token,live).catch(()=>{});}};
+     document.addEventListener("visibilitychange",visibility);
+     return()=>{generation.current++;abort.abort();document.removeEventListener("visibilitychange",visibility);owner.current=null;
+-      const live=current.current;if(live&&!TERMINAL.has(live.state))void api.stop(activityId,token,live,"back_to_learning").catch(()=>{});current.current=null;};
++      window.removeEventListener("beforeunload",leaving);window.removeEventListener("pagehide",leaving);window.removeEventListener("pageshow",restored);
++      const live=current.current;if(!leavingDocument.current&&live&&!TERMINAL.has(live.state))void api.stop(activityId,token,live,"back_to_learning").catch(()=>{});current.current=null;};
+   },[activityId,parentKey,token]);
+ 
+   useEffect(()=>{
+@@ -57,7 +62,7 @@
+         }
+       }catch(reason){if(!closed&&version===generation.current&&!abort.signal.aborted){
+         setError(String(reason));setPicture(null);setAck(null);setItem(null);setCitation(null);artifactVersion.current++;citationVersion.current++;
+-        owner.current=null;void api.stop(activityId,token,active).catch(()=>{});
++        owner.current=null;if(!leavingDocument.current)void api.stop(activityId,token,active).catch(()=>{});
+       }}
+       if(!closed)timer=window.setTimeout(()=>void observe(),300);
+     }
+@@ -102,7 +107,7 @@
+   async function open(){
+     if(!item||busy||running&&!TERMINAL.has(running.state))return;const version=generation.current;const key=api.randomKey();setBusy(true);setError("");
+     try{const value=await api.openPreview(activityId,token,item,crypto.randomUUID(),key,control.current?.signal);
+-      if(version!==generation.current){void api.stop(activityId,token,value).catch(()=>{});return;}
++      if(version!==generation.current){if(!leavingDocument.current)void api.stop(activityId,token,value).catch(()=>{});return;}
+       owner.current=key;current.current=value;seq.current=0;frameSeq.current=0;setRunning(value);setPicture(null);setAck(null);
+     }catch(reason){if(version===generation.current)setError(String(reason));}
+     finally{if(version===generation.current)setBusy(false);}
+@@ -118,7 +123,7 @@
+       if(reason instanceof api.HtmlApiError&&["calculation_domain_error","invalid_input"].includes(reason.code)){
+         setError("计算输入超出定义域，已保留上次画面");
+         setValues(ack?.input_values??Object.fromEntries(item.description.inputs.map(input=>[input.id,input.default])));
+-      }else{setError(String(reason));owner.current=null;setPicture(null);setAck(null);void api.stop(activityId,token,live).catch(()=>{});}
++      }else{setError(String(reason));owner.current=null;setPicture(null);setAck(null);if(!leavingDocument.current)void api.stop(activityId,token,live).catch(()=>{});}
+     }}
+     finally{if(version===generation.current)setBusy(false);}
+   }

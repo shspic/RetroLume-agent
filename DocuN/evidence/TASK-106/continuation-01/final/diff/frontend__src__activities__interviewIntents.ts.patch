@@ -1,0 +1,19 @@
+--- pre/frontend/src/activities/interviewIntents.ts
++++ post/frontend/src/activities/interviewIntents.ts
+@@ -47,12 +47,13 @@
+     if(!stillCurrent())throw new Error("本机保存成功，但发送身份已变化；未发送");
+   });
+ }
+-export async function noteInterviewReceipt(receipt:InterviewReceipt,owner:string):Promise<void>{
++export async function noteInterviewReceipt(receipt:InterviewReceipt,owner:string,stillCurrent:()=>boolean=()=>true):Promise<void>{
+   if(!navigator.locks)throw new Error("本机锁不可用");
+   await navigator.locks.request(KEY,async()=>{
+-    const now=await interviewEditorOwner();if(now!==owner)throw new Error("编辑身份已变化");
++    if(!stillCurrent())throw new Error("原意图身份已变化");
++    const now=await interviewEditorOwner();if(!stillCurrent()||now!==owner)throw new Error("编辑身份已变化");
+     const rows=summaries();const item=rows.find(x=>x.key===receipt.business_key&&x.activity_id===receipt.activity_id&&x.owner===owner&&x.hash===receipt.request_sha256);
+-    if(!item)throw new Error("原意图身份无法核对");
++    if(!item||item.action!==receipt.action||!stillCurrent())throw new Error("原意图身份无法核对");
+     item.state=receipt.status;localStorage.setItem(KEY,canonicalInterview(rows));
+   });
+ }

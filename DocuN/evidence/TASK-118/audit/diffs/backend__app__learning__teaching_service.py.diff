@@ -1,0 +1,85 @@
+--- first-pre/backend/app/learning/teaching_service.py
++++ current/backend/app/learning/teaching_service.py
+@@ -33,6 +33,8 @@
+     TeachingFrozenContext,
+     TeachingMemoryFrozenContext,
+     TeachingMemoryProfile,
++    TeachingHybridFrozenContext,
++    TeachingHybridProfile,
+     parse_frozen_context,
+     TeachingRefusal,
+     ToolFrozenCall,
+@@ -140,7 +142,7 @@
+             identity = {name: head.get(name) for name in ('goal_record_id', 'goal_version',
+                         'path_record_id', 'node_id', 'exercise_record_id', 'answer_record_id')}
+             identity['correction_record_id'] = command.body.get('correction_record_id')
+-        if isinstance(frozen,TeachingMemoryFrozenContext):
++        if isinstance(frozen,TeachingMemoryFrozenContext) and frozen.recipe is not None:
+             from app.memory.context import materialize_recipe,check_capacity
+             from app.memory.contracts import MemoryRefusal
+             try:
+@@ -159,7 +161,8 @@
+         request = ModelCallRequest(
+             messages=[{"role": m["role"], "content": m["content"]} for m in messages],
+             max_output_tokens=frozen.max_output_tokens,
+-            allowed_tools=frozenset(), teaching_profile=profile)
++            allowed_tools=frozenset(), teaching_profile=profile,
++            retrieval_ref=frozen.retrieval_ref if isinstance(frozen,TeachingHybridFrozenContext) else None)
+         service = config.model_service
+         try:
+             OneCallInput(command.operation_id(activity_id), request, service).to_wire()
+@@ -260,7 +263,12 @@
+         snapshot["teaching_query"] = facts["goal_text"].split("；",1)[0]
+         query = self._context_query(command, snapshot, facts)
+         units = await asyncio.to_thread(load_units, snapshot, self.materials, self.originals)
+-        catalog = assemble_teaching_catalog(query, units, request_sha)
++        if command.retrieval_ref is not None:
++            from app.retrieval.service import RetrievalService
++            from app.retrieval.contracts import RetrievalRefusal
++            try:catalog=await RetrievalService(self.ledger,self.materials,self.originals).catalog(activity_id,command.retrieval_ref,request_sha,top_k=4,max_chars=4000,max_bytes=8000)
++            except RetrievalRefusal as exc:raise TeachingRefusal(exc.code,'本轮资料检索已失效，请核对原操作') from None
++        else:catalog = assemble_teaching_catalog(query, units, request_sha)
+         document = self._stored_document(command, snapshot, catalog, identity, facts)
+         messages = messages_for_teaching(command.action, document)
+         if len(messages) > 3:
+@@ -289,9 +297,20 @@
+                  'max_output_tokens':tokens,'catalog':[e.model_dump() for e in catalog],
+                  'recipe':recipe,'memory_selection_sha256':selection['selection_sha256'],'memory_refs':refs,
+                  'assembled_messages_sha256':sha(canonical(messages))}
++                if command.retrieval_ref is not None:
++                    value.update(schema='teaching.context.v3',profile_version='teaching.v3',prompt_version='teaching-hybrid-prompt-v1',
++                        memory_dependency_sha256=selection['dependency_sha256'],retrieval_ref=command.retrieval_ref.model_dump(),messages=None)
+                 value['context_sha256']=sha(canonical(value))
+-                return TeachingMemoryFrozenContext.model_validate(value),identity
++                return (TeachingHybridFrozenContext if command.retrieval_ref is not None else TeachingMemoryFrozenContext).model_validate(value),identity
+             except MemoryRefusal as exc:raise TeachingRefusal(exc.code,exc.message) from None
++        if command.retrieval_ref is not None:
++            value={'schema':'teaching.context.v3','kind':'model','reference_hashes':[r.model_dump() for r in references],
++              'operation_id':command.operation_id(activity_id),'profile_version':'teaching.v3','prompt_version':'teaching-hybrid-prompt-v1',
++              'projection_policy_version':'teaching.memory.recipe.v1','max_output_tokens':tokens,'catalog':[e.model_dump() for e in catalog],
++              'recipe':None,'messages':messages,'memory_selection_sha256':None,'memory_dependency_sha256':None,'memory_refs':[],
++              'assembled_messages_sha256':sha(canonical(messages)),'retrieval_ref':command.retrieval_ref.model_dump()}
++            value['context_sha256']=sha(canonical(value))
++            return TeachingHybridFrozenContext.model_validate(value),identity
+         context_value = {
+             "schema": "teaching.context.v1", "kind": "model",
+             "reference_hashes": [r.model_dump() for r in references],
+@@ -540,7 +559,7 @@
+         ordered = [seen[k] for k in sorted(seen)]
+         # DEF-004：profile 携带真实当前教学身份（goal/路径/题/答/纠错），
+         # 全零占位与 CAS 猜测值不再出现；admit 锁内再据 DB 复核。
+-        profile_type=TeachingMemoryProfile if isinstance(frozen,TeachingMemoryFrozenContext) else TeachingProfile
++        profile_type=TeachingHybridProfile if isinstance(frozen,TeachingHybridFrozenContext) else TeachingMemoryProfile if isinstance(frozen,TeachingMemoryFrozenContext) else TeachingProfile
+         return profile_type(
+             action=command.action if command.action in ("plan", "exercise", "evaluate") else "plan",
+             command_key=command.business_key,
+@@ -561,7 +580,8 @@
+             messages_sha256=frozen.assembled_messages_sha256 if isinstance(frozen,TeachingMemoryFrozenContext) else sha(canonical(frozen.messages or [])),
+             max_output_tokens=frozen.max_output_tokens or 256,
+             **({"memory_selection_sha256":frozen.memory_selection_sha256,"memory_refs":frozen.memory_refs,
+-                "assembled_messages_sha256":frozen.assembled_messages_sha256} if isinstance(frozen,TeachingMemoryFrozenContext) else {}))
++                "assembled_messages_sha256":frozen.assembled_messages_sha256} if isinstance(frozen,TeachingMemoryFrozenContext) else {}),
++            **({'retrieval_ref':frozen.retrieval_ref,'memory_dependency_sha256':frozen.memory_dependency_sha256} if isinstance(frozen,TeachingHybridFrozenContext) else {}))
+ 
+     # --- 工具动作：沿 G5 原链（ActivityService.execute_tool_action） ---
+ 

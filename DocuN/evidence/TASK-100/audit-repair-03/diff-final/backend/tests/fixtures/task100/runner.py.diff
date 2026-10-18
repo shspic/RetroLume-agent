@@ -1,0 +1,22 @@
+--- pre/backend/tests/fixtures/task100/runner.py
++++ post/backend/tests/fixtures/task100/runner.py
+@@ -124,7 +124,8 @@
+         for port in (18100,):
+             with socket.socket() as sock:
+                 if sock.connect_ex(('127.0.0.1',port))==0: raise ControlRefusal('app_port_in_use')
+-        data=ROOT/'backend/tests/data/task100/continuation-02'; backups=ROOT/'backend/tests/data/task100/continuation-02-backups'
++        data=ROOT/('backend/tests/data/task100/audit-repair-03/data' if IS_REPAIR else 'backend/tests/data/task100/continuation-02')
++        backups=ROOT/('backend/tests/data/task100/audit-repair-03/backups' if IS_REPAIR else 'backend/tests/data/task100/continuation-02-backups')
+         data.mkdir(parents=True,exist_ok=True);backups.mkdir(parents=True,exist_ok=True)
+         # Fixture 与应用使用同一原件根，仓储测试也写在这个真实项目目录。
+         originals=data/'originals'; originals.mkdir(exist_ok=True)
+@@ -393,7 +394,8 @@
+         return 0 if result['status']=='pass' else 1
+     finally: ledger.charge('offline',time.monotonic()-start,{'mode':mode,'batch':str(batch.directory)})
+ 
+-def main():
++def main():
++    raise ControlRefusal('continuation02_permit_ended_use_current_repair_runner')
+     parser=argparse.ArgumentParser();parser.add_argument('mode',choices=['init','plan','budget','offline','typecheck','frontend-build','browser-artifacts','main-combo'])
+     parser.add_argument('--stages');parser.add_argument('--reason');parser.add_argument('--repository-tests');parser.add_argument('--http-tests')
+     parser.add_argument('--reuse-windows-batch');parser.add_argument('--browser-controls-only',action='store_true');args=parser.parse_args()

@@ -1,0 +1,451 @@
+--- backend/app/data_exit/control.py@S07-pre
++++ backend/app/data_exit/control.py@S07-current
+@@ -107,34 +107,39 @@
+             elif kind=='source.register':state['source']=p
+         return state
+ 
++    def _validated_locked(self, *, writable=False):
++        """仅由持有本hub真实文件锁的读写入口调用，返回当前完整字节的已验快照。"""
++        # 每次仍在真实锁内读取当前完整字节；仅复用同一文件对象和摘要的已验投影。
++        info = regular(self.path)
++        with self.path.open('rb') as stream:
++            opened = os.fstat(stream.fileno())
++            if (info.st_dev, info.st_ino) != (opened.st_dev, opened.st_ino):
++                raise DataError('control_corrupt', 503)
++            if opened.st_size > MAX_JOURNAL:
++                raise DataError('capacity_exceeded', 413)
++            raw = stream.read(opened.st_size + 1)
++            after = os.fstat(stream.fileno())
++        current = regular(self.path)
++        if len(raw) > MAX_JOURNAL:
++            raise DataError('capacity_exceeded', 413)
++        if (opened.st_dev, opened.st_ino, opened.st_size) != (after.st_dev, after.st_ino, len(raw)) or (current.st_dev, current.st_ino, current.st_size) != (opened.st_dev, opened.st_ino, len(raw)):
++            raise DataError('control_corrupt', 503)
++        identity = (opened.st_dev, opened.st_ino, digest(raw))
++        cached = getattr(self, '_state_cache', None)
++        if cached is None or cached[0] != identity:
++            events, tail = self._read(raw)
++            if not events or events[0]['kind']!='hub.init' or events[0]['payload'].get('control_id')!=self.control_id:
++                raise DataError('control_corrupt',503)
++            state = self.replay(events)
++            cached = (identity, canonical(state), {key: canonical(job) for key, job in state['jobs'].items()}, tail, events)
++            self._state_cache = cached
++        if writable and cached[3]:
++            raise DataError('control_tail_unconfirmed', 503)
++        return cached
++
+     def _current_snapshot(self, job_id=None, *, writable=False):
+         with self.lock.acquire():
+-            # 每次仍在真实锁内读取当前完整字节；仅复用同一文件对象和摘要的已验投影。
+-            info = regular(self.path)
+-            with self.path.open('rb') as stream:
+-                opened = os.fstat(stream.fileno())
+-                if (info.st_dev, info.st_ino) != (opened.st_dev, opened.st_ino):
+-                    raise DataError('control_corrupt', 503)
+-                if opened.st_size > MAX_JOURNAL:
+-                    raise DataError('capacity_exceeded', 413)
+-                raw = stream.read(opened.st_size + 1)
+-                after = os.fstat(stream.fileno())
+-            current = regular(self.path)
+-            if len(raw) > MAX_JOURNAL:
+-                raise DataError('capacity_exceeded', 413)
+-            if (opened.st_dev, opened.st_ino, opened.st_size) != (after.st_dev, after.st_ino, len(raw)) or (current.st_dev, current.st_ino, current.st_size) != (opened.st_dev, opened.st_ino, len(raw)):
+-                raise DataError('control_corrupt', 503)
+-            identity = (opened.st_dev, opened.st_ino, digest(raw))
+-            cached = getattr(self, '_state_cache', None)
+-            if cached is None or cached[0] != identity:
+-                events, tail = self._read(raw)
+-                if not events or events[0]['kind']!='hub.init' or events[0]['payload'].get('control_id')!=self.control_id:
+-                    raise DataError('control_corrupt',503)
+-                state = self.replay(events)
+-                cached = (identity, canonical(state), {key: canonical(job) for key, job in state['jobs'].items()}, tail)
+-                self._state_cache = cached
+-            if writable and cached[3]:
+-                raise DataError('control_tail_unconfirmed', 503)
++            cached = self._validated_locked(writable=writable)
+             # 不把可变的日志payload或缓存对象交给调用者。
+             return json.loads(cached[1] if job_id is None else cached[2][job_id])
+ 
+@@ -147,10 +152,8 @@
+ 
+     def commit(self, kind, payload, *, validate=None):
+         with self.lock.acquire(True, timeout=1):
+-            events, tail = self._read()
+-            if tail:
+-                raise DataError("control_tail_unconfirmed", 503)
+-            state = self.replay(events)
++            cached = self._validated_locked(writable=True)
++            events, state = cached[4], json.loads(cached[1])
+             if validate is not None:
+                 validate(state)
+             return self._append(events, kind, payload)
+@@ -184,15 +187,13 @@
+         request_sha = digest(command.normalized())
+         key = business_key(command.business_key)
+         with self.lock.acquire(True, timeout=1):
+-            events, tail = self._read()
+-            state = self.replay(events)
++            cached = self._validated_locked(writable=True)
++            events, state = cached[4], json.loads(cached[1])
+             for job in state["jobs"].values():
+                 if job["business_key"] == key:
+                     if job["request_sha256"] != request_sha or job["kind"] != command.kind:
+                         raise DataError("request_conflict")
+                     return self.current_receipt(state, job)
+-            if tail:
+-                raise DataError("control_tail_unconfirmed", 503)
+             if len(state["jobs"]) >= 256:
+                 raise DataError("capacity_exceeded", 413)
+             now = datetime.now(timezone.utc).isoformat()
+@@ -233,9 +234,8 @@
+         """短锁内读取、验证与CAS；decide仅计算字段，不能进行I/O。"""
+         uuid(job_id)
+         with self.lock.acquire(True, timeout=1):
+-            events, tail = self._read()
+-            if tail: raise DataError('control_tail_unconfirmed', 503)
+-            state = self.replay(events)
++            cached = self._validated_locked(writable=True)
++            events, state = cached[4], json.loads(cached[1])
+             job = state['jobs'].get(job_id)
+             if job is None: raise DataError('not_found', 404)
+             changes = decide(job)
+--- backend/app/capabilities/embedding.py@S07-pre
++++ backend/app/capabilities/embedding.py@S07-current
+@@ -126,6 +126,13 @@
+       'unit_sha256':v['unit_sha256'],'original_sha256':v['original_sha256']})
+ 
+ 
++class OutboundModelApproval(BaseModel):
++    """受信离线清单逐动作批准完整发送对象及其原请求身份。"""
++    model_config=ConfigDict(extra='forbid',frozen=True,strict=True)
++    payload_sha256:str=Field(pattern=HEX)
++    request_sha256:str=Field(pattern=HEX)
++
++
+ class OutboundSourceManifest(BaseModel):
+     """operator采用的有限实际版本/片段，不把样本文件hash冒实际外发范围。"""
+     model_config=ConfigDict(extra='forbid',frozen=True,strict=True)
+@@ -134,6 +141,7 @@
+     sources:tuple[dict,...]=Field(min_length=1,max_length=128)
+     fragments:tuple[dict,...]=Field(min_length=1,max_length=512)
+     query_input_sha256:tuple[str,...]=Field(min_length=1,max_length=128)
++    model_requests:tuple[OutboundModelApproval,...]=Field(default=(),max_length=128)
+ 
+     @model_validator(mode='after')
+     def closed(self):
+@@ -149,10 +157,14 @@
+             if set(row)!={'identity_sha256','input_sha256'} or any(not isinstance(v,str) or not re.fullmatch(HEX,v) for v in row.values()) or row['identity_sha256'] in ids:raise ValueError('outbound_fragment_shape')
+             ids.add(row['identity_sha256'])
+         if len(set(self.query_input_sha256))!=len(self.query_input_sha256) or any(not re.fullmatch(HEX,x) for x in self.query_input_sha256):raise ValueError('outbound_query_shape')
++        pairs=[(row.payload_sha256,row.request_sha256) for row in self.model_requests]
++        if len(set(pairs))!=len(pairs):raise ValueError('outbound_model_approval_duplicate')
+         return self
+ 
+     @property
+-    def sha256(self):return digest(self.model_dump(mode='json'))
++    def sha256(self):
++        # 空新增字段保留原Embedding清单身份；模型没有完整批准仍失败关闭。
++        return digest(self.model_dump(mode='json',exclude={'model_requests'} if not self.model_requests else set()))
+     @classmethod
+     def from_wire(cls,value):return cls.model_validate_json(json.dumps(value,ensure_ascii=False,separators=(',',':')))
+ 
+@@ -168,7 +180,9 @@
+             else:valid=digest(item.text) in self.query_input_sha256
+             if not valid:raise AdmissionDenied('outbound_input_not_approved')
+ 
+-    def check_model(self,request):
++    def check_model(self,request,payload=None):
++        if payload is None or not any(row.payload_sha256==digest(payload) and row.request_sha256==digest(request.model_dump(mode='json')) for row in self.model_requests):
++            raise AdmissionDenied('outbound_model_payload_not_approved')
+         profile=request.learning_profile or request.teaching_profile or request.interview_profile
+         if profile is not None:catalog=profile.catalog
+         elif request.html_profile is not None:catalog=json.loads(request.html_profile.context_json).get('catalog',[])
+--- backend/app/capabilities/gateway.py@S07-pre
++++ backend/app/capabilities/gateway.py@S07-current
+@@ -98,6 +98,15 @@
+         self._tools = tools or ToolRegistry()
+ 
+     async def call(self, context: CallContext, request: ModelCallRequest) -> ModelCallResult:
++        # 冻结原请求及服务端配置；await不能把已核正文换成新正文。
++        original_request = request
++        request = request.model_copy(deep=True)
++        config = self._config.model_copy(deep=True)
++        request_snapshot = json.dumps(request.model_dump(mode='json'),sort_keys=True,separators=(',',':'),allow_nan=False)
++        config_snapshot = json.dumps(config.model_dump(mode='json'),sort_keys=True,separators=(',',':'),allow_nan=False)
++        def original_scope_unchanged():
++            return (json.dumps(original_request.model_dump(mode='json'),sort_keys=True,separators=(',',':'),allow_nan=False)==request_snapshot
++                and json.dumps(self._config.model_dump(mode='json'),sort_keys=True,separators=(',',':'),allow_nan=False)==config_snapshot)
+         if context.operation_id.startswith("html11m.") and request.html_profile is None:
+             return self._result(context, CallStatus.REJECTED, "html_profile_required")
+         if request.html_profile is not None:
+@@ -134,28 +143,29 @@
+             or request.allowed_tools
+         ):
+             return self._result(context, CallStatus.REJECTED, "invalid_input")
+-        if request.max_output_tokens > self._config.max_output_tokens_limit:
++        if request.max_output_tokens > config.max_output_tokens_limit:
+             return self._result(context, CallStatus.REJECTED, "output_token_limit")
+         try:
+-            payload = self._build_payload(request)
++            payload = self._build_payload(request, config=config)
+             encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+         except (ToolValidationError, ValueError, TypeError):
+             return self._result(context, CallStatus.REJECTED, "invalid_request")
+-        if len(encoded) > self._config.max_request_bytes:
++        if len(encoded) > config.max_request_bytes:
+             return self._result(context, CallStatus.REJECTED, "context_limit")
+ 
+         approved_grant = None
+         approved_manifest=None
+-        if getattr(self._transport, 'is_external', True) or self._config.outbound_grant is not None:
++        if getattr(self._transport, 'is_external', True) or config.outbound_grant is not None:
+             from .embedding import OutboundGrant,OutboundSourceManifest
+-            if self._config.outbound_grant is None:
++            if config.outbound_grant is None:
+                 return self._result(context, CallStatus.REJECTED, 'outbound_not_authorized')
+             try:
+-                grant = OutboundGrant.from_wire(self._config.outbound_grant)
+-                grant.check(context.activity_id,self._config.provider.value,self._config.model,len(encoded),request.max_output_tokens)
+-                manifest=OutboundSourceManifest.from_wire(self._config.outbound_source_manifest)
++                grant = OutboundGrant.from_wire(config.outbound_grant)
++                grant.check(context.activity_id,config.provider.value,config.model,len(encoded),request.max_output_tokens)
++                manifest=OutboundSourceManifest.from_wire(config.outbound_source_manifest)
+                 if manifest.sha256!=grant.source_manifest_sha256:raise AdmissionDenied('outbound_manifest_mismatch')
+-                manifest.check_model(request)
++                if not original_scope_unchanged():raise AdmissionDenied('outbound_scope_changed')
++                manifest.check_model(request,payload)
+                 approved_grant = grant.model_dump(mode='json')
+                 approved_manifest=manifest.model_dump(mode='json')
+             except (ValueError,AdmissionDenied):
+@@ -163,8 +173,8 @@
+ 
+         intent = AdmissionIntent(
+             context=context,
+-            provider=self._config.provider,
+-            configured_model=self._config.model,
++            provider=config.provider,
++            configured_model=config.model,
+             request_bytes=len(encoded),
+             max_output_tokens=request.max_output_tokens,
+             tool_names=tuple(sorted(request.allowed_tools)),
+@@ -197,18 +207,31 @@
+                     context_sha256=p.context_sha256, renderer_sha256=p.renderer_sha256,
+                     memory_selection_sha256=frozen.get("memory_selection_sha256")))
+         intent = replace(intent,retrieval_ref=request.retrieval_ref,outbound_grant=approved_grant,outbound_source_manifest=approved_manifest)
++        approved_wire = json.dumps([approved_grant,approved_manifest],sort_keys=True,separators=(',',':'))
++        def check_approved_scope():
++            if approved_grant is None:return
++            if not original_scope_unchanged() or json.dumps([intent.outbound_grant,intent.outbound_source_manifest],sort_keys=True,separators=(',',':'))!=approved_wire:
++                raise AdmissionDenied('outbound_scope_changed')
++            grant.check(context.activity_id,config.provider.value,config.model,len(encoded),request.max_output_tokens)
++            manifest.check_model(request,json.loads(encoded))
+         stage = "admit"
+         try:
++            check_approved_scope()
+             permit = await self._ledger.admit(intent)
+             stage = "permit_check"
+             self._validate_permit(permit, context)
+             stage = "mark_dispatch"
+-            if approved_grant is not None:grant.check(context.activity_id,self._config.provider.value,self._config.model,len(encoded),request.max_output_tokens)
++            check_approved_scope()
+             if request.retrieval_ref is not None:await self._ledger.mark_dispatch_started(permit,retrieval_ref=request.retrieval_ref)
+             else:await self._ledger.mark_dispatch_started(permit)
++            stage = "dispatch_scope_check"
++            check_approved_scope()
+         except AdmissionDenied as exc:
+             code = str(exc)
+-            if not code.startswith("interview_") and code not in {"scope_conflict","source_invalid","result_invalidated","cancelled","budget_exhausted","integrity_error","invalid_input"}:
++            if stage=="dispatch_scope_check":
++                # 已预扣/登记dispatch但尚未调用transport，明确未发送且不退款。
++                return await self._finish(permit,context,LedgerOutcome(LedgerDisposition.NOT_SENT,error_code='outbound_scope_changed'),CallStatus.NOT_SENT)
++            if not code.startswith("interview_") and code not in {"scope_conflict","source_invalid","result_invalidated","cancelled","budget_exhausted","integrity_error","invalid_input","outbound_scope_changed"}:
+                 code = "admission_denied"
+             return self._result(context, CallStatus.REJECTED, code)
+         except AdmissionUnavailable:
+@@ -225,13 +248,13 @@
+             return self._result(context, CallStatus.REJECTED, "admission_internal_error")
+ 
+         try:
+-            async with asyncio.timeout(self._config.timeout_seconds):
++            async with asyncio.timeout(config.timeout_seconds):
+                 response = await self._transport.send(
+-                    endpoint=f"{self._config.base_url}/chat/completions",
+-                    api_key=self._config.api_key.get_secret_value(),
+-                    payload=payload,
+-                    timeout_seconds=self._config.timeout_seconds,
+-                    max_response_bytes=self._config.max_response_bytes,
++                    endpoint=f"{config.base_url}/chat/completions",
++                    api_key=config.api_key.get_secret_value(),
++                    payload=json.loads(encoded),
++                    timeout_seconds=config.timeout_seconds,
++                    max_response_bytes=config.max_response_bytes,
+                 )
+         except RequestNotSent:
+             outcome = LedgerOutcome(LedgerDisposition.NOT_SENT, error_code="request_not_sent")
+@@ -251,14 +274,15 @@
+ 
+         return await self._handle_response(permit, context, request, response)
+ 
+-    def _build_payload(self, request: ModelCallRequest) -> dict[str, Any]:
++    def _build_payload(self, request: ModelCallRequest, *, config: ModelServiceConfig | None = None) -> dict[str, Any]:
++        config = config or self._config
+         self._validate_conversation(request)
+         payload: dict[str, Any] = {
+-            "model": self._config.model,
++            "model": config.model,
+             "messages": [message.model_dump(exclude_none=True) for message in request.messages],
+             "max_tokens": request.max_output_tokens,
+             "stream": False,
+-            "thinking": {"type": self._config.thinking.value},
++            "thinking": {"type": config.thinking.value},
+         }
+         if request.response_mode == ResponseMode.JSON_OBJECT:
+             payload["response_format"] = {"type": "json_object"}
+--- frontend/src/activities/TeachingWorkspace.tsx@S07-pre
++++ frontend/src/activities/TeachingWorkspace.tsx@S07-current
+@@ -25,6 +25,7 @@
+ import type { HtmlParent } from "../explanations/contracts";
+ import {RetrievalPanel} from './RetrievalPanel';
+ import {retrieveForCommand,storeRetrievalChain,type RetrievalChain} from './retrieval-api';
++import {canonical,dataNamespace,getDataContext} from '../data/context';
+ 
+ const POLL_MS = 3000;
+ const OBSERVE_MAX_SECONDS = 120;
+@@ -153,6 +154,7 @@
+   const editorOwner = useRef<string|null>(null);
+   const dirty = useRef({answer:false,goal:false,correction:false});
+   const workspaceToken = useRef("");
++  const observedHead = useRef("");
+   const [retrievalMode,setRetrievalMode]=useState<'hybrid'|'terms'>('hybrid');
+   const historySeq = useRef(0);
+   const historyAbort = useRef<AbortController|null>(null);
+@@ -206,6 +208,7 @@
+       const view = await getTeachingWorkspace(activityId, token, controller.signal);
+       if (!mounted.current || seq !== readSeq.current) return;
+       if (view === null) { setReadError("教学读取不可用（未确认）"); return; }
++      observedHead.current=canonical({revision:view.head.revision,goal: view.head.goal_version});
+       const key = [activityId, view.head.goal_record_id, view.head.path_record_id, view.head.node_id,
+         view.head.exercise_record_id, view.head.answer_record_id].join("|");
+       const editKey = `${key}|${view.head.revision}`;
+@@ -322,7 +325,11 @@
+     if (busy || !intentsOk) return;
+     if ((action==='answer'||action==='correct') && editConflict) { setError("输入仍属于旧作答身份；请先核对并明确沿用草稿"); return; }
+     const submittedContext=contextKey.current;
+-    const stillCurrent=()=>mounted.current&&activityRef.current===activityId&&contextKey.current===submittedContext;
++    const origin={activity:activityId,owner:editorOwner.current,view:workspaceToken.current,head:observedHead.current,
++      scope:scopeRef.current,namespace:dataNamespace(),dataContext:canonical(getDataContext())};
++    const stillCurrent=()=>mounted.current&&activityRef.current===origin.activity&&contextKey.current===submittedContext
++      &&editorOwner.current===origin.owner&&workspaceToken.current===origin.view&&observedHead.current===origin.head
++      &&scopeRef.current===origin.scope&&dataNamespace()===origin.namespace&&canonical(getDataContext())===origin.dataContext;
+     setBusy(action); setError(""); setNotice("");
+     const key = recovered?String(recovered.domain_input.business_key):newTeachingKey();
+     const input: Omit<TeachingCommandInput, "body"> = {
+@@ -341,7 +348,7 @@
+       let retrievalChain:RetrievalChain|undefined;
+       if (['plan','exercise','evaluate'].includes(action)&&retrievalMode==='hybrid') {
+         const owner=await teachingEditorOwner();
+-        if(!owner||!stillCurrent()||editorOwner.current!==owner)throw new Error('编辑身份不可核对，未提交');
++        if(!owner||!stillCurrent()||origin.owner!==owner)throw new Error('编辑身份不可核对，未提交');
+         if(recovered&&JSON.stringify(recovered.domain_input)!==JSON.stringify({...input,body}))throw new Error('原动作版本不同，不能改绑');
+         const query=String(workspace?.goal?.goal??goalText).trim().slice(0,1024);
+         const result=await retrieveForCommand(token,activityId,owner,'teaching',{...input,body},scopeRevision,input.expected_revision,query,()=>stillCurrent()&&editorOwner.current===owner,recovered);
+@@ -349,6 +356,7 @@
+         input.retrieval_ref=result.ref;retrievalChain=result.row;
+       }
+       const built = await buildTeachingCommand(activityId, { ...input, body });
++      if(!stillCurrent())return;
+       // 顺序：规范字节 → IndexedDB 完整正文 → localStorage 摘要 → POST 一次。
+       const stored = await saveTeachingDraft({
+         draft_id: `draft-${key}`,
+@@ -359,9 +367,11 @@
+         path_record_id: workspace?.head.path_record_id ?? null,
+         node_id: workspace?.head.node_id ?? null,
+         head_revision: input.expected_revision,
++        editor_owner_id:origin.owner??undefined,
+         content: built.request_body,
+         created_at: new Date().toISOString(),
+       });
++      if(!stillCurrent())return;
+       if (!stored) { setError("本机草稿写入失败，输入已保留，未发出任何请求"); return; }
+       draftId.current = `draft-${key}`;
+       const summary: TeachingIntentSummary = {
+@@ -372,23 +382,26 @@
+         answer_id: workspace?.head.answer_record_id ?? undefined,
+         request_sha: built.request_sha256, draft_id: draftId.current,
+         created_at: new Date().toISOString(), state: "pending",
++        editor_owner_id:origin.owner??undefined,view_token:origin.view,namespace:origin.namespace,
+         ...extra,
+       };
+       if (!await appendTeachingIntent(summary)) {
+         setError("本机恢复台账写入失败，未发出任何请求");
+         return;
+       }
+-      reloadIntents();
+-      if (!await updateTeachingIntent(key, { state: "submitted" })) {
+-        setError("本机恢复台账确认失败，未发出请求"); return;
+-      }
++      if(!stillCurrent())return;
+       reloadIntents();
+       let receipt: TeachingReceipt;
+       try {
++        const currentOwner=await teachingEditorOwner();
++        if(!stillCurrent()||!currentOwner||currentOwner!==origin.owner)return;
++        // 最后身份检查后先实际发起POST，异步标记只能描述已发起的动作。
++        const delivery=postTeachingCommand(activityId,{...input,body},token,stillCurrent)
++          .then(value=>({value,error:null}),error=>({value:null,error}));
+         if(retrievalChain)await storeRetrievalChain({...retrievalChain,domain_sent:true});
+-        const currentOwner=await teachingEditorOwner();
+-        if(!stillCurrent()||!currentOwner||currentOwner!==editorOwner.current)return;
+-        receipt = await postTeachingCommand(activityId, { ...input, body }, token);
++        await updateTeachingIntent(key,{state:"submitted"});
++        const delivered=await delivery;if(delivered.error)throw delivered.error;
++        receipt=delivered.value!;
+       } catch (reason) {
+         const known = reason instanceof TeachingApiError && reason.status > 0;
+         await updateTeachingIntent(key, known
+@@ -551,7 +564,7 @@
+           {head ? `${PHASE_TEXT[head.phase] ?? head.phase} · 修订 ${head.revision} · 目标版本 ${head.goal_version}` : "读取中…"}
+         </span>
+       </div>
+-      <button className="secondary" disabled={busy!==""} onClick={()=>void refresh()}>刷新教学工作区（只读）</button>
++      <button className="secondary" onClick={()=>void refresh()}>刷新教学工作区（只读）</button>
+       {workspace?.memory_selected && <p>本活动固定使用明确选择的背景版本。旧作答不算本活动的新独立表现。</p>}
+       {memoryModelBlocked && <p role="status">学习背景使用尚未配置，模型动作暂不可用。</p>}
+       {workspace?.memory_invalid && <p role="alert" className="failure">所选背景已更新或撤销，相关教学内容停用。原始作答仍保留，可新建活动重新选择。</p>}
+--- frontend/src/activities/teachingIntents.ts@S07-pre
++++ frontend/src/activities/teachingIntents.ts@S07-current
+@@ -15,7 +15,10 @@
+ let editorOwner: Promise<string | null> | null = null;
+ 
+ export function teachingEditorOwner(): Promise<string | null> {
+-  if (editorOwner) return editorOwner;
++  if (editorOwner) return editorOwner.then(id=>{
++    // 会话存储身份被更换时不能把原链自动改绑给新owner。
++    try{return id&&sessionStorage.getItem(EDITOR_OWNER_KEY())===id?id:null;}catch{return null;}
++  });
+   editorOwner = new Promise(resolve => {
+     if (!navigator.locks || !crypto.randomUUID) { resolve(null); return; }
+     void (async () => {
+@@ -63,6 +66,9 @@
+   state: "pending" | "submitted" | "committed" | "unconfirmed" | "refused";
+   last_code?: string;
+   last_message?: string;
++  editor_owner_id?: string;
++  view_token?: string;
++  namespace?: string;
+ };
+ 
+ function isSummary(value: unknown): value is TeachingIntentSummary {
+--- frontend/src/activities/teachingApi.ts@S07-pre
++++ frontend/src/activities/teachingApi.ts@S07-current
+@@ -118,8 +118,9 @@
+ }
+ 
+ export async function postTeachingCommand(
+-  activityId: string, command: TeachingCommandInput, token: string,
++  activityId: string, command: TeachingCommandInput, token: string, guard=()=>true,
+ ): Promise<TeachingReceipt> {
++  if(!guard())throw new TeachingApiError(0,"view_changed","原页面身份已变化，草稿与原键保留，未提交");
+   const data = await request(`/api/activities/${activityId}/teaching/commands`, token, {
+     method: "POST",
+     headers: { "Content-Type": "application/json" },

@@ -1,0 +1,64 @@
+{
+  "schema": "TASK117.low-memory-profile.v1",
+  "issued_at": "2026-10-15T12:14:07.428806+08:00",
+  "TASK": "TASK-117",
+  "R": "R-111",
+  "permit": "TASK-117-STEP018-INTEGRATION-S02-20261015",
+  "profile": "TASK117-S02-LOW-MEMORY-20261015",
+  "user_basis": "所有自有PG/API已停、暖机可用约1.66GiB；用户明确没更多内存并要求现有条件继续",
+  "supersedes": "原统一2GiB测试夹具预检与本次根分时调度项，其余S02许可不变",
+  "minimum_available_physical_MiB_before_start": {
+    "base_preflight": 512,
+    "first_PG": 512,
+    "API": 512,
+    "host_UI_browser": 768,
+    "second_PG": 768,
+    "fixed_preview": 1024
+  },
+  "second_PG_precondition": "实际恢复/校验依赖两库，且API/host browser/preview均停",
+  "default_simultaneous_PG": 1,
+  "maximum_short_restore_PG": 2,
+  "pressure_monitor": {
+    "sample_period_seconds": 2,
+    "available_physical_low_MiB": 256,
+    "consecutive_low_samples_to_cleanup": 2,
+    "action": "拒新动作并沿原有界闭包精确结束自有消费者/API/PG，不动他人"
+  },
+  "container_isolation_limits_unchanged": {
+    "PG_memory_MiB": 512,
+    "preview_memory_MiB": 1024,
+    "preview_memory_swap_MiB": 1024,
+    "PG_pids": 128,
+    "preview_pids": 256,
+    "network_sandbox_readonly_Job_StopProof": "unchanged"
+  },
+  "remaining_roots_from_actual_adoption_max": 3,
+  "S_total_roots_max": 11,
+  "TASK_total_including_one_reserved_Q_root_max": 12,
+  "time_money_starts_builds_objects_windows_caps": "原S02全部保持，无重置或延时；只增加用于内存分时的根调度门",
+  "counts_observed_not_final": {
+    "roots": 8,
+    "pg_create_attempts": 3,
+    "pg_objects": 3,
+    "volumes": 3,
+    "pg_starts": 11,
+    "api_starts": 7,
+    "browser_starts": 2,
+    "frontend_builds": 4,
+    "native_windows": 31,
+    "preview_creates": 0,
+    "preview_starts": 0,
+    "http": 164,
+    "provider_calls": 0,
+    "actual_fee_microunits": 0
+  },
+  "S02_start_unchanged": {
+    "utc": "2026-10-15T02:24:00.722344+00:00",
+    "mono_ns": 4278922854000
+  },
+  "clock_domain_note": "当前host mono约4e12，旧S01约1e15；不同host启动域不作跨域差值，只将封存S01秒数与S02段秒数相加",
+  "gate_values_are_trial_scheduling_not_capacity_guarantee": true,
+  "main_product_execution_Docker_or_private_read": 0,
+  "old_execution_budget_or_fixture_written_by_main": false,
+  "notice_sha256": "de6ea09ee641b8924cdcafa454f61c5a5a7e866d6426abee2ef696f451f29ff1"
+}

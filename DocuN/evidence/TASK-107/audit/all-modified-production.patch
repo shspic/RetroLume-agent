@@ -1,0 +1,776 @@
+--- pre/backend/app/activities/repository.py
++++ current/backend/app/activities/repository.py
+@@ -35,6 +35,8 @@
+ from app.learning.teaching_contracts import TeachingRefusal
+ 
+ from .teaching_repository import TeachingLedgerMethods
++from .interview_repository import InterviewLedgerMethods
++from app.interview.contracts import InterviewRefusal
+ from app.memory.repository import MemoryLedgerMethods
+ from app.memory.contracts import MemorySelectionInput, MemoryRefusal
+ from app.learning.contracts import canonical, sha
+@@ -95,6 +97,7 @@
+     INVALIDATED_SCOPE_CHANGED = "invalidated_scope_changed"
+     INVALIDATED_SOURCE = "invalidated_source"
+     INVALIDATED_MEMORY = "invalidated_memory"
++    INVALIDATED_INTERVIEW = "invalidated_interview"
+     UNRESOLVED = "unresolved"
+     TERMINAL_WITHOUT_PAYLOAD = "terminal_without_payload"
+     NO_OPERATION = "no_operation"
+@@ -253,6 +256,7 @@
+     allowed_models: tuple[tuple[str, str], ...]
+     sources: tuple[ActivitySourceView, ...]
+     memory_selection: dict | None = None
++    business_domain: str | None = None
+ 
+ 
+ @dataclass(frozen=True)
+@@ -277,7 +281,7 @@
+     payload: str | None = field(default=None, repr=False)
+ 
+ 
+-class PostgresAdmissionLedger(TeachingLedgerMethods, MemoryLedgerMethods):
++class PostgresAdmissionLedger(TeachingLedgerMethods, MemoryLedgerMethods, InterviewLedgerMethods):
+     """`AdmissionLedger` 的失败关闭 PostgreSQL 实现。
+ 
+     连接、锁和语句都有限时；任何数据库错误对准入调用统一表现为 unavailable，
+@@ -477,24 +481,28 @@
+             cursor=await connection.execute("SELECT * FROM activities WHERE id=%s FOR UPDATE",(activity_id,))
+             row=await cursor.fetchone()
+             await self._verify_scope_hint(connection,activity_id,hint)
+-            if row is None:raise ActivityLedgerConflict("not_found")
+-            if row["scope_revision"]!=expected_scope_revision:raise ScopeConflict("scope_conflict")
+-            if row["status"]=="cancelled":raise ActivityLedgerConflict("cancelled")
+-            if row["status"] not in ("pending","running") or row["deadline_at"]<=datetime.now(timezone.utc):
+-                raise ActivityLedgerConflict("activity_expired")
+-            for x in sources:
+-                actual=locked[x.source_id]
+-                if actual is None or str(actual["current_version"])!=x.version_id or actual["revision"]!=x.revision:
+-                    raise ActivityLedgerConflict("source_invalid")
+-            new_key=tuple(sorted((x.source_id,x.version_id,x.revision) for x in sources))
+-            if self._scope_key(hint)==new_key:return ScopeSnapshot(activity_id,expected_scope_revision,sources)
+-            if expected_scope_revision==2_147_483_647:raise ActivityLedgerConflict("scope_revision_limit")
+-            await connection.execute("DELETE FROM activity_scope_sources WHERE activity_id=%s",(activity_id,))
+-            for x in sources:
+-                await connection.execute("INSERT INTO activity_scope_sources(activity_id,source_id,version_id,source_revision) VALUES (%s,%s,%s,%s)",(activity_id,x.source_id,x.version_id,x.revision))
+-            await connection.execute("UPDATE activities SET scope_revision=scope_revision+1,updated_at=CURRENT_TIMESTAMP WHERE id=%s",(activity_id,))
+-            return ScopeSnapshot(activity_id,expected_scope_revision+1,sources)
++            await self._interview_require_non_domain(connection,activity_id)
++            return await self._apply_scope_locked(connection,activity_id,row,locked,expected_scope_revision,sources)
+         return await self._transaction(operation)
++
++    async def _apply_scope_locked(self,connection,activity_id,row,locked,expected_scope_revision,sources,force_revision=False):
++        if row is None:raise ActivityLedgerConflict("not_found")
++        if row["scope_revision"]!=expected_scope_revision:raise ScopeConflict("scope_conflict")
++        if row["status"]=="cancelled":raise ActivityLedgerConflict("cancelled")
++        if row["status"] not in ("pending","running") or row["deadline_at"]<=datetime.now(timezone.utc):
++            raise ActivityLedgerConflict("activity_expired")
++        for x in sources:
++            actual=locked[x.source_id]
++            if actual is None or str(actual["current_version"])!=x.version_id or actual["revision"]!=x.revision:
++                raise ActivityLedgerConflict("source_invalid")
++        new_key=tuple(sorted((x.source_id,x.version_id,x.revision) for x in sources))
++        if not force_revision and self._scope_key(await self._source_rows(connection,activity_id))==new_key:return ScopeSnapshot(activity_id,expected_scope_revision,sources)
++        if expected_scope_revision==2_147_483_647:raise ActivityLedgerConflict("scope_revision_limit")
++        await connection.execute("DELETE FROM activity_scope_sources WHERE activity_id=%s",(activity_id,))
++        for x in sources:
++            await connection.execute("INSERT INTO activity_scope_sources(activity_id,source_id,version_id,source_revision) VALUES (%s,%s,%s,%s)",(activity_id,x.source_id,x.version_id,x.revision))
++        await connection.execute("UPDATE activities SET scope_revision=scope_revision+1,updated_at=CURRENT_TIMESTAMP WHERE id=%s",(activity_id,))
++        return ScopeSnapshot(activity_id,expected_scope_revision+1,sources)
+ 
+     async def create_activity(self, spec: ActivitySpec, *, memory_selection=None) -> None:
+         activity_id, sources = self._validate_spec(spec)
+@@ -1083,6 +1091,7 @@
+             snapshots=memory_state['snapshots']
+             sources_valid=memory_state['sources_valid']
+             activity=memory_state['activity']
++            await self._interview_require_call(connection,activity,operation_id,intent.interview_binding)
+             self._memory_require_call(activity,operation_id,intent.teaching_binding)
+             if intent.input_result is not None and activity is not None:
+                 if activity["status"]=="cancelled":raise AdmissionDenied("cancelled")
+@@ -1108,7 +1117,7 @@
+                     raise AdmissionDenied("invalid_input")
+                 if ref.scope_revision!=activity["scope_revision"] or ref.scope_revision!=intent.context.scope_revision:
+                     raise AdmissionDenied("result_invalidated")
+-            if operation_id.startswith(('teach8m.','teach8t.')):
++            if operation_id.startswith(('teach8m.','teach8t.','int10m.')):
+                 await self._teaching_lock_operations(connection,activity_id)
+             keys=sorted({operation_id}|({ref.operation_id} if ref else set()))
+             cursor=await connection.execute("SELECT * FROM activity_operations WHERE activity_id=%s AND operation_id=ANY(%s) ORDER BY operation_id FOR UPDATE",(activity_id,keys))
+@@ -1120,7 +1129,11 @@
+                                                         intent.teaching_binding, "admit")
+                 except TeachingRefusal as exc:
+                     raise AdmissionDenied(exc.code) from None
++            if operation_id.startswith("int10m."):
++                try: await self._locked_interview_binding(connection,activity,operation_id,intent.interview_binding,"admit")
++                except InterviewRefusal as exc: raise AdmissionDenied(exc.code) from None
+             if operation_id in calls:raise AdmissionDenied("操作键已经占用，不能获得第二次发送资格")
++            if ref and ref.operation_id.startswith("int10m."):raise AdmissionDenied("interview_parent_forbidden")
+             if ref:
+                 parent=calls.get(ref.operation_id)
+                 if parent is not None and parent["kind"]!="model":
+@@ -1239,6 +1252,7 @@
+             snapshots=memory_state['snapshots']
+             sources_valid=memory_state['sources_valid']
+             activity=memory_state['activity']
++            await self._interview_require_call(connection,activity,operation_id,tool=True)
+             self._memory_require_call(activity,operation_id,tool=True)
+             now = datetime.now(timezone.utc)  # 来源与活动锁均已取得。
+             if activity is None or not sources_valid:
+@@ -1471,7 +1485,7 @@
+         snapshots=memory_state['snapshots']
+         sources_valid=memory_state['sources_valid']
+         activity=memory_state['activity']
+-        if operation_id.startswith(('teach8m.','teach8t.')):
++        if operation_id.startswith(('teach8m.','teach8t.','int10m.')):
+             await self._teaching_lock_operations(connection,activity_id)
+         cursor = await connection.execute(
+             "SELECT * FROM activity_operations WHERE admission_id = %s FOR UPDATE",
+@@ -1512,6 +1526,9 @@
+                     await self._locked_teaching_binding(connection, activity, call["operation_id"], None, "mark")
+                 except TeachingRefusal as exc:
+                     raise AdmissionDenied(exc.code) from None
++            if call["operation_id"].startswith("int10m."):
++                try: await self._locked_interview_binding(connection,activity,call["operation_id"],None,"mark")
++                except InterviewRefusal as exc: raise AdmissionDenied(exc.code) from None
+             if (
+                 call["state"] != "reserved" or activity["dispatch_closed"]
+                 or not self._operation_is_current(activity, call, sources_valid)
+@@ -1689,6 +1706,8 @@
+             if confirmed is not None:
+                 if call["operation_id"].startswith("teach8m."):
+                     await self._teaching_confirm_integrity(connection,call,payload_triple)
++                if call["operation_id"].startswith("int10m."):
++                    await self._interview_confirm_integrity(connection,call,payload_triple)
+                 return confirmed
+             current = self._operation_is_current(activity, call, sources_valid)
+             if not current and outcome.disposition is not LedgerDisposition.UNKNOWN:
+@@ -1701,6 +1720,8 @@
+             if call["operation_id"].startswith(("teach8m.", "teach8t.")):
+                 # G8：教学事实/进度/暴露与终态正文同一 COMMIT；失败整笔回滚。
+                 await self._write_teaching_outcome(connection, activity, call, outcome, payload_triple)
++            if call["operation_id"].startswith("int10m."):
++                await self._write_interview_outcome(connection,activity,call,outcome,payload_triple)
+             return RecordOutcome.RECORDED
+ 
+         return await self._transaction(operation)
+@@ -1730,7 +1751,7 @@
+                AND (m.id IS NULL OR m.current_version IS NULL
+                     OR m.current_version <> s.version_id
+                     OR m.revision <> s.source_revision)
+-        )) AS sources_valid, /*memory*/TRUE AS memory_qualified"""
++        )) AS sources_valid, /*memory*/TRUE AS memory_qualified, /*interview*/TRUE AS interview_qualified"""
+ 
+     @staticmethod
+     def _read_status(row: dict, *, has_result: bool) -> ResultReadStatus:
+@@ -1745,6 +1766,8 @@
+             return ResultReadStatus.INVALIDATED_SOURCE
+         if not row.get("memory_qualified", True):
+             return ResultReadStatus.INVALIDATED_MEMORY
++        if not row.get("interview_qualified",True):
++            return ResultReadStatus.INVALIDATED_INTERVIEW
+         if row["activity_status_now"] == "cancelled":
+             return ResultReadStatus.COMMITTED_HISTORY_CANCELLED
+         return ResultReadStatus.COMMITTED_CURRENT
+@@ -1793,7 +1816,7 @@
+ 
+         async def operation(connection: object) -> CommittedResultSnapshot:
+             cursor = await connection.execute(
+-                await self._memory_result_sql(connection,f"""{self._RESULT_READ_SQL},
++                await self._interview_result_sql(connection,await self._memory_result_sql(connection,f"""{self._RESULT_READ_SQL},
+        CASE WHEN r.payload_sha256 IS NOT NULL
+              AND r.admission_id = o.admission_id
+              AND r.execution_generation = o.execution_generation
+@@ -1807,13 +1830,13 @@
+                     AND (m.id IS NULL OR m.current_version IS NULL
+                          OR m.current_version <> s.version_id
+                          OR m.revision <> s.source_revision))
+-            THEN r.payload ELSE NULL END AS payload,
++            AND /*interview*/TRUE THEN r.payload ELSE NULL END AS payload,
+        o.activity_id
+   FROM activity_operations o
+   JOIN activities a ON a.id = o.activity_id
+   LEFT JOIN activity_operation_results r
+          ON r.activity_id = o.activity_id AND r.operation_id = o.operation_id
+- WHERE o.activity_id = %s AND o.operation_id = %s"""),
++ WHERE o.activity_id = %s AND o.operation_id = %s""")),
+                 (activity_id, operation_id),
+             )
+             row = await cursor.fetchone()
+@@ -1875,7 +1898,7 @@
+ 
+         async def operation(connection: object) -> tuple[CommittedResultSnapshot, ...]:
+             cursor = await connection.execute(
+-                await self._memory_result_sql(connection,f"""{self._RESULT_READ_SQL},
++                await self._interview_result_sql(connection,await self._memory_result_sql(connection,f"""{self._RESULT_READ_SQL},
+        CASE WHEN r.payload_sha256 IS NOT NULL
+              AND r.admission_id = o.admission_id
+              AND r.execution_generation = o.execution_generation
+@@ -1889,7 +1912,7 @@
+                     AND (m.id IS NULL OR m.current_version IS NULL
+                          OR m.current_version <> s.version_id
+                          OR m.revision <> s.source_revision))
+-            THEN r.payload ELSE NULL END AS payload,
++            AND /*interview*/TRUE THEN r.payload ELSE NULL END AS payload,
+        o.activity_id
+   FROM activity_operation_results r
+   JOIN activity_operations o
+@@ -1897,7 +1920,7 @@
+   JOIN activities a ON a.id = r.activity_id
+  WHERE {conditions}
+  ORDER BY r.operation_id
+- LIMIT %s"""),
++ LIMIT %s""")),
+                 tuple(params),
+             )
+             rows = list(await cursor.fetchall())
+@@ -2004,6 +2027,7 @@
+             tools_reserved=row["tools_reserved"],
+             allowed_models=tuple((str(p), str(m)) for p, m in row["allowed_models"]),
+             memory_selection=row.get("memory_selection"),
++            business_domain=row.get("business_domain"),
+             sources=tuple(
+                 ActivitySourceView(str(x["source_id"]), str(x["title"]), bool(x["valid"]))
+                 for x in row["sources"]
+@@ -2063,6 +2087,9 @@
+                 await self._memory_result_sql(connection,f"{self._ACTIVITY_FACT_SQL} WHERE a.id = %s"), (activity_id,),
+             )
+             row = await cursor.fetchone()
++            if row is not None:
++                domain=await self._interview_domain(connection,activity_id)
++                row=dict(row,business_domain=None if domain=="existing" else domain)
+             return None if row is None else self._activity_fact_from_row(row)
+ 
+         return await self._transaction(operation)
+@@ -2099,7 +2126,7 @@
+                     AND (m.id IS NULL OR m.current_version IS NULL
+                          OR m.current_version <> s.version_id
+                          OR m.revision <> s.source_revision))
+-            THEN r.payload ELSE NULL END AS payload
++            AND /*interview*/TRUE THEN r.payload ELSE NULL END AS payload
+   FROM activity_operations o
+   JOIN activities a ON a.id = o.activity_id
+   LEFT JOIN activity_operation_results r
+@@ -2124,7 +2151,7 @@
+              WHERE s.activity_id = o.activity_id
+                AND (m.id IS NULL OR m.current_version IS NULL
+                     OR m.current_version <> s.version_id
+-                    OR m.revision <> s.source_revision)) AND /*memory*/TRUE) AS payload_eligible
++                    OR m.revision <> s.source_revision)) AND /*memory*/TRUE AND /*interview*/TRUE) AS payload_eligible
+   FROM activity_operations o
+   JOIN activities a ON a.id = o.activity_id
+   LEFT JOIN activity_operation_results r
+@@ -2238,7 +2265,7 @@
+ 
+         async def operation(connection: object) -> tuple[OperationRow, ...]:
+             cursor = await connection.execute(
+-                await self._memory_result_sql(connection,f"{self._OPERATIONS_LIST_SELECT} WHERE {conditions} ORDER BY o.operation_id LIMIT %s"),
++                await self._interview_result_sql(connection,await self._memory_result_sql(connection,f"{self._OPERATIONS_LIST_SELECT} WHERE {conditions} ORDER BY o.operation_id LIMIT %s")),
+                 (*params, limit),
+             )
+             return tuple(self._operation_list_row_from_row(row) for row in await cursor.fetchall())
+@@ -2252,7 +2279,7 @@
+ 
+         async def operation(connection: object) -> OperationRow | None:
+             cursor = await connection.execute(
+-                await self._memory_result_sql(connection,f"{self._OPERATIONS_SELECT} WHERE o.activity_id = %s AND o.operation_id = %s"),
++                await self._interview_result_sql(connection,await self._memory_result_sql(connection,f"{self._OPERATIONS_SELECT} WHERE o.activity_id = %s AND o.operation_id = %s")),
+                 (activity_id, operation_id),
+             )
+             row = await cursor.fetchone()
+
+--- pre/backend/app/activities/service.py
++++ current/backend/app/activities/service.py
+@@ -120,6 +120,10 @@
+                 return ContinuationOutcome("invalid_input")
+         except (ValueError,TypeError,AttributeError):
+             return ContinuationOutcome("invalid_input")
++        from app.interview.contracts import InterviewRefusal
++        try: await self.ledger.require_non_interview(activity_id)
++        except InterviewRefusal as exc: return ContinuationOutcome(exc.code)
++        if parent_operation_id.startswith("int10m.") or new_operation_id.startswith("int10m."):return ContinuationOutcome("interview_parent_forbidden")
+         selected=await self.ledger.read_memory_selection(activity_id)
+         if selected.get('selected') or not selected.get('eligible',True):
+             return ContinuationOutcome('memory_profile_required')
+@@ -206,6 +210,9 @@
+             validate_identity(activity_id,executor_id,operation_id,run_tag)
+         except (ValueError,TypeError,AttributeError):
+             return ToolActionOutcome("invalid_input")
++        from app.interview.contracts import InterviewRefusal
++        try: await self.ledger.require_non_interview(activity_id)
++        except InterviewRefusal as exc: return ToolActionOutcome(exc.code)
+         selected=await self.ledger.read_memory_selection(activity_id)
+         if (selected.get('selected') or not selected.get('eligible',True)) and not operation_id.startswith('teach8t.'):
+             return ToolActionOutcome('memory_profile_required')
+
+--- pre/backend/app/activities/api.py
++++ current/backend/app/activities/api.py
+@@ -95,7 +95,8 @@
+ 
+ def _fact_payload(fact: ActivityFactView, *, detail: bool) -> dict:
+     data = {
+-        "activity_id": fact.activity_id,
++        "activity_id": fact.activity_id,
++        **({"business_domain":fact.business_domain} if fact.business_domain is not None else {}),
+         "status": fact.status,
+         **({"memory_selection":fact.memory_selection} if fact.memory_selection is not None else {}),
+         "created_at": _iso(fact.created_at),
+@@ -182,7 +183,10 @@
+     return value
+ 
+ 
+-def _map_read_error(exc: Exception) -> HTTPException:
++def _map_read_error(exc: Exception) -> HTTPException:
++    from app.interview.contracts import InterviewRefusal
++    if isinstance(exc, InterviewRefusal):
++        return _error(exc.status or 409,exc.code,exc.message)
+     if isinstance(exc, ResultIntegrityError):
+         return _error(409, "integrity_error", "活动数据完整性检查失败，未返回可能不可信的内容")
+     if isinstance(exc, ActivityLedgerConflict):
+@@ -429,6 +433,9 @@
+         "learning_followup_required": (409, "learning_followup_required"),
+         "memory_profile_required": (409, "memory_profile_required"),
+         "memory_dependency_invalid": (409, "memory_dependency_invalid"),
++        "interview_domain_conflict": (409, "interview_domain_conflict"),
++        "interview_parent_forbidden": (409, "interview_parent_forbidden"),
++        "interview_schema_not_ready": (503, "interview_schema_not_ready"),
+         "integrity_error": (409, "integrity_error"),
+     }
+     if outcome.status in refusal:
+
+--- pre/backend/app/activities/teaching_repository.py
++++ current/backend/app/activities/teaching_repository.py
+@@ -131,6 +131,9 @@
+             extra=refs
+         state=await self._memory_lock_prefix(connection,activity_id,extra_sources=extra)
+         activity=state['activity']
++        from app.interview.contracts import InterviewRefusal
++        try: await self._interview_require_non_domain(connection,activity_id)
++        except InterviewRefusal as exc: raise TeachingRefusal('stage_conflict','此活动属于面试域或其资格不可靠') from None
+         if activity is None:raise TeachingRefusal('not_found','活动不存在')
+         await self._teaching_lock_operations(connection,activity_id)
+         activity['_teaching_sources_valid']=state['sources_valid'] and state['eligible']
+@@ -410,7 +413,7 @@
+ 
+     async def _teaching_rebuild_progress(self, connection, activity_id, head, extra=None):
+         guard=await self._memory_sql_guard(connection,"%s")
+-        cursor=await connection.execute("SELECT "+guard+" AS valid",tuple(activity_id for _ in range(guard.count('%s'))))
++        cursor=await connection.execute("SELECT "+guard+" AS valid",tuple(activity_id for _ in range(guard.count('%s'))))
+         if not (await cursor.fetchone())['valid']:
+             raise TeachingRefusal('memory_dependency_invalid','失效背景不能重建当前进度')
+         path = await self._teaching_read_record_row(connection, activity_id, head["path_record_id"])
+@@ -1512,25 +1515,25 @@
+ 
+         return await self._transaction(operation)
+ 
+-    async def read_teaching_recipe_records(self,activity_id,record_ids):
+-        """v2有限recipe一次资格快照复取全部引用，避免逐项重复schema探测。"""
+-        activity_id=self._uuid(activity_id,'activity_id')
+-        if not 1<=len(record_ids)<=12 or len(set(record_ids))!=len(record_ids):raise ValueError('invalid_input')
+-        ids=[self._uuid(rid,'record_id') for rid in record_ids]
+-        async def operation(connection):
+-            guard=await self._memory_sql_guard(connection,'r.activity_id')
+-            cursor=await connection.execute("""SELECT r.record_id::text,r.kind,r.body_sha256,r.exercise_record_id::text,
+-              r.answer_record_id::text,r.operation_id,
+-              CASE WHEN r.kind IN('goal','answer','correction') OR """+guard+""" THEN r.body ELSE NULL END AS body,
+-              CASE WHEN """+guard+""" THEN p.payload ELSE NULL END AS payload,
+-              p.payload_format,p.payload_sha256 AS operation_payload_sha256
+-              FROM teaching_records r LEFT JOIN activity_operation_results p
+-               ON p.activity_id=r.activity_id AND p.operation_id=r.operation_id
+-              WHERE r.activity_id=%s AND r.record_id=ANY(%s::uuid[]) ORDER BY r.seq""",(activity_id,ids))
+-            return list(await cursor.fetchall())
+-        return await self._transaction(operation)
+-
+-    async def read_teaching_head(self, activity_id: str) -> dict | None:
++    async def read_teaching_recipe_records(self,activity_id,record_ids):
++        """v2有限recipe一次资格快照复取全部引用，避免逐项重复schema探测。"""
++        activity_id=self._uuid(activity_id,'activity_id')
++        if not 1<=len(record_ids)<=12 or len(set(record_ids))!=len(record_ids):raise ValueError('invalid_input')
++        ids=[self._uuid(rid,'record_id') for rid in record_ids]
++        async def operation(connection):
++            guard=await self._memory_sql_guard(connection,'r.activity_id')
++            cursor=await connection.execute("""SELECT r.record_id::text,r.kind,r.body_sha256,r.exercise_record_id::text,
++              r.answer_record_id::text,r.operation_id,
++              CASE WHEN r.kind IN('goal','answer','correction') OR """+guard+""" THEN r.body ELSE NULL END AS body,
++              CASE WHEN """+guard+""" THEN p.payload ELSE NULL END AS payload,
++              p.payload_format,p.payload_sha256 AS operation_payload_sha256
++              FROM teaching_records r LEFT JOIN activity_operation_results p
++               ON p.activity_id=r.activity_id AND p.operation_id=r.operation_id
++              WHERE r.activity_id=%s AND r.record_id=ANY(%s::uuid[]) ORDER BY r.seq""",(activity_id,ids))
++            return list(await cursor.fetchall())
++        return await self._transaction(operation)
++
++    async def read_teaching_head(self, activity_id: str) -> dict | None:
+         """当前教学 head 只读快照（锁前组包用；锁内以 CAS/核对为准）。"""
+         activity_id = self._uuid(activity_id, "activity_id")
+ 
+
+--- pre/backend/app/learning/service.py
++++ current/backend/app/learning/service.py
+@@ -28,6 +28,11 @@
+         return None if operation_id is None else await self.ledger.read_operation(activity_id, operation_id)
+ 
+     async def execute(self, activity_id, business_key, text, config, *, parent_operation_id=None, run_tag):
++        from app.interview.contracts import InterviewRefusal
++        try: await self.ledger.require_non_interview(activity_id)
++        except InterviewRefusal as exc: raise LearningRefusal(exc.code,'此活动属于面试域或其资格不可核对') from None
++        if parent_operation_id is not None and parent_operation_id.startswith('int10m.'):
++            raise LearningRefusal('interview_parent_forbidden','面试成果不能成为学习输入')
+         selection=await self.ledger.read_memory_selection(activity_id)
+         if selection.get('selected') or not selection.get('eligible',True):
+             raise LearningRefusal('memory_profile_required','此活动的背景请在教学工作区使用')
+
+--- pre/backend/app/capabilities/contracts.py
++++ current/backend/app/capabilities/contracts.py
+@@ -13,6 +13,7 @@
+ 
+ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
+ from app.learning.contracts import LearningProfile
++from app.interview.contracts import InterviewProfile, InterviewCallBinding
+ from app.learning.teaching_contracts import TeachingCallBinding, TeachingProfile, TeachingMemoryCallBinding, TeachingMemoryProfile
+ 
+ 
+@@ -130,6 +131,7 @@
+     input_result: ResultConsumptionRef | None = Field(default=None, repr=False)
+     learning_profile: LearningProfile | None = Field(default=None, repr=False)
+     teaching_profile: TeachingProfile | TeachingMemoryProfile | None = Field(default=None, repr=False)
++    interview_profile: InterviewProfile | None = Field(default=None, repr=False)
+     messages: tuple[Message, ...] = Field(min_length=1, max_length=128)
+     max_output_tokens: int = Field(ge=1)
+     response_mode: ResponseMode = ResponseMode.JSON_OBJECT
+@@ -138,7 +140,7 @@
+     @model_validator(mode="after")
+     def profile_exclusive(self) -> "ModelCallRequest":
+         # teaching.v1 与 learning.v1 互斥；teaching 必须 JSON_OBJECT 且无工具。
+-        if self.learning_profile is not None and self.teaching_profile is not None:
++        if sum(p is not None for p in (self.learning_profile,self.teaching_profile,self.interview_profile)) > 1:
+             raise ValueError("mixed_profile_rejected")
+         if self.teaching_profile is not None and (
+             self.response_mode.value != "json_object" or self.allowed_tools
+@@ -146,6 +148,8 @@
+             raise ValueError("invalid_teaching_profile")
+         if self.teaching_profile is not None and self.messages and len(self.messages) > 3:
+             raise ValueError("invalid_teaching_profile")
++        if self.interview_profile is not None and (self.response_mode.value != "json_object" or self.allowed_tools or self.input_result is not None or len(self.messages) != 2):
++            raise ValueError("interview_binding_invalid")
+         return self
+ 
+     @field_validator("allowed_tools")
+@@ -194,6 +198,7 @@
+     input_result: ResultConsumptionRef | None = None
+     # G8：受信教学调用绑定；由 gateway 从 teaching_profile 构造，公开 API 不可直接构造。
+     teaching_binding: TeachingCallBinding | TeachingMemoryCallBinding | None = None
++    interview_binding: InterviewCallBinding | None = None
+ 
+ 
+ @dataclass(frozen=True)
+
+--- pre/backend/app/capabilities/gateway.py
++++ current/backend/app/capabilities/gateway.py
+@@ -101,6 +101,13 @@
+         if request.learning_profile is None and request.teaching_profile is None \
+                 and context.operation_id.startswith(("learn-first-v1.", "learn-next-v1.")):
+             return self._result(context, CallStatus.REJECTED, "invalid_learning_profile")
++        if context.operation_id.startswith("int10m.") and request.interview_profile is None:
++            return self._result(context, CallStatus.REJECTED, "interview_profile_required")
++        if request.interview_profile is not None:
++            from app.interview.policy import validate_request
++            code = await validate_request(context, request, self._ledger)
++            if code is not None:
++                return self._result(context, CallStatus.REJECTED, code)
+         if request.teaching_profile is not None:
+             if request.learning_profile is not None or request.allowed_tools \
+                     or not context.operation_id.startswith("teach8m."):
+@@ -147,6 +154,12 @@
+                 **({'memory_selection_sha256':request.teaching_profile.memory_selection_sha256,'assembled_messages_sha256':request.teaching_profile.assembled_messages_sha256} if request.teaching_profile.profile=='teaching.v2' else {}),
+             ) if request.teaching_profile is not None else None),
+         )
++        if request.interview_profile is not None:
++            from app.interview.contracts import InterviewCallBinding
++            p=request.interview_profile
++            intent=AdmissionIntent(context=intent.context,provider=intent.provider,configured_model=intent.configured_model,request_bytes=intent.request_bytes,
++                max_output_tokens=intent.max_output_tokens,tool_names=intent.tool_names,interview_binding=InterviewCallBinding(
++                    business_key=p.business_key,request_sha256=p.request_sha256,context_sha256=p.context_sha256,expected_head_revision=p.expected_head_revision,goal_version=p.goal_version))
+         stage = "admit"
+         try:
+             permit = await self._ledger.admit(intent)
+@@ -156,7 +169,7 @@
+             await self._ledger.mark_dispatch_started(permit)
+         except AdmissionDenied as exc:
+             code = str(exc)
+-            if code not in {"scope_conflict","source_invalid","result_invalidated","cancelled","budget_exhausted","integrity_error","invalid_input"}:
++            if not code.startswith("interview_") and code not in {"scope_conflict","source_invalid","result_invalidated","cancelled","budget_exhausted","integrity_error","invalid_input"}:
+                 code = "admission_denied"
+             return self._result(context, CallStatus.REJECTED, code)
+         except AdmissionUnavailable:
+@@ -413,7 +426,14 @@
+             if not isinstance(value, dict):
+                 raise ResponseValidationError("invalid_output_json")
+             _validate_json_shape(value)
+-            if request.learning_profile is not None:
++            if request.interview_profile is not None:
++                from app.interview.policy import stored_result
++                try:
++                    if completion_tokens > request.max_output_tokens: raise ValueError("invalid_interview_output")
++                    value=stored_result(content,request.interview_profile,request.messages)
++                except (ValueError,TypeError,KeyError,RecursionError):
++                    raise ResponseValidationError("invalid_interview_output") from None
++            elif request.learning_profile is not None:
+                 from app.learning.contracts import normalize_result, parse_output
+                 try:
+                     if completion_tokens > request.max_output_tokens:
+
+--- pre/backend/app/service_config.py
++++ current/backend/app/service_config.py
+@@ -56,7 +56,11 @@
+     teaching_output_tokens: int | None = None
+     teaching_calculation_layer: LayerState = LayerState(False, "teaching_not_configured")
+     memory_context: object | None = None
+-    memory_layer: LayerState = LayerState(False,"memory_not_configured")
++    memory_layer: LayerState = LayerState(False,"memory_not_configured")
++    interview_local_layer: LayerState = LayerState(False,"interview_schema_probe_required")
++    interview_model_layer: LayerState = LayerState(False,"interview_not_configured")
++    interview_output_tokens: int | None = None
++    interview_followups: int | None = None
+ 
+ 
+ class _ModelIdentity(BaseModel):
+@@ -269,7 +273,28 @@
+     return LayerState(True), config
+ 
+ 
+-def load_activity_config(path: Path) -> ActivityConfig:
++class _InterviewInput(BaseModel):
++    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
++    profile: str = Field(pattern=r"^interview\.v1$")
++    max_output_tokens: int = Field(ge=1, le=2048)
++    max_followups_per_round: int = Field(ge=1, le=4)
++
++
++def _interview_check(data, defaults, cont, service):
++    if data.get('interview') is None:
++        return LayerState(False,'interview_not_configured'),None,None
++    try:
++        value=_InterviewInput.model_validate(data['interview'])
++    except ValidationError:
++        return LayerState(False,'interview_config_invalid'),None,None
++    if not cont.available or service is None:
++        return LayerState(False,'interview_model_unavailable'),None,None
++    if value.max_output_tokens>min(defaults.max_output_tokens,service.max_output_tokens_limit):
++        return LayerState(False,'interview_config_invalid'),None,None
++    return LayerState(True),value.max_output_tokens,value.max_followups_per_round
++
++
++def load_activity_config(path: Path) -> ActivityConfig:
+     """读取一次本地私有配置；任何失败都按 L1/L2 分层失败关闭，不抛出。"""
+     try:
+         raw = path.read_text(encoding="utf-8")
+@@ -300,7 +325,8 @@
+     create_layer = LayerState(True)
+     continue_layer, model_service = _l2_check(data, provider, identity.model, defaults)
+     learning_layer, learning_tokens = _learning_check(data, defaults, continue_layer, model_service)
+-    teaching_layer, teaching_tokens, calculation_layer = _teaching_check(data, defaults, continue_layer, model_service)
++    teaching_layer, teaching_tokens, calculation_layer = _teaching_check(data, defaults, continue_layer, model_service)
++    interview_layer,interview_tokens,interview_followups = _interview_check(data,defaults,continue_layer,model_service)
+     memory_context=None
+     memory_layer=LayerState(False,'memory_not_configured')
+     if data.get('memory_context') is not None:
+@@ -325,5 +351,6 @@
+         teaching_layer=teaching_layer,
+         teaching_output_tokens=teaching_tokens,
+         teaching_calculation_layer=calculation_layer,
+-        memory_context=memory_context,memory_layer=memory_layer,
++        memory_context=memory_context,memory_layer=memory_layer,
++        interview_model_layer=interview_layer,interview_output_tokens=interview_tokens,interview_followups=interview_followups,
+     )
+
+--- pre/backend/app/main.py
++++ current/backend/app/main.py
+@@ -14,7 +14,8 @@
+ from app.activities.api import router as activities_router
+ from app.learning.api import router as learning_router
+ from app.learning.teaching_api import router as teaching_router
+-from app.memory.api import router as memory_router
++from app.memory.api import router as memory_router
++from app.interview.api import router as interview_router
+ from app.service_config import load_activity_config
+ 
+ class Settings(BaseModel):
+@@ -81,7 +82,8 @@
+     app.include_router(activities_router)
+     app.include_router(learning_router)
+     app.include_router(teaching_router)
+-    app.include_router(memory_router)
++    app.include_router(memory_router)
++    app.include_router(interview_router)
+     dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+     if dist.is_dir():
+         app.mount("/", StaticFiles(directory=dist, html=True), name="frontend")
+
+--- pre/frontend/src/activities/ActivityWorkspace.tsx
++++ current/frontend/src/activities/ActivityWorkspace.tsx
+@@ -3,6 +3,7 @@
+ import { isLearningDocument, LearningResult } from "./LearningResult";
+ import { compareLearningIntent } from "./learningIntentMatch";
+ import { TeachingWorkspace } from "./TeachingWorkspace";
++import { InterviewWorkspace } from "./InterviewWorkspace";
+ import { MemoryWorkspace } from "./MemoryWorkspace";
+ import type { MemoryChoice } from "./memoryApi";
+ import { submitTrackedMemoryCreate } from "./memoryIntents";
+@@ -19,8 +20,8 @@
+   continue: { available: boolean; reason: string | null };
+   learning?: { available: boolean; reason: string | null; max_input_chars: number; max_output_tokens: number | null };
+   teaching?: { available: boolean; reason: string | null; profile: string; max_output_tokens: number | null };
+-  teaching_calculation?: { available: boolean; reason: string | null; tool: string };
+-  memory_model?: { available: boolean; reason: string | null };
++  teaching_calculation?: { available: boolean; reason: string | null; tool: string };
++  memory_model?: { available: boolean; reason: string | null };
+   quota_preview: Record<string, number | string[] | null> | null;
+   provider: { provider: string; model: string } | null;
+   supervision_management_budget_seconds: number;
+@@ -38,8 +39,9 @@
+   max_tool_calls: number | null; tools_reserved: number;
+   source_count: number; source_titles: string[];
+   allowed_models?: { provider: string; model: string }[];
+-  sources?: { source_id: string; title: string; valid: boolean }[];
+-  memory_selection?: { selected: boolean; eligible: boolean } | null;
++  sources?: { source_id: string; title: string; valid: boolean }[];
++  memory_selection?: { selected: boolean; eligible: boolean } | null;
++  business_domain?: "interview" | "unknown";
+ };
+ 
+ type OperationRow = {
+@@ -112,8 +114,8 @@
+     case "committed_current": return "已提交，正文可回查";
+     case "committed_history_cancelled": return "已提交（活动已取消，仅供历史查看）";
+     case "invalidated_scope_changed": return "已失效，活动范围已变化";
+-    case "invalidated_source": return "已失效，资料已被替换或移除";
+-    case "invalidated_memory": return "已失效，所选学习记忆或其依据已变化";
++    case "invalidated_source": return "已失效，资料已被替换或移除";
++    case "invalidated_memory": return "已失效，所选学习记忆或其依据已变化";
+     case "unresolved": return row.state === "unknown" ? "结果未知，可能已发出；不会自动重发" : "进行中，结果尚未提交";
+     case "terminal_without_payload": return "已结束但无正文记录";
+     default: return "尚无此项操作";
+@@ -141,7 +143,7 @@
+   return status === "running" ? "运行中" : status === "cancelled" ? "已取消" : "空闲";
+ }
+ 
+-export function ActivityWorkspace({ token }: { token: string }) {
++export function ActivityWorkspace({ token, variant = "learning" }: { token: string; variant?: "learning" | "interview" }) {
+   const [caps, setCaps] = useState<Capabilities | null>(null);
+   const [capsError, setCapsError] = useState("");
+   const [items, setItems] = useState<ActivityFacts[]>([]);
+@@ -677,7 +679,7 @@
+       <header>
+         <div>
+           <p className="eyebrow">YOUR ACTIVITIES, IN FACTS</p>
+-          <h1>学习活动</h1>
++          <h1>{variant === "interview" ? "模拟面试" : "学习活动"}</h1>
+           <p className="subtitle">每次活动限定资料范围与有限预算；这里查看活动、四类预算与每次运行的事实结果。</p>
+         </div>
+         <button className="secondary" onClick={() => { void refreshCapabilities(); void refreshList(); void loadMaterials(); if (selectedId) void refreshDetail(selectedId); }}>刷新</button>
+@@ -743,9 +745,9 @@
+         </section>
+       )}
+ 
+-      {caps?.storage_ready && (
+-        <>
+-        <MemoryWorkspace token={token} choices={memoryChoices} onChoicesChange={setMemoryChoices} />
++      {caps?.storage_ready && (
++        <>
++        {variant === "learning" && <MemoryWorkspace token={token} choices={memoryChoices} onChoicesChange={setMemoryChoices} />}
+         <section className="ws-create">
+           <h2>新建活动</h2>
+           <p className="quiet">新建只确定资料范围与有限预算，不会立即产生模型调用。创建后确认目标并显式开始学习。</p>
+@@ -785,11 +787,11 @@
+           ) : (
+             <p className="quiet">新建未开放：{reasonText(caps.create.reason)}。只读与取消不受影响。</p>
+           )}
+-        </section>
+-        </>
+-      )}
+-
+-      <div className="content-grid">
++        </section>
++        </>
++      )}
++
++      <div className="content-grid">
+         <section className="library">
+           <div className="section-title"><h2>活动列表</h2><span>{items.length} 项{listCursor ? " +" : ""}</span></div>
+           {listError && <p role="alert" className="failure">{listError}</p>}
+@@ -803,7 +805,7 @@
+           <ul>
+             {items.map(item => (
+               <li key={item.activity_id}>
+-                <button className={`material ${selectedId === item.activity_id ? "selected" : ""}`} onClick={() => void selectActivity(item.activity_id)}>
++                <button data-activity-id={item.activity_id} className={`material ${selectedId === item.activity_id ? "selected" : ""}`} onClick={() => void selectActivity(item.activity_id)}>
+                   <span className="format">{statusBadge(item.status)}</span>
+                   <span className="material-name">
+                     <strong>{activityLabel(item)}</strong>
+@@ -840,6 +842,7 @@
+                 </div>
+               )}
+ 
++              {(variant === "interview" || detail.business_domain === "interview") ? detail.activity_id === selectedId ? <InterviewWorkspace key={detail.activity_id} activityId={detail.activity_id} token={token} scopeRevision={detail.scope_revision} onChanged={() => { void refreshDetail(detail.activity_id, true); }}/> : <p role="status">正在读取选中的面试活动…</p> : detail.business_domain === "unknown" ? <p role="alert">活动领域资格不可核对，保持只读；请核对服务状态。</p> : <>
+               <div className="ws-block">
+                 <h4>资料范围 · 范围修订 {detail.scope_revision}</h4>
+                 {(detail.sources ?? []).map(source => (
+@@ -899,8 +902,8 @@
+                   token={token}
+                   scopeRevision={detail.scope_revision}
+                   teachingAvailable={Boolean(caps?.teaching?.available)}
+-                  calculationAvailable={Boolean(caps?.teaching_calculation?.available)}
+-                  memoryModelAvailable={Boolean(caps?.memory_model?.available)}
++                  calculationAvailable={Boolean(caps?.teaching_calculation?.available)}
++                  memoryModelAvailable={Boolean(caps?.memory_model?.available)}
+                   seed={teachingSeed?.activity_id===detail.activity_id?teachingSeed:null}
+                 />
+                 {!caps?.teaching?.available && (
+@@ -984,6 +987,7 @@
+                 </ul>
+                 {opsCursor && <button className="secondary" onClick={() => void loadMoreOperations()}>加载更多操作</button>}
+               </div>
++              </>}
+             </>
+           )}
+         </section>
+
+--- pre/frontend/src/main.tsx
++++ current/frontend/src/main.tsx
+@@ -31,7 +31,7 @@
+   const [loading, setLoading] = useState(false);
+   const [nextOffset, setNextOffset] = useState<number | null>(null);
+   const [candidateReload, setCandidateReload] = useState(0);
+-  const [view, setView] = useState<"materials" | "activities">("materials");
++  const [view, setView] = useState<"materials" | "activities" | "interview">("materials");
+   const picker = useRef<HTMLInputElement>(null);
+   const replacement = useRef<HTMLInputElement>(null);
+   const excerptRequest = useRef<AbortController | null>(null);
+@@ -140,8 +140,8 @@
+   }
+ 
+   return <div className="workspace">
+-    <aside className="rail"><div className="wordmark">R<span>RetroLume</span></div><p className="rail-caption">溯光教育 · 本地工作台</p><nav><div className={view === "materials" ? "nav-active" : "nav-muted"} role="button" tabIndex={0} style={{cursor: "pointer"}} onClick={() => setView("materials")}>▤ <span>我的资料</span></div><div className={view === "activities" ? "nav-active" : "nav-muted"} role="button" tabIndex={0} style={{cursor: "pointer"}} onClick={() => setView("activities")}>▦ <span>学习活动</span></div><div className="nav-muted">模拟面试 <small>尚未接入</small></div></nav><div className="local-note"><span className="status-dot"/> 个人本地空间<br/><small>资料是学习的起点</small></div></aside>
+-    <main className="main">{view === "activities" ? <ActivityWorkspace token={session?.token ?? ""}/> : (<>
++    <aside className="rail"><div className="wordmark">R<span>RetroLume</span></div><p className="rail-caption">溯光教育 · 本地工作台</p><nav><div className={view === "materials" ? "nav-active" : "nav-muted"} role="button" tabIndex={0} style={{cursor: "pointer"}} onClick={() => setView("materials")}>▤ <span>我的资料</span></div><div className={view === "activities" ? "nav-active" : "nav-muted"} role="button" tabIndex={0} style={{cursor: "pointer"}} onClick={() => setView("activities")}>▦ <span>学习活动</span></div><div className={view === "interview" ? "nav-active" : "nav-muted"} role="button" tabIndex={0} style={{cursor: "pointer"}} onClick={() => setView("interview")}>模拟面试</div></nav><div className="local-note"><span className="status-dot"/> 个人本地空间<br/><small>资料是学习的起点</small></div></aside>
++    <main className="main">{view !== "materials" ? <ActivityWorkspace key={view} token={session?.token ?? ""} variant={view === "interview" ? "interview" : "learning"}/> : (<>
+       <header><div><p className="eyebrow">YOUR KNOWLEDGE, IN CONTEXT</p><h1>我的资料</h1><p className="subtitle">保存原始内容，为接下来的学习保留依据。</p></div><button className="primary" disabled={busy || !session?.storage_configured} onClick={() => picker.current?.click()}>＋ 导入资料</button></header>
+       <input ref={picker} hidden aria-label="选择资料" type="file" multiple accept=".txt,.md,.markdown,.pdf,application/pdf" onChange={event => {void upload(event.target.files); event.target.value = "";}}/>
+       <input ref={replacement} hidden aria-label="选择替换文件" type="file" accept=".txt,.md,.markdown,.pdf,application/pdf" onChange={event => {void upload(event.target.files, readerMaterial); event.target.value = "";}}/>
+
+--- pre/config/activity.example.json
++++ current/config/activity.example.json
+@@ -28,6 +28,11 @@
+     "profile": "learning.v1",
+     "max_output_tokens": 0
+   },
+-  "memory_context": null,
++  "interview": {
++    "profile": "interview.v1",
++    "max_output_tokens": 0,
++    "max_followups_per_round": 2
++  },
++  "memory_context": null,
+   "_memory_context_readme": "默认关闭学习背景消费；显式配置需绑定当前模型、4项/4096字节/2048字符及有限输入估算/输出/安全预留。010与最小权限由受控迁移采用，不由启动器执行，真实用户库迁移另授权。"
+ }

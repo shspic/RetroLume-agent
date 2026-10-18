@@ -1,0 +1,197 @@
+{
+  "schema": "retrolume.design.task119.official-facts.v1",
+  "checked_date": "2026-10-18",
+  "checked_window_utc_from": "2026-10-18T06:45:16.4903015Z",
+  "status": "PUBLIC_DOCUMENTS_ONLY_NO_ACCOUNT_OR_API_VERIFICATION",
+  "ledger": "D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-119/design/web-request-ledger.json",
+  "facts": [
+    {
+      "id": "OF01",
+      "url": "https://api-docs.deepseek.com/news/news260424/",
+      "owner": "DeepSeek official API documentation",
+      "page_version_or_date": "2026-04-24 release",
+      "observation": "The announcement says deepseek-chat and deepseek-reasoner cease service after 2026-07-24 15:59 UTC.",
+      "method": "official search returned article text; no API",
+      "verified": [
+        "announced_retirement"
+      ],
+      "unknown": [
+        "actual_account_runtime_behavior"
+      ],
+      "effect": "old candidate must remain disabled; no deprecated endpoint probe"
+    },
+    {
+      "id": "OF02",
+      "url": "https://api-docs.deepseek.com/updates/",
+      "owner": "DeepSeek official API documentation",
+      "page_version_or_date": "latest shown 2026-10-17",
+      "observation": "Latest model update uses deepseek-flash for DeepSeek-V4.1-Flash-1017; earlier entries corroborate July retirement.",
+      "method": "official search article text; two explicit opens timed out",
+      "verified": [
+        "current_documented_configured_name_and_version"
+      ],
+      "unknown": [
+        "exact_returned_model_alias_list"
+      ],
+      "effect": "only minimal proposed replacement, requires adoption"
+    },
+    {
+      "id": "OF03",
+      "url": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/",
+      "owner": "DeepSeek official API documentation",
+      "page_version_or_date": "live page checked 2026-10-18; no explicit effective date printed",
+      "observation": "Flash CNY peak rates per million tokens: cache-miss input 2, output 8; off-peak 1 and 4. Both thinking modes, JSON output and up to 384K output are listed. Existing product limits remain 10 seconds and 65536 bytes.",
+      "verified": [
+        "public_CNY_rates",
+        "documented_modes_and_feature"
+      ],
+      "unknown": [
+        "account_CNY_applicability",
+        "VAT_or_additional_charge_boundary",
+        "token_framing_bound",
+        "no_extra_reasoning_billing_bound"
+      ],
+      "effect": "conditional calculation only; highest rate and cache miss used; no activation"
+    },
+    {
+      "id": "OF04",
+      "url": "https://api-docs.deepseek.com/quick_start/pricing/?model_version=DeepSeek-V4-Pro-0813",
+      "owner": "DeepSeek official API documentation",
+      "page_version_or_date": "live page checked 2026-10-18",
+      "observation": "English page lists USD pricing while Chinese page lists CNY; currencies are not interchangeable. Latest Flash and Pro identifiers differ from old candidate.",
+      "verified": [
+        "different_price_currencies"
+      ],
+      "unknown": [
+        "this_account_billing_currency_and_FX"
+      ],
+      "effect": "no guessed exchange rate"
+    },
+    {
+      "id": "OF05",
+      "url": "https://api-docs.deepseek.com/api/create-chat-completion/",
+      "owner": "DeepSeek official API documentation",
+      "page_version_or_date": "live search text checked 2026-10-18",
+      "observation": "Current request documentation lists deepseek-flash and deepseek-v4-pro, supports thinking disabled and response_format json_object. max_tokens bounds generated output. Returned usage has prompt/completion/total fields.",
+      "method": "official search text; explicit open timed out",
+      "verified": [
+        "documented_input_names",
+        "thinking_disabled_parameter",
+        "JSON_object_parameter"
+      ],
+      "unknown": [
+        "strict_full_returned_model_allowlist",
+        "all_billed_reasoning_and_template_bounds"
+      ],
+      "effect": "Q v2 parser and loader must pin returned identities; cannot mark complete capability readiness"
+    },
+    {
+      "id": "OF06",
+      "url": "https://api-docs.deepseek.com/guides/json_mode/",
+      "owner": "DeepSeek official API documentation",
+      "page_version_or_date": "live search text checked 2026-10-18",
+      "observation": "JSON mode also requires a JSON instruction; truncation and occasionally empty content remain possible.",
+      "verified": [
+        "JSON_mode_requirements_and_limitations"
+      ],
+      "unknown": [
+        "semantic_quality",
+        "10_second_completion_for_frozen_tasks"
+      ],
+      "effect": "retain local schema and semantic rubric; no paid fault injection or hidden retries"
+    },
+    {
+      "id": "OF07",
+      "url": "https://cdn.deepseek.com/policies/zh-CN/deepseek-open-platform-terms-of-service.html",
+      "owner": "杭州深度求索人工智能基础技术研究有限公司",
+      "page_version_or_date": "updated 2026-04-22; effective 2026-04-29",
+      "observation": "The specific terms cover API developers, require safeguarding API keys and input rights, explain prepaid access and public price rules, and distinguish downstream users' privacy responsibilities.",
+      "verified": [
+        "public_API_terms_scope"
+      ],
+      "unknown": [
+        "operator_actual_account_acceptance",
+        "special_contracts_and_tax_applicability"
+      ],
+      "effect": "public terms do not prove this account ready"
+    },
+    {
+      "id": "OF08",
+      "url": "https://cdn.deepseek.com/policies/zh-CN/deepseek-privacy-policy.html",
+      "owner": "杭州深度求索人工智能基础技术研究有限公司及关联公司",
+      "page_version_or_date": "updated and effective 2026-02-10",
+      "observation": "The policy includes API subject to special policies, describes mainland storage and necessary retention with legal exceptions, and describes a setting to decline training use. No fixed API zero-retention guarantee was established.",
+      "verified": [
+        "general_scope_storage_and_optout_description"
+      ],
+      "unknown": [
+        "API_specific_retention_duration",
+        "actual_account_training_choice_or_special_terms"
+      ],
+      "effect": "no default_no_training_or_zero_retention_claim; synthetic only"
+    },
+    {
+      "id": "OF09",
+      "url": "https://docs.bigmodel.cn/cn/guide/models/embedding/embedding-3",
+      "owner": "智谱开放平台官方文档，北京智谱华章科技股份有限公司",
+      "page_version_or_date": "live page checked 2026-10-18; no model revision date",
+      "observation": "embedding-3 supports dimensions 512; public rate 0.5 CNY per million tokens. Arrays have at most 64 items; text describes a 3072-token restriction and an 8K window. Examples use the existing /api/paas/v4/embeddings path and return model embedding-3 with prompt/completion/total usage.",
+      "verified": [
+        "configured_and_example_returned_identity",
+        "512_dimensions",
+        "array_max_64",
+        "public_rate",
+        "usage_example"
+      ],
+      "unknown": [
+        "whether_3072_limit_is_per_item_or_aggregate_in_this_account",
+        "tokenizer_and_billing_overhead_bound",
+        "account_access_and_tax"
+      ],
+      "effect": "retain at most four inputs; conservatively require verified whole-batch and per-item token bounds <=3072; no SDK installation"
+    },
+    {
+      "id": "OF10",
+      "url": "https://docs.bigmodel.cn/cn/terms/privacy-policy",
+      "owner": "北京智谱华章科技股份有限公司",
+      "page_version_or_date": "effective 2025-05-20",
+      "observation": "The platform/API policy describes mainland storage and necessary retention, allows anonymized data for model improvement/training, and has legal retention exceptions. It does not establish a fixed API zero-retention period.",
+      "verified": [
+        "public_API_policy_scope",
+        "anonymized_training_and_retention_description"
+      ],
+      "unknown": [
+        "this_account_specific_agreement_or_optout",
+        "exact_API_input_retention_days"
+      ],
+      "effect": "cannot claim default_no_training; verify synthetic-use account terms before activation"
+    },
+    {
+      "id": "OF11",
+      "url": "https://docs.bigmodel.cn/cn/terms/service-agreement",
+      "owner": "北京智谱华章科技股份有限公司",
+      "page_version_or_date": "no explicit revision/effective date in retrieved page",
+      "observation": "The service agreement covers authenticated platform users, prepaid CNY funds, temporary promotions, data rights, and necessary service/compliance retention.",
+      "verified": [
+        "public_general_service_terms"
+      ],
+      "unknown": [
+        "this_account_authentication_access_billing_and_special_terms",
+        "tax_inclusive_final_unit_price"
+      ],
+      "effect": "do not treat a new-user promotion or Coding Plan as embedding API permission"
+    }
+  ],
+  "unresolved_gates": [
+    "adoption_of_replacement_model",
+    "exact_returned_chat_identity",
+    "conservative_token_and_framing_bound",
+    "billed_reasoning_bound_when_disabled",
+    "actual_account_CNY_tax_and_terms",
+    "same_PG_two_provider_persistent_admission_proof",
+    "global_and_supplement_call_shortfall"
+  ],
+  "refresh_rule": "Before real Q master activation, refresh changed official facts and private nonsecret readiness within a separately permitted scope; no date here starts the 72-hour window",
+  "new_provider_calls": 0,
+  "new_fee_microunits": 0
+}

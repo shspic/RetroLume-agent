@@ -1,0 +1,60 @@
+--- first-pre/backend/tests/fixtures/step018/test_lifecycle.py
++++ current/backend/tests/fixtures/step018/test_lifecycle.py
+@@ -0,0 +1,57 @@
++"""截止、半启动及清场失败的确定性合同，不启动PG/API/Browser。"""
++import unittest,time
++from lifecycle import BoundedResources
++
++class CleanupTests(unittest.TestCase):
++    def test_memory_pressure_closes_consumers_before_pg_without_new_command(self):
++        calls=[];samples=iter([300*1024**2,200*1024**2,200*1024**2])
++        with BoundedResources(deadline=time.monotonic()+30) as run:
++            run.register('pg',lambda:calls.append('pg') or True,priority=0)
++            run.register('api',lambda:calls.append('api') or True,priority=30)
++            run.register('browser',lambda:calls.append('browser') or True,priority=60)
++            run.monitor_memory(lambda:next(samples),every=.01)
++            run.wake();self.assertTrue(run.closed.wait(2))
++            self.assertEqual(run.report['reason'],'memory_pressure')
++            self.assertEqual(calls,['browser','api','pg'])
++            self.assertEqual(run.memory['minimum_bytes'],200*1024**2)
++            with self.assertRaises(RuntimeError):run.check()
++
++    def test_unknown_memory_fails_closed_and_still_cleans(self):
++        calls=[]
++        def failed():raise OSError('sample unavailable')
++        with BoundedResources(deadline=time.monotonic()+30) as run:
++            run.register('pg',lambda:calls.append('pg') or True)
++            run.monitor_memory(failed,every=.01);run.wake()
++            self.assertTrue(run.closed.wait(2));self.assertEqual(run.report['reason'],'memory_sample_failed')
++            self.assertEqual(calls,['pg'])
++
++    def test_deadline_cleans_every_resource_without_new_command(self):
++        now=[10.0];calls=[]
++        with BoundedResources(deadline=20,clock=lambda:now[0]) as run:
++            for priority,name in enumerate(('pg','api','preview','browser','mutations')):
++                run.register(name,lambda name=name:calls.append(name) or True,priority=priority)
++            now[0]=21;run.wake()
++            self.assertTrue(run.closed.wait(2))
++            self.assertEqual(calls,['mutations','browser','preview','api','pg'])
++            self.assertEqual(run.report['reason'],'business_deadline')
++            with self.assertRaises(RuntimeError):run.check()
++        self.assertEqual(len(calls),5)
++
++    def test_partial_launch_exception_still_cleans_previous_and_intent(self):
++        calls=[]
++        with self.assertRaises(OSError):
++            with BoundedResources(deadline=time.monotonic()+30) as run:
++                run.register('pg',lambda:calls.append('pg') or True)
++                run.register('api_intent',lambda:calls.append('api_intent') or True,priority=1)
++                raise OSError('明确模拟API创建失败')
++        self.assertEqual(calls,['api_intent','pg'])
++
++    def test_one_stop_failure_does_not_skip_remaining_resources(self):
++        calls=[]
++        def bad():calls.append('api');raise RuntimeError('停止未确认')
++        with BoundedResources(deadline=time.monotonic()+30) as run:
++            run.register('pg',lambda:calls.append('pg') or True)
++            run.register('api',bad,priority=1)
++        self.assertEqual(calls,['api','pg']);self.assertFalse(run.report['all_confirmed'])
++
++if __name__=='__main__':unittest.main()

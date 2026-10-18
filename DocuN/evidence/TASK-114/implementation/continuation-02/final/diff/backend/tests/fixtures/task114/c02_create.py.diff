@@ -1,0 +1,32 @@
+--- pre/backend/tests/fixtures/task114/c02_create.py
++++ final/backend/tests/fixtures/task114/c02_create.py
+@@ -0,0 +1,29 @@
++"""有界C02 source创建/初始化根，所有旧对象只读不启动。"""
++import json
++import subprocess
++import time
++from budget import Budget, EVIDENCE
++from c02_common import Evidence, create_source
++from freeze import freeze
++
++
++def main():
++    budget=Budget();budget.check()
++    label='c02-source-init-'+str(time.monotonic_ns());evidence=Evidence(label)
++    # 包含全部TCP状态而非只Listen；异常不当空白通过。
++    command="$ErrorActionPreference='Stop'; @(Get-NetTCPConnection | Where-Object { $_.LocalPort -in @(15452,15453,15454,18114,15114) } | Select-Object LocalAddress,LocalPort,State,OwningProcess) | ConvertTo-Json -Compress"
++    result=subprocess.run(['powershell','-NoProfile','-Command',command],capture_output=True,timeout=15)
++    if result.returncode:raise RuntimeError('完整TCP观察失败')
++    values=json.loads(result.stdout.decode('utf-8-sig').strip() or '[]')
++    evidence.save('preflight-all-TCP-states',{'states':values,'exit_code':result.returncode})
++    if values:raise RuntimeError('计划TCP端口存在占用，不能创建')
++    budget.root('c02-pg-group');freeze(label)
++    try:
++        target,credentials=create_source(budget,evidence)
++        evidence.save('result',{'state':'initialized_stopped','cid':target.cid,'old_objects_started':0})
++        return 0
++    except BaseException as error:
++        evidence.fail(error);raise
++
++
++if __name__=='__main__':raise SystemExit(main())

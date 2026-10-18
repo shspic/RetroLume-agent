@@ -1,0 +1,165 @@
+--- first-pre/backend/app/activities/repository.py
++++ current/backend/app/activities/repository.py
+@@ -41,6 +41,7 @@
+ from app.memory.contracts import MemorySelectionInput, MemoryRefusal
+ from app.learning.contracts import canonical, sha
+ from app.preview.repository import HtmlLedgerMethods
++from app.retrieval.repository import RetrievalLedgerMethods
+ 
+ 
+ _T = TypeVar("_T")
+@@ -192,6 +193,7 @@
+     scope_revision: int = 1
+     # G5：独立工具次数上限；None=未配置（必须已用 0），0=明确禁用。
+     max_tool_calls: int | None = None
++    outbound_grant_sha256: str | None = None
+ 
+ 
+ @dataclass(frozen=True)
+@@ -282,7 +284,7 @@
+     payload: str | None = field(default=None, repr=False)
+ 
+ 
+-class PostgresAdmissionLedger(TeachingLedgerMethods, MemoryLedgerMethods, InterviewLedgerMethods, HtmlLedgerMethods):
++class PostgresAdmissionLedger(TeachingLedgerMethods, MemoryLedgerMethods, InterviewLedgerMethods, HtmlLedgerMethods, RetrievalLedgerMethods):
+     """`AdmissionLedger` 的失败关闭 PostgreSQL 实现。
+ 
+     连接、锁和语句都有限时；任何数据库错误对准入调用统一表现为 unavailable，
+@@ -549,6 +551,9 @@
+         create_sha = sha(canonical({'activity_id':activity_id,'source_ids':sorted(x.source_id for x in sources),'memory_selection':selection.model_dump() if selection else None}))
+ 
+         async def operation(connection: object) -> None:
++            if spec.outbound_grant_sha256 is not None:
++                if not _HEX64.fullmatch(spec.outbound_grant_sha256):raise ValueError('outbound_grant_invalid')
++                await connection.execute("SELECT pg_advisory_xact_lock(hashtextextended('retrolume.outbound-roster.v1',0))")
+             if selection:
+                 await self._memory_assert_schema(connection)
+                 cursor=await connection.execute("SELECT create_request_sha256 FROM public.activity_memory_bindings WHERE activity_id=%s",(activity_id,))
+@@ -575,8 +580,8 @@
+                        max_requests, max_cost_microunits, reserve_cost_microunits,
+                        max_request_bytes, max_output_tokens,
+                        max_running_seconds, running_reserved_seconds, running_settled_seconds,
+-                       allowed_tools, max_tool_calls)
+-                     VALUES (%s, 'pending', %s, 0, %s, %s, %s, %s, %s, %s, %s, 0, 0, %s, %s)""",
++                       allowed_tools, max_tool_calls""" + (", outbound_grant_sha256" if spec.outbound_grant_sha256 is not None else "") + """ )
++                     VALUES (%s, 'pending', %s, 0, %s, %s, %s, %s, %s, %s, %s, 0, 0, %s, %s""" + (", %s)" if spec.outbound_grant_sha256 is not None else ")"),
+                 (
+                     activity_id,
+                     spec.scope_revision,
+@@ -589,7 +594,7 @@
+                     spec.max_running_seconds,
+                     list(spec.allowed_tools),
+                     spec.max_tool_calls,
+-                ),
++                ) + ((spec.outbound_grant_sha256,) if spec.outbound_grant_sha256 is not None else ()),
+             )
+             for source in sources:
+                 await connection.execute(
+@@ -1126,6 +1131,7 @@
+         activity_id, operation_id, executor_id, provider, model = self._intent_fields(intent)
+ 
+         async def operation(connection: object) -> AdmissionPermit:
++            await self._outbound_lock(connection,activity_id,intent.outbound_grant,provider,model,intent.request_bytes,intent.max_output_tokens,intent.outbound_source_manifest)
+             memory_state=await self._memory_lock_prefix(connection,activity_id)
+             snapshots=memory_state['snapshots']
+             sources_valid=memory_state['sources_valid']
+@@ -1135,7 +1141,7 @@
+                 await self._html_require_call(connection,activity,operation_id,intent.html_binding)
+             else:
+                 if intent.html_binding is not None: raise AdmissionDenied("invalid_html_profile")
+-                self._memory_require_call(activity,operation_id,intent.teaching_binding)
++                self._memory_require_call(activity,operation_id,intent.interview_binding if operation_id.startswith('int18m.') else intent.teaching_binding)
+             if intent.input_result is not None and activity is not None:
+                 if activity["status"]=="cancelled":raise AdmissionDenied("cancelled")
+                 if not sources_valid:raise AdmissionDenied("source_invalid")
+@@ -1146,6 +1152,8 @@
+                 activity, intent, executor_id, now=datetime.now(timezone.utc)
+             ):
+                 raise AdmissionDenied("活动、来源、租约或限额拒绝本次调用")
++            if intent.retrieval_ref is not None:
++                await self._require_retrieval_ref(connection,activity,intent.retrieval_ref)
+             cursor = await connection.execute(
+                 "SELECT 1 FROM activity_allowed_models WHERE activity_id = %s AND provider = %s AND model = %s",
+                 (activity_id, provider, model),
+@@ -1160,7 +1168,7 @@
+                     raise AdmissionDenied("invalid_input")
+                 if ref.scope_revision!=activity["scope_revision"] or ref.scope_revision!=intent.context.scope_revision:
+                     raise AdmissionDenied("result_invalidated")
+-            if operation_id.startswith(('teach8m.','teach8t.','int10m.','html11m.')):
++            if operation_id.startswith(('teach8m.','teach8t.','int10m.','int18m.','html11m.')):
+                 await self._teaching_lock_operations(connection,activity_id)
+             keys=sorted({operation_id}|({ref.operation_id} if ref else set()))
+             cursor=await connection.execute("SELECT * FROM activity_operations WHERE activity_id=%s AND operation_id=ANY(%s) ORDER BY operation_id FOR UPDATE",(activity_id,keys))
+@@ -1172,11 +1180,11 @@
+                                                         intent.teaching_binding, "admit")
+                 except TeachingRefusal as exc:
+                     raise AdmissionDenied(exc.code) from None
+-            if operation_id.startswith("int10m."):
++            if operation_id.startswith(("int10m.",'int18m.')):
+                 try: await self._locked_interview_binding(connection,activity,operation_id,intent.interview_binding,"admit")
+                 except InterviewRefusal as exc: raise AdmissionDenied(exc.code) from None
+             if operation_id in calls:raise AdmissionDenied("操作键已经占用，不能获得第二次发送资格")
+-            if ref and ref.operation_id.startswith("int10m."):raise AdmissionDenied("interview_parent_forbidden")
++            if ref and ref.operation_id.startswith(("int10m.",'int18m.')):raise AdmissionDenied("interview_parent_forbidden")
+             if ref and ref.operation_id.startswith("html11m."):raise AdmissionDenied("html_parent_forbidden")
+             if ref:
+                 parent=calls.get(ref.operation_id)
+@@ -1529,7 +1537,7 @@
+         snapshots=memory_state['snapshots']
+         sources_valid=memory_state['sources_valid']
+         activity=memory_state['activity']
+-        if operation_id.startswith(('teach8m.','teach8t.','int10m.','html11m.')):
++        if operation_id.startswith(('teach8m.','teach8t.','int10m.','int18m.','emb18i.','emb18q.','html11m.')):
+             await self._teaching_lock_operations(connection,activity_id)
+         cursor = await connection.execute(
+             "SELECT * FROM activity_operations WHERE admission_id = %s FOR UPDATE",
+@@ -1561,9 +1569,10 @@
+             and activity["deadline_at"] > now
+         )
+ 
+-    async def mark_dispatch_started(self, permit: AdmissionPermit) -> None:
++    async def mark_dispatch_started(self, permit: AdmissionPermit, *, retrieval_ref=None) -> None:
+         async def operation(connection: object) -> AdmissionPermit:
+             activity, call, sources_valid = await self._locked_operation(connection, permit)
++            if retrieval_ref is not None:await self._require_retrieval_ref(connection,activity,retrieval_ref)
+             if call["operation_id"].startswith("html11m."):
+                 await self._html_locked_binding(connection,activity,call["operation_id"])
+             if call["operation_id"].startswith("teach8m."):
+@@ -1572,7 +1581,7 @@
+                     await self._locked_teaching_binding(connection, activity, call["operation_id"], None, "mark")
+                 except TeachingRefusal as exc:
+                     raise AdmissionDenied(exc.code) from None
+-            if call["operation_id"].startswith("int10m."):
++            if call["operation_id"].startswith(("int10m.",'int18m.')):
+                 try: await self._locked_interview_binding(connection,activity,call["operation_id"],None,"mark")
+                 except InterviewRefusal as exc: raise AdmissionDenied(exc.code) from None
+             if (
+@@ -1754,7 +1763,7 @@
+                     await self._html_confirm_integrity(connection,call,payload_triple)
+                 if call["operation_id"].startswith("teach8m."):
+                     await self._teaching_confirm_integrity(connection,call,payload_triple)
+-                if call["operation_id"].startswith("int10m."):
++                if call["operation_id"].startswith(("int10m.",'int18m.')):
+                     await self._interview_confirm_integrity(connection,call,payload_triple)
+                 return confirmed
+             current = self._operation_is_current(activity, call, sources_valid)
+@@ -1764,11 +1773,18 @@
+                 raise AdmissionDenied("尚未越过发送边界的调用不能登记该结果")
+             if payload_triple is not None and activity["dispatch_closed"]:
+                 raise AdmissionDenied("关闭门后不接受正文新写")
++            if payload_triple is not None:
++                value=json.loads(payload_triple[1]).get('value')
++                if isinstance(value,dict) and value.get('profile')=='teaching.v3':
++                    await self._locked_teaching_binding(connection,activity,call['operation_id'],None,'mark')
++                elif isinstance(value,dict) and value.get('profile')=='learning.v2':
++                    from app.retrieval.contracts import RetrievalRef
++                    await self._require_retrieval_ref(connection,activity,RetrievalRef.model_validate(value['retrieval_ref']),domain='learning')
+             await self._write_outcome(connection, call, values, payload_triple)
+             if call["operation_id"].startswith(("teach8m.", "teach8t.")):
+                 # G8：教学事实/进度/暴露与终态正文同一 COMMIT；失败整笔回滚。
+                 await self._write_teaching_outcome(connection, activity, call, outcome, payload_triple)
+-            if call["operation_id"].startswith("int10m."):
++            if call["operation_id"].startswith(("int10m.",'int18m.')):
+                 await self._write_interview_outcome(connection,activity,call,outcome,payload_triple)
+             if call["operation_id"].startswith("html11m."):
+                 await self._write_html_outcome(connection,activity,call,outcome,payload_triple)

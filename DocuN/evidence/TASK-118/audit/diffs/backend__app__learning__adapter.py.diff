@@ -1,0 +1,20 @@
+--- first-pre/backend/app/learning/adapter.py
++++ current/backend/app/learning/adapter.py
+@@ -2,14 +2,15 @@
+ import json
+ from uuid import UUID
+ 
+-from .contracts import FIRST_PREFIX, NEXT_PREFIX, LearningProfile, canonical, read_document
++from .contracts import FIRST_PREFIX, NEXT_PREFIX, LearningProfile,LearningHybridProfile, canonical, read_document
+ from .evidence import LearningRefusal, validate_snapshot
+ from .prompt import messages_for
+ 
+ 
+ async def validate_learning_request(context, request, ledger):
+     try:
+-        profile = LearningProfile.model_validate(request.learning_profile.model_dump())
++        profile = (LearningHybridProfile if request.learning_profile.profile=='learning.v2' else LearningProfile).model_validate(request.learning_profile.model_dump())
++        if isinstance(profile,LearningHybridProfile) and request.retrieval_ref!=profile.retrieval_ref:return 'retrieval_ref_invalidated'
+         if (context.activity_id != profile.activity_id or context.scope_revision != profile.scope_revision
+                 or request.allowed_tools or request.response_mode.value != "json_object"
+                 or request.max_output_tokens != profile.max_output_tokens

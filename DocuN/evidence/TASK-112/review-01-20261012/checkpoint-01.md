@@ -1,0 +1,11 @@
+# review-01 独立代码判断
+
+先独立读取三项产品实际diff、当前必要调用链及control/core增量，尚未读取111结果、candidate-summary或本轮主控回收评价。原112结论复用，不再次完整重审。
+
+DEF-031代码修正对准原因。read_packet完整返回后记录接收mono，身份正确的迟到ready仍保存kernel但置stop；_wait_ready在Event.wait成功后同时核received、当前时窗与stop，并在保存观察后再次复核，相等关闭。实际调用在resume/init后、ready事务前，started没有改成未启动。等待真实迟到包与及时对照原件。
+
+DEF-032代码修正对准原因。stderr超过8192只限保存而继续读，空读才置stderr_eof；读异常独立记错。stdout底层读异常由PipeReadError与EOF区分，协议拒绝后排空仍不能清原读取异常。_attach_ended和持久_settle_stop均对已resume对象要求双EOF、无读异常及真实进程/线程结束，旧StopProof与原D继续约束。等待真实12289字节及未EOF原件、同根满R恢复和失败夹具归因。
+
+DEF-033代码修正位于生产renderer-protocol的实际入口。boundedJSON比规范UTF-8字节与原bytes，不受TextDecoder去BOM影响；validateInit对存在constraints键要求Array，再调用原runtime.validate/hash。缺省和空数组仍合法，字符串内U+FEFF保持普通数据。未改四runtime，需核新image/load及实际wire拒绝，不能只看旁路helper。
+
+传播仅三产品、control/core和七个C07夹具；不扩至未变前端/SQL/四账/所有故障。当前379项冻结身份全部一致。pre/post真实字节和diff重算、A类原件与E112-01账段核销仍待完成，不在此先写最终通过。

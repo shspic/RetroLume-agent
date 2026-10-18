@@ -1,0 +1,268 @@
+--- pre/backend/app/activities/teaching_repository.py
++++ post/backend/app/activities/teaching_repository.py
+@@ -23,7 +23,8 @@
+     MAX_COMMANDS_PER_ACTIVITY,
+     MAX_CORRECTIONS,
+     MAX_EXERCISES,
+-    MAX_GOAL_VERSION,
++    MAX_GOAL_VERSION,
++    MAX_PATHS,
+     MAX_RECORDS,
+     MAX_RECORD_BODY_BYTES,
+     MAX_STATE_AFTER_BYTES,
+@@ -118,9 +119,18 @@
+ 
+     # --- 锁内公共 ---
+ 
+-    async def _teaching_lock(self, connection, activity_id: str) -> _TeachingLocked:
++    async def _teaching_lock(self, connection, activity_id: str, *, original_record_id=None) -> _TeachingLocked:
+         """来源→活动→head 锁序；head 惰性（不存在返回 head=None）。"""
+-        snapshots = await self._source_rows(connection, activity_id)
++        snapshots = await self._source_rows(connection, activity_id)
++        if original_record_id is not None:
++            from app.learning.teaching_views import bound_references
++            row = await self._teaching_read_record_row(connection, activity_id, original_record_id)
++            refs = None if row is None else bound_references(row)
++            if refs is None:
++                raise TeachingRefusal('source_invalid', '原练习来源身份不可核对')
++            # 先按全体来源UUID排序锁定，再锁活动；旧题不依赖新scope资格。
++            combined = [*snapshots, *refs]
++            await self._lock_sources(connection, sorted(combined, key=lambda r: (str(r['source_id']), str(r['version_id']))))
+         sources_valid = bool(snapshots) and await self._lock_sources(connection, snapshots)
+         cursor = await connection.execute("SELECT * FROM activities WHERE id = %s FOR UPDATE", (activity_id,))
+         activity = await cursor.fetchone()
+@@ -139,8 +149,8 @@
+     async def _teaching_lock_operations(self,connection,activity_id):
+         await connection.execute("SELECT operation_id FROM activity_operations WHERE activity_id=%s ORDER BY operation_id FOR UPDATE",(activity_id,))
+ 
+-    async def _teaching_lock_command(self, connection, activity_id: str, business_key: str) -> _TeachingLocked:
+-        locked = await self._teaching_lock(connection, activity_id)
++    async def _teaching_lock_command(self, connection, activity_id: str, business_key: str, *, original_record_id=None) -> _TeachingLocked:
++        locked = await self._teaching_lock(connection, activity_id, original_record_id=original_record_id)
+         cursor = await connection.execute(
+             "SELECT * FROM teaching_commands WHERE activity_id = %s AND business_key = %s FOR UPDATE",
+             (activity_id, business_key))
+@@ -167,8 +177,9 @@
+                  (SELECT count(*) FROM teaching_records WHERE activity_id=%s) AS records,
+                  (SELECT count(*) FROM teaching_records WHERE activity_id=%s AND kind='exercise') AS exercises,
+                  (SELECT count(*) FROM teaching_records WHERE activity_id=%s AND kind='answer') AS answers,
+-                 (SELECT count(*) FROM teaching_records WHERE activity_id=%s AND kind='correction') AS corrections""",
+-            (activity_id, activity_id, activity_id, activity_id, activity_id))
++                 (SELECT count(*) FROM teaching_records WHERE activity_id=%s AND kind='correction') AS corrections,
++                 (SELECT count(*) FROM teaching_records WHERE activity_id=%s AND kind='path_accept') AS paths""",
++            (activity_id, activity_id, activity_id, activity_id, activity_id, activity_id))
+         return await cursor.fetchone()
+ 
+     @staticmethod
+@@ -451,7 +462,8 @@
+         request_sha = sha(request_body)
+ 
+         async def operation(connection) -> TeachingCommandReceipt:
+-            locked = await self._teaching_lock_command(connection, activity_id, command.business_key)
++            locked = await self._teaching_lock_command(connection, activity_id, command.business_key,
++                original_record_id=command.body.get('exercise_record_id') if command.action == 'expose' else None)
+             activity, head, existing = locked.activity, locked.head, locked.command
+             if existing is not None:
+                 if self._teaching_replay(existing, request_sha, request_body):
+@@ -514,7 +526,7 @@
+ 
+         return await self._transaction(operation)
+ 
+-    def _teaching_anchors(self, head, command: TeachingCommandInput) -> dict:
++    def _teaching_anchors(self, head, command: TeachingCommandInput) -> dict:
+         """服务端组包语义槽锚点：ID 一律转文本，None 保持 None。
+ 
+         psycopg 的 UUID 列返回 UUID 对象，直接进 canonical 会抛
+@@ -526,9 +538,44 @@
+             anchors["goal_record_id"] = str(head["goal_record_id"])
+             anchors["reason_record_id"] = str(head.get("reason_record_id") or "")
+             anchors["diagnostic_anchor"] = str(head.get("reason_record_id") or "")
+-        return anchors
+-
+-    async def _teaching_apply_local_effects(self, connection, activity_id, head, activity,
++        return anchors
++
++    async def _teaching_validate_seed(self, connection, activity_id, activity, body):
++        seed = body.get('seed_operation_id')
++        if seed is None:
++            return []
++        if not activity['_teaching_sources_valid']:
++            raise TeachingRefusal('source_invalid', 'G7来源已失效，不能沿用该成果')
++        cursor = await connection.execute("""SELECT o.kind,o.disposition,o.admission_id AS op_admission,
++                o.execution_generation AS op_generation,o.scope_revision AS op_scope,r.*
++            FROM activity_operations o JOIN activity_operation_results r
++                ON r.activity_id=o.activity_id AND r.operation_id=o.operation_id
++            WHERE o.activity_id=%s AND o.operation_id=%s""", (activity_id, seed))
++        row = await cursor.fetchone()
++        if (row is None or row['kind'] != 'model' or row['disposition'] != 'received'
++                or row['admission_id'] != row['op_admission'] or row['execution_generation'] != row['op_generation']
++                or row['scope_revision'] != row['op_scope'] or row['scope_revision'] != activity['scope_revision']
++                or row['payload_sha256'] != body['seed_payload_sha256']):
++            raise TeachingRefusal('version_conflict', 'G7成果身份或当前资格不符，未沿用目标')
++        try:
++            from app.capabilities.contracts import validate_business_payload
++            from app.learning.contracts import read_document
++            validate_business_payload(row['payload'], row['payload_format'], row['payload_sha256'])
++            profile, _ = read_document(json.loads(row['payload'])['value'], activity_id=activity_id, operation_id=seed)
++            if (profile.scope_revision != activity['scope_revision'] or profile.goal != body['goal']
++                    or self._scope_key([s.model_dump() for s in profile.sources]) != self._scope_key(activity['_teaching_sources'])):
++                raise ValueError('seed_identity')
++        except (ValueError, TypeError, KeyError):
++            raise TeachingRefusal('version_conflict', 'G7目标、类型或范围身份不符') from None
++        cursor = await connection.execute('SELECT source_id::text,id::text AS version_id,sha256 FROM material_versions WHERE id=ANY(%s::uuid[])',
++            ([s.version_id for s in profile.sources],))
++        hashes = {(s['source_id'],s['version_id']):s['sha256'] for s in await cursor.fetchall()}
++        if any(hashes.get((e.source_id,e.version_id)) != e.original_sha256 for e in profile.catalog):
++            raise TeachingRefusal('source_invalid', 'G7原资料hash不符')
++        return [dict(source_id=e.source_id,version_id=e.version_id,source_revision=e.source_revision,
++                     original_sha256=e.original_sha256) for e in profile.catalog]
++
++    async def _teaching_apply_local_effects(self, connection, activity_id, head, activity,
+                                              command: TeachingCommandInput, request_body, request_sha):
+         """T-local 各 action 的 records+head 原子效果；返回 (record_refs, new_revision)。"""
+         action, body = command.action, command.body
+@@ -550,13 +597,15 @@
+             revision += 1
+             return revision
+ 
+-        if action == "goal":
++        if action == "goal":
++            seed_sources = await self._teaching_validate_seed(connection, activity_id, activity, body)
+             if goal_version >= MAX_GOAL_VERSION:
+                 raise TeachingRefusal("history_limit", "目标版本已达上限")
+             new_version = goal_version + 1
+             goal_record = str(uuid4())
+-            goal_body = canonical({"goal": body["goal"], "self_report": body.get("self_report"),
+-                                   "domain": body.get("domain")})
++            goal_body = canonical({"goal": body["goal"], "self_report": body.get("self_report"),
++                                   "domain": body.get("domain"), "seed_operation_id": body.get('seed_operation_id'),
++                                   "seed_payload_sha256": body.get('seed_payload_sha256')})
+             if head is not None:
+                 previous = await self._teaching_read_record_row(connection, activity_id, head["goal_record_id"])
+                 if previous is not None and previous["body"] == goal_body:
+@@ -576,7 +625,7 @@
+             await self._teaching_insert_record(
+                 connection, activity_id, goal_record, goal_seq, "goal", command.business_key, 1,
+                 new_version, scope_revision, goal_body, sha(goal_body),
+-                applied_revision=new_revision, state_after=state)
++                applied_revision=new_revision, state_after=state, source_refs=canonical(seed_sources))
+             if head is None:
+                 await self._teaching_create_head(connection, activity_id, new_revision, new_version,
+                                                  "needs_plan", goal_record, seq_base)
+@@ -590,7 +639,9 @@
+             records.append(RecordRef(record_id=goal_record, kind="goal", seq=goal_seq))
+             return records, new_revision
+ 
+-        if action == "accept_path":
++        if action == "accept_path":
++            if (await self._teaching_counts(connection, activity_id))["paths"] >= MAX_PATHS:
++                raise TeachingRefusal("history_limit", "已接受路径数已达32条，请新建活动")
+             proposal = await self._teaching_read_record_row(connection, activity_id, body["proposal_record_id"])
+             if proposal is None or proposal["kind"] != "path_proposal":
+                 raise TeachingRefusal("record_not_found", "路径提案不存在")
+@@ -634,10 +685,25 @@
+             records.append(RecordRef(record_id=path_record, kind="path_accept", seq=path_seq))
+             return records, new_revision
+ 
+-        if action == "expose":
++        if action == "expose":
+             exercise = await self._teaching_read_record_row(connection, activity_id, body["exercise_record_id"])
+-            if exercise is None or exercise["kind"] != "exercise":
+-                raise TeachingRefusal("record_not_found", "练习不存在")
++            if exercise is None or exercise["kind"] != "exercise":
++                raise TeachingRefusal("record_not_found", "练习不存在")
++            from app.learning.teaching_views import record_sources_valid, bound_references
++            refs = bound_references(exercise)
++            cursor = await connection.execute("""SELECT v.source_id::text,v.id::text AS version_id,
++                    m.revision AS source_revision,v.sha256,
++                    COALESCE(m.current_version=v.id,false) AS valid,
++                    CASE WHEN v.format IN ('txt','md') THEN true WHEN v.format='pdf' THEN EXISTS (
++                        SELECT 1 FROM pdf_review_candidates c WHERE c.version_id=v.id AND c.status='confirmed'
++                        AND c.page_count BETWEEN 1 AND 50
++                        AND (SELECT count(*) FROM pdf_review_pages p WHERE p.candidate_id=c.id)=c.page_count
++                        AND (SELECT count(*) FROM pdf_extracted_pages p WHERE p.version_id=v.id)=c.page_count)
++                        ELSE false END AS ready
++                FROM material_versions v LEFT JOIN material_sources m ON m.id=v.source_id
++                WHERE v.id=ANY(%s::uuid[])""", ([r['version_id'] for r in refs or []],))
++            if not record_sources_valid(exercise, await cursor.fetchall()):
++                raise TeachingRefusal('source_invalid', '原练习的资料版本、修订或原文hash已失效')
+             await self._teaching_fact_result(connection, activity_id, exercise)
+             # 重复 exposure：核对后返回原事实，不新记。
+             cursor = await connection.execute(
+@@ -1291,16 +1357,39 @@
+                     FROM activity_scope_sources s LEFT JOIN material_sources m ON m.id=s.source_id
+                     LEFT JOIN material_versions v ON v.id=s.version_id AND v.source_id=s.source_id
+                     WHERE s.activity_id=%(aid)s ORDER BY s.source_id LIMIT 11),
+-                pending AS (SELECT business_key::text,action,status,error_code,created_at,
++                record_versions AS (
++                    SELECT DISTINCT ref.parts[1] AS version_id FROM teaching_records r
++                    CROSS JOIN LATERAL regexp_matches(r.source_refs,
++                        '"version_id"[[:space:]]*:[[:space:]]*"([0-9a-f-]{36})"', 'g') AS ref(parts)
++                    WHERE r.activity_id=%(aid)s),
++                record_sources AS (
++                    SELECT v.source_id::text,v.id::text AS version_id,m.revision AS source_revision,
++                        v.filename AS title,v.format,v.sha256,v.size,
++                        COALESCE(m.current_version=v.id,false) AS valid,
++                        CASE WHEN v.format IN ('txt','md') THEN true WHEN v.format='pdf' THEN EXISTS (
++                            SELECT 1 FROM pdf_review_candidates c WHERE c.version_id=v.id AND c.status='confirmed'
++                            AND c.page_count BETWEEN 1 AND 50
++                            AND (SELECT count(*) FROM pdf_review_pages p WHERE p.candidate_id=c.id)=c.page_count
++                            AND (SELECT count(*) FROM pdf_extracted_pages p WHERE p.version_id=v.id)=c.page_count)
++                            ELSE false END AS ready
++                    FROM record_versions rv JOIN material_versions v ON v.id::text=rv.version_id
++                    LEFT JOIN material_sources m ON m.id=v.source_id),
++                pending AS (SELECT business_key::text,action,status,error_code,created_at,
+                     launch_claimed_at,obsolete_at,abandoned_at FROM teaching_commands
+                     WHERE activity_id=%(aid)s ORDER BY created_at DESC,business_key LIMIT 8),
+-                history AS (SELECT record_id::text,kind,seq,goal_version,parent_record_id::text,created_at
++                history AS (SELECT record_id::text,kind,seq,goal_version,scope_revision,parent_record_id::text,created_at,source_refs
+                     FROM teaching_records WHERE activity_id=%(aid)s
+                     AND (%(before)s::bigint IS NULL OR seq<%(before)s) ORDER BY seq DESC LIMIT %(limit)s),
+                 command AS (SELECT * FROM teaching_commands WHERE activity_id=%(aid)s AND business_key=%(key)s::uuid),
+-                bodies AS (SELECT r.*,r.business_key AS command_key,o.payload,o.payload_format,o.payload_sha256 AS operation_payload_sha256
+-                    FROM teaching_records r LEFT JOIN activity_operation_results o
+-                    ON o.activity_id=r.activity_id AND o.operation_id=r.operation_id
++                bodies AS (SELECT r.*,r.business_key AS command_key,o.payload,o.payload_format,o.payload_sha256 AS operation_payload_sha256,
++                    COALESCE(o.payload,po.payload) AS citation_payload,
++                    COALESCE(o.payload_format,po.payload_format) AS citation_payload_format,
++                    COALESCE(o.payload_sha256,po.payload_sha256) AS citation_payload_sha256
++                    FROM teaching_records r LEFT JOIN activity_operation_results o
++                    ON o.activity_id=r.activity_id AND o.operation_id=r.operation_id
++                    LEFT JOIN teaching_records parent ON r.kind='path_accept' AND parent.activity_id=r.activity_id
++                        AND parent.record_id=r.parent_record_id AND parent.kind='path_proposal'
++                    LEFT JOIN activity_operation_results po ON po.activity_id=parent.activity_id AND po.operation_id=parent.operation_id
+                     WHERE r.activity_id=%(aid)s AND (r.record_id=%(rid)s::uuid OR r.business_key=%(key)s::uuid
+                       OR r.record_id IN (SELECT goal_record_id FROM h UNION ALL SELECT path_record_id FROM h
+                       UNION ALL SELECT exercise_record_id FROM h UNION ALL SELECT answer_record_id FROM h
+@@ -1312,7 +1401,8 @@
+                     AND r.exercise_record_id IN (SELECT exercise_record_id FROM bodies
+                                                UNION ALL SELECT record_id FROM bodies WHERE kind='exercise'))
+                 SELECT (SELECT to_jsonb(a) FROM a) AS activity,(SELECT to_jsonb(h) FROM h) AS head,
+-                    COALESCE((SELECT jsonb_agg(x ORDER BY x.source_id) FROM sources x),'[]'::jsonb) AS sources,
++                    COALESCE((SELECT jsonb_agg(x ORDER BY x.source_id) FROM sources x),'[]'::jsonb) AS sources,
++                    COALESCE((SELECT jsonb_agg(x ORDER BY x.source_id,x.version_id) FROM record_sources x),'[]'::jsonb) AS record_sources,
+                     COALESCE((SELECT jsonb_agg(x ORDER BY x.created_at DESC) FROM pending x),'[]'::jsonb) AS pending,
+                     COALESCE((SELECT jsonb_agg(x ORDER BY x.seq DESC) FROM history x),'[]'::jsonb) AS history,
+                     COALESCE((SELECT jsonb_agg(x ORDER BY x.seq) FROM bodies x),'[]'::jsonb) AS bodies,
+@@ -1321,7 +1411,20 @@
+                     CURRENT_TIMESTAMP AS read_at
+                 """, {"aid":activity_id,"key":business_key,"rid":record_id,"before":before,"limit":limit})
+             row=await cursor.fetchone()
+-            return None if row is None or row["activity"] is None else {k:_decode(v) if k!='read_at' else v.isoformat() for k,v in row.items()}
++            if row is None or row['activity'] is None:
++                return None
++            view = {k:_decode(v) if k!='read_at' else v.isoformat() for k,v in row.items()}
++            from app.learning.teaching_views import record_sources_valid, bound_references
++            for fact in view['bodies']:
++                fact['source_qualified'] = record_sources_valid(fact, view['record_sources'])
++                refs = bound_references(fact) or []
++                keys = {(r['source_id'],r['version_id']) for r in refs}
++                fact['bound_sources'] = [s for s in view['record_sources'] if (s['source_id'],s['version_id']) in keys]
++            for item in view['history']:
++                item['qualification'] = ('source_invalid' if item['kind'] not in ('goal','answer','correction','exposure')
++                                         and not record_sources_valid(item,view['record_sources']) else 'history')
++                item.pop('source_refs')
++            return view
+         return await self._transaction(operation)
+ 
+     async def read_teaching_workspace(self, activity_id: str, history_limit: int = _HISTORY_LIMIT_DEFAULT) -> dict | None:

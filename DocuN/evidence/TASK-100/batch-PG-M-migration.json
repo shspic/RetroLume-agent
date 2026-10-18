@@ -1,0 +1,92 @@
+{
+  "batch": "PG-M",
+  "layer": "postgres",
+  "run_at": "2026-10-03T11:51:21",
+  "container": "retrolume-task-100-g8-pg1",
+  "image": "pgvector/pgvector:0.8.6-pg17-bookworm (cf134a767f47)",
+  "port": "127.0.0.1:55442",
+  "roles": [
+    "retrolume_task100_super",
+    "retrolume_task100_admin",
+    "retrolume_task100_app",
+    "retrolume_task100_denied"
+  ],
+  "command": "backend/.venv/Scripts/python.exe -B tests/fixtures/task100/pg_migration_scenarios.py",
+  "exit_code": 0,
+  "summary": "11/11 passed",
+  "scenarios": [
+    {
+      "name": "M01_nonempty_upgrade_creates_tables",
+      "result": "PASS"
+    },
+    {
+      "name": "M01_no_backfill_old_rows",
+      "result": "PASS"
+    },
+    {
+      "name": "M02_duplicate_rejected",
+      "result": "PASS"
+    },
+    {
+      "name": "M02_no_extra_objects",
+      "result": "PASS"
+    },
+    {
+      "name": "M03_missing_prerequisite_rejected",
+      "result": "PASS"
+    },
+    {
+      "name": "M03_no_partial_tables",
+      "result": "PASS"
+    },
+    {
+      "name": "M04_tampered_constraint_rejected",
+      "result": "PASS"
+    },
+    {
+      "name": "M04_no_partial_tables",
+      "result": "PASS"
+    },
+    {
+      "name": "M05_midway_failure_raised",
+      "result": "PASS"
+    },
+    {
+      "name": "M05_full_rollback",
+      "result": "PASS"
+    },
+    {
+      "name": "M06_denied_role_rejected",
+      "result": "PASS"
+    }
+  ],
+  "key_facts": [
+    "非空升级零回填旧行（activities 1->1, teaching_heads=0）",
+    "重复执行整体回滚且无多余对象",
+    "缺 008 前置被拒（缺少 kind/工具预算列）",
+    "008 约束被删后被拒（不只比表名）",
+    "事务中途 1/0 失败后三表与两触发器全不存在",
+    "denied 角色对教学三表 3/3 真实拒绝"
+  ],
+  "fixture_fixes": [
+    "008 实际文件名为 008_activity_tool_budget.sql",
+    "psycopg3 将 LIKE %t%% 视占位符，需写 teaching%%%%",
+    "场景库须 OWNER=admin（PG17 public schema 权限随 database owner）",
+    "admin 无 CREATEDB，建库/删库只经 super 连接",
+    "activities 必填 max_running_seconds"
+  ],
+  "file_identity": {
+    "backend/migrations/009_teaching.sql": {
+      "sha256": "9b5db84c0537d992335cb153ac18619e4ad92b583e02e05f8d42de1151a344b0",
+      "bytes": 12844
+    },
+    "backend/tests/fixtures/task100/pg_setup.py": {
+      "sha256": "d629f8c7cee3b255e46ddfea9423bfa29fe01878658f6b9ba5d88c54d3fcc539",
+      "bytes": 6533
+    },
+    "backend/tests/fixtures/task100/pg_migration_scenarios.py": {
+      "sha256": "cdcbb1766b8d7c506532b6c1c5afb15cbdc52536786c424a9a93201d2b3b2f26",
+      "bytes": 11637
+    }
+  }
+}

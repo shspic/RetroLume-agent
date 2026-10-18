@@ -1,0 +1,14 @@
+# TASK-083 D3-10 替补资源启动前文本核对与预算
+- 授权来源：用户粘贴的2026-09-25接续裁定；D3累计容器最多2，原ID 1086a37d40c34841d373487c10b278c5cfb771b81af7d70251fcb260c69421f0 停止保留，不接管。本次只允许一个新runTag容器。
+- 原前置耗时7.859秒及精确stop/inspect另计，剩余真实资源操作窗口保守取28分钟；替补runner单调总期限1680秒，正常Docker检查每步≤30秒并保留60秒收尾。
+- 离线3批已用，复用有效证据；不再运行纯单元/compile/import探针。
+- 启动文本核对：Docker info、本地镜像ID+镜像声明/var/lib/postgresql/data匿名volume、127.0.0.1:55439 bind预检一次；Docker run无--mount/-v及宿主bind，镜像同哈希、1CPU/512MiB/pids128/restart=no/bridge。创建后核CID/标签/镜像/限制/port bindings/HostConfig.Binds和Mounts；仅接受本次新建且挂在/var/lib/postgresql/data的匿名volume。
+- 就绪SQL：SELECT current_database(),current_user,inet_server_port()；预期retrolume_task083_d3/task083_d3/容器内5432，宿主55439由Docker PortBindings独立核对。
+- 每场景新schema，DSN子进程env及search_path scoped；迁移empty/old/rollback、ledger_active_lease_rejected/ledger_new_g/ledger_exhausted、windows_recovery；失败逐项failfast并保留schema。
+- 子进程一般命令60秒，Windows整场景≤30秒，批次≤10分钟，最多3批、PG测试进程≤3、Windows场景≤12。stdout+stderr/exit及complete/all_pass逐项判定；新attempt独立目录保存as-run脚本/hash。
+- 初验失败且尚未进入Windows阶段、归属收尾可确认时，runner同进程持口令最多等240秒供同窗针对性修正并用go文件启动受影响部分；Windows阶段失败/timeout则立即停止真实运行并收尾。
+- finally先核精确批PID+创建时间/句柄，再核容器ID+标签；同ID stop失败一次kill并inspect，原错误保留，cleanup_incomplete单列。
+- 全新证据写 replacement-<newRunTag>，旧attempt-00/runner-state/runner-log/container-created不覆盖。
+- runner_replacement.py SHA-256 56e698a7f98b2732596153c26247a41e017420fc4c7e2af9d8d06ac80435ce8e
+- d3_pg_windows.py SHA-256 7c650f78974be05e3aa18b8fd0fba7ff5f25953925316ef11e6580d122dab067
+- test_worker_session.py 真实SHA-256 4027f5cd72b17d826626704e118b0a194b0a7aef48c4ee4c8de4ac3efae69cf5（结果文件旧抄写值不足信）

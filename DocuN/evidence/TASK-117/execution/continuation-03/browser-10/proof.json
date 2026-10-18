@@ -1,0 +1,88 @@
+{
+  "attempt": "10",
+  "origin": "http://127.0.0.1:18118",
+  "official_bundle": true,
+  "vite": false,
+  "errors": [],
+  "receipts": [],
+  "requests": 57,
+  "screenshots": [
+    "1-final-bundle-materials",
+    "2-answer-committed-body-lost",
+    "3-failure"
+  ],
+  "semantic_quality": "NOT_RUN_SYNTHETIC_TRANSPORT",
+  "phase": "s04-normal-final",
+  "assets": [
+    {
+      "url": "http://127.0.0.1:18118/assets/index-Ccc1_Rok.css",
+      "sha256": "6f02da29293bb8bf41825425f1d9d0c5da950ab02e77dfa4854ed195f49e8b94"
+    },
+    {
+      "url": "http://127.0.0.1:18118/assets/index-BgdcRLRN.js",
+      "sha256": "58a87abf5ff4b02b33aab5dc3735507f4f097791e021aeb4ddfbf0b62ac115e8"
+    }
+  ],
+  "scenario": "S04定向场景；复用本轮已合法持久的同一活动，旧S03表现仅按原证据继承",
+  "dropped": [
+    {
+      "kind": "answer",
+      "path": "/api/activities/0305ee4c-be33-489e-bab6-8f2f55e59573/teaching/commands",
+      "request": {
+        "business_key": "a897e204-8351-4bf6-afa2-7e9420213225",
+        "expected_revision": 5,
+        "expected_goal_version": 1,
+        "expected_scope_revision": 1,
+        "action": "answer",
+        "body": {
+          "exercise_record_id": "7cfa805f-2bf4-410c-9429-d959ad9bb89f",
+          "kind": "initial",
+          "text": "1米每秒；2分钟为120秒，120米除以120秒。",
+          "supersedes_answer_record_id": null
+        }
+      },
+      "HTTP": 200,
+      "actual_result": {
+        "activity_id": "0305ee4c-be33-489e-bab6-8f2f55e59573",
+        "business_key": "a897e204-8351-4bf6-afa2-7e9420213225",
+        "action": "answer",
+        "request_sha256": "b4eb83930e9de928173a52e5e21c04b8ec70a71338eaadfaa25a28861a95822e",
+        "status": "committed",
+        "duplicate_of": null,
+        "record_ids": [
+          {
+            "record_id": "951a30c1-9e87-4ba1-8ac9-cba266647f45",
+            "kind": "answer",
+            "seq": 6
+          }
+        ],
+        "operation_id": null,
+        "payload_sha256": null,
+        "applied_revision": 6,
+        "head_revision_now": 6,
+        "qualification": "current",
+        "error_code": null,
+        "model_called": false,
+        "tool_called": false,
+        "retry_policy": "none",
+        "exposed_part": null
+      }
+    }
+  ],
+  "status": "failed",
+  "failure": "TimeoutError: locator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('section.ws-teaching').getByText('已只读核对：匹配同一持久命令（未产生第二次动作）。', { exact: true }) to be visible\u001b[22m\n",
+  "observations_drained_before_close": false,
+  "observation_errors": [
+    {
+      "kind": "retrieval-status",
+      "closing": true,
+      "error": "Error: response.json: Target page, context or browser has been closed"
+    },
+    {
+      "kind": "retrieval-status",
+      "closing": true,
+      "error": "Error: response.json: Target page, context or browser has been closed"
+    }
+  ],
+  "browser_closed": true
+}

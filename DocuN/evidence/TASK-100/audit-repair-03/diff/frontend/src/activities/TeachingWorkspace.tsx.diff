@@ -1,0 +1,470 @@
+--- pre/frontend/src/activities/TeachingWorkspace.tsx
++++ post/frontend/src/activities/TeachingWorkspace.tsx
+@@ -6,16 +6,19 @@
+ import { TeachingExercise } from "./TeachingExercise";
+ import { TeachingFeedback, type FeedbackView } from "./TeachingFeedback";
+ import {
+-  getTeachingCommand, getTeachingWorkspace, getTeachingRecord, postTeachingCommand,
++  getTeachingCommand, getTeachingWorkspace, getTeachingRecord, postTeachingCommand,
++  getTeachingHistory, type TeachingHistoryItem, type TeachingSeed,
+   TeachingApiError, type TeachingAction, type TeachingCommandInput, type TeachingReceipt,
+   type TeachingRegion, type TeachingWorkspace,
+ } from "./teachingApi";
+ import { buildTeachingCommand, newTeachingKey } from "./teachingDrafts";
+ import {
+   appendTeachingIntent, loadTeachingIntents, removeTeachingIntent, saveTeachingDraft,
+-  updateTeachingIntent, readTeachingDraft, removeTeachingDraft, type TeachingIntentSummary,
++  updateTeachingIntent, readTeachingDraft, removeTeachingDraft, type TeachingIntentSummary,
++  teachingEditorOwner,
+ } from "./teachingIntents";
+-import { compareTeachingIntent } from "./teachingIntentMatch";
++import { compareTeachingIntent } from "./teachingIntentMatch";
++import { TeachingCitations, citationIds } from "./TeachingCitations";
+ 
+ const POLL_MS = 3000;
+ const OBSERVE_MAX_SECONDS = 120;
+@@ -63,9 +66,10 @@
+ 
+ function toFeedbackView(region: TeachingRegion): FeedbackView {
+   const list = (value: unknown) => (Array.isArray(value) ? value : []);
+-  const excerpt = (item: Record<string, unknown>) => ({
++  const excerpt = (item: Record<string, unknown>) => ({
+     answer_excerpt: String(item.answer_excerpt ?? ""),
+-    explanation: String(item.explanation ?? ""),
++    explanation: String(item.explanation ?? ""),
++    citations: Array.isArray(item.citations) ? item.citations.filter((id):id is string=>typeof id==='string') : [],
+   });
+   const take = (key: string) => list(region[key])
+     .map(item => item as Record<string, unknown>).filter(item => "answer_excerpt" in item)
+@@ -104,14 +108,15 @@
+ 
+ export function TeachingWorkspace({
+   activityId, token, scopeRevision, teachingAvailable, calculationAvailable,
+-  onCapabilitiesDirty,
++  onCapabilitiesDirty, seed,
+ }: {
+   activityId: string;
+   token: string;
+   scopeRevision: number;
+   teachingAvailable: boolean;
+   calculationAvailable: boolean;
+-  onCapabilitiesDirty?: () => void;
++  onCapabilitiesDirty?: () => void;
++  seed?: TeachingSeed | null;
+ }) {
+   const [workspace, setWorkspace] = useState<TeachingWorkspace | null>(null);
+   const [feedback, setFeedback] = useState<FeedbackView | null>(null);
+@@ -125,10 +130,26 @@
+   const [error, setError] = useState("");
+   const [readError, setReadError] = useState("");
+   const [historyDetail,setHistoryDetail] = useState<Record<string,unknown>|null>(null);
+-  const [correctionTarget,setCorrectionTarget] = useState<string|null>(null);
++  const [correctionTarget,setCorrectionTarget] = useState<string|null>(null);
++  const [olderHistory,setOlderHistory] = useState<TeachingHistoryItem[]>([]);
++  const [historyNext,setHistoryNext] = useState<string|null>(null);
++  const [historyLoading,setHistoryLoading] = useState(false);
++  const [historyNotice,setHistoryNotice] = useState("");
++  const [editConflict,setEditConflict] = useState(false);
++  const [selectedSeed,setSelectedSeed] = useState<TeachingSeed|null>(null);
++  const editing = useRef<{activity_id:string;head:TeachingWorkspace['head'];scope_revision:number;key:string;draft_key:string|null}|null>(null);
++  const editorOwner = useRef<string|null>(null);
++  const dirty = useRef({answer:false,goal:false,correction:false});
++  const workspaceToken = useRef("");
++  const historySeq = useRef(0);
++  const historyAbort = useRef<AbortController|null>(null);
++  const pageSeq = useRef(0);
++  const pageAbort = useRef<AbortController|null>(null);
+   const editSeq=useRef(0);
+-  const activityRef=useRef(activityId);
+-  activityRef.current=activityId;
++  const activityRef=useRef(activityId);
++  activityRef.current=activityId;
++  const scopeRef=useRef(scopeRevision);
++  scopeRef.current=scopeRevision;
+ 
+   const mounted = useRef(true);
+   const inFlight = useRef(false);
+@@ -140,7 +161,8 @@
+ 
+   useEffect(() => {
+     mounted.current = true;
+-    return () => { mounted.current = false; abort.current?.abort(); };
++    return () => { mounted.current = false; abort.current?.abort(); ++historySeq.current; historyAbort.current?.abort();
++      ++pageSeq.current; pageAbort.current?.abort(); };
+   }, []);
+ 
+   const reloadIntents = useCallback(() => {
+@@ -159,24 +181,44 @@
+       const view = await getTeachingWorkspace(activityId, token, controller.signal);
+       if (!mounted.current || seq !== readSeq.current) return;
+       if (view === null) { setReadError("教学读取不可用（未确认）"); return; }
+-      const key = [activityId, view.head.goal_record_id, view.head.path_record_id, view.head.node_id,
+-        view.head.exercise_record_id].join("|");
+-      if (key !== contextKey.current) {
+-        // 上下文切换：废弃旧反馈视图与旧草稿绑定，不覆盖当前编辑区。
+-        contextKey.current = key;
+-        setFeedback(null);
+-        setCorrectionText("");
+-        setHistoryDetail(null);
+-        setCorrectionTarget(null);
+-        draftId.current = null;
+-        const editAt=editSeq.current;
+-        const draft=await readTeachingDraft(`edit-${key}`);
+-        if (!mounted.current||seq!==readSeq.current) return;
+-        if (editAt===editSeq.current) {
+-          setAnswerText(draft?.content??String(view.answer?.text??""));
+-          setGoalText(String(view.goal?.goal??""));
+-        }
+-      }
++      const key = [activityId, view.head.goal_record_id, view.head.path_record_id, view.head.node_id,
++        view.head.exercise_record_id, view.head.answer_record_id].join("|");
++      const editKey = `${key}|${view.head.revision}`;
++      const owner=await teachingEditorOwner();
++      if (!mounted.current||seq!==readSeq.current) return;
++      editorOwner.current=owner;
++      const ownDraftKey=owner ? `edit-${editKey}|${owner}` : null;
++      if (view.view_token !== workspaceToken.current) {
++        workspaceToken.current=view.view_token; ++pageSeq.current; pageAbort.current?.abort();
++        setOlderHistory([]); setHistoryNext(view.next_cursor??null); setHistoryLoading(false);
++      }
++      if (key !== contextKey.current) {
++        // 编辑身份独立于新快照；外部新答不把旧文字改绑为其supersedes。
++        contextKey.current = key;
++        setFeedback(null);
++        ++historySeq.current; historyAbort.current?.abort();
++        setHistoryDetail(null);
++        setCorrectionTarget(null);
++        draftId.current = null;
++        const editAt=editSeq.current;
++        if (editing.current && (dirty.current.answer||dirty.current.correction)) {
++          setEditConflict(true);
++        } else {
++          editing.current={activity_id:activityId,head:{...view.head},scope_revision:scopeRef.current,key:editKey,draft_key:ownDraftKey};
++          setEditConflict(false);
++          const draft=ownDraftKey ? await readTeachingDraft(ownDraftKey) : null;
++          if (!mounted.current||seq!==readSeq.current) return;
++          if (editAt===editSeq.current) {
++            setAnswerText(draft?.content??String(view.answer?.text??""));
++            dirty.current.answer=Boolean(draft);
++            if (!dirty.current.goal) setGoalText(String(view.goal?.goal??""));
++            if (!dirty.current.correction) setCorrectionText("");
++          }
++        }
++      } else if (editing.current?.head.revision !== view.head.revision) {
++        if (dirty.current.answer||dirty.current.correction) setEditConflict(true);
++        else editing.current={activity_id:activityId,head:{...view.head},scope_revision:scopeRef.current,key:editKey,draft_key:ownDraftKey};
++      }
+       setWorkspace(view);
+       setReadError("");
+       if (!view.overlay.processing && !view.overlay.unknown) {
+@@ -198,13 +240,20 @@
+       }
+       if (!quiet) setReadError(reason instanceof Error ? reason.message : "教学读取失败");
+     }
+-  }, [activityId, token]);
++  }, [activityId, token]);
+ 
+   useEffect(() => {
+-    ++readSeq.current; contextKey.current=""; setWorkspace(null); setBusy("");
+-    reloadIntents(); void refresh();
+-    return ()=>{ ++readSeq.current; abort.current?.abort(); };
+-  }, [reloadIntents, refresh]);
++    ++readSeq.current; ++historySeq.current; historyAbort.current?.abort(); ++pageSeq.current; pageAbort.current?.abort();
++    contextKey.current=""; workspaceToken.current=""; setWorkspace(null); setBusy("");
++    editing.current=null; dirty.current={answer:false,goal:false,correction:false}; setEditConflict(false);
++    setOlderHistory([]); setHistoryDetail(null); setCorrectionTarget(null); setHistoryNotice("");
++    reloadIntents(); void refresh();
++    return ()=>{ ++readSeq.current; abort.current?.abort(); ++historySeq.current; historyAbort.current?.abort(); ++pageSeq.current; pageAbort.current?.abort(); };
++  }, [reloadIntents, refresh]);
++  useEffect(()=>{
++    if (seed?.activity_id===activityId) { setSelectedSeed(seed); setGoalText(seed.goal); dirty.current.goal=true; }
++    else setSelectedSeed(null);
++  },[seed,activityId]);
+   useEffect(()=>{
+     const onStorage=()=>reloadIntents();
+     window.addEventListener("storage",onStorage);
+@@ -243,20 +292,26 @@
+     return () => { stop(); document.removeEventListener("visibilitychange", onVisibility); };
+   }, [workspace, refresh]);
+ 
+-  async function submit(action: TeachingAction, body: Record<string, unknown>,
++  async function submit(action: TeachingAction, body: Record<string, unknown>,
+                          extra?: Partial<TeachingIntentSummary>) {
+-    if (busy || !intentsOk) return;
++    if (busy || !intentsOk) return;
++    if ((action==='answer'||action==='correct') && editConflict) { setError("输入仍属于旧作答身份；请先核对并明确沿用草稿"); return; }
+     const submittedContext=contextKey.current;
+     const stillCurrent=()=>mounted.current&&activityRef.current===activityId&&contextKey.current===submittedContext;
+     setBusy(action); setError(""); setNotice("");
+     const key = newTeachingKey();
+     const input: Omit<TeachingCommandInput, "body"> = {
+       business_key: key,
+-      expected_revision: workspace?.head.revision ?? 0,
++      expected_revision: workspace?.head.revision ?? 0,
+       expected_goal_version: workspace?.head.goal_version ?? 0,
+       expected_scope_revision: scopeRevision,
+       action,
+-    };
++    };
++    if (action==='answer' && editing.current) {
++      input.expected_revision=editing.current.head.revision;
++      input.expected_goal_version=editing.current.head.goal_version;
++      input.expected_scope_revision=editing.current.scope_revision;
++    }
+     try {
+       const built = await buildTeachingCommand(activityId, { ...input, body });
+       // 顺序：规范字节 → IndexedDB 完整正文 → localStorage 摘要 → POST 一次。
+@@ -265,7 +320,10 @@
+         activity_id: activityId,
+         goal_record_id: workspace?.head.goal_record_id ?? null,
+         exercise_record_id: workspace?.head.exercise_record_id ?? null,
+-        answer_record_id: workspace?.head.answer_record_id ?? null,
++        answer_record_id: workspace?.head.answer_record_id ?? null,
++        path_record_id: workspace?.head.path_record_id ?? null,
++        node_id: workspace?.head.node_id ?? null,
++        head_revision: input.expected_revision,
+         content: built.request_body,
+         created_at: new Date().toISOString(),
+       });
+@@ -318,7 +376,12 @@
+       } else {
+         await updateTeachingIntent(key, { state: "submitted" }); reloadIntents();
+       }
+-      if (!stillCurrent()) return;
++      if (!stillCurrent()) return;
++      if (receipt.status==='committed') {
++        if (action==='answer') dirty.current.answer=false;
++        if (action==='correct') dirty.current.correction=false;
++        if (action==='goal') { dirty.current.goal=false; setSelectedSeed(null); }
++      }
+       if (receipt.duplicate_of) {
+         setNotice("同内容已被同一父槽的其他键接收，返回既有事实，未产生第二次效果。");
+       } else if (receipt.status === "committed") {
+@@ -330,7 +393,7 @@
+     }
+   }
+ 
+-  async function reconcile(intent: TeachingIntentSummary) {
++  async function reconcile(intent: TeachingIntentSummary) {
+     setBusy(`reconcile-${intent.key}`); setError(""); setNotice("");
+     try {
+       const value = await getTeachingCommand(activityId, intent.key, token);
+@@ -346,14 +409,79 @@
+         setError("已核对：该键绑定不同内容，保留本机输入，未覆盖旧事实。");
+       } else {
+         const status=String(value?.status??"unknown");
+-        await updateTeachingIntent(intent.key, { state: "unconfirmed",last_message:status }); reloadIntents();
+-        setNotice(status==="failed"||status==="not_sent"?"已确认本次失败；可显式以新键重试。":"结果仍在途或未知；仅核对，不会重复启动。");
++        const unclaimed=value?.retry_policy==='same_key_before_claim';
++        await updateTeachingIntent(intent.key, { state: "unconfirmed",last_message:status,last_code:unclaimed?'same_key_before_claim':undefined }); reloadIntents();
++        setNotice(unclaimed?'已接受且尚未领取启动；可明确恢复原意图一次。':status==="failed"||status==="not_sent"?"已确认本次失败；可显式以新键重试。":"结果仍在途或未知；仅核对，不会重复启动。");
+       }
+       await refresh(true);
+     } catch (reason) {
+       setError(reason instanceof Error ? reason.message : "核对未完成");
+     } finally { if (mounted.current) setBusy(""); }
+-  }
++  }
++
++  async function resumeAccepted(intent: TeachingIntentSummary) {
++    if (busy||!intent.draft_id) return;
++    const context=contextKey.current; setBusy(`resume-${intent.key}`); setError('');
++    const current=()=>mounted.current&&activityRef.current===activityId&&context===contextKey.current;
++    try {
++      const stored=await readTeachingDraft(intent.draft_id);
++      const receipt=await getTeachingCommand(activityId,intent.key,token);
++      if (!stored||compareTeachingIntent(intent,receipt)!=='matching'||receipt?.retry_policy!=='same_key_before_claim') {
++        if(current()) setNotice('原命令不再满足未领取启动条件；已只读核对，没有重发。'); return;
++      }
++      const original=JSON.parse(stored.content) as Record<string,unknown>;
++      delete original.activity_id;
++      const result=await postTeachingCommand(activityId,{...original,business_key:intent.key} as TeachingCommandInput,token);
++      if (result.request_sha256!==intent.request_sha||result.business_key!==intent.key) throw new Error('恢复回执身份未确认');
++      if (['committed','history'].includes(result.status)) { await removeTeachingIntent(intent.key); await removeTeachingDraft(intent.draft_id); }
++      else await updateTeachingIntent(intent.key,{state:'unconfirmed',last_message:result.status,last_code:result.error_code??undefined});
++      if(current()) { reloadIntents(); setNotice('原意图恢复已返回；不会自动再发。'); await refresh(true); }
++    } catch(reason) { if(current()) setError(reason instanceof Error?reason.message:'恢复未确认，原意图保留'); }
++    finally { if(mounted.current&&activityRef.current===activityId) setBusy(''); }
++  }
++
++  function useCurrentBinding(keepText: boolean) {
++    if (!workspace) return;
++    const key=[activityId,workspace.head.goal_record_id,workspace.head.path_record_id,workspace.head.node_id,
++      workspace.head.exercise_record_id,workspace.head.answer_record_id,workspace.head.revision].join('|');
++    editing.current={activity_id:activityId,head:{...workspace.head},scope_revision:scopeRef.current,key,
++      draft_key:editorOwner.current?`edit-${key}|${editorOwner.current}`:null};
++    setEditConflict(false); ++editSeq.current;
++    if (!keepText) { setAnswerText(String(workspace.answer?.text??'')); dirty.current.answer=false; setCorrectionText(''); dirty.current.correction=false; }
++    setNotice(keepText?'已明确将未保存文字沿用到当前作答；原身份草稿仍保留。':'已载入当前作答；旧草稿仍保留在本机。');
++  }
++
++  async function selectHistory(item: TeachingHistoryItem) {
++    const seq=++historySeq.current, context=contextKey.current;
++    historyAbort.current?.abort(); const active=new AbortController(); historyAbort.current=active;
++    setHistoryDetail(null); setCorrectionTarget(null); setHistoryNotice('正在读取所选历史…');
++    try {
++      const record=await getTeachingRecord(activityId,item.record_id,token,active.signal);
++      if (!mounted.current||activityRef.current!==activityId||seq!==historySeq.current||active.signal.aborted||context!==contextKey.current) return;
++      setHistoryDetail(record); setHistoryNotice('所选记录仅供历史核对，当前工作区保持不变。');
++      setCorrectionTarget(['path_proposal','path_accept','feedback','progress'].includes(item.kind)?item.record_id:null);
++    } catch (reason) {
++      if (mounted.current&&seq===historySeq.current&&!active.signal.aborted&&context===contextKey.current)
++        setHistoryNotice(reason instanceof Error?reason.message:'历史读取未确认');
++    }
++  }
++
++  async function loadEarlier() {
++    if (!historyNext||historyLoading) return;
++    const cursor=historyNext, expectedToken=workspaceToken.current, seq=++pageSeq.current;
++    pageAbort.current?.abort(); const active=new AbortController(); pageAbort.current=active;
++    setHistoryLoading(true); setHistoryNotice('');
++    try {
++      const page=await getTeachingHistory(activityId,token,cursor,active.signal);
++      if (!mounted.current||activityRef.current!==activityId||seq!==pageSeq.current||active.signal.aborted||expectedToken!==workspaceToken.current) return;
++      if (page.view_token!==expectedToken) throw new TeachingApiError(409,'snapshot_changed','历史版本已变化，请刷新工作区后重新翻页');
++      setOlderHistory(previous=>[...previous,...page.items.filter(item=>!previous.some(p=>p.record_id===item.record_id))]);
++      setHistoryNext(page.next_cursor);
++    } catch (reason) {
++      if (mounted.current&&seq===pageSeq.current&&!active.signal.aborted)
++        setHistoryNotice(reason instanceof TeachingApiError&&reason.status===409?'历史版本已变化，请刷新工作区后重新翻页':reason instanceof Error?reason.message:'历史分页未确认');
++    } finally { if(mounted.current&&seq===pageSeq.current) setHistoryLoading(false); }
++  }
+ 
+   const head = workspace?.head;
+   const overlay = workspace?.overlay;
+@@ -395,15 +523,16 @@
+         <textarea
+           id="teaching-goal" value={goalText} maxLength={1024} disabled={busy !== ""}
+           placeholder="例如：能正确换算平均速度并说明数量级"
+-          onChange={event => { editSeq.current++; setGoalText(event.target.value); }}
++          onChange={event => { editSeq.current++; dirty.current.goal=true; setSelectedSeed(null); setGoalText(event.target.value); }}
+         />
+         <button
+           className="primary" disabled={busy !== "" || !goalText.trim() || !canLocal}
+           onClick={() => void submit("goal", {
+             goal: goalText.trim(),
+-            self_report: null, domain: null, seed_operation_id: null, seed_payload_sha256: null,
++            self_report: null, domain: null, seed_operation_id: selectedSeed?.operation_id??null, seed_payload_sha256: selectedSeed?.payload_sha256??null,
+           })}
+-        >保存目标（不调用模型）</button>
++        >保存目标（不调用模型）</button>
++        {selectedSeed&&<p role="status">已载入G7目标；保存时保留原成果身份，不调用模型或重新启动首次学习。</p>}
+         <p className="quiet">
+           目标每次保存生成新版本；旧反馈、题目与作答保留为历史。没有观察前能力标记为未知，不从目标文字推断。
+         </p>
+@@ -426,7 +555,9 @@
+         {(workspace?.proposal||workspace?.path)&&<div aria-label="学习路径">
+           <p>{String(workspace.proposal?.message??"已接受当前路径")}</p>
+           <ol>{((workspace.proposal?.nodes??workspace.path?.nodes??[]) as Record<string,unknown>[]).map((node,index)=><li key={String(node.node_id??index)}>
+-            <strong>{String(node.title)}</strong>：{String(node.objective)}<p>依据与理由：{String(node.rationale)}</p>
++            <strong>{String(node.title)}</strong>：{String(node.objective)}<p>依据与理由：{String(node.rationale)}</p>
++            <TeachingCitations activityId={activityId} recordId={workspace.proposal?.record_id??workspace.path?.record_id}
++              ids={citationIds(node)} token={token} label={`路径 n${index+1}`} />
+             <p>前置节点：{(node.prerequisites as number[]).map(n=>`n${n+1}`).join("、")||"无"} · {workspace.nodes?.[`n${index+1}`]?.status??"尚未观察"}</p>
+             {workspace.head.path_record_id&&<button className="secondary" disabled={busy!==""||!canLocal||overlay?.processing||overlay?.unknown}
+               onClick={()=>void submit("select_node",{path_record_id:workspace.head.path_record_id,node_id:`n${index+1}`,archive_current:Boolean(workspace.head.exercise_record_id)})}>选择节点 n{index+1}（保留当前题为历史）</button>}
+@@ -480,24 +611,33 @@
+         </div>
+       </div>
+ 
+-      <div className="ws-teaching-block">
+-        <h5>4. 作答草稿与保存（零费）</h5>
++      <div className="ws-teaching-block">
++        <h5>4. 作答草稿与保存（零费）</h5>
++        {editConflict&&<div role="alert" aria-label="作答身份变化">
++          <p>作答或修订身份已变化。未保存文字仍绑定原作答及修订 {editing.current?.head.revision}，请核对新作答后再保存。</p>
++          <button className="secondary" onClick={()=>useCurrentBinding(true)}>明确沿用草稿到当前作答</button>
++          <button className="secondary" onClick={()=>useCurrentBinding(false)}>载入当前作答（保留旧草稿）</button>
++        </div>}
+         {Boolean(workspace?.answer?.text)&&<p aria-label="已保存作答">已保存作答：{String(workspace?.answer?.text)}</p>}
+         <label htmlFor="teaching-answer">作答</label>
+         <textarea
+           id="teaching-answer" value={answerText} maxLength={ANSWER_MAX} disabled={busy !== ""}
+           placeholder="写下你的答案与依据（仅保存在本机浏览器，成功保存后成为不可变记录）"
+           onChange={event => {
+-            editSeq.current++; setAnswerText(event.target.value);
+-            void saveTeachingDraft({draft_id:`edit-${contextKey.current}`,activity_id:activityId,
+-              goal_record_id:head?.goal_record_id,exercise_record_id:head?.exercise_record_id,answer_record_id:head?.answer_record_id,
++            editSeq.current++; dirty.current.answer=true; setAnswerText(event.target.value);
++            const binding=editing.current;
++            if (!binding?.draft_key) { setNotice("本机编辑身份未就绪，文字仍保留在当前页面。"); return; }
++            void saveTeachingDraft({draft_id:binding.draft_key,activity_id:binding.activity_id,
++              goal_record_id:binding?.head.goal_record_id,exercise_record_id:binding?.head.exercise_record_id,answer_record_id:binding?.head.answer_record_id,
++              path_record_id:binding?.head.path_record_id,node_id:binding?.head.node_id,head_revision:binding?.head.revision,
++              editor_owner_id:editorOwner.current??undefined,
+               content:event.target.value,created_at:new Date().toISOString()});
+           }}
+         />
+         <div className="ws-exercise-actions">
+           <button
+             className="primary"
+-            disabled={busy !== "" || !canLocal || !workspace?.head.exercise_record_id || !answerText.trim()}
++            disabled={busy !== "" || !canLocal || editConflict || !workspace?.head.exercise_record_id || !answerText.trim()}
+             onClick={() => {
+               if (!workspace?.head.exercise_record_id) return;
+               void submit("answer", {
+@@ -510,7 +650,7 @@
+           >保存作答（零费，不调用模型）</button>
+           <button
+             className="secondary"
+-            disabled={busy !== "" || !canLocal || !workspace?.head.answer_record_id || !answerText.trim()}
++            disabled={busy !== "" || !canLocal || editConflict || !workspace?.head.answer_record_id || !answerText.trim()}
+             onClick={() => {
+               if (!workspace?.head.exercise_record_id || !workspace.head.answer_record_id) return;
+               void submit("answer", {
+@@ -556,7 +696,7 @@
+             });
+           }}
+         >请求评价（1 次模型）</button>
+-        <TeachingFeedback workspace={workspace} feedback={feedback} />
++        <TeachingFeedback workspace={workspace} feedback={feedback} token={token} />
+         {workspace?.reason&&<div aria-label="更新或保留理由"><h6>更新或保留理由</h6>
+           <p>{String(reasonBody.reason??workspace.reason.message??reasonBody.text??"当前事实保留，等待你的下一次明确动作。")}</p>
+           {workspace.reason.kind==="progress"&&<p>本节点独立作答 {reasonCount("independent_answers")} 个，辅助观察 {reasonCount("assisted")} 个，争议观察 {reasonCount("contested")} 个。{reasonBody.advance?`当前节点已从 ${String(reasonBody.node_before)} 前进至 ${String(reasonBody.node_after)}。`:"当前节点保留。"}</p>}
+@@ -569,11 +709,11 @@
+         <label htmlFor="teaching-correction">你的纠错说明（用户补充，不是已验证事实）</label>
+         <textarea
+           id="teaching-correction" value={correctionText} maxLength={1024} disabled={busy !== ""}
+-          onChange={event => setCorrectionText(event.target.value)}
++          onChange={event => { dirty.current.correction=true; setCorrectionText(event.target.value); }}
+         />
+         <button
+           className="secondary"
+-          disabled={busy !== "" || !canLocal || !(correctionTarget||workspace?.head.feedback_record_id||workspace?.head.reason_record_id) || !correctionText.trim()}
++          disabled={busy !== "" || !canLocal || editConflict || !(correctionTarget||workspace?.head.feedback_record_id||workspace?.head.reason_record_id) || !correctionText.trim()}
+           onClick={() => {
+             const target=correctionTarget||workspace?.head.feedback_record_id||workspace?.head.reason_record_id;
+             if (!target) return;
+@@ -587,14 +727,15 @@
+           纠错不会覆盖原答案或原反馈：相反的两版评价并存，相关观察标记为有争议，不用于推进。
+         </p>
+         <ul className="ws-history">
+-          {workspace?.history.map(item => (
++          {[...(workspace?.history??[]),...olderHistory].map(item => (
+             <li key={item.record_id} className="quiet">{item.label} · 目标版本 {item.goal_version} · {new Date(item.created_at).toLocaleString("zh-CN", { hour12: false })}
+-              <button className="secondary" onClick={()=>{ const current=contextKey.current; void getTeachingRecord(activityId,item.record_id,token).then(record=>{
+-                if (mounted.current&&current===contextKey.current) { setHistoryDetail(record); setCorrectionTarget(["path_proposal","path_accept","feedback","progress"].includes(item.kind)?item.record_id:null); }
+-              }).catch(()=>setReadError("历史读取未确认")); }}>查看记录</button></li>
++              <button className="secondary" onClick={()=>void selectHistory(item)}>查看记录 · {item.seq}</button></li>
+           ))}
+-        </ul>
+-        {historyDetail&&<div aria-label="历史记录正文"><p>读取资格：{String(historyDetail.qualification)}</p><pre style={{whiteSpace:"pre-wrap"}}>{JSON.stringify(historyDetail.public_body,null,2)}</pre></div>}
++        </ul>
++        {historyNext&&<button className="secondary" disabled={historyLoading} onClick={()=>void loadEarlier()}>查看更早历史（只读）</button>}
++        {historyNotice&&<p role="status">{historyNotice}</p>}
++        {historyDetail&&<div aria-label="历史记录正文" data-record-id={String(historyDetail.record_id)}><p>读取资格：{String(historyDetail.qualification)}</p><pre style={{whiteSpace:"pre-wrap"}}>{JSON.stringify(historyDetail.public_body,null,2)}</pre></div>}
++        {historyDetail&&<TeachingCitations activityId={activityId} recordId={String(historyDetail.record_id)} ids={citationIds(historyDetail.public_body)} token={token} label="所选历史" />}
+       </div>
+ 
+       {intents.length > 0 && (
+@@ -606,7 +747,9 @@
+                 {intent.action} · {intent.state === "refused" ? "已被拒绝" : "结果未确认"} · 修订 {intent.head_revision}
+                 {intent.last_code ? ` · ${errorText(intent.last_code)}` : ""}
+               </p>
+-              <button className="secondary" disabled={busy !== ""} onClick={() => void reconcile(intent)}>核对（只读）</button>
++              <button className="secondary" disabled={busy !== ""} onClick={() => void reconcile(intent)}>核对（只读）</button>
++              {intent.last_code==='same_key_before_claim'&&<button className="secondary" disabled={busy!==''||!canLocal||overlay?.source_invalid||exhausted}
++                onClick={()=>void resumeAccepted(intent)}>明确恢复原意图（同键）</button>}
+               {["failed","not_sent"].includes(intent.last_message??"")&&<button className="secondary" disabled={busy!==""||!canModel} onClick={()=>{
+                 if (!intent.draft_id) return;
+                 void readTeachingDraft(intent.draft_id).then(draft=>{

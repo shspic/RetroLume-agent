@@ -1,0 +1,744 @@
+{
+  "ok": false,
+  "steps": [
+    "s0-mount-route-coverage",
+    "s1-refresh-get-only-normal",
+    "s2-unconfirmed-intent-get-only",
+    "s3-submitted-intent-explicit-post",
+    "s4-poll-no-overlap-slow",
+    "s5-visibility-pause-resume",
+    "s6-late-result-isolation",
+    "s7-branches-expanded-invalid",
+    "s8-unmount-cleanup"
+  ],
+  "checks": {
+    "s1_refresh_get_only": true,
+    "s1_no_ops_without_explicit_pick": true,
+    "s1_detail_not_auto_restored": true,
+    "s2_unconfirmed_intent_no_post": true,
+    "s2_banner_visible": true,
+    "s3_submitted_intent_no_auto_post": true,
+    "s3_explicit_post_exactly_one": true,
+    "s3_read_after_explicit_action": true,
+    "s3_detail_after_success": true,
+    "s4_lists_observed": true,
+    "s4_no_overlap": true,
+    "s4_slow_request_seen": true,
+    "s4_tick_skipped_while_inflight": true,
+    "s4_window_concurrent_peak_le_2": true,
+    "s5_hidden_pauses_polling": true,
+    "s5_resume_get_only": true,
+    "s6_late_activity_does_not_override": true,
+    "s6_late_payload_does_not_override": true,
+    "s7_invalidated_no_continue_entry": true,
+    "s7_expanded_payload_rendered": true,
+    "s7_committed_has_continue_entry": true,
+    "s8_no_requests_after_unmount": true,
+    "blocked_empty": true,
+    "post_total_is_one": true,
+    "console_errors_empty": true
+  },
+  "blocked": [],
+  "console_errors": [],
+  "page_errors": [],
+  "post_total": 0,
+  "bundle": {
+    "index_js": "index-CiaiBKAO.js"
+  },
+  "timeline_note": "[{\"start\":1790865598637,\"end\":1790865601841,\"dur\":3204},{\"start\":1790865604640,\"end\":1790865607853,\"dur\":3213}]",
+  "failures": [
+    "s3 after-action slice contains POST"
+  ],
+  "log": [
+    {
+      "phase": "s0-mount",
+      "group": "session",
+      "method": "GET",
+      "path": "/api/session",
+      "t_start": 1790865578109,
+      "inflight_at_start": 0,
+      "t_end": 1790865578112,
+      "duration_ms": 3
+    },
+    {
+      "phase": "s0-mount",
+      "group": "materials",
+      "method": "GET",
+      "path": "/api/materials",
+      "t_start": 1790865578117,
+      "inflight_at_start": 0,
+      "t_end": 1790865578120,
+      "duration_ms": 3
+    },
+    {
+      "phase": "s0-mount",
+      "group": "pdf-candidates",
+      "method": "GET",
+      "path": "/api/pdf-candidates",
+      "t_start": 1790865578119,
+      "inflight_at_start": 1,
+      "t_end": 1790865578121,
+      "duration_ms": 2
+    },
+    {
+      "phase": "s0-mount",
+      "group": "capabilities",
+      "method": "GET",
+      "path": "/api/activities/capabilities",
+      "t_start": 1790865578397,
+      "inflight_at_start": 0,
+      "t_end": 1790865578400,
+      "duration_ms": 3
+    },
+    {
+      "phase": "s0-mount",
+      "group": "list",
+      "method": "GET",
+      "path": "/api/activities",
+      "t_start": 1790865578398,
+      "inflight_at_start": 1,
+      "t_end": 1790865578400,
+      "duration_ms": 2
+    },
+    {
+      "phase": "s0-mount",
+      "group": "materials",
+      "method": "GET",
+      "path": "/api/materials",
+      "t_start": 1790865578422,
+      "inflight_at_start": 0,
+      "t_end": 1790865578424,
+      "duration_ms": 2
+    },
+    {
+      "phase": "s0-mount",
+      "group": "detail:11111111-1111-4111-8111-111111111111",
+      "method": "GET",
+      "path": "/api/activities/11111111-1111-4111-8111-111111111111",
+      "t_start": 1790865578546,
+      "inflight_at_start": 0,
+      "t_end": 1790865578549,
+      "duration_ms": 3
+    },
+    {
+      "phase": "s0-mount",
+      "group": "ops:11111111-1111-4111-8111-111111111111",
+      "method": "GET",
+      "path": "/api/activities/11111111-1111-4111-8111-111111111111/operations",
+      "t_start": 1790865578547,
+      "inflight_at_start": 1,
+      "t_end": 1790865578549,
+      "duration_ms": 2
+    },
+    {
+      "phase": "s1-reload",
+      "group": "list",
+      "method": "GET",
+      "path": "/api/activities",
+      "t_start": 1790865581443,
+      "inflight_at_start": 0,
+      "t_end": 1790865581444,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s1-reload",
+      "group": "detail:11111111-1111-4111-8111-111111111111",
+      "method": "GET",
+      "path": "/api/activities/11111111-1111-4111-8111-111111111111",
+      "t_start": 1790865581445,
+      "inflight_at_start": 0,
+      "t_end": 1790865581447,
+      "duration_ms": 2
+    },
+    {
+      "phase": "s1-reload",
+      "group": "ops:11111111-1111-4111-8111-111111111111",
+      "method": "GET",
+      "path": "/api/activities/11111111-1111-4111-8111-111111111111/operations",
+      "t_start": 1790865581446,
+      "inflight_at_start": 1,
+      "t_end": 1790865581447,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s1-reload",
+      "group": "session",
+      "method": "GET",
+      "path": "/api/session",
+      "t_start": 1790865582132,
+      "inflight_at_start": 0,
+      "t_end": 1790865582134,
+      "duration_ms": 2
+    },
+    {
+      "phase": "s1-reload",
+      "group": "materials",
+      "method": "GET",
+      "path": "/api/materials",
+      "t_start": 1790865582144,
+      "inflight_at_start": 0,
+      "t_end": 1790865582145,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s1-reload",
+      "group": "pdf-candidates",
+      "method": "GET",
+      "path": "/api/pdf-candidates",
+      "t_start": 1790865582147,
+      "inflight_at_start": 0,
+      "t_end": 1790865582148,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s1-reload",
+      "group": "capabilities",
+      "method": "GET",
+      "path": "/api/activities/capabilities",
+      "t_start": 1790865582177,
+      "inflight_at_start": 0,
+      "t_end": 1790865582179,
+      "duration_ms": 2
+    },
+    {
+      "phase": "s1-reload",
+      "group": "list",
+      "method": "GET",
+      "path": "/api/activities",
+      "t_start": 1790865582177,
+      "inflight_at_start": 1,
+      "t_end": 1790865582179,
+      "duration_ms": 2
+    },
+    {
+      "phase": "s1-reload",
+      "group": "materials",
+      "method": "GET",
+      "path": "/api/materials",
+      "t_start": 1790865582190,
+      "inflight_at_start": 0,
+      "t_end": 1790865582191,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s2-reload",
+      "group": "list",
+      "method": "GET",
+      "path": "/api/activities",
+      "t_start": 1790865585204,
+      "inflight_at_start": 0,
+      "t_end": 1790865585207,
+      "duration_ms": 3
+    },
+    {
+      "phase": "s2-reload",
+      "group": "session",
+      "method": "GET",
+      "path": "/api/session",
+      "t_start": 1790865587763,
+      "inflight_at_start": 0,
+      "t_end": 1790865587765,
+      "duration_ms": 2
+    },
+    {
+      "phase": "s2-reload",
+      "group": "materials",
+      "method": "GET",
+      "path": "/api/materials",
+      "t_start": 1790865587774,
+      "inflight_at_start": 0,
+      "t_end": 1790865587775,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s2-reload",
+      "group": "pdf-candidates",
+      "method": "GET",
+      "path": "/api/pdf-candidates",
+      "t_start": 1790865587777,
+      "inflight_at_start": 0,
+      "t_end": 1790865587778,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s2-reload",
+      "group": "capabilities",
+      "method": "GET",
+      "path": "/api/activities/capabilities",
+      "t_start": 1790865587810,
+      "inflight_at_start": 0,
+      "t_end": 1790865587811,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s2-reload",
+      "group": "list",
+      "method": "GET",
+      "path": "/api/activities",
+      "t_start": 1790865587810,
+      "inflight_at_start": 1,
+      "t_end": 1790865587811,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s2-reload",
+      "group": "materials",
+      "method": "GET",
+      "path": "/api/materials",
+      "t_start": 1790865587823,
+      "inflight_at_start": 0,
+      "t_end": 1790865587824,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s3-reload",
+      "group": "list",
+      "method": "GET",
+      "path": "/api/activities",
+      "t_start": 1790865590840,
+      "inflight_at_start": 0,
+      "t_end": 1790865590841,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s3-reload",
+      "group": "session",
+      "method": "GET",
+      "path": "/api/session",
+      "t_start": 1790865593501,
+      "inflight_at_start": 0,
+      "t_end": 1790865593504,
+      "duration_ms": 3
+    },
+    {
+      "phase": "s3-reload",
+      "group": "materials",
+      "method": "GET",
+      "path": "/api/materials",
+      "t_start": 1790865593512,
+      "inflight_at_start": 0,
+      "t_end": 1790865593513,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s3-reload",
+      "group": "pdf-candidates",
+      "method": "GET",
+      "path": "/api/pdf-candidates",
+      "t_start": 1790865593512,
+      "inflight_at_start": 1,
+      "t_end": 1790865593513,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s3-reload",
+      "group": "capabilities",
+      "method": "GET",
+      "path": "/api/activities/capabilities",
+      "t_start": 1790865593543,
+      "inflight_at_start": 0,
+      "t_end": 1790865593545,
+      "duration_ms": 2
+    },
+    {
+      "phase": "s3-reload",
+      "group": "list",
+      "method": "GET",
+      "path": "/api/activities",
+      "t_start": 1790865593543,
+      "inflight_at_start": 1,
+      "t_end": 1790865593545,
+      "duration_ms": 2
+    },
+    {
+      "phase": "s3-reload",
+      "group": "materials",
+      "method": "GET",
+      "path": "/api/materials",
+      "t_start": 1790865593556,
+      "inflight_at_start": 0,
+      "t_end": 1790865593557,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s3-reload",
+      "group": "create",
+      "method": "POST",
+      "path": "/api/activities",
+      "t_start": 1790865595612,
+      "inflight_at_start": 0,
+      "t_end": 1790865595613,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s3-reload",
+      "group": "list",
+      "method": "GET",
+      "path": "/api/activities",
+      "t_start": 1790865595623,
+      "inflight_at_start": 0,
+      "t_end": 1790865595623,
+      "duration_ms": 0
+    },
+    {
+      "phase": "s3-reload",
+      "group": "detail:33333333-3333-4333-8333-333333333333",
+      "method": "GET",
+      "path": "/api/activities/33333333-3333-4333-8333-333333333333",
+      "t_start": 1790865595626,
+      "inflight_at_start": 0,
+      "t_end": 1790865595627,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s3-reload",
+      "group": "ops:33333333-3333-4333-8333-333333333333",
+      "method": "GET",
+      "path": "/api/activities/33333333-3333-4333-8333-333333333333/operations",
+      "t_start": 1790865595626,
+      "inflight_at_start": 1,
+      "t_end": 1790865595627,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s4-poll",
+      "group": "list",
+      "method": "GET",
+      "path": "/api/activities",
+      "t_start": 1790865598637,
+      "inflight_at_start": 0,
+      "t_end": 1790865601841,
+      "duration_ms": 3204
+    },
+    {
+      "phase": "s4-poll",
+      "group": "detail:33333333-3333-4333-8333-333333333333",
+      "method": "GET",
+      "path": "/api/activities/33333333-3333-4333-8333-333333333333",
+      "t_start": 1790865601842,
+      "inflight_at_start": 0,
+      "t_end": 1790865601844,
+      "duration_ms": 2
+    },
+    {
+      "phase": "s4-poll",
+      "group": "ops:33333333-3333-4333-8333-333333333333",
+      "method": "GET",
+      "path": "/api/activities/33333333-3333-4333-8333-333333333333/operations",
+      "t_start": 1790865601843,
+      "inflight_at_start": 1,
+      "t_end": 1790865601844,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s4-poll",
+      "group": "list",
+      "method": "GET",
+      "path": "/api/activities",
+      "t_start": 1790865604640,
+      "inflight_at_start": 0,
+      "t_end": 1790865607853,
+      "duration_ms": 3213
+    },
+    {
+      "phase": "s4-poll",
+      "group": "detail:33333333-3333-4333-8333-333333333333",
+      "method": "GET",
+      "path": "/api/activities/33333333-3333-4333-8333-333333333333",
+      "t_start": 1790865607854,
+      "inflight_at_start": 0,
+      "t_end": 1790865607855,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s4-poll",
+      "group": "ops:33333333-3333-4333-8333-333333333333",
+      "method": "GET",
+      "path": "/api/activities/33333333-3333-4333-8333-333333333333/operations",
+      "t_start": 1790865607855,
+      "inflight_at_start": 1,
+      "t_end": 1790865607855,
+      "duration_ms": 0
+    },
+    {
+      "phase": "s5-visibility",
+      "group": "list",
+      "method": "GET",
+      "path": "/api/activities",
+      "t_start": 1790865610639,
+      "inflight_at_start": 0,
+      "t_end": 1790865610641,
+      "duration_ms": 2
+    },
+    {
+      "phase": "s5-visibility",
+      "group": "detail:33333333-3333-4333-8333-333333333333",
+      "method": "GET",
+      "path": "/api/activities/33333333-3333-4333-8333-333333333333",
+      "t_start": 1790865610642,
+      "inflight_at_start": 0,
+      "t_end": 1790865610644,
+      "duration_ms": 2
+    },
+    {
+      "phase": "s5-visibility",
+      "group": "ops:33333333-3333-4333-8333-333333333333",
+      "method": "GET",
+      "path": "/api/activities/33333333-3333-4333-8333-333333333333/operations",
+      "t_start": 1790865610643,
+      "inflight_at_start": 1,
+      "t_end": 1790865610644,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s5-visibility",
+      "group": "list",
+      "method": "GET",
+      "path": "/api/activities",
+      "t_start": 1790865617767,
+      "inflight_at_start": 0,
+      "t_end": 1790865617768,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s5-visibility",
+      "group": "detail:33333333-3333-4333-8333-333333333333",
+      "method": "GET",
+      "path": "/api/activities/33333333-3333-4333-8333-333333333333",
+      "t_start": 1790865617769,
+      "inflight_at_start": 0,
+      "t_end": 1790865617770,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s5-visibility",
+      "group": "ops:33333333-3333-4333-8333-333333333333",
+      "method": "GET",
+      "path": "/api/activities/33333333-3333-4333-8333-333333333333/operations",
+      "t_start": 1790865617770,
+      "inflight_at_start": 1,
+      "t_end": 1790865617770,
+      "duration_ms": 0
+    },
+    {
+      "phase": "s6-late",
+      "group": "list",
+      "method": "GET",
+      "path": "/api/activities",
+      "t_start": 1790865620773,
+      "inflight_at_start": 0,
+      "t_end": 1790865620774,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s6-late",
+      "group": "detail:33333333-3333-4333-8333-333333333333",
+      "method": "GET",
+      "path": "/api/activities/33333333-3333-4333-8333-333333333333",
+      "t_start": 1790865620775,
+      "inflight_at_start": 0,
+      "t_end": 1790865620777,
+      "duration_ms": 2
+    },
+    {
+      "phase": "s6-late",
+      "group": "ops:33333333-3333-4333-8333-333333333333",
+      "method": "GET",
+      "path": "/api/activities/33333333-3333-4333-8333-333333333333/operations",
+      "t_start": 1790865620776,
+      "inflight_at_start": 1,
+      "t_end": 1790865620777,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s6-late",
+      "group": "detail:11111111-1111-4111-8111-111111111111",
+      "method": "GET",
+      "path": "/api/activities/11111111-1111-4111-8111-111111111111",
+      "t_start": 1790865620819,
+      "inflight_at_start": 0,
+      "t_end": 1790865620820,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s6-late",
+      "group": "detail:22222222-2222-4222-8222-222222222222",
+      "method": "GET",
+      "path": "/api/activities/22222222-2222-4222-8222-222222222222",
+      "t_start": 1790865620858,
+      "inflight_at_start": 1,
+      "t_end": 1790865620859,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s6-late",
+      "group": "ops:22222222-2222-4222-8222-222222222222",
+      "method": "GET",
+      "path": "/api/activities/22222222-2222-4222-8222-222222222222/operations",
+      "t_start": 1790865620858,
+      "inflight_at_start": 2,
+      "t_end": 1790865620859,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s6-late",
+      "group": "ops:11111111-1111-4111-8111-111111111111",
+      "method": "GET",
+      "path": "/api/activities/11111111-1111-4111-8111-111111111111/operations",
+      "t_start": 1790865620820,
+      "inflight_at_start": 1,
+      "t_end": 1790865623327,
+      "duration_ms": 2507
+    },
+    {
+      "phase": "s6-late",
+      "group": "single:22222222-2222-4222-8222-222222222222:OP-B-FAST",
+      "method": "GET",
+      "path": "/api/activities/22222222-2222-4222-8222-222222222222/operations/OP-B-FAST",
+      "t_start": 1790865623690,
+      "inflight_at_start": 1,
+      "t_end": 1790865623691,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s6-late",
+      "group": "list",
+      "method": "GET",
+      "path": "/api/activities",
+      "t_start": 1790865623769,
+      "inflight_at_start": 1,
+      "t_end": 1790865623769,
+      "duration_ms": 0
+    },
+    {
+      "phase": "s6-late",
+      "group": "detail:22222222-2222-4222-8222-222222222222",
+      "method": "GET",
+      "path": "/api/activities/22222222-2222-4222-8222-222222222222",
+      "t_start": 1790865623771,
+      "inflight_at_start": 1,
+      "t_end": 1790865623772,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s6-late",
+      "group": "ops:22222222-2222-4222-8222-222222222222",
+      "method": "GET",
+      "path": "/api/activities/22222222-2222-4222-8222-222222222222/operations",
+      "t_start": 1790865623771,
+      "inflight_at_start": 2,
+      "t_end": 1790865623772,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s6-late",
+      "group": "single:22222222-2222-4222-8222-222222222222:OP-B-SLOW",
+      "method": "GET",
+      "path": "/api/activities/22222222-2222-4222-8222-222222222222/operations/OP-B-SLOW",
+      "t_start": 1790865623660,
+      "inflight_at_start": 0,
+      "t_end": 1790865626164,
+      "duration_ms": 2504
+    },
+    {
+      "phase": "s7-branches",
+      "group": "detail:11111111-1111-4111-8111-111111111111",
+      "method": "GET",
+      "path": "/api/activities/11111111-1111-4111-8111-111111111111",
+      "t_start": 1790865626575,
+      "inflight_at_start": 0,
+      "t_end": 1790865626576,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s7-branches",
+      "group": "ops:11111111-1111-4111-8111-111111111111",
+      "method": "GET",
+      "path": "/api/activities/11111111-1111-4111-8111-111111111111/operations",
+      "t_start": 1790865626575,
+      "inflight_at_start": 1,
+      "t_end": 1790865626577,
+      "duration_ms": 2
+    },
+    {
+      "phase": "s7-branches",
+      "group": "single:11111111-1111-4111-8111-111111111111:OP-INVALID",
+      "method": "GET",
+      "path": "/api/activities/11111111-1111-4111-8111-111111111111/operations/OP-INVALID",
+      "t_start": 1790865626656,
+      "inflight_at_start": 0,
+      "t_end": 1790865626657,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s7-branches",
+      "group": "single:11111111-1111-4111-8111-111111111111:OP-A1",
+      "method": "GET",
+      "path": "/api/activities/11111111-1111-4111-8111-111111111111/operations/OP-A1",
+      "t_start": 1790865626691,
+      "inflight_at_start": 0,
+      "t_end": 1790865626692,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s7-branches",
+      "group": "list",
+      "method": "GET",
+      "path": "/api/activities",
+      "t_start": 1790865626794,
+      "inflight_at_start": 0,
+      "t_end": 1790865626795,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s7-branches",
+      "group": "detail:11111111-1111-4111-8111-111111111111",
+      "method": "GET",
+      "path": "/api/activities/11111111-1111-4111-8111-111111111111",
+      "t_start": 1790865626797,
+      "inflight_at_start": 0,
+      "t_end": 1790865626798,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s7-branches",
+      "group": "ops:11111111-1111-4111-8111-111111111111",
+      "method": "GET",
+      "path": "/api/activities/11111111-1111-4111-8111-111111111111/operations",
+      "t_start": 1790865626797,
+      "inflight_at_start": 1,
+      "t_end": 1790865626798,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s8-unmount",
+      "group": "list",
+      "method": "GET",
+      "path": "/api/activities",
+      "t_start": 1790865629775,
+      "inflight_at_start": 0,
+      "t_end": 1790865629776,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s8-unmount",
+      "group": "detail:11111111-1111-4111-8111-111111111111",
+      "method": "GET",
+      "path": "/api/activities/11111111-1111-4111-8111-111111111111",
+      "t_start": 1790865629777,
+      "inflight_at_start": 0,
+      "t_end": 1790865629778,
+      "duration_ms": 1
+    },
+    {
+      "phase": "s8-unmount",
+      "group": "ops:11111111-1111-4111-8111-111111111111",
+      "method": "GET",
+      "path": "/api/activities/11111111-1111-4111-8111-111111111111/operations",
+      "t_start": 1790865629777,
+      "inflight_at_start": 1,
+      "t_end": 1790865629779,
+      "duration_ms": 2
+    }
+  ]
+}

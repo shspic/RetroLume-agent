@@ -1,0 +1,394 @@
+--- pre/backend/app/activities/repository.py
++++ post/backend/app/activities/repository.py
+@@ -6,9 +6,10 @@
+ 
+ from __future__ import annotations
+ 
+-from dataclasses import dataclass
++from dataclasses import dataclass, field
+ from datetime import datetime, timedelta, timezone
+ import enum
++import json
+ import math
+ import re
+ from typing import Awaitable, Callable, TypeVar
+@@ -21,6 +22,8 @@
+     AdmissionUnavailable,
+     LedgerDisposition,
+     LedgerOutcome,
++    RecordOutcome,
++    validate_business_payload,
+ )
+ 
+ 
+@@ -36,6 +39,48 @@
+ 
+ class ActivityLedgerConflict(RuntimeError):
+     """活动状态或调用方提供的版本已不再适用。"""
++
++
++class ResultIntegrityError(RuntimeError):
++    """持久结果行与权威绑定或规范字节不一致；失败关闭，不冒充读取状态。"""
++
++
++class ResultReadStatus(enum.Enum):
++    """read/list 的业务读取状态；不是业务成功，也不是执行/发送资格。"""
++
++    COMMITTED_CURRENT = "committed_current"
++    COMMITTED_HISTORY_CANCELLED = "committed_history_cancelled"
++    INVALIDATED_SCOPE_CHANGED = "invalidated_scope_changed"
++    INVALIDATED_SOURCE = "invalidated_source"
++    UNRESOLVED = "unresolved"
++    TERMINAL_WITHOUT_PAYLOAD = "terminal_without_payload"
++    NO_OPERATION = "no_operation"
++
++
++@dataclass(frozen=True)
++class CommittedResultSnapshot:
++    """read/list 的业务读取快照；只在有效绑定下携带正文，不授予新执行/写入权。"""
++
++    activity_id: str
++    operation_id: str
++    read_status: ResultReadStatus
++    admission_id: str | None = None
++    execution_generation: int | None = None
++    scope_revision: int | None = None
++    provider: str | None = None
++    configured_model: str | None = None
++    finish_reason: str | None = None
++    returned_model: str | None = None
++    remote_request_id: str | None = None
++    prompt_tokens: int | None = None
++    completion_tokens: int | None = None
++    response_bytes: int | None = None
++    payload_format: str | None = None
++    payload: str | None = field(default=None, repr=False)
++    payload_sha256: str | None = field(default=None, repr=False)
++    committed_at: datetime | None = None
++    activity_status_now: str | None = None
++    activity_scope_revision_now: int | None = None
+ 
+ 
+ class SettleResult(enum.Enum):
+@@ -977,6 +1022,26 @@
+         )
+ 
+     @staticmethod
++    def _payload_values(outcome: LedgerOutcome) -> tuple[str, str, str] | None:
++        """正文三字段同存同缺；合法时返回 (format, payload, sha256) 规范三元组。
++
++        对实际 payload 文本复查封套/format/value 类型/有限数/深度节点/编码
++        长度/规范形式/SHA-256 匹配（共享 helper），不是 hash 正则直通，也不
++        把已有封套再包一层。正文只允许随 received 终态登记。
++        """
++        fields = (outcome.payload_format, outcome.payload, outcome.payload_sha256)
++        if all(value is None for value in fields):
++            return None
++        if any(value is None for value in fields):
++            raise AdmissionDenied("正文三字段必须同存同缺")
++        if outcome.disposition is not LedgerDisposition.RECEIVED:
++            raise AdmissionDenied("正文只能随 received 终态登记")
++        try:
++            return validate_business_payload(outcome.payload, outcome.payload_format, outcome.payload_sha256)
++        except ValueError as exc:
++            raise AdmissionDenied(f"正文封套不合法（{exc}）") from None
++
++    @staticmethod
+     def _stored_outcome(call: dict) -> tuple:
+         return tuple(
+             call[name]
+@@ -992,20 +1057,53 @@
+             )
+         )
+ 
+-    async def record_outcome(self, permit: AdmissionPermit, outcome: LedgerOutcome) -> None:
++    @staticmethod
++    async def _stored_payload_row(connection: object, call: dict) -> tuple[str, str, str] | None:
++        cursor = await connection.execute(
++            """SELECT payload_format, payload, payload_sha256
++                 FROM activity_operation_results
++                WHERE activity_id = %s AND operation_id = %s""",
++            (call["activity_id"], call["operation_id"]),
++        )
++        row = await cursor.fetchone()
++        if row is None:
++            return None
++        return (row["payload_format"], row["payload"], row["payload_sha256"])
++
++    async def record_outcome(self, permit: AdmissionPermit, outcome: LedgerOutcome) -> RecordOutcome:
++        """原子登记终态与（可缺省的）业务正文；返回持久提交确认枚举。
++
++        正文新写与 received 终态在同一短事务内（来源→活动→操作锁序），
++        COMMIT 确认后才返回 RECORDED；COMMIT 后响应丢失按持久事实重读。
++        分支序：终态严格等值的无写幂等（含正文存在性与 format/规范内容/hash，
++        带正文与无正文不等价，旧 received 无正文不能补写，异文冲突保留已有）
++        先于失效/未发送新写资格拒绝；正文新写额外显式检查 dispatch_closed
++        （_operation_is_current 本身不含关门）。诊断/UNKNOWN 记录合同不变，
++        不扩展为正文授权。
++        """
+         values = self._outcome_values(outcome)
+-
+-        async def operation(connection: object) -> None:
++        payload_triple = self._payload_values(outcome)
++
++        async def operation(connection: object) -> RecordOutcome:
+             activity, call, sources_valid = await self._locked_operation(connection, permit)
+             if call["state"] in {"not_sent", "received", "unknown"}:
+                 if self._stored_outcome(call) == values:
+-                    return
++                    stored_payload = await self._stored_payload_row(connection, call)
++                    if payload_triple is None and stored_payload is None:
++                        return RecordOutcome.ALREADY_PRESENT
++                    if payload_triple is not None and stored_payload is not None and stored_payload == payload_triple:
++                        return RecordOutcome.ALREADY_PRESENT
++                    if stored_payload is None:
++                        raise AdmissionDenied("已终结无正文状态不能补写正文")
++                    raise AdmissionDenied("已终结正文与提交不一致")
+                 raise AdmissionDenied("已终结调用不能覆盖为不同结果")
+             current = self._operation_is_current(activity, call, sources_valid)
+             if not current and outcome.disposition is not LedgerDisposition.UNKNOWN:
+                 raise AdmissionDenied("失效或过期执行只能登记 unknown 诊断")
+             if call["state"] == "reserved" and outcome.disposition is not LedgerDisposition.UNKNOWN:
+                 raise AdmissionDenied("尚未越过发送边界的调用不能登记该结果")
++            if payload_triple is not None and activity["dispatch_closed"]:
++                raise AdmissionDenied("关闭门后不接受正文新写")
+             await connection.execute(
+                 """UPDATE activity_operations
+                       SET state = %s, disposition = %s, error_code = %s,
+@@ -1015,5 +1113,234 @@
+                     WHERE admission_id = %s""",
+                 (values[0], *values, permit.admission_id),
+             )
+-
+-        await self._transaction(operation)
++            if payload_triple is not None:
++                # 身份冗余值取锁内权威操作行，不直接相信调用参数。
++                await connection.execute(
++                    """INSERT INTO activity_operation_results(
++                           activity_id, operation_id, admission_id, execution_generation,
++                           scope_revision, payload_format, payload, payload_sha256)
++                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
++                    (
++                        call["activity_id"],
++                        call["operation_id"],
++                        call["admission_id"],
++                        call["execution_generation"],
++                        call["scope_revision"],
++                        payload_triple[0],
++                        payload_triple[1],
++                        payload_triple[2],
++                    ),
++                )
++            return RecordOutcome.RECORDED
++
++        return await self._transaction(operation)
++
++    # --- G3 只读恢复接口：资格判定与正文投影在单语句内完成；失效不投影正文。
++
++    _RESULT_READ_SQL = """\
++SELECT o.state, o.disposition, o.operation_id,
++       o.admission_id AS op_admission_id, o.execution_generation AS op_generation,
++       o.scope_revision AS op_scope, o.provider, o.configured_model,
++       o.finish_reason, o.returned_model, o.remote_request_id,
++       o.prompt_tokens, o.completion_tokens, o.response_bytes,
++       r.admission_id AS result_admission_id, r.execution_generation AS result_generation,
++       r.scope_revision AS result_scope, r.payload_format, r.payload_sha256, r.committed_at,
++       a.status AS activity_status_now, a.scope_revision AS activity_scope_revision_now,
++       (r.payload_sha256 IS NOT NULL
++        AND r.admission_id = o.admission_id
++        AND r.execution_generation = o.execution_generation
++        AND r.scope_revision = o.scope_revision) AS binding_consistent,
++       (r.payload_sha256 IS NOT NULL AND a.scope_revision = r.scope_revision) AS scope_current,
++       (EXISTS (SELECT 1 FROM activity_scope_sources s WHERE s.activity_id = o.activity_id)
++        AND NOT EXISTS (
++            SELECT 1 FROM activity_scope_sources s
++              LEFT JOIN material_sources m ON m.id = s.source_id
++             WHERE s.activity_id = o.activity_id
++               AND (m.id IS NULL OR m.current_version IS NULL
++                    OR m.current_version <> s.version_id
++                    OR m.revision <> s.source_revision)
++        )) AS sources_valid"""
++
++    @staticmethod
++    def _read_status(row: dict, *, has_result: bool) -> ResultReadStatus:
++        """行内绑定不一致抛完整性错误；scope 检查先于来源检查。"""
++        if row["payload_sha256"] is not None and not row["binding_consistent"]:
++            raise ResultIntegrityError("结果行与操作权威绑定不一致")
++        if not has_result:
++            return ResultReadStatus.UNRESOLVED
++        if not row["scope_current"]:
++            return ResultReadStatus.INVALIDATED_SCOPE_CHANGED
++        if not row["sources_valid"]:
++            return ResultReadStatus.INVALIDATED_SOURCE
++        if row["activity_status_now"] == "cancelled":
++            return ResultReadStatus.COMMITTED_HISTORY_CANCELLED
++        return ResultReadStatus.COMMITTED_CURRENT
++
++    @staticmethod
++    def _snapshot_from_row(row: dict, status: ResultReadStatus, payload: str | None) -> CommittedResultSnapshot:
++        has_result = row["payload_sha256"] is not None
++        return CommittedResultSnapshot(
++            activity_id=str(row["activity_id"]),
++            operation_id=row["operation_id"],
++            read_status=status,
++            admission_id=str(row["result_admission_id"] if has_result else row["op_admission_id"]),
++            execution_generation=row["result_generation"] if has_result else row["op_generation"],
++            scope_revision=row["result_scope"] if has_result else row["op_scope"],
++            provider=row["provider"],
++            configured_model=row["configured_model"],
++            finish_reason=row["finish_reason"],
++            returned_model=row["returned_model"],
++            remote_request_id=row["remote_request_id"],
++            prompt_tokens=row["prompt_tokens"],
++            completion_tokens=row["completion_tokens"],
++            response_bytes=row["response_bytes"],
++            payload_format=row["payload_format"],
++            payload=payload,
++            payload_sha256=row["payload_sha256"],
++            committed_at=row["committed_at"],
++            activity_status_now=row["activity_status_now"],
++            activity_scope_revision_now=row["activity_scope_revision_now"],
++        )
++
++    async def read_committed_result(self, activity_id: str, operation_id: str) -> CommittedResultSnapshot:
++        """内部只读恢复接口（无 HTTP）；失败关闭，失效分支不投影正文。
++
++        有效正文需要：结果行与操作/活动/admission/G/scope 完整绑定；结果
++        scope 与活动当前 scope 一致；来源快照非空且每项来源存在、版本与
++        revision 一致。有效返回前重算存储字节 hash 并复查合法封套；不以
++        hash 正确替代来源授权。取消后的历史成果仅来源/scope 有效才可读，
++        不授予新写/发送资格；快照之后的变化不声称可撤回已返回字节。
++        """
++        activity_id = self._uuid(activity_id, "activity_id")
++        operation_id = self._bounded_name(operation_id, "operation_id")
++
++        async def operation(connection: object) -> CommittedResultSnapshot:
++            cursor = await connection.execute(
++                f"""{self._RESULT_READ_SQL},
++       CASE WHEN r.payload_sha256 IS NOT NULL
++             AND r.admission_id = o.admission_id
++             AND r.execution_generation = o.execution_generation
++             AND r.scope_revision = o.scope_revision
++             AND a.scope_revision = r.scope_revision
++             AND EXISTS (SELECT 1 FROM activity_scope_sources s WHERE s.activity_id = o.activity_id)
++             AND NOT EXISTS (
++                 SELECT 1 FROM activity_scope_sources s
++                   LEFT JOIN material_sources m ON m.id = s.source_id
++                  WHERE s.activity_id = o.activity_id
++                    AND (m.id IS NULL OR m.current_version IS NULL
++                         OR m.current_version <> s.version_id
++                         OR m.revision <> s.source_revision))
++            THEN r.payload ELSE NULL END AS payload,
++       o.activity_id
++  FROM activity_operations o
++  JOIN activities a ON a.id = o.activity_id
++  LEFT JOIN activity_operation_results r
++         ON r.activity_id = o.activity_id AND r.operation_id = o.operation_id
++ WHERE o.activity_id = %s AND o.operation_id = %s""",
++                (activity_id, operation_id),
++            )
++            row = await cursor.fetchone()
++            if row is None:
++                # 无操作行：仅已知请求 ID，不伪造 admission/G/provider；
++                # 缺失活动同样明确返回未找到。
++                return CommittedResultSnapshot(
++                    activity_id=activity_id,
++                    operation_id=operation_id,
++                    read_status=ResultReadStatus.NO_OPERATION,
++                )
++            if row["payload_sha256"] is None:
++                status = (
++                    ResultReadStatus.UNRESOLVED
++                    if row["state"] in ("reserved", "dispatched", "unknown")
++                    else ResultReadStatus.TERMINAL_WITHOUT_PAYLOAD
++                )
++                return self._snapshot_from_row(row, status, None)
++            status = self._read_status(row, has_result=True)
++            payload: str | None = None
++            if status in (ResultReadStatus.COMMITTED_CURRENT, ResultReadStatus.COMMITTED_HISTORY_CANCELLED):
++                payload = row["payload"]
++                if payload is None:
++                    raise ResultIntegrityError("payload_integrity")
++                try:
++                    validate_business_payload(payload, row["payload_format"], row["payload_sha256"])
++                except ValueError:
++                    raise ResultIntegrityError("payload_integrity") from None
++            return self._snapshot_from_row(row, status, payload)
++
++        return await self._transaction(operation)
++
++    async def list_committed_results(
++        self,
++        activity_id: str,
++        *,
++        limit: int = 100,
++        after_operation_id: str | None = None,
++    ) -> tuple[CommittedResultSnapshot, ...]:
++        """只列真正 results 行（含失效记录的轻量元数据，不含正文）。
++
++        operation_id 稳定游标有界分页，limit 1..200；整页轻量元数据编码
++        超过 256KiB 明确拒绝，不静默丢项；不把无正文操作混成已提交列表。
++        """
++        activity_id = self._uuid(activity_id, "activity_id")
++        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
++            raise ValueError("limit 必须是 1 到 200 之间的整数")
++        if after_operation_id is not None:
++            after_operation_id = self._bounded_name(after_operation_id, "after_operation_id")
++        conditions = "r.activity_id = %s"
++        params: list[object] = [activity_id]
++        if after_operation_id is not None:
++            conditions += " AND r.operation_id > %s"
++            params.append(after_operation_id)
++        params.append(limit)
++
++        async def operation(connection: object) -> tuple[CommittedResultSnapshot, ...]:
++            cursor = await connection.execute(
++                f"""{self._RESULT_READ_SQL},
++       o.activity_id
++  FROM activity_operation_results r
++  JOIN activity_operations o
++    ON o.activity_id = r.activity_id AND o.operation_id = r.operation_id
++  JOIN activities a ON a.id = r.activity_id
++ WHERE {conditions}
++ ORDER BY r.operation_id
++ LIMIT %s""",
++                tuple(params),
++            )
++            rows = list(await cursor.fetchall())
++            snapshots = tuple(
++                self._snapshot_from_row(row, self._read_status(row, has_result=True), None)
++                for row in rows
++            )
++            encoded = json.dumps(
++                [
++                    {
++                        "activity_id": item.activity_id,
++                        "operation_id": item.operation_id,
++                        "read_status": item.read_status.value,
++                        "admission_id": item.admission_id,
++                        "execution_generation": item.execution_generation,
++                        "scope_revision": item.scope_revision,
++                        "provider": item.provider,
++                        "configured_model": item.configured_model,
++                        "finish_reason": item.finish_reason,
++                        "returned_model": item.returned_model,
++                        "remote_request_id": item.remote_request_id,
++                        "prompt_tokens": item.prompt_tokens,
++                        "completion_tokens": item.completion_tokens,
++                        "response_bytes": item.response_bytes,
++                        "payload_format": item.payload_format,
++                        "payload_sha256": item.payload_sha256,
++                        "committed_at": item.committed_at.isoformat() if item.committed_at else None,
++                        "activity_status_now": item.activity_status_now,
++                        "activity_scope_revision_now": item.activity_scope_revision_now,
++                    }
++                    for item in snapshots
++                ],
++                ensure_ascii=False,
++                separators=(",", ":"),
++            ).encode("utf-8")
++            if len(encoded) > 262_144:
++                raise ValueError("结果页编码超过 256KiB")
++            return snapshots
++
++        return await self._transaction(operation)

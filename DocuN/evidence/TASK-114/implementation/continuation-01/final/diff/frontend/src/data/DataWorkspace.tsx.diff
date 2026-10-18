@@ -1,0 +1,11 @@
+--- pre/frontend/src/data/DataWorkspace.tsx
++++ final/frontend/src/data/DataWorkspace.tsx
+@@ -52,7 +52,7 @@
+       <button disabled={busy||!caps?.backup_available||mode==='selected'&&!scopePreview} onClick={()=>run(()=>create('portable_export'))}>导出这些已保存内容</button>
+       <button disabled={busy||!caps?.backup_available||mode!=='all'} onClick={()=>run(()=>create('restore_checkpoint'))}>保存当前时点的恢复备份</button>
+       <button onClick={()=>run(exportDrafts)}>单独下载未提交浏览器草稿</button></section>
+-    <section><h2>核对与恢复备份</h2><label>删除处理<select value={policy} onChange={event=>{setPolicy(event.target.value);setPlan(null);}}><option value="respect_current_deletions">尊重当前已删除内容</option><option value="snapshot_only_readonly">按备份时点只读查看</option></select></label>
++    <section><h2>核对与恢复备份</h2>{caps?.target_observation_status==='unknown'&&<p>已选择的只读副本暂不可读取；已保存操作仍可核对，写入保持关闭。</p>}<label>删除处理<select value={policy} onChange={event=>{setPolicy(event.target.value);setPlan(null);}}><option value="respect_current_deletions">尊重当前已删除内容</option><option value="snapshot_only_readonly">按备份时点只读查看</option></select></label>
+       {policy==='snapshot_only_readonly'&&<label><input type="checkbox" checked={confirmSnapshot} onChange={e=>setConfirmSnapshot(e.target.checked)}/>确认旧备份可能重新显示已删除内容，仅限隔离只读副本；源墓碑保留</label>}
+       <label>选择备份文件<input type="file" accept=".rldata" disabled={busy||!caps?.restore_executor_configured||policy==='snapshot_only_readonly'&&!confirmSnapshot} onChange={event=>{const file=event.target.files?.[0];if(file)void run(()=>upload(file));}}/></label>
+       {plan&&<div><p>范围与完整性已核对，删除覆盖 {plan.overlay_count} 项。{plan.latest_status==='known'?'最新删除历史已取得。':'删除历史无法核对。'}</p>

@@ -1,0 +1,23 @@
+Traceback (most recent call last):
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task114\matrix_pg.py", line 129, in main
+    result=runner.run(scenario(runtime,credentials,budget,output,args.seed_new))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task114\matrix_pg.py", line 70, in scenario
+    identities=await seed(runtime)
+               ^^^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task114\seed_full.py", line 51, in seed
+    materials.confirm_pdf_candidate(candidate_id=candidate['candidate_id'],version_id=candidate['version_id'],
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\materials\repository.py", line 220, in confirm_pdf_candidate
+    with self.connection(writable=True, reference_pin=reference_pin) as conn:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\contextlib.py", line 158, in __exit__
+    self.gen.throw(value)
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\materials\repository.py", line 51, in connection
+    raise DatabaseUnavailable("本地数据库暂不可用或尚未初始化") from None
+app.materials.repository.DatabaseUnavailable: 本地数据库暂不可用或尚未初始化

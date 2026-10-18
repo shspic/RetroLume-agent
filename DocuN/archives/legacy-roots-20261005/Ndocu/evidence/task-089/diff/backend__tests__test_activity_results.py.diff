@@ -1,0 +1,218 @@
+--- pre/backend/tests/test_activity_results.py
++++ final/backend/tests/test_activity_results.py
+@@ -345,6 +345,40 @@
+         self.assertIsNone(outcome.payload)
+ 
+ 
++class ResultPageBudgetOfflineTests(unittest.IsolatedAsyncioTestCase):
++    async def test_actual_list_serializer_rejects_oversized_projected_page(self):
++        # 仅替换数据库取行；执行实际list编码/预算分支。不是PG资格/查询动态证据。
++        # 多字节元数据在SQL VARCHAR字符限制内，但不声称生产provider会产生它。
++        activity_id, admission_id = str(uuid4()), str(uuid4())
++        row = dict(activity_id=activity_id, operation_id="op", state="received", disposition="received",
++                   result_admission_id=admission_id, op_admission_id=admission_id,
++                   result_generation=1, op_generation=1, result_scope=1, op_scope=1,
++                   provider="p" * 64, configured_model="m" * 128, finish_reason="f" * 64,
++                   returned_model="m" * 128, remote_request_id="r" * 128,
++                   prompt_tokens=1, completion_tokens=1, response_bytes=1,
++                   payload_format="text", payload_sha256="a" * 64,
++                   committed_at=datetime(2026, 9, 29, tzinfo=timezone.utc),
++                   activity_status_now="pending", activity_scope_revision_now=1,
++                   binding_consistent=True, scope_current=True, sources_valid=True)
++        rows = [dict(row, operation_id=f"{i:03d}-" + "x" * 124) for i in range(200)]
++        class ProjectedRows:
++            async def execute(self, sql, params):
++                self.limit = params[-1]
++                return self
++            async def fetchall(self): return rows[:self.limit]
++        connection = ProjectedRows()
++        ledger = PostgresAdmissionLedger("unused-synthetic")
++        async def transaction(operation): return await operation(connection)
++        with patch.object(ledger, "_transaction", transaction):
++            self.assertEqual(200, len(await ledger.list_committed_results(activity_id, limit=200)))
++            for item in rows:
++                item["configured_model"] = "模" * 128
++                item["returned_model"] = "模" * 128
++            self.assertEqual(100, len(await ledger.list_committed_results(activity_id, limit=100)))
++            with self.assertRaisesRegex(ValueError, "256KiB"):
++                await ledger.list_committed_results(activity_id, limit=200)
++
++
+ class ProtocolThreeOfflineTests(unittest.IsolatedAsyncioTestCase):
+     async def _succeeded(self, behavior="recorded"):
+         ledger = _ConfirmLedger(behavior)
+@@ -364,18 +398,57 @@
+         from dataclasses import replace as dc_replace
+         with self.assertRaises(ValueError):
+             receipt(dc_replace(succeeded, payload_sha256=None), _context(), "run-088")
+-        # unknown/record_unconfirmed → unconfirmed；其余 unknown → not_committed。
++        # record阶段拒绝和异常均未确认，不能据此否认历史正文。
+         for behavior, commit in (("unavailable", "unconfirmed"),):
+             failed = await self._succeeded(behavior)
+             self.assertEqual(CallStatus.UNKNOWN, failed.status)
+             frame2 = receipt(failed, _context(), "run-088")
+             self.assertEqual(commit, frame2["business_commit"])
+             decode_receipt(frame2, _context(), "run-088")
+-        for behavior, commit in (("denied", "not_committed"),):
++        for behavior, commit in (("denied", "unconfirmed"),):
+             failed = await self._succeeded(behavior)
+             frame3 = receipt(failed, _context(), "run-088")
+             self.assertEqual(commit, frame3["business_commit"])
+             decode_receipt(frame3, _context(), "run-088")
++
++    async def test_status_error_commit_truth_table_at_each_decoder(self):
++        from dataclasses import asdict, replace
++        from app.worker.launcher import _decode_outcome
++        from app.worker.session import SessionOutcome
++        base = await self._succeeded("denied")
++        for status, error, expected in (
++            (CallStatus.UNKNOWN, "record_denied", "unconfirmed"),
++            (CallStatus.UNKNOWN, "record_unconfirmed", "unconfirmed"),
++            (CallStatus.UNKNOWN, "delivery_unknown", "not_committed"),
++            (CallStatus.UNKNOWN, None, "not_committed"),
++            (CallStatus.FAILED, "invalid_payload", "not_committed"),
++            (CallStatus.REJECTED, "admission_denied", "not_committed"),
++            (CallStatus.NOT_SENT, "not_sent", "not_committed"),
++        ):
++            with self.subTest(status=status, error=error):
++                result = replace(base, status=status, error_code=error)
++                good = receipt(result, _context(), "run-089")
++                self.assertEqual(expected, good["business_commit"])
++                for commit in ("committed", "unconfirmed", "not_committed"):
++                    item = json.loads(json.dumps(good))
++                    item["business_commit"] = commit
++                    outer = {"protocol": 2, "run_tag": "run-089", "activity_id": _context().activity_id,
++                             "outcome": asdict(SessionOutcome("run-089", "settled", _context().activity_id,
++                                generation=2, model_receipt=item))}
++                    recovered = _decode_outcome(json.loads(json.dumps(outer)), "run-089", _context().activity_id)
++                    if commit == expected:
++                        decode_receipt(item, _context(), "run-089")
++                        decode_receipt(recovered.model_receipt, _context(), "run-089")
++                    else:
++                        with self.assertRaises(ValueError): decode_receipt(item, _context(), "run-089")
++                        with self.assertRaises(ValueError): decode_receipt(recovered.model_receipt, _context(), "run-089")
++        for status in (CallStatus.FAILED, CallStatus.REJECTED, CallStatus.NOT_SENT):
++            with self.assertRaises(ValueError):
++                receipt(replace(base, status=status), _context(), "run-089")
++            bad = receipt(base, _context(), "run-089")
++            bad["result"]["status"] = status.value
++            bad["business_commit"] = "not_committed"
++            with self.assertRaises(ValueError): decode_receipt(bad, _context(), "run-089")
+ 
+     async def test_mixed_version_identity_hash_and_smuggled_payload_rejected(self):
+         succeeded = await self._succeeded()
+@@ -805,7 +878,8 @@
+ 
+         spec, lease = await self.build_activity()
+         ledger = LoseResponseLedger(DSN)
+-        gateway = ControlledModelGateway(_config(), ledger=ledger, transport=_transport())
++        transport = _transport()
++        gateway = ControlledModelGateway(_config(), ledger=ledger, transport=transport)
+         context = CallContext(
+             activity_id=spec.activity_id,
+             operation_id="op-088-lost",
+@@ -842,6 +916,7 @@
+             Permit(str(permit["admission_id"]), "op-088-lost", lease.executor_id), replay
+         )
+         self.assertEqual(RecordOutcome.ALREADY_PRESENT, confirm)
++        self.assertEqual(1, transport.calls)
+ 
+     # -- 竞争与取消 ---------------------------------------------------------
+ 
+@@ -867,7 +942,7 @@
+             return_exceptions=True,
+         )
+         outcomes = sorted(item.value if isinstance(item, RecordOutcome) else type(item).__name__ for item in results)
+-        self.assertIn(RecordOutcome.RECORDED.value, outcomes)
++        self.assertEqual([RecordOutcome.ALREADY_PRESENT.value, RecordOutcome.RECORDED.value], outcomes)
+         self.assertEqual(1, len(await self.db_rows(
+             "SELECT * FROM activity_operation_results WHERE activity_id = %s", (spec.activity_id,))))
+ 
+@@ -1171,6 +1246,87 @@
+             with self.assertRaises(ValueError):
+                 await self.ledger.list_committed_results(spec.activity_id, limit=bad_limit)
+ 
++    async def test_16_historical_binding_and_write_free_confirmation(self):
++        import psycopg
++        spec, lease = await self.build_activity()
++        permit, outcome = await self._commit_payload(spec, lease)
++        await self.ledger.cancel_activity(spec.activity_id)
++        original = await self.db_row(
++            "SELECT *, xmin::text AS row_version FROM activity_operation_results WHERE activity_id=%s",
++            (spec.activity_id,))
++        for column, bad in (("admission_id", str(uuid4())), ("execution_generation", 99), ("scope_revision", 99)):
++            with self.subTest(column=column):
++                async with await psycopg.AsyncConnection.connect(DSN) as conn:
++                    await conn.execute(f"UPDATE activity_operation_results SET {column}=%s WHERE activity_id=%s",
++                                       (bad, spec.activity_id))
++                with self.assertRaises(AdmissionDenied):
++                    await self.ledger.record_outcome(permit, outcome)
++                with self.assertRaises(ResultIntegrityError):
++                    await self.ledger.read_committed_result(spec.activity_id, permit.operation_id)
++                async with await psycopg.AsyncConnection.connect(DSN) as conn:
++                    await conn.execute(f"UPDATE activity_operation_results SET {column}=%s WHERE activity_id=%s",
++                                       (original[column], spec.activity_id))
++        before = await self.db_row(
++            "SELECT xmin::text AS row_version FROM activity_operation_results WHERE activity_id=%s", (spec.activity_id,))
++        self.assertEqual(RecordOutcome.ALREADY_PRESENT, await self.ledger.record_outcome(permit, outcome))
++        after = await self.db_row(
++            "SELECT xmin::text AS row_version FROM activity_operation_results WHERE activity_id=%s", (spec.activity_id,))
++        self.assertEqual(before, after)
++
++    async def test_17_new_payload_rejects_each_stale_authority(self):
++        import psycopg
++        for case in ("permit", "generation", "scope", "lease", "executor"):
++            with self.subTest(case=case):
++                activity_id = str(uuid4())
++                self.extra_activity_ids.append(activity_id)
++                spec, lease = await self.build_activity(activity_id=activity_id)
++                permit = await self.dispatched_permit(spec, lease)
++                mutations = {
++                    "generation": "execution_generation=execution_generation+1",
++                    "scope": "scope_revision=scope_revision+1",
++                    "lease": "lease_expires_at=CURRENT_TIMESTAMP-interval '1 second'",
++                    "executor": "executor_id='other-worker'",
++                }
++                if case == "permit":
++                    permit = AdmissionPermit(str(uuid4()), permit.operation_id, permit.executor_id)
++                else:
++                    async with await psycopg.AsyncConnection.connect(DSN) as conn:
++                        await conn.execute(f"UPDATE activities SET {mutations[case]} WHERE id=%s", (activity_id,))
++                with self.assertRaises(AdmissionDenied):
++                    await self.ledger.record_outcome(permit, self.payload_outcome())
++                self.assertEqual([], await self.db_rows(
++                    "SELECT 1 FROM activity_operation_results WHERE activity_id=%s", (activity_id,)))
++                row = await self.db_row("SELECT state FROM activity_operations WHERE activity_id=%s", (activity_id,))
++                self.assertEqual("dispatched", row["state"])
++
++    async def test_18_stored_payload_integrity_and_sql_suppression(self):
++        import psycopg
++        spec, lease = await self.build_activity()
++        permit, outcome = await self._commit_payload(spec, lease)
++        for column, value in (("payload_sha256", "0" * 64), ("payload", '{"format":"text","value":"changed"}')):
++            async with await psycopg.AsyncConnection.connect(DSN) as conn:
++                await conn.execute(f"UPDATE activity_operation_results SET {column}=%s WHERE activity_id=%s", (value, spec.activity_id))
++            with self.assertRaises(ResultIntegrityError) as raised:
++                await self.ledger.read_committed_result(spec.activity_id, permit.operation_id)
++            self.assertEqual("payload_integrity", str(raised.exception))
++            async with await psycopg.AsyncConnection.connect(DSN) as conn:
++                await conn.execute(f"UPDATE activity_operation_results SET {column}=%s WHERE activity_id=%s",
++                                   (getattr(outcome, column), spec.activity_id))
++        # 在数据库驱动取行点观察失效投影，不能只测试最终对象被隐藏。
++        async with await psycopg.AsyncConnection.connect(DSN) as conn:
++            await conn.execute("UPDATE activities SET scope_revision=scope_revision+1 WHERE id=%s", (spec.activity_id,))
++        fetchone = psycopg.AsyncCursor.fetchone
++        observed = []
++        async def capture(cursor):
++            row = await fetchone(cursor)
++            if isinstance(row, dict) and "binding_consistent" in row:
++                observed.append(row["payload"])
++            return row
++        with patch.object(psycopg.AsyncCursor, "fetchone", capture):
++            hidden = await self.ledger.read_committed_result(spec.activity_id, permit.operation_id)
++        self.assertEqual([None], observed)
++        self.assertIsNone(hidden.payload)
++
+     # -- 时间账与业务正文分离 ----------------------------------------------
+ 
+     async def test_15_settle_failure_vs_response_loss_keep_payload(self):

@@ -1,0 +1,14 @@
+{
+  "permit": "TASK-104-G9-AUDIT-20261007",
+  "number": 2,
+  "started_at": "2026-10-07T10:05:31.461201+00:00",
+  "status": "FAIL",
+  "business_POST": 0,
+  "business_SQL_writes": 0,
+  "error_type": "ProgrammingError",
+  "error": "only '%s', '%b', '%t' are allowed as placeholders, got '%''",
+  "traceback": "Traceback (most recent call last):\n  File \"D:\\shspic\\project_NO3_RetroLume-agent\\backend\\tests\\fixtures\\task104\\run_readonly.py\", line 125, in run_root\n    attrs = role_acl(conn)\n            ^^^^^^^^^^^^^^\n  File \"D:\\shspic\\project_NO3_RetroLume-agent\\backend\\tests\\fixtures\\task104\\run_readonly.py\", line 26, in role_acl\n    memberships = conn.execute(\"\"\"SELECT jsonb_agg(jsonb_build_object('role',r.rolname,'member',u.rolname,'admin',m.admin_option,\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"D:\\shspic\\project_NO3_RetroLume-agent\\backend\\.venv\\Lib\\site-packages\\psycopg\\connection.py\", line 300, in execute\n    raise ex.with_traceback(None)\npsycopg.ProgrammingError: only '%s', '%b', '%t' are allowed as placeholders, got '%''\n",
+  "ended_at": "2026-10-07T10:05:58.733288+00:00",
+  "cleanup_complete": true,
+  "data_roles_profiles_volumes_retained": true
+}

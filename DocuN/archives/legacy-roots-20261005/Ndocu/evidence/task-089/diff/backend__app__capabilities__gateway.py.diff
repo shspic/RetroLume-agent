@@ -1,0 +1,11 @@
+--- pre/backend/app/capabilities/gateway.py
++++ final/backend/app/capabilities/gateway.py
+@@ -408,7 +408,7 @@
+     ) -> ModelCallResult:
+         """记账并按提交确认三分类映射最终状态。
+ 
+-        AdmissionDenied → 事务确定回滚：UNKNOWN + record_denied；
++        AdmissionDenied → 本次未获确认：UNKNOWN + record_denied，不否认既有正文；
+         其他异常（含 AdmissionUnavailable 与意外异常）或返回非法枚举/None →
+         提交结果未确认：UNKNOWN + record_unconfirmed。两处 UNKNOWN 都不否定
+         同键历史持久正文；恢复由 record 幂等与只读接口承担，不重发、不补写。

@@ -1,0 +1,36 @@
+--- /dev/null
++++ final/backend/tests/fixtures/task114/source_start_diagnostic.py
+@@ -0,0 +1,33 @@
++"""一次有账的准确source启动诊断，补保存原包装器遗漏的CLI拒绝原因。"""
++import json
++import subprocess
++import time
++from pathlib import Path
++from budget import Budget,EVIDENCE
++from setup_source import reference,memory_guard,IMAGE,stop_source
++from app.data_exit.restore import inspect_target
++from freeze import freeze
++
++def main():
++    budget=Budget();source,credentials=reference();identity=inspect_target(source,IMAGE)
++    if identity['running']:raise RuntimeError('source已运行，诊断不二启')
++    if not memory_guard()['ready']:return 78
++    label='c01-source-start-diagnostic-'+str(time.monotonic_ns());freeze(label)
++    path=EVIDENCE/'observations'/(label+'.json')
++    budget.root('c01-source-group');budget.reserve('pg_start');budget.begin(source.cid)
++    try:
++        argv=['docker','start',source.cid];before=time.monotonic()
++        result=subprocess.run(argv,capture_output=True,timeout=30,check=False)
++        error=result.stderr.decode('utf-8',errors='replace')
++        from psycopg.conninfo import conninfo_to_dict
++        secrets=[credentials['maintenance_key']]
++        for key,value in credentials.items():
++            if key.endswith('_dsn'):secrets.extend([value,conninfo_to_dict(value).get('password','')])
++        for secret in sorted(secrets,key=len,reverse=True):
++            if secret:error=error.replace(secret,'[private value removed]')
++        record={'arguments':argv,'exit_code':result.returncode,'seconds':time.monotonic()-before,'stderr':error,'after':inspect_target(source,IMAGE)}
++        path.write_text(json.dumps(record,ensure_ascii=False,indent=2),encoding='utf-8')
++        print(json.dumps(record,ensure_ascii=False));return result.returncode
++    finally:stop_source(budget,source)
++
++if __name__=='__main__':raise SystemExit(main())

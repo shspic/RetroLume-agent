@@ -1,0 +1,26 @@
+--- before/backend/app/activities/service.py
++++ final/backend/app/activities/service.py
+@@ -4,6 +4,7 @@
+ 取消历史只展示；线程中的监督必须完成自身有界收尾才传播调用方取消。
+ """
+ from __future__ import annotations
++from app.data_exit.maintenance import owned_service
+ 
+ import asyncio
+ from collections.abc import Mapping
+@@ -101,6 +102,7 @@
+     async def revise_scope(self, activity_id, expected_scope_revision, sources):
+         return await self.ledger.revise_scope(activity_id,expected_scope_revision,sources)
+ 
++    @owned_service
+     async def continue_from_result(self, activity_id, parent_operation_id, new_operation_id,
+                                    followup, service, config, executor_id, run_tag) -> ContinuationOutcome:
+         from app.worker.one_call import OneCallInput,run_one_call,validate_identity
+@@ -196,6 +198,7 @@
+                 status=receipt["result"]["error_code"]
+         return ContinuationOutcome(status,business,supervision,settlement)
+ 
++    @owned_service
+     async def execute_tool_action(self, activity_id, operation_id, plan, config,
+                                   executor_id, run_tag) -> ToolActionOutcome:
+         """显式一次工具动作；唯一finite_calculate，经固定受控worker执行。

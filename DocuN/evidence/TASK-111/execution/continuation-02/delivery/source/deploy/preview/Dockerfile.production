@@ -1,0 +1,9 @@
+# 受信运行产物；构建材料预先在本地，构建时禁止联网安装。
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+WORKDIR /opt/preview
+COPY vendor/playwright-core ./vendor/playwright-core
+COPY licenses ./licenses
+COPY runtime.cjs runtime.css runtime.html descriptor.schema.json renderer-host.cjs renderer-bootstrap.cjs load-manifest.json ./
+USER 10001:10001
+ENTRYPOINT ["node","/opt/preview/renderer-bootstrap.cjs"]

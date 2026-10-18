@@ -1,0 +1,32 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\tests\fixtures\task100\app_entry.py", line 5, in <module>
+    uvicorn.run('app.main:create_app',factory=True,host='127.0.0.1',port=18100,
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\.venv\Lib\site-packages\uvicorn\main.py", line 621, in run
+    server.run()
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\.venv\Lib\site-packages\uvicorn\server.py", line 77, in run
+    return asyncio_run(self.serve(sockets=sockets), loop_factory=self.config.get_loop_factory())
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 195, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\28432\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\.venv\Lib\site-packages\uvicorn\server.py", line 81, in serve
+    await self._serve(sockets)
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\.venv\Lib\site-packages\uvicorn\server.py", line 88, in _serve
+    config.load()
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\.venv\Lib\site-packages\uvicorn\config.py", line 497, in load
+    self.loaded_app = self.loaded_app()
+                      ^^^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\main.py", line 44, in create_app
+    settings = load_settings()
+               ^^^^^^^^^^^^^^^
+  File "D:\shspic\project_NO3_RetroLume-agent\backend\app\main.py", line 40, in load_settings
+    raise ValueError("资料与备份目录必须独立")
+ValueError: 资料与备份目录必须独立

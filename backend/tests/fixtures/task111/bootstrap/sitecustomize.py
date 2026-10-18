@@ -1,0 +1,17 @@
+"""只激活本卡精确合成许可；真实worker/SUP/账本不替换。"""
+import os
+if os.environ.get("RETROLUME_TASK111_FIXTURE"):
+    try:
+        if os.environ["RETROLUME_TASK111_FIXTURE"]!="TASK-111-G11-P110-20261010":raise RuntimeError("permit")
+        import socket
+        original=socket.socket.connect;original_ex=socket.socket.connect_ex
+        def check(address):
+            if not isinstance(address,tuple) or address[0] not in ("127.0.0.1","::1"):raise OSError("TASK111 external network denied")
+        def connect(self,address):check(address);return original(self,address)
+        def connect_ex(self,address):check(address);return original_ex(self,address)
+        socket.socket.connect=connect;socket.socket.connect_ex=connect_ex
+        from tests.fixtures.task111.runtime import install
+        install()
+    except BaseException:
+        import sys
+        sys.stderr.write("TASK111 synthetic bootstrap failed closed\n");os._exit(86)

@@ -1,0 +1,11 @@
+--- pre/backend/app/worker/supervisor_main.py
++++ final/backend/app/worker/supervisor_main.py
+@@ -60,6 +60,8 @@
+         if one_call is None:
+             raise ValueError("missing one_call data")
+         validate_identity(activity_id, executor_id, one_call.operation_id, run_tag)
++        if one_call.request.input_result is not None and one_call.request.input_result.activity_id != activity_id:
++            raise ValueError("input result activity mismatch")
+     elif one_call is not None:
+         raise ValueError("unexpected business data")
+     return ledger, config, activity_id, executor_id, command, run_tag, deadline_ns, one_call

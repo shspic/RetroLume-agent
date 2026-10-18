@@ -1,0 +1,20 @@
+--- first-pre/backend/app/interview/api.py
++++ current/backend/app/interview/api.py
+@@ -5,7 +5,7 @@
+ from fastapi.responses import Response
+ from app.activities.api import _guard,_ledger,_config,_uuid_text
+ from app.capabilities.contracts import AdmissionUnavailable
+-from .contracts import InterviewCommandInput,InterviewRefusal,load_json,MAX_COMMAND
++from .contracts import InterviewCommandInput,parse_command,InterviewRefusal,load_json,MAX_COMMAND
+ from .views import bounded_wire
+ from .service import InterviewService
+ 
+@@ -37,7 +37,7 @@
+     async for part in request.stream():
+         if len(raw)+len(part)>MAX_COMMAND:return error(InterviewRefusal('interview_invalid_input','命令超过32768字节',413))
+         raw.extend(part)
+-    try:command=InterviewCommandInput.model_validate(load_json(raw.decode('utf-8')))
++    try:command=parse_command(load_json(raw.decode('utf-8')))
+     except (ValueError,TypeError,RecursionError):return error(InterviewRefusal('interview_invalid_input','命令字段、类型或正文非法',422))
+     try:
+         result=await service(request).submit_command(activity_id,command,_config(request),run_tag='interview-'+secrets.token_hex(12))

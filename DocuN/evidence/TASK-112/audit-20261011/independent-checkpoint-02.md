@@ -1,0 +1,15 @@
+# TASK-112 第二轮独立定位
+
+以下定位只依据冻结产品源码与已读合同，未读取111结果自评或methods-byte-check。尚未形成全卡最终结论，继续完成原件与执行控制审查。
+
+01 迟到ready缺少成功分支的时窗校验
+
+production_supervisor.py 283—294行接收ready只核身份，不核接收时刻。390—392行只在Event.wait返回false时查ready_deadline；若在t0+8之前进入20ms等待，ready在t0+8之后、该等待返回之前到达，wait成功直接进入ready事务。合同C6和TASK112要求ready最多8秒。此是可由源码确定的路径，历史正常样本均较快不能排除此路径。最小修正是在完整ready接收时刻核原ready_deadline，同时成功wait后复核停止/截止；不延D、不改模型或业务预算。运行出现频率未验证，不把静态证明写成已复现。
+
+02 两处描述校验的constraints:null域不一致
+
+description.py 136—138行在键存在且值为null时交bounded_list，拒绝非list。runtime.cjs 57行将null与缺省键一起变成空数组，107—108行求值也采用空数组。规范JSON与hash不能消除此差异，null的规范序列化仍是null。正式Python生成入口会拒绝该值，未发现模型能借此取得代码/导航能力；但Node第二校验接受域没有与Python相同。最小修正只区分缺省constraints与显式null，并复用原规范/边界例补一个字段类型反例，无需重跑正常图形或所有故障。
+
+03 stderr超限退出不等于两管道真实EOF
+
+production_supervisor.py 317—325行超过8192后break，未到真实stderr EOF，也无stderr_eof标记。421—423行以stdout的pipe_eof、attach退出和两个reader线程结束合成attach_ended，允许调用stop_owned签attach_eof_confirmed。该超限分支的stderr线程结束可由break造成，不能证明它读到EOF。精确Linux结束和Job零仍可能成立，但不能虚报该管道事实。最小修正保留有界日志存储、置stop并继续有界排空到真实EOF，或保留未确认；停止收据应分别核真实stdout/stderr EOF。历史正常零stderr原件可继续有效；未称现有故障原件已经命中此分支。

@@ -1,0 +1,114 @@
+[
+  {
+    "args": [
+      "ps",
+      "-a",
+      "--filter",
+      "name=^retrolume-task-109-g11-preview-02$",
+      "--format",
+      "{{.Names}}"
+    ],
+    "code": 0,
+    "stdout": "",
+    "stderr": "",
+    "elapsed_seconds": 6.219
+  },
+  {
+    "args": [
+      "image",
+      "inspect",
+      "--format",
+      "{\"id\":{{json .Id}},\"descriptor\":{{json .Descriptor}},\"user\":{{json .Config.User}},\"entrypoint\":{{json .Config.Entrypoint}},\"os\":{{json .Os}},\"architecture\":{{json .Architecture}},\"labels\":{{json .Config.Labels}}}",
+      "sha256:aa824fa25eb0aae09cee50c10372fb218a7d86ffb10124b46074a5c1e977cc66"
+    ],
+    "code": 0,
+    "stdout": "{\"id\":\"sha256:aa824fa25eb0aae09cee50c10372fb218a7d86ffb10124b46074a5c1e977cc66\",\"descriptor\":{\"annotations\":{\"config.digest\":\"sha256:e881d12c9e682de7e535386b9db353bfc95838c3bcea04332bcdffd9cc30e6ea\"},\"digest\":\"sha256:aa824fa25eb0aae09cee50c10372fb218a7d86ffb10124b46074a5c1e977cc66\",\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"size\":2403},\"user\":\"10001:10001\",\"entrypoint\":[\"node\",\"/opt/preview/h0-counter.cjs\"],\"os\":\"linux\",\"architecture\":\"amd64\",\"labels\":{\"org.opencontainers.image.version\":\"24.04\",\"retrolume.action-permit\":\"TASK-109-G11-C01-20261009\",\"retrolume.permit\":\"TASK-109-G11-20261009\",\"retrolume.task\":\"TASK-109\"}}\n",
+    "stderr": "",
+    "elapsed_seconds": 0.25
+  },
+  {
+    "args": [
+      "create",
+      "--pull=never",
+      "--name",
+      "retrolume-task-109-g11-preview-02",
+      "--label",
+      "retrolume.task=TASK-109",
+      "--label",
+      "retrolume.permit=TASK-109-G11-20261009",
+      "--label",
+      "retrolume.synthetic=true",
+      "--label",
+      "retrolume.phase=H0-C03",
+      "--label",
+      "retrolume.action-permit=TASK-109-G11-C03-20261009",
+      "--label",
+      "retrolume.attempt=1",
+      "--label",
+      "retrolume.nonce=9ba135f1906af725df70c4dd8a23eb72",
+      "--network=none",
+      "--user=10001:10001",
+      "--cap-drop=ALL",
+      "--security-opt",
+      "no-new-privileges",
+      "--security-opt",
+      "seccomp=D:\\shspic\\project_NO3_RetroLume-agent\\deploy\\preview\\seccomp.json",
+      "--read-only",
+      "--restart=no",
+      "--init",
+      "--cpus=1",
+      "--memory=768m",
+      "--memory-swap=768m",
+      "--pids-limit=128",
+      "--ipc=private",
+      "--shm-size=64m",
+      "--tmpfs",
+      "/tmp:rw,nosuid,nodev,noexec,size=128m,uid=10001,gid=10001,mode=1777",
+      "--tmpfs",
+      "/home/preview:rw,nosuid,nodev,noexec,size=32m,uid=10001,gid=10001,mode=0700",
+      "--env",
+      "HOME=/home/preview",
+      "--env",
+      "XDG_CONFIG_HOME=/home/preview/.config",
+      "--env",
+      "XDG_CACHE_HOME=/home/preview/.cache",
+      "--env",
+      "XDG_RUNTIME_DIR=/home/preview/.runtime",
+      "--env",
+      "TMPDIR=/tmp/task109-private",
+      "--env",
+      "DEBUG=pw:browser",
+      "--env",
+      "DEBUG_COLORS=0",
+      "--entrypoint",
+      "node",
+      "sha256:aa824fa25eb0aae09cee50c10372fb218a7d86ffb10124b46074a5c1e977cc66",
+      "-e",
+      "\"use strict\";\n// 仅本卡固定可信程序：有限临时目录核验，再进入原镜像counter。\nconst fs = require(\"node:fs\");\nconst path = require(\"node:path\");\nconst crypto = require(\"node:crypto\");\nconst util = require(\"node:util\");\nprocess.env.DEBUG = \"pw:browser\";\nprocess.env.DEBUG_COLORS = \"0\";\nconst debug = require(\"/opt/preview/vendor/playwright-core/lib/utilsBundle.js\").debug;\ndebug.log = (...values) => process.stderr.write(util.format(...values) + \"\\n\");\ndebug.enable(\"pw:browser\");\nconst host = require(\"/opt/preview/host.cjs\");\nconst followup_parent_dir = \"\";\nconst runtime_env = {\n  HOME: \"/home/preview\",\n  XDG_CONFIG_HOME: \"/home/preview/.config\",\n  XDG_CACHE_HOME: \"/home/preview/.cache\",\n  XDG_RUNTIME_DIR: \"/home/preview/.runtime\",\n  TMPDIR: \"/tmp/task109-private\"\n};\nfunction inspectDirectory(directory, expectedMode, initialize) {\n  if (initialize) fs.mkdirSync(directory, { recursive: true, mode: 0o700 });\n  const stat = fs.statSync(directory);\n  const result = { path: directory, uid: stat.uid, gid: stat.gid, mode: (stat.mode & 0o7777).toString(8), is_directory: stat.isDirectory() };\n  if (!stat.isDirectory() || stat.uid !== 10001 || stat.gid !== 10001 || (stat.mode & 0o7777) !== expectedMode) throw Object.assign(new Error(\"目录归属或模式不符\"), { code: \"DIRECTORY_IDENTITY\", directory, observed: result });\n  const probe = path.join(directory, \"task109-write-\" + crypto.randomBytes(8).toString(\"hex\"));\n  fs.writeFileSync(probe, Buffer.from(\"TASK109\"), { flag: \"wx\", mode: 0o600 });\n  const written = fs.statSync(probe);\n  result.write_probe = { path: probe, bytes: written.size, uid: written.uid, gid: written.gid, mode: (written.mode & 0o7777).toString(8), exclusive_success: written.size === 7 };\n  return result;\n}\ntry {\n  if (process.getuid() !== 10001 || process.getgid() !== 10001) throw new Error(\"固定非root身份不符\");\n  for (const [name, value] of Object.entries(runtime_env)) if (process.env[name] !== value) throw new Error(\"选定运行目录环境不一致: \" + name);\n  host.emit(\"runtime_environment\", { uid: process.getuid(), gid: process.getgid(), selected_environment: runtime_env, debug_category: \"pw:browser\", debug_sink: \"stderr\" });\n  host.emit(\"runtime_directory\", inspectDirectory(\"/tmp\", 0o1777, false));\n  for (const directory of Object.values(runtime_env)) host.emit(\"runtime_directory\", inspectDirectory(directory, 0o700, directory !== \"/home/preview\"));\n  if (followup_parent_dir) {\n    const allowed = [\"/home/preview/.config/chromium/Crash Reports\", \"/home/preview/.config/google-chrome/Crash Reports\", \"/home/preview/.config/google-chrome-for-testing/Crash Reports\", \"/home/preview/.config/microsoft-edge/Crash Reports\"];\n    if (!allowed.includes(followup_parent_dir)) throw new Error(\"复验目录不在固定白名单\");\n    host.emit(\"runtime_directory_followup\", inspectDirectory(followup_parent_dir, 0o700, true));\n  }\n  host.emit(\"bootstrap_ready\", { original_counter: \"/opt/preview/h0-counter.cjs\", image_bytes_changed: false, no_probe_file_delete: true });\n  require(\"/opt/preview/h0-counter.cjs\");\n} catch (error) {\n  host.emit(\"terminal\", { verdict: \"ERROR\", phase: \"runtime_directory_bootstrap\", message: String(error.message).slice(0, 1000), code: error.code ?? null, directory: error.directory ?? null, observed: error.observed ?? null });\n  setInterval(() => {}, 1000);\n}\n"
+    ],
+    "code": 0,
+    "stdout": "0a449f648fc66020b937cdefa2f2cea4cc6ad305d42a9275cc96a76e77a4ccd0\n",
+    "stderr": "",
+    "elapsed_seconds": 0.25
+  },
+  {
+    "args": [
+      "kill",
+      "0a449f648fc66020b937cdefa2f2cea4cc6ad305d42a9275cc96a76e77a4ccd0"
+    ],
+    "code": 0,
+    "stdout": "0a449f648fc66020b937cdefa2f2cea4cc6ad305d42a9275cc96a76e77a4ccd0\n",
+    "stderr": "",
+    "elapsed_seconds": 0.406
+  },
+  {
+    "args": [
+      "wait",
+      "0a449f648fc66020b937cdefa2f2cea4cc6ad305d42a9275cc96a76e77a4ccd0"
+    ],
+    "code": 0,
+    "stdout": "137\n",
+    "stderr": "",
+    "elapsed_seconds": 0.188
+  }
+]

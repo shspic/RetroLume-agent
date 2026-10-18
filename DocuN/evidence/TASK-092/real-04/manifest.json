@@ -1,0 +1,328 @@
+{
+  "attempt": 4,
+  "phase": "continuation_01",
+  "utc": "2026-09-30T15:19:28.037365+00:00",
+  "cid": "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4",
+  "continuation_authorization": "TASK-092续作01置顶：追加real-04一批及原容器一次启动，累计上限3→4，不重置历史；业务300秒+收尾120秒，入口总截止420秒；Windows本轮至多6会话；费用仍0。",
+  "cumulative_before": {
+    "real_used_seconds": 25.92100000000937,
+    "real_attempts": 3,
+    "container_starts": 3,
+    "windows_sessions": 1,
+    "offline_used_seconds": 5.873999999996158
+  },
+  "business_seconds_budget": 300,
+  "cleanup_seconds_budget": 120,
+  "total_seconds_budget": 420,
+  "scenarios_frozen": {
+    "batch": 4,
+    "database": "retrolume_task092_upgrade + retrolume_task092_tools",
+    "deadline_seconds": 420,
+    "business_seconds": 300,
+    "cleanup_seconds": 120,
+    "frozen_utc": "2026-09-30T23:18:56.630849+08:00",
+    "note": "续作01真实批冻结。原批frozen_utc=2026-10-01T00:05:00+08:00为书写时投影值，与real-01实际时间2026-09-30T22:51:47+08:00不一致，据真实manifest披露，不回改旧值；本条目使用真实时点。",
+    "scenarios": [
+      "upgrade收尾子批（修复F-U2后）：合法非空001-007→008全量断言、旧model生命线、重复008回滚、篡改约束失败回滚、缺前置拒绝；三schema先摘要后定向重建",
+      "windows六方向（5场景函数，含两会话组合）：tool_chain/model_regression/tool_stop/tool_recovery/old_sup_reject/old_worker_reject",
+      "清理不全即停止后续场景；stop失败则recovery标not_run；不重跑pg_retry/离线全量"
+    ],
+    "fault_injection": "同前冻结清单；本轮修正F-U2、win场景清单函数映射与清理纪律；产品/迁移/backend测试全部冻结于final-product-hashes.json"
+  },
+  "commands": [
+    {
+      "args": [
+        "inspect",
+        "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4"
+      ],
+      "started_utc": "2026-09-30T15:19:28.063932+00:00",
+      "exit": 0,
+      "seconds": 0.1870000000053551
+    },
+    {
+      "args": [
+        "start",
+        "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4"
+      ],
+      "started_utc": "2026-09-30T15:19:28.262859+00:00",
+      "exit": 0,
+      "seconds": 5.25
+    },
+    {
+      "args": [
+        "inspect",
+        "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4"
+      ],
+      "started_utc": "2026-09-30T15:19:33.501456+00:00",
+      "exit": 0,
+      "seconds": 0.17199999999866122
+    },
+    {
+      "args": [
+        "exec",
+        "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4",
+        "pg_isready",
+        "-U",
+        "psql(...)"
+      ],
+      "started_utc": "2026-09-30T15:19:33.685582+00:00",
+      "exit": 0,
+      "seconds": 0.2819999999992433
+    },
+    {
+      "args": [
+        "exec",
+        "-i",
+        "-e",
+        "PGOPTIONS=-c statement_timeout=10000 -c lock_timeout=2000",
+        "psql(...)"
+      ],
+      "started_utc": "2026-09-30T15:19:33.955145+00:00",
+      "exit": 0,
+      "seconds": 0.2649999999994179
+    },
+    {
+      "args": [
+        "exec",
+        "-i",
+        "-e",
+        "PGOPTIONS=-c statement_timeout=10000 -c lock_timeout=2000",
+        "psql(...)"
+      ],
+      "started_utc": "2026-09-30T15:19:34.222436+00:00",
+      "exit": 0,
+      "seconds": 0.25
+    },
+    {
+      "args": [
+        "stop",
+        "--time",
+        "10",
+        "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4"
+      ],
+      "started_utc": "2026-09-30T15:19:54.466307+00:00",
+      "exit": 0,
+      "seconds": 0.48399999999674037
+    },
+    {
+      "args": [
+        "inspect",
+        "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4"
+      ],
+      "started_utc": "2026-09-30T15:19:54.947776+00:00",
+      "exit": 0,
+      "seconds": 0.17200000000593718
+    }
+  ],
+  "cleanup_incomplete": false,
+  "exit": 1,
+  "new_containers": 0,
+  "new_volumes": 0,
+  "windows_sessions": 6,
+  "credential_lifecycle": "task role password rotated via psql stdin; never argv/log; no Env read",
+  "preflight": {
+    "Id": "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4",
+    "Name": "/retrolume-task-088-g3-w1",
+    "Image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+    "State": {
+      "Running": false,
+      "Pid": 0,
+      "StartedAt": "2026-09-30T14:54:19.565018151Z"
+    },
+    "HostConfig": {
+      "NanoCpus": 1000000000,
+      "Memory": 536870912,
+      "PidsLimit": 128,
+      "Privileged": false,
+      "PortBindings": {
+        "5432/tcp": [
+          {
+            "HostIp": "127.0.0.1",
+            "HostPort": "55441"
+          }
+        ]
+      }
+    },
+    "RestartPolicyName": "no",
+    "Mounts": [
+      {
+        "Type": "volume",
+        "Name": "retrolume-task-088-g3-w1-data",
+        "Destination": "/var/lib/postgresql/data",
+        "RW": true
+      }
+    ]
+  },
+  "started": {
+    "Id": "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4",
+    "Name": "/retrolume-task-088-g3-w1",
+    "Image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+    "State": {
+      "Running": true,
+      "Pid": 392,
+      "StartedAt": "2026-09-30T15:19:33.161251187Z"
+    },
+    "HostConfig": {
+      "NanoCpus": 1000000000,
+      "Memory": 536870912,
+      "PidsLimit": 128,
+      "Privileged": false,
+      "PortBindings": {
+        "5432/tcp": [
+          {
+            "HostIp": "127.0.0.1",
+            "HostPort": "55441"
+          }
+        ]
+      }
+    },
+    "RestartPolicyName": "no",
+    "Mounts": [
+      {
+        "Type": "volume",
+        "Name": "retrolume-task-088-g3-w1-data",
+        "Destination": "/var/lib/postgresql/data",
+        "RW": true
+      }
+    ]
+  },
+  "database_preflight": {
+    "tools_owner": "retrolume_task092_synth",
+    "upgrade_owner": "retrolume_task092_synth",
+    "role": [
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ],
+    "sessions": 0,
+    "memberships": 0
+  },
+  "credential_rotated_once": true,
+  "children": [
+    {
+      "label": "upgrade_child",
+      "script": "upgrade_child.py",
+      "exit": 1,
+      "cleanup_confirmed": true,
+      "process": {
+        "pid": 40892,
+        "created_100ns": 134352551747307946
+      }
+    },
+    {
+      "label": "windows_child",
+      "script": "win_chain.py",
+      "exit": 0,
+      "cleanup_confirmed": true,
+      "process": {
+        "pid": 39052,
+        "created_100ns": 134352551758598558
+      }
+    }
+  ],
+  "process": {
+    "pid": 39052,
+    "created_100ns": 134352551758598558
+  },
+  "outer_tree_zero": true,
+  "outer_handles_closed": true,
+  "child_finalized": {
+    "upgrade_child": {
+      "clean": true,
+      "stdout_lines": 5
+    },
+    "windows_child": {
+      "clean": true,
+      "stdout_lines": 23
+    }
+  },
+  "continue_after_upgrade_failure": true,
+  "process_events": [
+    {
+      "event": "suspended_identity",
+      "monotonic": 53053.281,
+      "pid": 40892,
+      "created_100ns": 134352551747307946
+    },
+    {
+      "event": "assigned_outer_job",
+      "monotonic": 53053.281,
+      "active_processes": 1
+    },
+    {
+      "event": "resumed",
+      "monotonic": 53053.281
+    },
+    {
+      "event": "control_handles_closed",
+      "monotonic": 53054.39,
+      "tree_zero_confirmed": true
+    },
+    {
+      "event": "suspended_identity",
+      "monotonic": 53054.406,
+      "pid": 39052,
+      "created_100ns": 134352551758598558
+    },
+    {
+      "event": "assigned_outer_job",
+      "monotonic": 53054.406,
+      "active_processes": 1
+    },
+    {
+      "event": "resumed",
+      "monotonic": 53054.406
+    },
+    {
+      "event": "control_handles_closed",
+      "monotonic": 53073.0,
+      "tree_zero_confirmed": true
+    }
+  ],
+  "final_resource": {
+    "Id": "e49d3acc3c1be13d670af68bca2b082fea4faeeb9b9babe69df7f1d3941696a4",
+    "Name": "/retrolume-task-088-g3-w1",
+    "Image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+    "State": {
+      "Running": false,
+      "Pid": 0,
+      "StartedAt": "2026-09-30T15:19:33.161251187Z"
+    },
+    "HostConfig": {
+      "NanoCpus": 1000000000,
+      "Memory": 536870912,
+      "PidsLimit": 128,
+      "Privileged": false,
+      "PortBindings": {
+        "5432/tcp": [
+          {
+            "HostIp": "127.0.0.1",
+            "HostPort": "55441"
+          }
+        ]
+      }
+    },
+    "RestartPolicyName": "no",
+    "Mounts": [
+      {
+        "Type": "volume",
+        "Name": "retrolume-task-088-g3-w1-data",
+        "Destination": "/var/lib/postgresql/data",
+        "RW": true
+      }
+    ]
+  },
+  "container_stopped": true,
+  "seconds": 27.10899999999674,
+  "end_utc": "2026-09-30T15:19:55.154543+00:00",
+  "cumulative_after": {
+    "real_used_seconds": 53.03000000000611,
+    "real_attempts": 4,
+    "container_starts": 4,
+    "windows_sessions": 7
+  }
+}

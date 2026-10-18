@@ -1,0 +1,128 @@
+--- pre/backend/app/learning/teaching_api.py
++++ post/backend/app/learning/teaching_api.py
+@@ -45,17 +45,46 @@
+     return _error(status, exc.code, exc.message)
+ 
+ 
+-def _service(request: Request) -> TeachingService:
++def _service(request: Request) -> TeachingService:
+     return TeachingService(_ledger(request), getattr(request.app.state, "materials", None),
+-                           request.app.state.originals)
+-
+-
+-async def _read_bounded_body(request: Request) -> dict:
+-    raw = await request.body()
+-    if len(raw) > MAX_HTTP_BODY_BYTES:
+-        raise _error(413, "input_too_large", "教学命令正文超过 32768 字节上限")
+-    try:
+-        value = json.loads(raw)
++                           request.app.state.originals)
++
++@router.get("/{activity_id}/teaching/seeds/{operation_id}")
++async def read_teaching_seed(request: Request, activity_id: str, operation_id: str):
++    _guard(request)
++    activity_id = _uuid_text(activity_id, 'activity_id')
++    try:
++        row = await _ledger(request).read_committed_result(activity_id, operation_id)
++        if row.read_status.value != 'committed_current' or row.kind != 'model' or row.payload is None:
++            raise TeachingRefusal('version_conflict', 'G7成果目前不可沿用')
++        from .contracts import read_document
++        profile, _ = read_document(json.loads(row.payload)['value'], activity_id=activity_id, operation_id=operation_id)
++        return _public_response({'activity_id':activity_id,'operation_id':operation_id,'goal':profile.goal,
++                                 'payload_sha256':row.payload_sha256}, 65536)
++    except TeachingRefusal as exc:
++        raise _teaching_error(exc) from None
++    except (ValueError, TypeError, KeyError):
++        raise _error(409, 'version_conflict', '该成果不是可沿用的G7目标') from None
++    except Exception as exc:
++        raise _map_read_error(exc) from None
++
++
++async def _read_bounded_body(request: Request) -> dict:
++    raw = bytearray()
++    async for chunk in request.stream():
++        if len(chunk) > MAX_HTTP_BODY_BYTES - len(raw):
++            raise _error(413, "input_too_large", "教学命令正文超过 32768 字节上限")
++        raw.extend(chunk)
++    def unique_pairs(items):
++        result = {}
++        for key, item in items:
++            if key in result:
++                raise ValueError("duplicate_teaching_field")
++            result[key] = item
++        return result
++    try:
++        value = json.loads(raw.decode("utf-8", errors="strict"), object_pairs_hook=unique_pairs,
++                           parse_constant=lambda _: (_ for _ in ()).throw(ValueError("invalid_input")))
+     except (ValueError, UnicodeDecodeError):
+         raise _error(400, "invalid_input", "教学命令正文不是合法 JSON") from None
+     if not isinstance(value, dict):
+@@ -123,7 +152,9 @@
+             "unconfirmed" if row["status"] in ('accepted','started','unknown') else
+             "history_only" if row["status"]=='history' else "current",
+         "model_called":None,"tool_called":None,
+-        "retry_policy":"read_only" if row["status"] in ('accepted','started','unknown') else
++        "retry_policy":"same_key_before_claim" if row['status']=='accepted' and row['launch_claimed_at'] is None
++            and row['obsolete_at'] is None and row['abandoned_at'] is None else
++            "read_only" if row["status"] in ('accepted','started','unknown') else
+             "explicit_new_key_after_confirmed_failure" if row["status"] in ('failed','not_sent') else "none",
+         "created_at":row["created_at"],"launch_claimed_at":row["launch_claimed_at"],
+         "obsolete_at":row["obsolete_at"],"abandoned_at":row["abandoned_at"],"exposed_part":None}
+@@ -176,9 +207,18 @@
+         **{key:projected.get(key) for key in ('goal','path','proposal','exercise','answer','feedback','reason','nodes')},
+         "sources":[{key:s.get(key) for key in ('source_id','version_id','valid','ready','title','format')} for s in view.get('sources',[])],
+         "budgets":{key:activity.get(key) for key in budget_names},"pending":pending,
+-        "history":[{**r,"label":_kind_label(r['kind'])} for r in view['history']],"next_cursor":None,
++        "history":[{**r,"label":_kind_label(r['kind'])} for r in view['history']],
++        "next_cursor":_history_cursor(activity_id,view_token(view),view['history'],head.get('last_seq',0)),
+         "limits":{"goal_versions":32,"records":4096,"history_default":20,"history_max":50,
+-            "answer_chars":4096,"answer_bytes":12288,"output_tokens_max":2048}}
++            "answer_chars":4096,"answer_bytes":12288,"output_tokens_max":2048}}
++
++
++def _history_cursor(activity_id, token, items, watermark):
++    if not items or items[-1]['seq'] <= 1:
++        return None
++    import base64
++    return base64.urlsafe_b64encode(json.dumps({'activity_id':activity_id,'view_token':token,
++        'watermark_last_seq':watermark,'before_seq':items[-1]['seq']},separators=(',',':')).encode()).decode().rstrip('=')
+ 
+ 
+ def _deadline_passed(deadline) -> bool:
+@@ -411,7 +451,8 @@
+         if row is None: raise TeachingRefusal('record_not_found','教学记录不存在')
+         q,body=public_record(row,row['snapshot_sources'],row['snapshot_exposures'],row['snapshot_head'],row['snapshot_activity'])
+         if q in ('source_invalid','integrity_error'): raise TeachingRefusal(q,'引用目前不可核对')
+-        if row.get('payload') is None: raise TeachingRefusal('citation_not_found','该记录没有资料引用')
++        citation_payload = row.get('citation_payload') or row.get('payload')
++        if citation_payload is None: raise TeachingRefusal('citation_not_found','该记录没有资料引用')
+         # 未暴露参考不能通过猜引用 ID 查看其复制文本。
+         visible=set()
+         def collect(value):
+@@ -421,10 +462,14 @@
+             elif isinstance(value,list):
+                 for v in value: collect(v)
+         collect(body)
+-        value=json.loads(row['payload'])['value']
++        from app.capabilities.contracts import validate_business_payload
++        validate_business_payload(citation_payload,row.get('citation_payload_format') or row['payload_format'],
++                                  row.get('citation_payload_sha256') or row['operation_payload_sha256'])
++        value=json.loads(citation_payload)['value']
+         entry=next((CatalogEntry.model_validate(e) for e in value.get('catalog',[]) if e['citation_id']==citation_id and citation_id in visible),None)
+         if entry is None: raise TeachingRefusal('citation_not_found','引用不属于该公开内容')
+-        selected=[s for s in row['snapshot_sources'] if s['source_id']==entry.source_id and s['version_id']==entry.version_id and s['sha256']==entry.original_sha256]
++        selected=[s for s in row.get('bound_sources',row['snapshot_sources']) if s['source_id']==entry.source_id and s['version_id']==entry.version_id
++                  and s['source_revision']==entry.source_revision and s['sha256']==entry.original_sha256 and s.get('valid') and s.get('ready',True)]
+         if len(selected)!=1: raise TeachingRefusal('source_invalid','原资料身份变化')
+         units=await asyncio.to_thread(load_units,{'sources':selected,'source_count':1},service.materials,service.originals)
+         item=next((u for u in units if u.unit.physical_page==entry.physical_page and u.unit.origin_kind==entry.origin_kind and u.supplement_id==entry.supplement_id),None)
+@@ -434,7 +479,8 @@
+             raise TeachingRefusal('source_invalid','原文位置或 hash 变化')
+         return _public_response({'citation':entry.model_dump(),'read_at':row['snapshot_read_at']},65536)
+     except TeachingRefusal as exc: raise _teaching_error(exc) from None
+-    except LearningRefusal: raise _error(409,'source_invalid','引用不可核对') from None
++    except LearningRefusal: raise _error(409,'source_invalid','引用不可核对') from None
++    except (ValueError,TypeError,KeyError): raise _error(503,'integrity_error','引用内容完整性未确认') from None
+     except (AdmissionUnavailable,DatabaseUnavailable): raise _error(503,'unavailable','引用未确认') from None
+ 
+ 

@@ -1,0 +1,12 @@
+--- test_activity_recovery.py.before
++++ test_activity_recovery.py.after
+@@ -179,7 +179,8 @@
+         rows = {
+             row["operation_id"]: row
+             for row in await self.db_rows(
+-                "SELECT operation_id, state, disposition, error_code, dispatch_started_at, recorded_at"
++                "SELECT operation_id, state, disposition, error_code, execution_generation,"
++                " dispatch_started_at, recorded_at"
+                 " FROM activity_operations WHERE activity_id = %s",
+                 (spec.activity_id,),
+             )

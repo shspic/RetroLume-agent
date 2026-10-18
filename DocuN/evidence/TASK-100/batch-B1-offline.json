@@ -1,0 +1,45 @@
+{
+  "batch": "B1",
+  "layer": "offline",
+  "run_at": "2026-10-03T11:44:16",
+  "command": "backend/.venv/Scripts/python.exe -B -m unittest tests.test_teaching_policy tests.test_teaching_contracts",
+  "exit_code": 0,
+  "result": "Ran 20 tests OK",
+  "failures_found": 3,
+  "fixes": [
+    {
+      "defect": "validate_transition 对未知动作按“无限制”静默放行（_ACTION_PHASES.get 返回 None）",
+      "fix": "先校验动作在 ALL_ACTIONS 封闭集合内，否则 TeachingRefusal invalid_input",
+      "root_cause": "产品缺陷"
+    },
+    {
+      "defect": "derive_support_checks 对非有限数值（NaN/Infinity）误报 conflict，且 Decimal 解析非有限值不抛 InvalidOperation",
+      "fix": "显式 is_finite() 门；非有限与除零一律 unchecked，conflict 只由合法运算产生",
+      "root_cause": "产品缺陷"
+    },
+    {
+      "defect": "derive_progress 未按 answer_record_id 去重，且缺失必需维度因 all() 空集真被当作满足",
+      "fix": "len(set(answers)) 去重 + all_met 要求 node_dimensions 非空且逐维命中",
+      "root_cause": "产品缺陷"
+    },
+    {
+      "defect": "测试期望非有限数值返回空列表，与合同“判 unchecked”语义不符",
+      "fix": "测试改为断言 p1 无检查项、p4/p3 为 unchecked、无 conflict",
+      "root_cause": "测试期望偏差"
+    }
+  ],
+  "file_identity": {
+    "backend/app/learning/teaching_policy.py": {
+      "sha256": "ede8ab1eb5ec83b81a8e0e358003cf1b1af0c3f138d08494092f3e0cf0d8a505",
+      "bytes": 9613
+    },
+    "backend/tests/test_teaching_policy.py": {
+      "sha256": "94e3c68806b3a78e4582f007e64e949199976a45d0ca70320c72b44654f7451d",
+      "bytes": 11055
+    },
+    "backend/tests/test_teaching_contracts.py": {
+      "sha256": "be4396c46ab5077d87755d904c49ee2c2eecafa7dcc0f07c4b12ddba7522e30d",
+      "bytes": 16273
+    }
+  }
+}

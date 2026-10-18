@@ -1,0 +1,58 @@
+{
+  "status": "FAIL",
+  "executed": true,
+  "cases": [
+    {
+      "name": "V18 普通app调用最终清理函数，物理缺正文拒绝/墓碑pending/0新收据",
+      "status": "PASS",
+      "executed": true,
+      "sqlstate": "P0001",
+      "reason": "清理集合不符",
+      "target": {
+        "memory_id": "4ca80351-4a6c-4896-8b59-985fdfd4490b",
+        "version": 1,
+        "body_sha256": "e506230382737af56e15108b07f3acfff77b57b3ebb55211fe679a8e5038d1ec"
+      },
+      "exact_delete_count": 1,
+      "before_sha": "dc22fbf4ed3add5def17400bc2101456cc085c374ae9e337ddb92452fae941c6",
+      "after_sha": "dc22fbf4ed3add5def17400bc2101456cc085c374ae9e337ddb92452fae941c6",
+      "triggers_and_rows_restored": true
+    },
+    {
+      "name": "V18 实际DB不可读，清理未确认；重启只读核墓碑/正文/旧收据保留",
+      "status": "PASS",
+      "executed": true,
+      "failure": {
+        "type": "AdmissionUnavailable",
+        "message": "持久准入账本暂不可用"
+      },
+      "pending": true,
+      "before_sha": "dc22fbf4ed3add5def17400bc2101456cc085c374ae9e337ddb92452fae941c6",
+      "after_sha": "dc22fbf4ed3add5def17400bc2101456cc085c374ae9e337ddb92452fae941c6",
+      "no_auto_retry": true,
+      "no_new_receipt": true,
+      "revoked_body_suppressed": true
+    }
+  ],
+  "objects": {
+    "memory_id": "4ca80351-4a6c-4896-8b59-985fdfd4490b",
+    "save_key": "e955ded4-fdf5-47ac-90bb-35aca3285535",
+    "revoke_key": "f8a9b547-8967-4b78-a7bb-33b3d4a597e1",
+    "manifest_sha256": "beacb538567647dd4befdb625e5bdc4b0a23ec4bf1dc7b52aa0194a6a145e6b0",
+    "purge_key": "eb20e07d-57e4-4cb3-b602-c60134067f79",
+    "body_target": {
+      "memory_id": "4ca80351-4a6c-4896-8b59-985fdfd4490b",
+      "version": 1,
+      "body_sha256": "e506230382737af56e15108b07f3acfff77b57b3ebb55211fe679a8e5038d1ec"
+    }
+  },
+  "fault_stop": {
+    "cid": "4b813f9e4317aef9c613eb140fcb2d40c55a6bd98ee5d79807ea5851975d7f68",
+    "image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+    "name": "retrolume-task-103-g9-pg3",
+    "volume": "retrolume-task-103-g9-pg3-data",
+    "running": false,
+    "pid": 0,
+    "exit_code": 0
+  }
+}

@@ -1,0 +1,19 @@
+--- backend/app/preview/repository.py.pre
++++ backend/app/preview/repository.py.post
+@@ -303,6 +303,16 @@
+             return result
+         return await self._transaction(transaction)
+ 
++    async def _read_html_stop_confirmation(self, aid, pid):
++        """仅恢复控制者读取完整已结停止收据，不进入公开状态投影。"""
++        async def transaction(connection):
++            await self._html_assert_schema(connection)
++            cursor = await connection.execute("SELECT confirmation_receipt FROM public.html_preview_sessions WHERE activity_id=%s AND preview_id=%s", (aid,pid))
++            row = await cursor.fetchone()
++            if row is None or row["confirmation_receipt"] is None:return None
++            return load_json(row["confirmation_receipt"],65536)
++        return await self._transaction(transaction)
++
+     async def list_html_artifacts(self, aid, before=None):
+         async def transaction(connection):
+             await self._html_assert_schema(connection)

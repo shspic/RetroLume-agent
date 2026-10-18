@@ -1,0 +1,4 @@
+import os
+from budget import Budget,ROOT
+os.environ['RETROLUME_TASK114_SCRATCH']=str(ROOT/'DocuN/evidence/TASK-114/synthetic/scratch')
+raise SystemExit(Budget().offline('package-boundaries-01',[str(ROOT/'backend/.venv/Scripts/python.exe'),'-X','utf8',str(ROOT/'backend/tests/test_data_exit_package.py')]))

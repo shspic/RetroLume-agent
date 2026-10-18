@@ -1,0 +1,2255 @@
+[
+  {
+    "file": "backend\\migrations\\001_materials.sql",
+    "tables": [
+      {
+        "name": "material_sources",
+        "columns_detected": [
+          "id",
+          "title",
+          "current_version",
+          "revision"
+        ],
+        "DDL": "CREATE TABLE material_sources (\n    id UUID PRIMARY KEY,\n    title TEXT NOT NULL,\n    current_version UUID,\n    revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0)\n);",
+        "references": [],
+        "line": 3,
+        "columns": [
+          {
+            "name": "id",
+            "definition": "id UUID PRIMARY KEY"
+          },
+          {
+            "name": "title",
+            "definition": "title TEXT NOT NULL"
+          },
+          {
+            "name": "current_version",
+            "definition": "current_version UUID"
+          },
+          {
+            "name": "revision",
+            "definition": "revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0)"
+          }
+        ]
+      },
+      {
+        "name": "material_versions",
+        "columns_detected": [
+          "id",
+          "source_id",
+          "filename",
+          "format",
+          "sha256",
+          "size",
+          "created_at"
+        ],
+        "DDL": "CREATE TABLE material_versions (\n    id UUID PRIMARY KEY,\n    source_id UUID NOT NULL REFERENCES material_sources(id),\n    filename TEXT NOT NULL,\n    format TEXT NOT NULL CHECK (format IN ('txt','md')),\n    sha256 CHAR(64) NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),\n    size BIGINT NOT NULL CHECK (size >= 0 AND size <= 5242880),\n    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n    UNIQUE(source_id,id)\n);",
+        "references": [
+          "material_sources"
+        ],
+        "line": 9,
+        "columns": [
+          {
+            "name": "id",
+            "definition": "id UUID PRIMARY KEY"
+          },
+          {
+            "name": "source_id",
+            "definition": "source_id UUID NOT NULL REFERENCES material_sources(id)"
+          },
+          {
+            "name": "filename",
+            "definition": "filename TEXT NOT NULL"
+          },
+          {
+            "name": "format",
+            "definition": "format TEXT NOT NULL CHECK (format IN ('txt','md'))"
+          },
+          {
+            "name": "sha256",
+            "definition": "sha256 CHAR(64) NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "size",
+            "definition": "size BIGINT NOT NULL CHECK (size >= 0 AND size <= 5242880)"
+          },
+          {
+            "name": "created_at",
+            "definition": "created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP"
+          }
+        ]
+      }
+    ],
+    "alter_lines": [
+      "ALTER TABLE material_sources ADD CONSTRAINT material_current_version_source"
+    ]
+  },
+  {
+    "file": "backend\\migrations\\002_activities.sql",
+    "tables": [
+      {
+        "name": "activities",
+        "columns_detected": [
+          "id",
+          "status",
+          "scope_revision",
+          "execution_generation",
+          "executor_id",
+          "lease_expires_at",
+          "deadline_at",
+          "max_requests",
+          "requests_reserved",
+          "max_cost_microunits",
+          "cost_reserved_microunits",
+          "reserve_cost_microunits",
+          "max_request_bytes",
+          "max_output_tokens",
+          "allowed_tools",
+          "created_at",
+          "updated_at",
+          "cancelled_at"
+        ],
+        "DDL": "CREATE TABLE activities (\n    id UUID PRIMARY KEY,\n    status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'cancelled')),\n    scope_revision INTEGER NOT NULL CHECK (scope_revision > 0),\n    execution_generation INTEGER NOT NULL DEFAULT 0 CHECK (execution_generation >= 0),\n    executor_id VARCHAR(128),\n    lease_expires_at TIMESTAMPTZ,\n    deadline_at TIMESTAMPTZ NOT NULL,\n    max_requests INTEGER NOT NULL CHECK (max_requests > 0),\n    requests_reserved INTEGER NOT NULL DEFAULT 0 CHECK (requests_reserved >= 0 AND requests_reserved <= max_requests),\n    max_cost_microunits BIGINT NOT NULL CHECK (max_cost_microunits > 0),\n    cost_reserved_microunits BIGINT NOT NULL DEFAULT 0 CHECK (\n        cost_reserved_microunits >= 0 AND cost_reserved_microunits <= max_cost_microunits\n    ),\n    reserve_cost_microunits BIGINT NOT NULL CHECK (\n        reserve_cost_microunits > 0 AND reserve_cost_microunits <= max_cost_microunits\n    ),\n    max_request_bytes INTEGER NOT NULL CHECK (max_request_bytes > 0),\n    max_output_tokens INTEGER NOT NULL CHECK (max_output_tokens > 0),\n    allowed_tools VARCHAR(64)[] NOT NULL DEFAULT '{}',\n    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n    cancelled_at TIMESTAMPTZ,\n    CHECK (cardinality(allowed_tools) <= 32),\n    CHECK (\n        (status = 'running' AND executor_id IS NOT NULL AND lease_expires_at IS NOT NULL)\n        OR status <> 'running'\n    )\n);",
+        "references": [],
+        "line": 4,
+        "columns": [
+          {
+            "name": "id",
+            "definition": "id UUID PRIMARY KEY"
+          },
+          {
+            "name": "status",
+            "definition": "status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'cancelled'))"
+          },
+          {
+            "name": "scope_revision",
+            "definition": "scope_revision INTEGER NOT NULL CHECK (scope_revision > 0)"
+          },
+          {
+            "name": "execution_generation",
+            "definition": "execution_generation INTEGER NOT NULL DEFAULT 0 CHECK (execution_generation >= 0)"
+          },
+          {
+            "name": "executor_id",
+            "definition": "executor_id VARCHAR(128)"
+          },
+          {
+            "name": "lease_expires_at",
+            "definition": "lease_expires_at TIMESTAMPTZ"
+          },
+          {
+            "name": "deadline_at",
+            "definition": "deadline_at TIMESTAMPTZ NOT NULL"
+          },
+          {
+            "name": "max_requests",
+            "definition": "max_requests INTEGER NOT NULL CHECK (max_requests > 0)"
+          },
+          {
+            "name": "requests_reserved",
+            "definition": "requests_reserved INTEGER NOT NULL DEFAULT 0 CHECK (requests_reserved >= 0 AND requests_reserved <= max_requests)"
+          },
+          {
+            "name": "max_cost_microunits",
+            "definition": "max_cost_microunits BIGINT NOT NULL CHECK (max_cost_microunits > 0)"
+          },
+          {
+            "name": "cost_reserved_microunits",
+            "definition": "cost_reserved_microunits BIGINT NOT NULL DEFAULT 0 CHECK (\n        cost_reserved_microunits >= 0 AND cost_reserved_microunits <= max_cost_microunits\n    )"
+          },
+          {
+            "name": "reserve_cost_microunits",
+            "definition": "reserve_cost_microunits BIGINT NOT NULL CHECK (\n        reserve_cost_microunits > 0 AND reserve_cost_microunits <= max_cost_microunits\n    )"
+          },
+          {
+            "name": "max_request_bytes",
+            "definition": "max_request_bytes INTEGER NOT NULL CHECK (max_request_bytes > 0)"
+          },
+          {
+            "name": "max_output_tokens",
+            "definition": "max_output_tokens INTEGER NOT NULL CHECK (max_output_tokens > 0)"
+          },
+          {
+            "name": "allowed_tools",
+            "definition": "allowed_tools VARCHAR(64)[] NOT NULL DEFAULT '{}'"
+          },
+          {
+            "name": "created_at",
+            "definition": "created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP"
+          },
+          {
+            "name": "updated_at",
+            "definition": "updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP"
+          },
+          {
+            "name": "cancelled_at",
+            "definition": "cancelled_at TIMESTAMPTZ"
+          }
+        ]
+      },
+      {
+        "name": "activity_scope_sources",
+        "columns_detected": [
+          "activity_id",
+          "source_id",
+          "version_id",
+          "source_revision"
+        ],
+        "DDL": "CREATE TABLE activity_scope_sources (\n    activity_id UUID NOT NULL REFERENCES activities(id),\n    source_id UUID NOT NULL REFERENCES material_sources(id),\n    version_id UUID NOT NULL,\n    source_revision INTEGER NOT NULL CHECK (source_revision >= 0),\n    PRIMARY KEY (activity_id, source_id),\n    FOREIGN KEY (source_id, version_id) REFERENCES material_versions(source_id, id)\n);",
+        "references": [
+          "activities",
+          "material_sources",
+          "material_versions"
+        ],
+        "line": 34,
+        "columns": [
+          {
+            "name": "activity_id",
+            "definition": "activity_id UUID NOT NULL REFERENCES activities(id)"
+          },
+          {
+            "name": "source_id",
+            "definition": "source_id UUID NOT NULL REFERENCES material_sources(id)"
+          },
+          {
+            "name": "version_id",
+            "definition": "version_id UUID NOT NULL"
+          },
+          {
+            "name": "source_revision",
+            "definition": "source_revision INTEGER NOT NULL CHECK (source_revision >= 0)"
+          }
+        ]
+      },
+      {
+        "name": "activity_allowed_models",
+        "columns_detected": [
+          "activity_id",
+          "provider",
+          "model"
+        ],
+        "DDL": "CREATE TABLE activity_allowed_models (\n    activity_id UUID NOT NULL REFERENCES activities(id),\n    provider VARCHAR(64) NOT NULL,\n    model VARCHAR(128) NOT NULL,\n    PRIMARY KEY (activity_id, provider, model)\n);",
+        "references": [
+          "activities"
+        ],
+        "line": 45,
+        "columns": [
+          {
+            "name": "activity_id",
+            "definition": "activity_id UUID NOT NULL REFERENCES activities(id)"
+          },
+          {
+            "name": "provider",
+            "definition": "provider VARCHAR(64) NOT NULL"
+          },
+          {
+            "name": "model",
+            "definition": "model VARCHAR(128) NOT NULL"
+          }
+        ]
+      },
+      {
+        "name": "activity_operations",
+        "columns_detected": [
+          "activity_id",
+          "operation_id",
+          "admission_id",
+          "executor_id",
+          "execution_generation",
+          "scope_revision",
+          "provider",
+          "configured_model",
+          "request_bytes",
+          "max_output_tokens",
+          "tool_names",
+          "reserved_cost_microunits",
+          "state",
+          "disposition",
+          "error_code",
+          "remote_request_id",
+          "returned_model",
+          "finish_reason",
+          "prompt_tokens",
+          "completion_tokens",
+          "response_bytes",
+          "reserved_at",
+          "dispatch_started_at",
+          "recorded_at"
+        ],
+        "DDL": "CREATE TABLE activity_operations (\n    activity_id UUID NOT NULL REFERENCES activities(id),\n    operation_id VARCHAR(128) NOT NULL,\n    admission_id UUID NOT NULL UNIQUE,\n    executor_id VARCHAR(128) NOT NULL,\n    execution_generation INTEGER NOT NULL CHECK (execution_generation >= 0),\n    scope_revision INTEGER NOT NULL CHECK (scope_revision > 0),\n    provider VARCHAR(64) NOT NULL,\n    configured_model VARCHAR(128) NOT NULL,\n    request_bytes INTEGER NOT NULL CHECK (request_bytes > 0),\n    max_output_tokens INTEGER NOT NULL CHECK (max_output_tokens > 0),\n    tool_names VARCHAR(64)[] NOT NULL DEFAULT '{}',\n    reserved_cost_microunits BIGINT NOT NULL CHECK (reserved_cost_microunits > 0),\n    state TEXT NOT NULL DEFAULT 'reserved' CHECK (state IN ('reserved', 'dispatched', 'not_sent', 'received', 'unknown')),\n    disposition TEXT CHECK (disposition IN ('not_sent', 'received', 'unknown')),\n    error_code VARCHAR(64),\n    remote_request_id VARCHAR(128),\n    returned_model VARCHAR(128),\n    finish_reason VARCHAR(64),\n    prompt_tokens INTEGER CHECK (prompt_tokens >= 0),\n    completion_tokens INTEGER CHECK (completion_tokens >= 0),\n    response_bytes INTEGER CHECK (response_bytes >= 0 AND response_bytes <= 67108864),\n    reserved_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n    dispatch_started_at TIMESTAMPTZ,\n    recorded_at TIMESTAMPTZ,\n    PRIMARY KEY (activity_id, operation_id),\n    CHECK (cardinality(tool_names) <= 32),\n    CHECK ((state IN ('reserved', 'dispatched') AND disposition IS NULL) OR state = disposition),\n    CHECK ((state = 'reserved' AND dispatch_started_at IS NULL) OR state <> 'reserved'),\n    CHECK ((state IN ('not_sent', 'received', 'unknown') AND recorded_at IS NOT NULL) OR state IN ('reserved', 'dispatched'))\n);",
+        "references": [
+          "activities"
+        ],
+        "line": 52,
+        "columns": [
+          {
+            "name": "activity_id",
+            "definition": "activity_id UUID NOT NULL REFERENCES activities(id)"
+          },
+          {
+            "name": "operation_id",
+            "definition": "operation_id VARCHAR(128) NOT NULL"
+          },
+          {
+            "name": "admission_id",
+            "definition": "admission_id UUID NOT NULL UNIQUE"
+          },
+          {
+            "name": "executor_id",
+            "definition": "executor_id VARCHAR(128) NOT NULL"
+          },
+          {
+            "name": "execution_generation",
+            "definition": "execution_generation INTEGER NOT NULL CHECK (execution_generation >= 0)"
+          },
+          {
+            "name": "scope_revision",
+            "definition": "scope_revision INTEGER NOT NULL CHECK (scope_revision > 0)"
+          },
+          {
+            "name": "provider",
+            "definition": "provider VARCHAR(64) NOT NULL"
+          },
+          {
+            "name": "configured_model",
+            "definition": "configured_model VARCHAR(128) NOT NULL"
+          },
+          {
+            "name": "request_bytes",
+            "definition": "request_bytes INTEGER NOT NULL CHECK (request_bytes > 0)"
+          },
+          {
+            "name": "max_output_tokens",
+            "definition": "max_output_tokens INTEGER NOT NULL CHECK (max_output_tokens > 0)"
+          },
+          {
+            "name": "tool_names",
+            "definition": "tool_names VARCHAR(64)[] NOT NULL DEFAULT '{}'"
+          },
+          {
+            "name": "reserved_cost_microunits",
+            "definition": "reserved_cost_microunits BIGINT NOT NULL CHECK (reserved_cost_microunits > 0)"
+          },
+          {
+            "name": "state",
+            "definition": "state TEXT NOT NULL DEFAULT 'reserved' CHECK (state IN ('reserved', 'dispatched', 'not_sent', 'received', 'unknown'))"
+          },
+          {
+            "name": "disposition",
+            "definition": "disposition TEXT CHECK (disposition IN ('not_sent', 'received', 'unknown'))"
+          },
+          {
+            "name": "error_code",
+            "definition": "error_code VARCHAR(64)"
+          },
+          {
+            "name": "remote_request_id",
+            "definition": "remote_request_id VARCHAR(128)"
+          },
+          {
+            "name": "returned_model",
+            "definition": "returned_model VARCHAR(128)"
+          },
+          {
+            "name": "finish_reason",
+            "definition": "finish_reason VARCHAR(64)"
+          },
+          {
+            "name": "prompt_tokens",
+            "definition": "prompt_tokens INTEGER CHECK (prompt_tokens >= 0)"
+          },
+          {
+            "name": "completion_tokens",
+            "definition": "completion_tokens INTEGER CHECK (completion_tokens >= 0)"
+          },
+          {
+            "name": "response_bytes",
+            "definition": "response_bytes INTEGER CHECK (response_bytes >= 0 AND response_bytes <= 67108864)"
+          },
+          {
+            "name": "reserved_at",
+            "definition": "reserved_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP"
+          },
+          {
+            "name": "dispatch_started_at",
+            "definition": "dispatch_started_at TIMESTAMPTZ"
+          },
+          {
+            "name": "recorded_at",
+            "definition": "recorded_at TIMESTAMPTZ"
+          }
+        ]
+      }
+    ],
+    "alter_lines": []
+  },
+  {
+    "file": "backend\\migrations\\003_pdf_review.sql",
+    "tables": [
+      {
+        "name": "pdf_review_candidates",
+        "columns_detected": [
+          "id",
+          "source_id",
+          "version_id",
+          "expected_version",
+          "expected_revision",
+          "status",
+          "page_count",
+          "extraction_method",
+          "created_at",
+          "decided_at"
+        ],
+        "DDL": "CREATE TABLE pdf_review_candidates (\n    id UUID PRIMARY KEY,\n    source_id UUID NOT NULL REFERENCES material_sources(id),\n    version_id UUID NOT NULL,\n    expected_version UUID,\n    expected_revision INTEGER NOT NULL CHECK (expected_revision >= 0),\n    status TEXT NOT NULL CHECK (status IN ('pending','confirmed','skipped')),\n    page_count INTEGER NOT NULL CHECK (page_count BETWEEN 1 AND 50),\n    extraction_method TEXT NOT NULL,\n    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n    decided_at TIMESTAMPTZ,\n    UNIQUE(version_id),\n    UNIQUE(id,version_id),\n    FOREIGN KEY (source_id,version_id) REFERENCES material_versions(source_id,id),\n    FOREIGN KEY (source_id,expected_version) REFERENCES material_versions(source_id,id),\n    CHECK ((status='pending' AND decided_at IS NULL) OR (status<>'pending' AND decided_at IS NOT NULL))\n);",
+        "references": [
+          "material_sources",
+          "material_versions",
+          "material_versions"
+        ],
+        "line": 8,
+        "columns": [
+          {
+            "name": "id",
+            "definition": "id UUID PRIMARY KEY"
+          },
+          {
+            "name": "source_id",
+            "definition": "source_id UUID NOT NULL REFERENCES material_sources(id)"
+          },
+          {
+            "name": "version_id",
+            "definition": "version_id UUID NOT NULL"
+          },
+          {
+            "name": "expected_version",
+            "definition": "expected_version UUID"
+          },
+          {
+            "name": "expected_revision",
+            "definition": "expected_revision INTEGER NOT NULL CHECK (expected_revision >= 0)"
+          },
+          {
+            "name": "status",
+            "definition": "status TEXT NOT NULL CHECK (status IN ('pending','confirmed','skipped'))"
+          },
+          {
+            "name": "page_count",
+            "definition": "page_count INTEGER NOT NULL CHECK (page_count BETWEEN 1 AND 50)"
+          },
+          {
+            "name": "extraction_method",
+            "definition": "extraction_method TEXT NOT NULL"
+          },
+          {
+            "name": "created_at",
+            "definition": "created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP"
+          },
+          {
+            "name": "decided_at",
+            "definition": "decided_at TIMESTAMPTZ"
+          }
+        ]
+      },
+      {
+        "name": "pdf_extracted_pages",
+        "columns_detected": [
+          "version_id",
+          "physical_page",
+          "extracted_text",
+          "warnings"
+        ],
+        "DDL": "CREATE TABLE pdf_extracted_pages (\n    version_id UUID NOT NULL REFERENCES pdf_review_candidates(version_id),\n    physical_page INTEGER NOT NULL CHECK (physical_page BETWEEN 1 AND 50),\n    extracted_text TEXT NOT NULL,\n    warnings JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(warnings)='array'),\n    PRIMARY KEY (version_id,physical_page)\n);",
+        "references": [
+          "pdf_review_candidates"
+        ],
+        "line": 26,
+        "columns": [
+          {
+            "name": "version_id",
+            "definition": "version_id UUID NOT NULL REFERENCES pdf_review_candidates(version_id)"
+          },
+          {
+            "name": "physical_page",
+            "definition": "physical_page INTEGER NOT NULL CHECK (physical_page BETWEEN 1 AND 50)"
+          },
+          {
+            "name": "extracted_text",
+            "definition": "extracted_text TEXT NOT NULL"
+          },
+          {
+            "name": "warnings",
+            "definition": "warnings JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(warnings)='array')"
+          }
+        ]
+      },
+      {
+        "name": "pdf_review_pages",
+        "columns_detected": [
+          "candidate_id",
+          "version_id",
+          "physical_page",
+          "reviewed_at"
+        ],
+        "DDL": "CREATE TABLE pdf_review_pages (\n    candidate_id UUID NOT NULL,\n    version_id UUID NOT NULL,\n    physical_page INTEGER NOT NULL,\n    reviewed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n    PRIMARY KEY (candidate_id,physical_page),\n    FOREIGN KEY (candidate_id,version_id) REFERENCES pdf_review_candidates(id,version_id),\n    FOREIGN KEY (version_id,physical_page) REFERENCES pdf_extracted_pages(version_id,physical_page)\n);",
+        "references": [
+          "pdf_review_candidates",
+          "pdf_extracted_pages"
+        ],
+        "line": 34,
+        "columns": [
+          {
+            "name": "candidate_id",
+            "definition": "candidate_id UUID NOT NULL"
+          },
+          {
+            "name": "version_id",
+            "definition": "version_id UUID NOT NULL"
+          },
+          {
+            "name": "physical_page",
+            "definition": "physical_page INTEGER NOT NULL"
+          },
+          {
+            "name": "reviewed_at",
+            "definition": "reviewed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP"
+          }
+        ]
+      },
+      {
+        "name": "pdf_user_supplements",
+        "columns_detected": [
+          "id",
+          "candidate_id",
+          "version_id",
+          "physical_page",
+          "identity",
+          "text",
+          "created_at"
+        ],
+        "DDL": "CREATE TABLE pdf_user_supplements (\n    id UUID PRIMARY KEY,\n    candidate_id UUID NOT NULL,\n    version_id UUID NOT NULL,\n    physical_page INTEGER NOT NULL,\n    identity TEXT NOT NULL DEFAULT 'user_supplement' CHECK (identity='user_supplement'),\n    text TEXT NOT NULL CHECK (octet_length(text)>0 AND octet_length(text)<=65536),\n    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n    FOREIGN KEY (candidate_id,version_id) REFERENCES pdf_review_candidates(id,version_id),\n    FOREIGN KEY (version_id,physical_page) REFERENCES pdf_extracted_pages(version_id,physical_page)\n);",
+        "references": [
+          "pdf_review_candidates",
+          "pdf_extracted_pages"
+        ],
+        "line": 44,
+        "columns": [
+          {
+            "name": "id",
+            "definition": "id UUID PRIMARY KEY"
+          },
+          {
+            "name": "candidate_id",
+            "definition": "candidate_id UUID NOT NULL"
+          },
+          {
+            "name": "version_id",
+            "definition": "version_id UUID NOT NULL"
+          },
+          {
+            "name": "physical_page",
+            "definition": "physical_page INTEGER NOT NULL"
+          },
+          {
+            "name": "identity",
+            "definition": "identity TEXT NOT NULL DEFAULT 'user_supplement' CHECK (identity='user_supplement')"
+          },
+          {
+            "name": "text",
+            "definition": "text TEXT NOT NULL CHECK (octet_length(text)>0 AND octet_length(text)<=65536)"
+          },
+          {
+            "name": "created_at",
+            "definition": "created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP"
+          }
+        ]
+      }
+    ],
+    "alter_lines": [
+      "ALTER TABLE material_versions DROP CONSTRAINT material_versions_format_check;",
+      "ALTER TABLE material_versions ADD CONSTRAINT material_versions_format_check"
+    ]
+  },
+  {
+    "file": "backend\\migrations\\004_activities_time_budget.sql",
+    "tables": [],
+    "alter_lines": [
+      "ALTER TABLE activities",
+      "    ADD COLUMN max_running_seconds BIGINT NOT NULL",
+      "    ADD COLUMN running_reserved_seconds BIGINT NOT NULL DEFAULT 0",
+      "    ADD COLUMN running_settled_seconds BIGINT NOT NULL DEFAULT 0",
+      "    ADD COLUMN last_settled_generation INTEGER",
+      "    ADD COLUMN last_settled_seconds BIGINT",
+      "ALTER TABLE activities",
+      "    ADD CONSTRAINT activities_time_budget_balance CHECK (",
+      "ALTER TABLE activities",
+      "    ADD CONSTRAINT activities_time_budget_running_shape CHECK (",
+      "ALTER TABLE activities",
+      "    ADD CONSTRAINT activities_time_budget_last_settled_pair CHECK ("
+    ]
+  },
+  {
+    "file": "backend\\migrations\\005_activities_dispatch_closed.sql",
+    "tables": [],
+    "alter_lines": [
+      "ALTER TABLE activities",
+      "    ADD COLUMN dispatch_closed BOOLEAN NOT NULL DEFAULT FALSE;"
+    ]
+  },
+  {
+    "file": "backend\\migrations\\006_activities_running_owner_session.sql",
+    "tables": [],
+    "alter_lines": [
+      "ALTER TABLE activities",
+      "    ADD COLUMN running_owner_session_id BIGINT DEFAULT NULL"
+    ]
+  },
+  {
+    "file": "backend\\migrations\\007_activity_operation_results.sql",
+    "tables": [
+      {
+        "name": "activity_operation_results",
+        "columns_detected": [
+          "activity_id",
+          "operation_id",
+          "admission_id",
+          "execution_generation",
+          "scope_revision",
+          "payload_format",
+          "payload",
+          "payload_sha256",
+          "committed_at"
+        ],
+        "DDL": "CREATE TABLE activity_operation_results (\n    activity_id UUID NOT NULL,\n    operation_id VARCHAR(128) NOT NULL,\n    admission_id UUID NOT NULL,\n    execution_generation INTEGER NOT NULL CHECK (execution_generation >= 0),\n    scope_revision INTEGER NOT NULL CHECK (scope_revision > 0),\n    payload_format TEXT NOT NULL CHECK (payload_format IN ('text', 'json')),\n    payload TEXT NOT NULL CHECK (octet_length(payload) BETWEEN 1 AND 131072),\n    payload_sha256 TEXT NOT NULL CHECK (payload_sha256 ~ '^[0-9a-f]{64}$'),\n    committed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n    PRIMARY KEY (activity_id, operation_id),\n    FOREIGN KEY (activity_id, operation_id)\n        REFERENCES activity_operations(activity_id, operation_id)\n);",
+        "references": [
+          "activity_operations"
+        ],
+        "line": 10,
+        "columns": [
+          {
+            "name": "activity_id",
+            "definition": "activity_id UUID NOT NULL"
+          },
+          {
+            "name": "operation_id",
+            "definition": "operation_id VARCHAR(128) NOT NULL"
+          },
+          {
+            "name": "admission_id",
+            "definition": "admission_id UUID NOT NULL"
+          },
+          {
+            "name": "execution_generation",
+            "definition": "execution_generation INTEGER NOT NULL CHECK (execution_generation >= 0)"
+          },
+          {
+            "name": "scope_revision",
+            "definition": "scope_revision INTEGER NOT NULL CHECK (scope_revision > 0)"
+          },
+          {
+            "name": "payload_format",
+            "definition": "payload_format TEXT NOT NULL CHECK (payload_format IN ('text', 'json'))"
+          },
+          {
+            "name": "payload",
+            "definition": "payload TEXT NOT NULL CHECK (octet_length(payload) BETWEEN 1 AND 131072)"
+          },
+          {
+            "name": "payload_sha256",
+            "definition": "payload_sha256 TEXT NOT NULL CHECK (payload_sha256 ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "committed_at",
+            "definition": "committed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP"
+          }
+        ]
+      }
+    ],
+    "alter_lines": []
+  },
+  {
+    "file": "backend\\migrations\\008_activity_tool_budget.sql",
+    "tables": [],
+    "alter_lines": [
+      "ALTER TABLE activities",
+      "    ADD COLUMN max_tool_calls INTEGER",
+      "    ADD COLUMN tools_reserved INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE activities",
+      "    ADD CONSTRAINT activities_tool_budget_balance CHECK (",
+      "ALTER TABLE activity_operations",
+      "    ADD COLUMN kind TEXT NOT NULL DEFAULT 'model',",
+      "    ADD COLUMN arguments_sha256 TEXT,",
+      "    ADD COLUMN tool_call_id VARCHAR(128);",
+      "ALTER TABLE activity_operations",
+      "ALTER TABLE activity_operations",
+      "    ADD CONSTRAINT activity_operations_kind_domain CHECK (kind IN ('model', 'tool')),",
+      "    ADD CONSTRAINT activity_operations_kind_shape CHECK ("
+    ]
+  },
+  {
+    "file": "backend\\migrations\\009_teaching.sql",
+    "tables": [
+      {
+        "name": "teaching_heads",
+        "columns_detected": [
+          "activity_id",
+          "revision",
+          "goal_version",
+          "last_seq",
+          "phase",
+          "goal_record_id",
+          "path_record_id",
+          "node_id",
+          "exercise_record_id",
+          "answer_record_id",
+          "feedback_record_id",
+          "reason_record_id",
+          "pending_business_key",
+          "projection",
+          "updated_at"
+        ],
+        "DDL": "CREATE TABLE teaching_heads (\n    activity_id UUID PRIMARY KEY REFERENCES activities(id),\n    revision INTEGER NOT NULL DEFAULT 0 CHECK (revision BETWEEN 0 AND 2147483647),\n    goal_version INTEGER NOT NULL DEFAULT 0 CHECK (goal_version BETWEEN 0 AND 32),\n    last_seq INTEGER NOT NULL DEFAULT 0 CHECK (last_seq BETWEEN 0 AND 4096),\n    phase TEXT NOT NULL DEFAULT 'needs_goal' CHECK (phase IN\n        ('needs_goal','needs_plan','path_review','ready','exercise_ready','answer_saved','feedback_ready')),\n    goal_record_id UUID,\n    path_record_id UUID,\n    node_id VARCHAR(2) CHECK (node_id IS NULL OR node_id ~ '^n[1-6]$'),\n    exercise_record_id UUID,\n    answer_record_id UUID,\n    feedback_record_id UUID,\n    reason_record_id UUID,\n    pending_business_key UUID,\n    projection TEXT NOT NULL DEFAULT '{}' CHECK (octet_length(projection) BETWEEN 2 AND 8192),\n    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n    CHECK ((goal_version = 0 AND goal_record_id IS NULL AND phase = 'needs_goal')\n        OR (goal_version > 0 AND goal_record_id IS NOT NULL AND phase <> 'needs_goal')),\n    CHECK ((path_record_id IS NULL AND node_id IS NULL) OR\n        (path_record_id IS NOT NULL AND node_id IS NOT NULL)),\n    CHECK (answer_record_id IS NULL OR exercise_record_id IS NOT NULL),\n    CHECK (feedback_record_id IS NULL OR answer_record_id IS NOT NULL)\n);",
+        "references": [
+          "activities"
+        ],
+        "line": 73,
+        "columns": [
+          {
+            "name": "activity_id",
+            "definition": "activity_id UUID PRIMARY KEY REFERENCES activities(id)"
+          },
+          {
+            "name": "revision",
+            "definition": "revision INTEGER NOT NULL DEFAULT 0 CHECK (revision BETWEEN 0 AND 2147483647)"
+          },
+          {
+            "name": "goal_version",
+            "definition": "goal_version INTEGER NOT NULL DEFAULT 0 CHECK (goal_version BETWEEN 0 AND 32)"
+          },
+          {
+            "name": "last_seq",
+            "definition": "last_seq INTEGER NOT NULL DEFAULT 0 CHECK (last_seq BETWEEN 0 AND 4096)"
+          },
+          {
+            "name": "phase",
+            "definition": "phase TEXT NOT NULL DEFAULT 'needs_goal' CHECK (phase IN\n        ('needs_goal','needs_plan','path_review','ready','exercise_ready','answer_saved','feedback_ready'))"
+          },
+          {
+            "name": "goal_record_id",
+            "definition": "goal_record_id UUID"
+          },
+          {
+            "name": "path_record_id",
+            "definition": "path_record_id UUID"
+          },
+          {
+            "name": "node_id",
+            "definition": "node_id VARCHAR(2) CHECK (node_id IS NULL OR node_id ~ '^n[1-6]$')"
+          },
+          {
+            "name": "exercise_record_id",
+            "definition": "exercise_record_id UUID"
+          },
+          {
+            "name": "answer_record_id",
+            "definition": "answer_record_id UUID"
+          },
+          {
+            "name": "feedback_record_id",
+            "definition": "feedback_record_id UUID"
+          },
+          {
+            "name": "reason_record_id",
+            "definition": "reason_record_id UUID"
+          },
+          {
+            "name": "pending_business_key",
+            "definition": "pending_business_key UUID"
+          },
+          {
+            "name": "projection",
+            "definition": "projection TEXT NOT NULL DEFAULT '{}' CHECK (octet_length(projection) BETWEEN 2 AND 8192)"
+          },
+          {
+            "name": "updated_at",
+            "definition": "updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP"
+          }
+        ]
+      },
+      {
+        "name": "teaching_commands",
+        "columns_detected": [
+          "activity_id",
+          "business_key",
+          "action",
+          "request_sha256",
+          "request_body",
+          "slot_sha256",
+          "expected_revision",
+          "goal_version",
+          "scope_revision",
+          "parent_record_id",
+          "context_body",
+          "context_sha256",
+          "operation_id",
+          "retry_of",
+          "status",
+          "launch_claimed_at",
+          "obsolete_at",
+          "abandoned_at",
+          "result_record_id",
+          "error_code",
+          "created_at",
+          "updated_at"
+        ],
+        "DDL": "CREATE TABLE teaching_commands (\n    activity_id UUID NOT NULL REFERENCES activities(id),\n    business_key UUID NOT NULL,\n    action TEXT NOT NULL CHECK (action IN\n        ('goal','plan','accept_path','exercise','expose','answer','calculate','evaluate',\n         'correct','abandon','select_node')),\n    request_sha256 CHAR(64) NOT NULL CHECK (request_sha256 ~ '^[0-9a-f]{64}$'),\n    request_body TEXT NOT NULL CHECK (octet_length(request_body) BETWEEN 2 AND 32768),\n    slot_sha256 CHAR(64) NOT NULL CHECK (slot_sha256 ~ '^[0-9a-f]{64}$'),\n    expected_revision INTEGER NOT NULL CHECK (expected_revision BETWEEN 0 AND 2147483647),\n    goal_version INTEGER NOT NULL CHECK (goal_version BETWEEN 0 AND 32),\n    scope_revision INTEGER NOT NULL CHECK (scope_revision > 0),\n    parent_record_id UUID,\n    context_body TEXT CHECK (context_body IS NULL OR octet_length(context_body) BETWEEN 2 AND 49152),\n    context_sha256 CHAR(64) CHECK (context_sha256 IS NULL OR context_sha256 ~ '^[0-9a-f]{64}$'),\n    operation_id VARCHAR(128) CHECK (operation_id IS NULL OR\n        (char_length(operation_id) BETWEEN 1 AND 128 AND operation_id !~ '[^A-Za-z0-9._:/-]')),\n    retry_of UUID,\n    status TEXT NOT NULL CHECK (status IN\n        ('accepted','started','committed','history','not_sent','failed','unknown','abandoned')),\n    launch_claimed_at TIMESTAMPTZ,\n    obsolete_at TIMESTAMPTZ,\n    abandoned_at TIMESTAMPTZ,\n    result_record_id UUID,\n    error_code VARCHAR(64) CHECK (error_code IS NULL OR error_code ~ '^[A-Za-z0-9._:/-]{1,64}$'),\n    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n    PRIMARY KEY (activity_id,business_key),\n    UNIQUE (activity_id,operation_id),\n    FOREIGN KEY (activity_id,retry_of) REFERENCES teaching_commands(activity_id,business_key),\n    CHECK ((context_body IS NULL) = (context_sha256 IS NULL)),\n    CHECK ((action IN ('plan','exercise','evaluate','calculate') AND operation_id IS NOT NULL)\n        OR (action NOT IN ('plan','exercise','evaluate','calculate') AND operation_id IS NULL)),\n    CHECK (launch_claimed_at IS NULL OR action IN ('plan','exercise','evaluate','calculate')),\n    CHECK (status <> 'started' OR launch_claimed_at IS NOT NULL)\n);",
+        "references": [
+          "activities",
+          "teaching_commands"
+        ],
+        "line": 98,
+        "columns": [
+          {
+            "name": "activity_id",
+            "definition": "activity_id UUID NOT NULL REFERENCES activities(id)"
+          },
+          {
+            "name": "business_key",
+            "definition": "business_key UUID NOT NULL"
+          },
+          {
+            "name": "action",
+            "definition": "action TEXT NOT NULL CHECK (action IN\n        ('goal','plan','accept_path','exercise','expose','answer','calculate','evaluate',\n         'correct','abandon','select_node'))"
+          },
+          {
+            "name": "request_sha256",
+            "definition": "request_sha256 CHAR(64) NOT NULL CHECK (request_sha256 ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "request_body",
+            "definition": "request_body TEXT NOT NULL CHECK (octet_length(request_body) BETWEEN 2 AND 32768)"
+          },
+          {
+            "name": "slot_sha256",
+            "definition": "slot_sha256 CHAR(64) NOT NULL CHECK (slot_sha256 ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "expected_revision",
+            "definition": "expected_revision INTEGER NOT NULL CHECK (expected_revision BETWEEN 0 AND 2147483647)"
+          },
+          {
+            "name": "goal_version",
+            "definition": "goal_version INTEGER NOT NULL CHECK (goal_version BETWEEN 0 AND 32)"
+          },
+          {
+            "name": "scope_revision",
+            "definition": "scope_revision INTEGER NOT NULL CHECK (scope_revision > 0)"
+          },
+          {
+            "name": "parent_record_id",
+            "definition": "parent_record_id UUID"
+          },
+          {
+            "name": "context_body",
+            "definition": "context_body TEXT CHECK (context_body IS NULL OR octet_length(context_body) BETWEEN 2 AND 49152)"
+          },
+          {
+            "name": "context_sha256",
+            "definition": "context_sha256 CHAR(64) CHECK (context_sha256 IS NULL OR context_sha256 ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "operation_id",
+            "definition": "operation_id VARCHAR(128) CHECK (operation_id IS NULL OR\n        (char_length(operation_id) BETWEEN 1 AND 128 AND operation_id !~ '[^A-Za-z0-9._:/-]'))"
+          },
+          {
+            "name": "retry_of",
+            "definition": "retry_of UUID"
+          },
+          {
+            "name": "status",
+            "definition": "status TEXT NOT NULL CHECK (status IN\n        ('accepted','started','committed','history','not_sent','failed','unknown','abandoned'))"
+          },
+          {
+            "name": "launch_claimed_at",
+            "definition": "launch_claimed_at TIMESTAMPTZ"
+          },
+          {
+            "name": "obsolete_at",
+            "definition": "obsolete_at TIMESTAMPTZ"
+          },
+          {
+            "name": "abandoned_at",
+            "definition": "abandoned_at TIMESTAMPTZ"
+          },
+          {
+            "name": "result_record_id",
+            "definition": "result_record_id UUID"
+          },
+          {
+            "name": "error_code",
+            "definition": "error_code VARCHAR(64) CHECK (error_code IS NULL OR error_code ~ '^[A-Za-z0-9._:/-]{1,64}$')"
+          },
+          {
+            "name": "created_at",
+            "definition": "created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP"
+          },
+          {
+            "name": "updated_at",
+            "definition": "updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP"
+          }
+        ]
+      },
+      {
+        "name": "teaching_records",
+        "columns_detected": [
+          "activity_id",
+          "record_id",
+          "seq",
+          "kind",
+          "business_key",
+          "ordinal",
+          "goal_version",
+          "scope_revision",
+          "goal_record_id",
+          "parent_record_id",
+          "exercise_record_id",
+          "answer_record_id",
+          "supersedes_record_id",
+          "operation_id",
+          "body",
+          "body_sha256",
+          "source_refs",
+          "applied_revision",
+          "state_after",
+          "created_at"
+        ],
+        "DDL": "CREATE TABLE teaching_records (\n    activity_id UUID NOT NULL REFERENCES activities(id),\n    record_id UUID NOT NULL,\n    seq INTEGER NOT NULL CHECK (seq BETWEEN 1 AND 4096),\n    kind TEXT NOT NULL CHECK (kind IN\n        ('goal','path_proposal','path_accept','exercise','exposure','answer','calculation',\n         'feedback','progress','correction','node_selection')),\n    business_key UUID NOT NULL,\n    ordinal SMALLINT NOT NULL CHECK (ordinal BETWEEN 1 AND 4),\n    goal_version INTEGER NOT NULL CHECK (goal_version BETWEEN 1 AND 32),\n    scope_revision INTEGER NOT NULL CHECK (scope_revision > 0),\n    goal_record_id UUID,\n    parent_record_id UUID,\n    exercise_record_id UUID,\n    answer_record_id UUID,\n    supersedes_record_id UUID,\n    operation_id VARCHAR(128),\n    body TEXT CHECK (body IS NULL OR octet_length(body) BETWEEN 2 AND 32768),\n    body_sha256 CHAR(64) NOT NULL CHECK (body_sha256 ~ '^[0-9a-f]{64}$'),\n    source_refs TEXT NOT NULL CHECK (octet_length(source_refs) BETWEEN 2 AND 8192),\n    applied_revision INTEGER CHECK (applied_revision BETWEEN 1 AND 2147483647),\n    state_after TEXT CHECK (state_after IS NULL OR octet_length(state_after) BETWEEN 2 AND 8192),\n    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n    PRIMARY KEY (activity_id,record_id),\n    UNIQUE (activity_id,seq),\n    UNIQUE (activity_id,business_key,ordinal),\n    FOREIGN KEY (activity_id,business_key) REFERENCES teaching_commands(activity_id,business_key),\n    FOREIGN KEY (activity_id,operation_id) REFERENCES activity_operation_results(activity_id,operation_id),\n    FOREIGN KEY (activity_id,goal_record_id) REFERENCES teaching_records(activity_id,record_id),\n    FOREIGN KEY (activity_id,parent_record_id) REFERENCES teaching_records(activity_id,record_id),\n    FOREIGN KEY (activity_id,exercise_record_id) REFERENCES teaching_records(activity_id,record_id),\n    FOREIGN KEY (activity_id,answer_record_id) REFERENCES teaching_records(activity_id,record_id),\n    FOREIGN KEY (activity_id,supersedes_record_id) REFERENCES teaching_records(activity_id,record_id),\n    CHECK ((kind IN ('path_proposal','exercise','calculation','feedback')\n            AND operation_id IS NOT NULL AND body IS NULL)\n        OR (kind NOT IN ('path_proposal','exercise','calculation','feedback')\n            AND operation_id IS NULL AND body IS NOT NULL)),\n    CHECK ((applied_revision IS NULL) = (state_after IS NULL)),\n    CHECK ((kind = 'goal' AND goal_record_id IS NULL) OR\n        (kind <> 'goal' AND goal_record_id IS NOT NULL)),\n    CHECK (kind NOT IN ('feedback','calculation','progress') OR answer_record_id IS NOT NULL),\n    CHECK (kind NOT IN ('answer','exposure','feedback','calculation','progress') OR exercise_record_id IS NOT NULL),\n    CHECK (kind <> 'progress' OR parent_record_id IS NOT NULL)\n);",
+        "references": [
+          "activities",
+          "teaching_commands",
+          "activity_operation_results",
+          "teaching_records",
+          "teaching_records",
+          "teaching_records",
+          "teaching_records",
+          "teaching_records"
+        ],
+        "line": 139,
+        "columns": [
+          {
+            "name": "activity_id",
+            "definition": "activity_id UUID NOT NULL REFERENCES activities(id)"
+          },
+          {
+            "name": "record_id",
+            "definition": "record_id UUID NOT NULL"
+          },
+          {
+            "name": "seq",
+            "definition": "seq INTEGER NOT NULL CHECK (seq BETWEEN 1 AND 4096)"
+          },
+          {
+            "name": "kind",
+            "definition": "kind TEXT NOT NULL CHECK (kind IN\n        ('goal','path_proposal','path_accept','exercise','exposure','answer','calculation',\n         'feedback','progress','correction','node_selection'))"
+          },
+          {
+            "name": "business_key",
+            "definition": "business_key UUID NOT NULL"
+          },
+          {
+            "name": "ordinal",
+            "definition": "ordinal SMALLINT NOT NULL CHECK (ordinal BETWEEN 1 AND 4)"
+          },
+          {
+            "name": "goal_version",
+            "definition": "goal_version INTEGER NOT NULL CHECK (goal_version BETWEEN 1 AND 32)"
+          },
+          {
+            "name": "scope_revision",
+            "definition": "scope_revision INTEGER NOT NULL CHECK (scope_revision > 0)"
+          },
+          {
+            "name": "goal_record_id",
+            "definition": "goal_record_id UUID"
+          },
+          {
+            "name": "parent_record_id",
+            "definition": "parent_record_id UUID"
+          },
+          {
+            "name": "exercise_record_id",
+            "definition": "exercise_record_id UUID"
+          },
+          {
+            "name": "answer_record_id",
+            "definition": "answer_record_id UUID"
+          },
+          {
+            "name": "supersedes_record_id",
+            "definition": "supersedes_record_id UUID"
+          },
+          {
+            "name": "operation_id",
+            "definition": "operation_id VARCHAR(128)"
+          },
+          {
+            "name": "body",
+            "definition": "body TEXT CHECK (body IS NULL OR octet_length(body) BETWEEN 2 AND 32768)"
+          },
+          {
+            "name": "body_sha256",
+            "definition": "body_sha256 CHAR(64) NOT NULL CHECK (body_sha256 ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "source_refs",
+            "definition": "source_refs TEXT NOT NULL CHECK (octet_length(source_refs) BETWEEN 2 AND 8192)"
+          },
+          {
+            "name": "applied_revision",
+            "definition": "applied_revision INTEGER CHECK (applied_revision BETWEEN 1 AND 2147483647)"
+          },
+          {
+            "name": "state_after",
+            "definition": "state_after TEXT CHECK (state_after IS NULL OR octet_length(state_after) BETWEEN 2 AND 8192)"
+          },
+          {
+            "name": "created_at",
+            "definition": "created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP"
+          }
+        ]
+      }
+    ],
+    "alter_lines": [
+      "ALTER TABLE teaching_heads",
+      "ALTER TABLE teaching_commands",
+      "CREATE FUNCTION teaching_records_immutable() RETURNS trigger LANGUAGE plpgsql AS $$",
+      "CREATE TRIGGER teaching_records_immutable BEFORE UPDATE OR DELETE ON teaching_records",
+      "CREATE FUNCTION teaching_command_identity_guard() RETURNS trigger LANGUAGE plpgsql AS $$",
+      "CREATE TRIGGER teaching_command_identity_guard BEFORE UPDATE ON teaching_commands",
+      "REVOKE ALL ON teaching_heads,teaching_commands,teaching_records FROM PUBLIC;"
+    ]
+  },
+  {
+    "file": "backend\\migrations\\010_learning_memory.sql",
+    "tables": [
+      {
+        "name": "learning_memories",
+        "columns_detected": [
+          "memory_id",
+          "revision",
+          "current_version",
+          "state",
+          "created_at",
+          "updated_at",
+          "revoked_at",
+          "revocation_key",
+          "purged_at",
+          "purge_state"
+        ],
+        "DDL": "CREATE TABLE public.learning_memories(\n memory_id UUID PRIMARY KEY, revision INTEGER NOT NULL CHECK(revision BETWEEN 1 AND 2147483647),\n current_version INTEGER NOT NULL CHECK(current_version BETWEEN 1 AND 32),\n state TEXT NOT NULL CHECK(state IN ('active','revoked')),\n created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n revoked_at TIMESTAMPTZ, revocation_key UUID, purged_at TIMESTAMPTZ,\n purge_state TEXT NOT NULL DEFAULT 'none' CHECK(purge_state IN ('none','pending','done')),\n CHECK((state='active' AND revoked_at IS NULL AND revocation_key IS NULL AND purged_at IS NULL AND purge_state='none')\n OR(state='revoked' AND revoked_at IS NOT NULL AND revocation_key IS NOT NULL\n AND((purge_state='pending' AND purged_at IS NULL) OR(purge_state='done' AND purged_at IS NOT NULL))))\n);",
+        "references": [],
+        "line": 68,
+        "columns": [
+          {
+            "name": "memory_id",
+            "definition": "memory_id UUID PRIMARY KEY"
+          },
+          {
+            "name": "revision",
+            "definition": "revision INTEGER NOT NULL CHECK(revision BETWEEN 1 AND 2147483647)"
+          },
+          {
+            "name": "current_version",
+            "definition": "current_version INTEGER NOT NULL CHECK(current_version BETWEEN 1 AND 32)"
+          },
+          {
+            "name": "state",
+            "definition": "state TEXT NOT NULL CHECK(state IN ('active','revoked'))"
+          },
+          {
+            "name": "created_at",
+            "definition": "created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP"
+          },
+          {
+            "name": "updated_at",
+            "definition": "updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP"
+          },
+          {
+            "name": "revoked_at",
+            "definition": "revoked_at TIMESTAMPTZ"
+          },
+          {
+            "name": "revocation_key",
+            "definition": "revocation_key UUID"
+          },
+          {
+            "name": "purged_at",
+            "definition": "purged_at TIMESTAMPTZ"
+          },
+          {
+            "name": "purge_state",
+            "definition": "purge_state TEXT NOT NULL DEFAULT 'none' CHECK(purge_state IN ('none','pending','done'))"
+          }
+        ]
+      },
+      {
+        "name": "learning_memory_commands",
+        "columns_detected": [
+          "business_key",
+          "action",
+          "memory_id",
+          "request_sha256",
+          "slot_sha256",
+          "effect_applied",
+          "before_revision",
+          "after_revision",
+          "after_version",
+          "result_meta",
+          "cleanup_manifest",
+          "manifest_sha256",
+          "committed_at"
+        ],
+        "DDL": "CREATE TABLE public.learning_memory_commands(\n business_key UUID PRIMARY KEY, action TEXT NOT NULL CHECK(action IN ('save','revise','revoke','purge')),\n memory_id UUID NOT NULL REFERENCES public.learning_memories(memory_id) DEFERRABLE INITIALLY DEFERRED,\n request_sha256 TEXT NOT NULL CHECK(request_sha256 ~ '^[0-9a-f]{64}$'),\n slot_sha256 TEXT NOT NULL CHECK(slot_sha256 ~ '^[0-9a-f]{64}$'), effect_applied BOOLEAN NOT NULL,\n before_revision INTEGER NOT NULL CHECK(before_revision BETWEEN 0 AND 2147483647),\n after_revision INTEGER NOT NULL CHECK(after_revision BETWEEN 1 AND 2147483647),\n after_version INTEGER NOT NULL CHECK(after_version BETWEEN 1 AND 32),\n result_meta TEXT NOT NULL CHECK(octet_length(result_meta) BETWEEN 2 AND 4096),\n cleanup_manifest TEXT CHECK(cleanup_manifest IS NULL OR octet_length(cleanup_manifest) BETWEEN 2 AND 8192),\n manifest_sha256 TEXT CHECK(manifest_sha256 IS NULL OR manifest_sha256 ~ '^[0-9a-f]{64}$'),\n committed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(memory_id,business_key),\n CHECK((cleanup_manifest IS NULL)=(manifest_sha256 IS NULL)),\n CHECK(action='revoke' OR cleanup_manifest IS NULL)\n);",
+        "references": [
+          "learning_memories"
+        ],
+        "line": 80,
+        "columns": [
+          {
+            "name": "business_key",
+            "definition": "business_key UUID PRIMARY KEY"
+          },
+          {
+            "name": "action",
+            "definition": "action TEXT NOT NULL CHECK(action IN ('save','revise','revoke','purge'))"
+          },
+          {
+            "name": "memory_id",
+            "definition": "memory_id UUID NOT NULL REFERENCES public.learning_memories(memory_id) DEFERRABLE INITIALLY DEFERRED"
+          },
+          {
+            "name": "request_sha256",
+            "definition": "request_sha256 TEXT NOT NULL CHECK(request_sha256 ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "slot_sha256",
+            "definition": "slot_sha256 TEXT NOT NULL CHECK(slot_sha256 ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "effect_applied",
+            "definition": "effect_applied BOOLEAN NOT NULL"
+          },
+          {
+            "name": "before_revision",
+            "definition": "before_revision INTEGER NOT NULL CHECK(before_revision BETWEEN 0 AND 2147483647)"
+          },
+          {
+            "name": "after_revision",
+            "definition": "after_revision INTEGER NOT NULL CHECK(after_revision BETWEEN 1 AND 2147483647)"
+          },
+          {
+            "name": "after_version",
+            "definition": "after_version INTEGER NOT NULL CHECK(after_version BETWEEN 1 AND 32)"
+          },
+          {
+            "name": "result_meta",
+            "definition": "result_meta TEXT NOT NULL CHECK(octet_length(result_meta) BETWEEN 2 AND 4096)"
+          },
+          {
+            "name": "cleanup_manifest",
+            "definition": "cleanup_manifest TEXT CHECK(cleanup_manifest IS NULL OR octet_length(cleanup_manifest) BETWEEN 2 AND 8192)"
+          },
+          {
+            "name": "manifest_sha256",
+            "definition": "manifest_sha256 TEXT CHECK(manifest_sha256 IS NULL OR manifest_sha256 ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "committed_at",
+            "definition": "committed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP"
+          }
+        ]
+      },
+      {
+        "name": "learning_memory_revisions",
+        "columns_detected": [
+          "memory_id",
+          "version",
+          "claim_kind",
+          "uncertainty",
+          "policy_version",
+          "body_sha256",
+          "body_bytes",
+          "dependencies_sha256",
+          "dependency_count",
+          "created_by_key",
+          "created_at"
+        ],
+        "DDL": "CREATE TABLE public.learning_memory_revisions(\n memory_id UUID NOT NULL REFERENCES public.learning_memories(memory_id),\n version INTEGER NOT NULL CHECK(version BETWEEN 1 AND 32), PRIMARY KEY(memory_id,version),\n claim_kind TEXT NOT NULL CHECK(claim_kind IN ('self_report','preference','focus','learning_observation')),\n uncertainty TEXT NOT NULL CHECK(uncertainty IN ('self_reported','unknown','limited')),\n policy_version TEXT NOT NULL CHECK(policy_version IN ('memory.user.v1','memory.observation.v1')),\n body_sha256 TEXT NOT NULL CHECK(body_sha256 ~ '^[0-9a-f]{64}$'),\n body_bytes INTEGER NOT NULL CHECK(body_bytes BETWEEN 2 AND 4096),\n dependencies_sha256 TEXT NOT NULL CHECK(dependencies_sha256 ~ '^[0-9a-f]{64}$'),\n dependency_count SMALLINT NOT NULL CHECK(dependency_count BETWEEN 0 AND 32),\n created_by_key UUID NOT NULL UNIQUE, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,\n FOREIGN KEY(memory_id,created_by_key) REFERENCES public.learning_memory_commands(memory_id,business_key)\n DEFERRABLE INITIALLY DEFERRED,\n CHECK((claim_kind='learning_observation' AND uncertainty IN ('limited','unknown') AND policy_version='memory.observation.v1')\n OR(claim_kind<>'learning_observation' AND uncertainty IN ('self_reported','unknown') AND policy_version='memory.user.v1'))\n);",
+        "references": [
+          "learning_memories",
+          "learning_memory_commands"
+        ],
+        "line": 96,
+        "columns": [
+          {
+            "name": "memory_id",
+            "definition": "memory_id UUID NOT NULL REFERENCES public.learning_memories(memory_id)"
+          },
+          {
+            "name": "version",
+            "definition": "version INTEGER NOT NULL CHECK(version BETWEEN 1 AND 32)"
+          },
+          {
+            "name": "claim_kind",
+            "definition": "claim_kind TEXT NOT NULL CHECK(claim_kind IN ('self_report','preference','focus','learning_observation'))"
+          },
+          {
+            "name": "uncertainty",
+            "definition": "uncertainty TEXT NOT NULL CHECK(uncertainty IN ('self_reported','unknown','limited'))"
+          },
+          {
+            "name": "policy_version",
+            "definition": "policy_version TEXT NOT NULL CHECK(policy_version IN ('memory.user.v1','memory.observation.v1'))"
+          },
+          {
+            "name": "body_sha256",
+            "definition": "body_sha256 TEXT NOT NULL CHECK(body_sha256 ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "body_bytes",
+            "definition": "body_bytes INTEGER NOT NULL CHECK(body_bytes BETWEEN 2 AND 4096)"
+          },
+          {
+            "name": "dependencies_sha256",
+            "definition": "dependencies_sha256 TEXT NOT NULL CHECK(dependencies_sha256 ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "dependency_count",
+            "definition": "dependency_count SMALLINT NOT NULL CHECK(dependency_count BETWEEN 0 AND 32)"
+          },
+          {
+            "name": "created_by_key",
+            "definition": "created_by_key UUID NOT NULL UNIQUE"
+          },
+          {
+            "name": "created_at",
+            "definition": "created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP"
+          }
+        ]
+      },
+      {
+        "name": "learning_memory_bodies",
+        "columns_detected": [
+          "memory_id",
+          "version",
+          "body"
+        ],
+        "DDL": "CREATE TABLE public.learning_memory_bodies(\n memory_id UUID NOT NULL, version INTEGER NOT NULL, body TEXT NOT NULL CHECK(octet_length(body) BETWEEN 2 AND 4096),\n PRIMARY KEY(memory_id,version),\n FOREIGN KEY(memory_id,version) REFERENCES public.learning_memory_revisions(memory_id,version)\n);",
+        "references": [
+          "learning_memory_revisions"
+        ],
+        "line": 118,
+        "columns": [
+          {
+            "name": "memory_id",
+            "definition": "memory_id UUID NOT NULL"
+          },
+          {
+            "name": "version",
+            "definition": "version INTEGER NOT NULL"
+          },
+          {
+            "name": "body",
+            "definition": "body TEXT NOT NULL CHECK(octet_length(body) BETWEEN 2 AND 4096)"
+          }
+        ]
+      },
+      {
+        "name": "learning_memory_dependencies",
+        "columns_detected": [
+          "memory_id",
+          "version",
+          "ordinal",
+          "dependency_kind",
+          "source_id",
+          "source_version_id",
+          "source_revision",
+          "original_sha256",
+          "origin_activity_id",
+          "record_id",
+          "record_kind",
+          "record_sha256",
+          "origin_scope_revision",
+          "origin_goal_version",
+          "upstream_memory_id",
+          "upstream_version",
+          "upstream_body_sha256"
+        ],
+        "DDL": "CREATE TABLE public.learning_memory_dependencies(\n memory_id UUID NOT NULL, version INTEGER NOT NULL, ordinal SMALLINT NOT NULL CHECK(ordinal BETWEEN 1 AND 32),\n dependency_kind TEXT NOT NULL CHECK(dependency_kind IN ('source','event','memory')),\n source_id UUID, source_version_id UUID, source_revision INTEGER CHECK(source_revision>=0), original_sha256 TEXT,\n origin_activity_id UUID, record_id UUID, record_kind TEXT, record_sha256 TEXT,\n origin_scope_revision INTEGER CHECK(origin_scope_revision>0), origin_goal_version INTEGER CHECK(origin_goal_version BETWEEN 1 AND 32),\n upstream_memory_id UUID, upstream_version INTEGER CHECK(upstream_version BETWEEN 1 AND 32), upstream_body_sha256 TEXT,\n PRIMARY KEY(memory_id,version,ordinal),\n FOREIGN KEY(memory_id,version) REFERENCES public.learning_memory_revisions(memory_id,version),\n FOREIGN KEY(source_id,source_version_id) REFERENCES public.material_versions(source_id,id),\n FOREIGN KEY(origin_activity_id,record_id) REFERENCES public.teaching_records(activity_id,record_id),\n FOREIGN KEY(upstream_memory_id,upstream_version) REFERENCES public.learning_memory_revisions(memory_id,version),\n CHECK(upstream_memory_id IS NULL OR upstream_memory_id<>memory_id),\n CHECK(original_sha256 IS NULL OR original_sha256 ~ '^[0-9a-f]{64}$'),\n CHECK(record_sha256 IS NULL OR record_sha256 ~ '^[0-9a-f]{64}$'),\n CHECK(upstream_body_sha256 IS NULL OR upstream_body_sha256 ~ '^[0-9a-f]{64}$'),\n CHECK(record_kind IS NULL OR record_kind IN ('exercise','answer','feedback','progress','correction')),\n CHECK(\n (dependency_kind='source' AND num_nonnulls(source_id,source_version_id,source_revision,original_sha256)=4\n  AND num_nonnulls(origin_activity_id,record_id,record_kind,record_sha256,origin_scope_revision,origin_goal_version,\n   upstream_memory_id,upstream_version,upstream_body_sha256)=0)\n OR(dependency_kind='event' AND num_nonnulls(origin_activity_id,record_id,record_kind,record_sha256,\n  origin_scope_revision,origin_goal_version)=6\n  AND num_nonnulls(source_id,source_version_id,source_revision,original_sha256,\n  upstream_memory_id,upstream_version,upstream_body_sha256)=0)\n OR(dependency_kind='memory' AND num_nonnulls(upstream_memory_id,upstream_version,upstream_body_sha256)=3\n  AND num_nonnulls(source_id,source_version_id,source_revision,original_sha256,origin_activity_id,record_id,\n   record_kind,record_sha256,origin_scope_revision,origin_goal_version)=0))\n);",
+        "references": [
+          "learning_memory_revisions",
+          "material_versions",
+          "teaching_records",
+          "learning_memory_revisions"
+        ],
+        "line": 123,
+        "columns": [
+          {
+            "name": "memory_id",
+            "definition": "memory_id UUID NOT NULL"
+          },
+          {
+            "name": "version",
+            "definition": "version INTEGER NOT NULL"
+          },
+          {
+            "name": "ordinal",
+            "definition": "ordinal SMALLINT NOT NULL CHECK(ordinal BETWEEN 1 AND 32)"
+          },
+          {
+            "name": "dependency_kind",
+            "definition": "dependency_kind TEXT NOT NULL CHECK(dependency_kind IN ('source','event','memory'))"
+          },
+          {
+            "name": "source_id",
+            "definition": "source_id UUID"
+          },
+          {
+            "name": "source_version_id",
+            "definition": "source_version_id UUID"
+          },
+          {
+            "name": "source_revision",
+            "definition": "source_revision INTEGER CHECK(source_revision>=0)"
+          },
+          {
+            "name": "original_sha256",
+            "definition": "original_sha256 TEXT"
+          },
+          {
+            "name": "origin_activity_id",
+            "definition": "origin_activity_id UUID"
+          },
+          {
+            "name": "record_id",
+            "definition": "record_id UUID"
+          },
+          {
+            "name": "record_kind",
+            "definition": "record_kind TEXT"
+          },
+          {
+            "name": "record_sha256",
+            "definition": "record_sha256 TEXT"
+          },
+          {
+            "name": "origin_scope_revision",
+            "definition": "origin_scope_revision INTEGER CHECK(origin_scope_revision>0)"
+          },
+          {
+            "name": "origin_goal_version",
+            "definition": "origin_goal_version INTEGER CHECK(origin_goal_version BETWEEN 1 AND 32)"
+          },
+          {
+            "name": "upstream_memory_id",
+            "definition": "upstream_memory_id UUID"
+          },
+          {
+            "name": "upstream_version",
+            "definition": "upstream_version INTEGER CHECK(upstream_version BETWEEN 1 AND 32)"
+          },
+          {
+            "name": "upstream_body_sha256",
+            "definition": "upstream_body_sha256 TEXT"
+          }
+        ]
+      },
+      {
+        "name": "activity_memory_bindings",
+        "columns_detected": [
+          "activity_id",
+          "selection_sha256",
+          "create_request_sha256",
+          "bound_scope_revision",
+          "bound_scope_sha256",
+          "selected_count",
+          "policy_version",
+          "selected_at"
+        ],
+        "DDL": "CREATE TABLE public.activity_memory_bindings(\n activity_id UUID PRIMARY KEY REFERENCES public.activities(id),\n selection_sha256 TEXT NOT NULL CHECK(selection_sha256 ~ '^[0-9a-f]{64}$'),\n create_request_sha256 TEXT NOT NULL CHECK(create_request_sha256 ~ '^[0-9a-f]{64}$'),\n bound_scope_revision INTEGER NOT NULL CHECK(bound_scope_revision>0),\n bound_scope_sha256 TEXT NOT NULL CHECK(bound_scope_sha256 ~ '^[0-9a-f]{64}$'),\n selected_count SMALLINT NOT NULL CHECK(selected_count BETWEEN 1 AND 4),\n policy_version TEXT NOT NULL CHECK(policy_version='memory.selection.v1'),\n selected_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP\n);",
+        "references": [
+          "activities"
+        ],
+        "line": 159,
+        "columns": [
+          {
+            "name": "activity_id",
+            "definition": "activity_id UUID PRIMARY KEY REFERENCES public.activities(id)"
+          },
+          {
+            "name": "selection_sha256",
+            "definition": "selection_sha256 TEXT NOT NULL CHECK(selection_sha256 ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "create_request_sha256",
+            "definition": "create_request_sha256 TEXT NOT NULL CHECK(create_request_sha256 ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "bound_scope_revision",
+            "definition": "bound_scope_revision INTEGER NOT NULL CHECK(bound_scope_revision>0)"
+          },
+          {
+            "name": "bound_scope_sha256",
+            "definition": "bound_scope_sha256 TEXT NOT NULL CHECK(bound_scope_sha256 ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "selected_count",
+            "definition": "selected_count SMALLINT NOT NULL CHECK(selected_count BETWEEN 1 AND 4)"
+          },
+          {
+            "name": "policy_version",
+            "definition": "policy_version TEXT NOT NULL CHECK(policy_version='memory.selection.v1')"
+          },
+          {
+            "name": "selected_at",
+            "definition": "selected_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP"
+          }
+        ]
+      },
+      {
+        "name": "activity_memory_choices",
+        "columns_detected": [
+          "activity_id",
+          "memory_id",
+          "version",
+          "selected_revision",
+          "body_sha256",
+          "ordinal"
+        ],
+        "DDL": "CREATE TABLE public.activity_memory_choices(\n activity_id UUID NOT NULL REFERENCES public.activity_memory_bindings(activity_id), memory_id UUID NOT NULL,\n version INTEGER NOT NULL CHECK(version BETWEEN 1 AND 32), selected_revision INTEGER NOT NULL CHECK(selected_revision>0),\n body_sha256 TEXT NOT NULL CHECK(body_sha256 ~ '^[0-9a-f]{64}$'), ordinal SMALLINT NOT NULL CHECK(ordinal BETWEEN 1 AND 4),\n PRIMARY KEY(activity_id,memory_id), UNIQUE(activity_id,ordinal),\n FOREIGN KEY(memory_id,version) REFERENCES public.learning_memory_revisions(memory_id,version)\n);",
+        "references": [
+          "activity_memory_bindings",
+          "learning_memory_revisions"
+        ],
+        "line": 169,
+        "columns": [
+          {
+            "name": "activity_id",
+            "definition": "activity_id UUID NOT NULL REFERENCES public.activity_memory_bindings(activity_id)"
+          },
+          {
+            "name": "memory_id",
+            "definition": "memory_id UUID NOT NULL"
+          },
+          {
+            "name": "version",
+            "definition": "version INTEGER NOT NULL CHECK(version BETWEEN 1 AND 32)"
+          },
+          {
+            "name": "selected_revision",
+            "definition": "selected_revision INTEGER NOT NULL CHECK(selected_revision>0)"
+          },
+          {
+            "name": "body_sha256",
+            "definition": "body_sha256 TEXT NOT NULL CHECK(body_sha256 ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "ordinal",
+            "definition": "ordinal SMALLINT NOT NULL CHECK(ordinal BETWEEN 1 AND 4)"
+          }
+        ]
+      }
+    ],
+    "alter_lines": [
+      "CREATE ROLE retrolume_memory_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;",
+      "CREATE ROLE retrolume_memory_app NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;",
+      "CREATE ROLE retrolume_memory_purger NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;",
+      "ALTER TABLE public.learning_memories ADD CONSTRAINT memory_current_version",
+      "ALTER TABLE public.learning_memories ADD CONSTRAINT memory_revoke_command",
+      "CREATE FUNCTION public.memory_dependency_line(d public.learning_memory_dependencies) RETURNS TEXT",
+      "CREATE FUNCTION public.memory_dependency_digest(mid UUID,ver INTEGER) RETURNS TEXT",
+      "CREATE FUNCTION public.memory_scope_digest(aid UUID) RETURNS TEXT",
+      "CREATE FUNCTION public.memory_choice_digest(aid UUID) RETURNS TEXT",
+      "CREATE FUNCTION public.memory_revision_readable(mid UUID,ver INTEGER) RETURNS BOOLEAN",
+      "CREATE FUNCTION public.memory_revision_eligible(mid UUID,ver INTEGER) RETURNS BOOLEAN",
+      "CREATE FUNCTION public.activity_memory_eligible(aid UUID) RETURNS BOOLEAN",
+      "CREATE FUNCTION public.memory_immutable_guard() RETURNS trigger LANGUAGE plpgsql SECURITY INVOKER",
+      "CREATE TRIGGER memory_revision_immutable BEFORE UPDATE OR DELETE ON public.learning_memory_revisions FOR EACH ROW EXECUTE FUNCTION public.memory_immutable_guard();",
+      "CREATE TRIGGER memory_dependency_immutable BEFORE UPDATE OR DELETE ON public.learning_memory_dependencies FOR EACH ROW EXECUTE FUNCTION public.memory_immutable_guard();",
+      "CREATE TRIGGER memory_command_immutable BEFORE UPDATE OR DELETE ON public.learning_memory_commands FOR EACH ROW EXECUTE FUNCTION public.memory_immutable_guard();",
+      "CREATE TRIGGER memory_binding_immutable BEFORE UPDATE OR DELETE ON public.activity_memory_bindings FOR EACH ROW EXECUTE FUNCTION public.memory_immutable_guard();",
+      "CREATE TRIGGER memory_choice_immutable BEFORE UPDATE OR DELETE ON public.activity_memory_choices FOR EACH ROW EXECUTE FUNCTION public.memory_immutable_guard();",
+      "CREATE FUNCTION public.memory_head_guard() RETURNS trigger LANGUAGE plpgsql SECURITY INVOKER",
+      "CREATE TRIGGER memory_head_identity BEFORE INSERT OR UPDATE OR DELETE ON public.learning_memories FOR EACH ROW EXECUTE FUNCTION public.memory_head_guard();",
+      "CREATE FUNCTION public.memory_body_guard() RETURNS trigger LANGUAGE plpgsql SECURITY INVOKER",
+      "CREATE TRIGGER memory_body_integrity BEFORE INSERT OR UPDATE OR DELETE ON public.learning_memory_bodies FOR EACH ROW EXECUTE FUNCTION public.memory_body_guard();",
+      "CREATE FUNCTION public.memory_final_shape_guard() RETURNS trigger LANGUAGE plpgsql SECURITY INVOKER",
+      "CREATE FUNCTION public.purge_learning_memory(revocation_key UUID,manifest_sha256 TEXT,purge_business_key UUID,request_sha256 TEXT)",
+      "GRANT USAGE ON SCHEMA public TO retrolume_memory_app,retrolume_memory_purger;",
+      "GRANT UPDATE(current_version,revision,state,updated_at,revoked_at,revocation_key,purge_state) ON public.learning_memories TO retrolume_memory_app;",
+      "GRANT SELECT ON public.learning_memories,public.learning_memory_revisions,public.learning_memory_bodies,public.learning_memory_commands TO retrolume_memory_purger;",
+      "GRANT DELETE ON public.learning_memory_bodies TO retrolume_memory_purger;",
+      "GRANT INSERT ON public.learning_memory_commands TO retrolume_memory_purger;",
+      "GRANT UPDATE(purge_state,purged_at) ON public.learning_memories TO retrolume_memory_purger;"
+    ]
+  },
+  {
+    "file": "backend\\migrations\\011_text_interview.sql",
+    "tables": [
+      {
+        "name": "interview_heads",
+        "columns_detected": [
+          "activity_id",
+          "revision",
+          "goal_version",
+          "phase",
+          "last_seq",
+          "round_index",
+          "probe_depth",
+          "goal_record_id",
+          "root_question_id",
+          "current_question_id",
+          "current_answer_id",
+          "current_feedback_id",
+          "pending_key",
+          "scope_revision",
+          "source_snapshot_sha256",
+          "created_at",
+          "updated_at"
+        ],
+        "DDL": "CREATE TABLE public.interview_heads (\n activity_id uuid PRIMARY KEY REFERENCES public.activities(id),\n revision integer NOT NULL CHECK(revision BETWEEN 1 AND 2147483647),\n goal_version integer NOT NULL CHECK(goal_version BETWEEN 0 AND 32),\n phase text NOT NULL CHECK(phase IN ('needs_goal','ready','question_ready','answer_ready','feedback_ready','ended')),\n last_seq integer NOT NULL CHECK(last_seq BETWEEN 1 AND 4096),\n round_index integer NOT NULL CHECK(round_index BETWEEN 0 AND 4096),\n probe_depth integer NOT NULL CHECK(probe_depth BETWEEN 0 AND 4),\n goal_record_id uuid, root_question_id uuid, current_question_id uuid, current_answer_id uuid, current_feedback_id uuid,\n pending_key uuid,\n scope_revision integer NOT NULL CHECK(scope_revision BETWEEN 1 AND 2147483647),\n source_snapshot_sha256 text NOT NULL CHECK(source_snapshot_sha256 ~ '^[0-9a-f]{64}$'),\n created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,\n updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,\n CONSTRAINT interview_goal_shape CHECK((goal_version=0 AND goal_record_id IS NULL AND phase IN ('needs_goal','ended')) OR (goal_version>0 AND goal_record_id IS NOT NULL))\n);",
+        "references": [
+          "activities"
+        ],
+        "line": 16,
+        "columns": [
+          {
+            "name": "activity_id",
+            "definition": "activity_id uuid PRIMARY KEY REFERENCES public.activities(id)"
+          },
+          {
+            "name": "revision",
+            "definition": "revision integer NOT NULL CHECK(revision BETWEEN 1 AND 2147483647)"
+          },
+          {
+            "name": "goal_version",
+            "definition": "goal_version integer NOT NULL CHECK(goal_version BETWEEN 0 AND 32)"
+          },
+          {
+            "name": "phase",
+            "definition": "phase text NOT NULL CHECK(phase IN ('needs_goal','ready','question_ready','answer_ready','feedback_ready','ended'))"
+          },
+          {
+            "name": "last_seq",
+            "definition": "last_seq integer NOT NULL CHECK(last_seq BETWEEN 1 AND 4096)"
+          },
+          {
+            "name": "round_index",
+            "definition": "round_index integer NOT NULL CHECK(round_index BETWEEN 0 AND 4096)"
+          },
+          {
+            "name": "probe_depth",
+            "definition": "probe_depth integer NOT NULL CHECK(probe_depth BETWEEN 0 AND 4)"
+          },
+          {
+            "name": "goal_record_id",
+            "definition": "goal_record_id uuid"
+          },
+          {
+            "name": "root_question_id",
+            "definition": "root_question_id uuid"
+          },
+          {
+            "name": "current_question_id",
+            "definition": "current_question_id uuid"
+          },
+          {
+            "name": "current_answer_id",
+            "definition": "current_answer_id uuid"
+          },
+          {
+            "name": "current_feedback_id",
+            "definition": "current_feedback_id uuid"
+          },
+          {
+            "name": "pending_key",
+            "definition": "pending_key uuid"
+          },
+          {
+            "name": "scope_revision",
+            "definition": "scope_revision integer NOT NULL CHECK(scope_revision BETWEEN 1 AND 2147483647)"
+          },
+          {
+            "name": "source_snapshot_sha256",
+            "definition": "source_snapshot_sha256 text NOT NULL CHECK(source_snapshot_sha256 ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "created_at",
+            "definition": "created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP"
+          },
+          {
+            "name": "updated_at",
+            "definition": "updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP"
+          }
+        ]
+      },
+      {
+        "name": "interview_commands",
+        "columns_detected": [
+          "activity_id",
+          "business_key",
+          "action",
+          "request_body",
+          "request_sha256",
+          "semantic_slot",
+          "execution_kind",
+          "context_body",
+          "context_sha256",
+          "operation_id",
+          "status",
+          "launch_claimed",
+          "obsolete",
+          "effect_applied",
+          "duplicate_of",
+          "retry_of",
+          "before_revision",
+          "after_revision",
+          "goal_version",
+          "scope_revision",
+          "result_record_ids",
+          "error_code",
+          "created_at",
+          "updated_at"
+        ],
+        "DDL": "CREATE TABLE public.interview_commands (\n activity_id uuid NOT NULL REFERENCES public.activities(id), business_key uuid NOT NULL,\n action text NOT NULL CHECK(action IN ('start','goal','ask','answer','correct_answer','review','bind_scope','abandon','finish')),\n request_body text NOT NULL CHECK(octet_length(request_body) BETWEEN 1 AND 32768),\n request_sha256 text NOT NULL CHECK(request_sha256 ~ '^[0-9a-f]{64}$'),\n semantic_slot text NOT NULL CHECK(semantic_slot ~ '^[0-9a-f]{64}$'),\n execution_kind text NOT NULL CHECK(execution_kind IN ('local','model')),\n context_body text CHECK(octet_length(context_body) BETWEEN 1 AND 49152),\n context_sha256 text CHECK(context_sha256 ~ '^[0-9a-f]{64}$'),\n operation_id text,\n status text NOT NULL CHECK(status IN ('accepted','started','committed','history','not_sent','failed','unknown','abandoned')),\n launch_claimed boolean NOT NULL DEFAULT false, obsolete boolean NOT NULL DEFAULT false,\n effect_applied boolean NOT NULL DEFAULT false,\n duplicate_of uuid, retry_of uuid,\n before_revision integer NOT NULL CHECK(before_revision BETWEEN 0 AND 2147483647),\n after_revision integer CHECK(after_revision BETWEEN 1 AND 2147483647),\n goal_version integer NOT NULL CHECK(goal_version BETWEEN 0 AND 32),\n scope_revision integer NOT NULL CHECK(scope_revision BETWEEN 1 AND 2147483647),\n result_record_ids uuid[] NOT NULL DEFAULT '{}' CHECK(cardinality(result_record_ids)<=2),\n error_code text CHECK(error_code ~ '^[A-Za-z0-9._:/-]{1,64}$'),\n created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,\n PRIMARY KEY(activity_id,business_key), UNIQUE(activity_id,operation_id),\n FOREIGN KEY(activity_id,duplicate_of) REFERENCES public.interview_commands(activity_id,business_key),\n FOREIGN KEY(activity_id,retry_of) REFERENCES public.interview_commands(activity_id,business_key),\n CONSTRAINT interview_command_execution CHECK(\n  (duplicate_of IS NOT NULL AND operation_id IS NULL AND context_body IS NULL AND context_sha256 IS NULL AND NOT effect_applied AND NOT launch_claimed)\n  OR (duplicate_of IS NULL AND execution_kind='local' AND operation_id IS NULL AND context_body IS NULL AND context_sha256 IS NULL AND NOT launch_claimed)\n  OR (duplicate_of IS NULL AND execution_kind='model' AND action IN ('ask','review') AND context_body IS NOT NULL AND context_sha256 IS NOT NULL\n      AND operation_id='int10m.'||replace(business_key::text,'-',''))),\n CONSTRAINT interview_command_hash CHECK(encode(sha256(convert_to(request_body,'UTF8')),'hex')=request_sha256\n      AND (context_body IS NULL OR encode(sha256(convert_to(context_body,'UTF8')),'hex')=context_sha256))\n);",
+        "references": [
+          "activities",
+          "interview_commands",
+          "interview_commands"
+        ],
+        "line": 32,
+        "columns": [
+          {
+            "name": "activity_id",
+            "definition": "activity_id uuid NOT NULL REFERENCES public.activities(id)"
+          },
+          {
+            "name": "business_key",
+            "definition": "business_key uuid NOT NULL"
+          },
+          {
+            "name": "action",
+            "definition": "action text NOT NULL CHECK(action IN ('start','goal','ask','answer','correct_answer','review','bind_scope','abandon','finish'))"
+          },
+          {
+            "name": "request_body",
+            "definition": "request_body text NOT NULL CHECK(octet_length(request_body) BETWEEN 1 AND 32768)"
+          },
+          {
+            "name": "request_sha256",
+            "definition": "request_sha256 text NOT NULL CHECK(request_sha256 ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "semantic_slot",
+            "definition": "semantic_slot text NOT NULL CHECK(semantic_slot ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "execution_kind",
+            "definition": "execution_kind text NOT NULL CHECK(execution_kind IN ('local','model'))"
+          },
+          {
+            "name": "context_body",
+            "definition": "context_body text CHECK(octet_length(context_body) BETWEEN 1 AND 49152)"
+          },
+          {
+            "name": "context_sha256",
+            "definition": "context_sha256 text CHECK(context_sha256 ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "operation_id",
+            "definition": "operation_id text"
+          },
+          {
+            "name": "status",
+            "definition": "status text NOT NULL CHECK(status IN ('accepted','started','committed','history','not_sent','failed','unknown','abandoned'))"
+          },
+          {
+            "name": "launch_claimed",
+            "definition": "launch_claimed boolean NOT NULL DEFAULT false"
+          },
+          {
+            "name": "obsolete",
+            "definition": "obsolete boolean NOT NULL DEFAULT false"
+          },
+          {
+            "name": "effect_applied",
+            "definition": "effect_applied boolean NOT NULL DEFAULT false"
+          },
+          {
+            "name": "duplicate_of",
+            "definition": "duplicate_of uuid"
+          },
+          {
+            "name": "retry_of",
+            "definition": "retry_of uuid"
+          },
+          {
+            "name": "before_revision",
+            "definition": "before_revision integer NOT NULL CHECK(before_revision BETWEEN 0 AND 2147483647)"
+          },
+          {
+            "name": "after_revision",
+            "definition": "after_revision integer CHECK(after_revision BETWEEN 1 AND 2147483647)"
+          },
+          {
+            "name": "goal_version",
+            "definition": "goal_version integer NOT NULL CHECK(goal_version BETWEEN 0 AND 32)"
+          },
+          {
+            "name": "scope_revision",
+            "definition": "scope_revision integer NOT NULL CHECK(scope_revision BETWEEN 1 AND 2147483647)"
+          },
+          {
+            "name": "result_record_ids",
+            "definition": "result_record_ids uuid[] NOT NULL DEFAULT '{}' CHECK(cardinality(result_record_ids)<=2)"
+          },
+          {
+            "name": "error_code",
+            "definition": "error_code text CHECK(error_code ~ '^[A-Za-z0-9._:/-]{1,64}$')"
+          },
+          {
+            "name": "created_at",
+            "definition": "created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP"
+          },
+          {
+            "name": "updated_at",
+            "definition": "updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP"
+          }
+        ]
+      },
+      {
+        "name": "interview_records",
+        "columns_detected": [
+          "activity_id",
+          "record_id",
+          "seq",
+          "business_key",
+          "ordinal",
+          "kind",
+          "origin",
+          "goal_version",
+          "scope_revision",
+          "round_index",
+          "probe_depth",
+          "answer_version",
+          "parent_ids",
+          "question_record_id",
+          "supersedes_record_id",
+          "source_refs",
+          "body_sha256",
+          "local_body",
+          "operation_id",
+          "payload_sha256",
+          "created_at"
+        ],
+        "DDL": "CREATE TABLE public.interview_records (\n activity_id uuid NOT NULL REFERENCES public.activities(id),record_id uuid NOT NULL,\n seq integer NOT NULL CHECK(seq BETWEEN 1 AND 4096),business_key uuid NOT NULL,ordinal integer NOT NULL CHECK(ordinal BETWEEN 0 AND 1),\n kind text NOT NULL CHECK(kind IN ('start','goal','scope','question','answer','probe','feedback','finish','abandon')),\n origin text NOT NULL CHECK(origin IN ('application','user','model')),\n goal_version integer NOT NULL CHECK(goal_version BETWEEN 0 AND 32),scope_revision integer NOT NULL CHECK(scope_revision BETWEEN 1 AND 2147483647),\n round_index integer NOT NULL CHECK(round_index BETWEEN 0 AND 4096),probe_depth integer NOT NULL CHECK(probe_depth BETWEEN 0 AND 4),\n answer_version integer CHECK(answer_version BETWEEN 1 AND 256),\n parent_ids uuid[] NOT NULL DEFAULT '{}' CHECK(cardinality(parent_ids)<=12),\n question_record_id uuid,supersedes_record_id uuid,\n source_refs jsonb NOT NULL CHECK(jsonb_typeof(source_refs)='array' AND jsonb_array_length(source_refs) BETWEEN 1 AND 10),\n body_sha256 text NOT NULL CHECK(body_sha256 ~ '^[0-9a-f]{64}$'),\n local_body text CHECK(octet_length(local_body) BETWEEN 1 AND 32768),operation_id text,payload_sha256 text,\n created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,\n PRIMARY KEY(activity_id,record_id),UNIQUE(activity_id,seq),UNIQUE(activity_id,business_key,ordinal),\n UNIQUE(activity_id,question_record_id,answer_version),\n FOREIGN KEY(activity_id,business_key) REFERENCES public.interview_commands(activity_id,business_key),\n FOREIGN KEY(activity_id,question_record_id) REFERENCES public.interview_records(activity_id,record_id),\n FOREIGN KEY(activity_id,supersedes_record_id) REFERENCES public.interview_records(activity_id,record_id),\n FOREIGN KEY(activity_id,operation_id) REFERENCES public.activity_operation_results(activity_id,operation_id),\n CONSTRAINT interview_record_storage CHECK((origin='model' AND kind IN ('question','probe','feedback') AND local_body IS NULL\n    AND operation_id IS NOT NULL AND payload_sha256=body_sha256)\n  OR (origin<>'model' AND local_body IS NOT NULL AND operation_id IS NULL AND payload_sha256 IS NULL\n    AND encode(sha256(convert_to(local_body,'UTF8')),'hex')=body_sha256)),\n CONSTRAINT interview_answer_shape CHECK((kind='answer' AND origin='user' AND answer_version IS NOT NULL AND question_record_id IS NOT NULL)\n  OR (kind<>'answer' AND answer_version IS NULL AND supersedes_record_id IS NULL))\n);",
+        "references": [
+          "activities",
+          "interview_commands",
+          "interview_records",
+          "interview_records",
+          "activity_operation_results"
+        ],
+        "line": 67,
+        "columns": [
+          {
+            "name": "activity_id",
+            "definition": "activity_id uuid NOT NULL REFERENCES public.activities(id)"
+          },
+          {
+            "name": "record_id",
+            "definition": "record_id uuid NOT NULL"
+          },
+          {
+            "name": "seq",
+            "definition": "seq integer NOT NULL CHECK(seq BETWEEN 1 AND 4096)"
+          },
+          {
+            "name": "business_key",
+            "definition": "business_key uuid NOT NULL"
+          },
+          {
+            "name": "ordinal",
+            "definition": "ordinal integer NOT NULL CHECK(ordinal BETWEEN 0 AND 1)"
+          },
+          {
+            "name": "kind",
+            "definition": "kind text NOT NULL CHECK(kind IN ('start','goal','scope','question','answer','probe','feedback','finish','abandon'))"
+          },
+          {
+            "name": "origin",
+            "definition": "origin text NOT NULL CHECK(origin IN ('application','user','model'))"
+          },
+          {
+            "name": "goal_version",
+            "definition": "goal_version integer NOT NULL CHECK(goal_version BETWEEN 0 AND 32)"
+          },
+          {
+            "name": "scope_revision",
+            "definition": "scope_revision integer NOT NULL CHECK(scope_revision BETWEEN 1 AND 2147483647)"
+          },
+          {
+            "name": "round_index",
+            "definition": "round_index integer NOT NULL CHECK(round_index BETWEEN 0 AND 4096)"
+          },
+          {
+            "name": "probe_depth",
+            "definition": "probe_depth integer NOT NULL CHECK(probe_depth BETWEEN 0 AND 4)"
+          },
+          {
+            "name": "answer_version",
+            "definition": "answer_version integer CHECK(answer_version BETWEEN 1 AND 256)"
+          },
+          {
+            "name": "parent_ids",
+            "definition": "parent_ids uuid[] NOT NULL DEFAULT '{}' CHECK(cardinality(parent_ids)<=12)"
+          },
+          {
+            "name": "question_record_id",
+            "definition": "question_record_id uuid"
+          },
+          {
+            "name": "supersedes_record_id",
+            "definition": "supersedes_record_id uuid"
+          },
+          {
+            "name": "source_refs",
+            "definition": "source_refs jsonb NOT NULL CHECK(jsonb_typeof(source_refs)='array' AND jsonb_array_length(source_refs) BETWEEN 1 AND 10)"
+          },
+          {
+            "name": "body_sha256",
+            "definition": "body_sha256 text NOT NULL CHECK(body_sha256 ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "local_body",
+            "definition": "local_body text CHECK(octet_length(local_body) BETWEEN 1 AND 32768)"
+          },
+          {
+            "name": "operation_id",
+            "definition": "operation_id text"
+          },
+          {
+            "name": "payload_sha256",
+            "definition": "payload_sha256 text"
+          },
+          {
+            "name": "created_at",
+            "definition": "created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP"
+          }
+        ]
+      }
+    ],
+    "alter_lines": [
+      "CREATE ROLE retrolume_interview_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;",
+      "CREATE ROLE retrolume_interview_app NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;",
+      "GRANT USAGE ON SCHEMA public TO retrolume_interview_owner,retrolume_interview_app;",
+      "ALTER TABLE public.interview_heads ADD FOREIGN KEY(activity_id,goal_record_id) REFERENCES public.interview_records(activity_id,record_id),",
+      "CREATE FUNCTION public.interview_record_insert_guard() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $body$",
+      "CREATE FUNCTION public.interview_record_immutable_guard() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $body$",
+      "CREATE FUNCTION public.interview_command_guard() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $body$",
+      "CREATE FUNCTION public.interview_head_guard() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $body$",
+      "CREATE FUNCTION public.interview_result_eligible(aid uuid, op text) RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog,public AS $body$",
+      "CREATE TRIGGER interview_record_insert BEFORE INSERT ON public.interview_records FOR EACH ROW EXECUTE FUNCTION public.interview_record_insert_guard();",
+      "CREATE TRIGGER interview_record_immutable BEFORE UPDATE OR DELETE ON public.interview_records FOR EACH ROW EXECUTE FUNCTION public.interview_record_immutable_guard();",
+      "CREATE TRIGGER interview_command BEFORE INSERT OR UPDATE OR DELETE ON public.interview_commands FOR EACH ROW EXECUTE FUNCTION public.interview_command_guard();",
+      "CREATE TRIGGER interview_head BEFORE INSERT OR UPDATE OR DELETE ON public.interview_heads FOR EACH ROW EXECUTE FUNCTION public.interview_head_guard();",
+      "ALTER TABLE public.interview_heads OWNER TO retrolume_interview_owner;",
+      "ALTER TABLE public.interview_commands OWNER TO retrolume_interview_owner;",
+      "ALTER TABLE public.interview_records OWNER TO retrolume_interview_owner;",
+      "GRANT SELECT ON public.activities,public.activity_scope_sources,public.material_sources,public.activity_operations,",
+      "REVOKE ALL ON FUNCTION public.interview_record_insert_guard(),public.interview_record_immutable_guard(),public.interview_command_guard(),public.interview_head_guard(),public.interview_result_eligible(uuid,text) FROM PUBLIC;",
+      "GRANT EXECUTE ON FUNCTION public.interview_result_eligible(uuid,text) TO retrolume_interview_app;",
+      "GRANT SELECT,INSERT ON public.interview_heads,public.interview_commands,public.interview_records TO retrolume_interview_app;",
+      "GRANT UPDATE(revision,goal_version,phase,last_seq,round_index,probe_depth,goal_record_id,root_question_id,current_question_id,",
+      "GRANT UPDATE(status,launch_claimed,obsolete,effect_applied,after_revision,result_record_ids,error_code,updated_at) ON public.interview_commands TO retrolume_interview_app;"
+    ]
+  },
+  {
+    "file": "backend\\migrations\\012_html_explanations.sql",
+    "tables": [
+      {
+        "name": "html_commands",
+        "columns_detected": [
+          "activity_id",
+          "business_key",
+          "operation_id",
+          "request_body",
+          "request_sha256",
+          "context_body",
+          "context_sha256",
+          "renderer_sha256",
+          "scope_revision",
+          "parent_kind",
+          "parent_locator",
+          "parent_sha256",
+          "status",
+          "terminal_disposition",
+          "error_code",
+          "created_at",
+          "updated_at"
+        ],
+        "DDL": "CREATE TABLE public.html_commands(\n activity_id uuid NOT NULL REFERENCES public.activities(id), business_key uuid NOT NULL,\n operation_id text NOT NULL CHECK(operation_id='html11m.'||replace(business_key::text,'-','')),\n request_body text NOT NULL CHECK(octet_length(request_body) BETWEEN 2 AND 8192),\n request_sha256 text NOT NULL CHECK(request_sha256 ~ '^[0-9a-f]{64}$'),\n context_body text NOT NULL CHECK(octet_length(context_body) BETWEEN 2 AND 24576),\n context_sha256 text NOT NULL CHECK(context_sha256 ~ '^[0-9a-f]{64}$'),\n renderer_sha256 text NOT NULL CHECK(renderer_sha256 ~ '^[0-9a-f]{64}$'),\n scope_revision integer NOT NULL CHECK(scope_revision>0),\n parent_kind text NOT NULL CHECK(parent_kind IN ('learning','teaching')),\n parent_locator text NOT NULL, parent_sha256 text NOT NULL CHECK(parent_sha256 ~ '^[0-9a-f]{64}$'),\n status text NOT NULL DEFAULT 'accepted' CHECK(status IN ('accepted','launch_claimed','terminal')),\n terminal_disposition text CHECK(terminal_disposition IN ('succeeded','invalid_output','not_sent','unknown','refused')),\n error_code text CHECK(error_code ~ '^[A-Za-z0-9._:/-]{1,64}$'),\n created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,\n PRIMARY KEY(activity_id,business_key), UNIQUE(activity_id,operation_id),\n CHECK(encode(sha256(convert_to(request_body,'UTF8')),'hex')=request_sha256),\n CHECK(encode(sha256(convert_to(context_body,'UTF8')),'hex')=context_sha256),\n CHECK((status='terminal')=(terminal_disposition IS NOT NULL))\n);",
+        "references": [
+          "activities"
+        ],
+        "line": 26,
+        "columns": [
+          {
+            "name": "activity_id",
+            "definition": "activity_id uuid NOT NULL REFERENCES public.activities(id)"
+          },
+          {
+            "name": "business_key",
+            "definition": "business_key uuid NOT NULL"
+          },
+          {
+            "name": "operation_id",
+            "definition": "operation_id text NOT NULL CHECK(operation_id='html11m.'||replace(business_key::text,'-',''))"
+          },
+          {
+            "name": "request_body",
+            "definition": "request_body text NOT NULL CHECK(octet_length(request_body) BETWEEN 2 AND 8192)"
+          },
+          {
+            "name": "request_sha256",
+            "definition": "request_sha256 text NOT NULL CHECK(request_sha256 ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "context_body",
+            "definition": "context_body text NOT NULL CHECK(octet_length(context_body) BETWEEN 2 AND 24576)"
+          },
+          {
+            "name": "context_sha256",
+            "definition": "context_sha256 text NOT NULL CHECK(context_sha256 ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "renderer_sha256",
+            "definition": "renderer_sha256 text NOT NULL CHECK(renderer_sha256 ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "scope_revision",
+            "definition": "scope_revision integer NOT NULL CHECK(scope_revision>0)"
+          },
+          {
+            "name": "parent_kind",
+            "definition": "parent_kind text NOT NULL CHECK(parent_kind IN ('learning','teaching'))"
+          },
+          {
+            "name": "parent_locator",
+            "definition": "parent_locator text NOT NULL"
+          },
+          {
+            "name": "parent_sha256",
+            "definition": "parent_sha256 text NOT NULL CHECK(parent_sha256 ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "status",
+            "definition": "status text NOT NULL DEFAULT 'accepted' CHECK(status IN ('accepted','launch_claimed','terminal'))"
+          },
+          {
+            "name": "terminal_disposition",
+            "definition": "terminal_disposition text CHECK(terminal_disposition IN ('succeeded','invalid_output','not_sent','unknown','refused'))"
+          },
+          {
+            "name": "error_code",
+            "definition": "error_code text CHECK(error_code ~ '^[A-Za-z0-9._:/-]{1,64}$')"
+          },
+          {
+            "name": "created_at",
+            "definition": "created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP"
+          },
+          {
+            "name": "updated_at",
+            "definition": "updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP"
+          }
+        ]
+      },
+      {
+        "name": "html_artifacts",
+        "columns_detected": [
+          "artifact_id",
+          "activity_id",
+          "business_key",
+          "operation_id",
+          "artifact_body",
+          "artifact_sha256",
+          "description_sha256",
+          "renderer_sha256",
+          "execution_package_sha256",
+          "body_sha256",
+          "created_at"
+        ],
+        "DDL": "CREATE TABLE public.html_artifacts(\n artifact_id uuid PRIMARY KEY, activity_id uuid NOT NULL, business_key uuid NOT NULL, operation_id text NOT NULL,\n artifact_body text NOT NULL CHECK(octet_length(artifact_body) BETWEEN 2 AND 110592),\n artifact_sha256 text NOT NULL CHECK(artifact_sha256 ~ '^[0-9a-f]{64}$'),\n description_sha256 text NOT NULL CHECK(description_sha256 ~ '^[0-9a-f]{64}$'),\n renderer_sha256 text NOT NULL CHECK(renderer_sha256 ~ '^[0-9a-f]{64}$'),\n execution_package_sha256 text NOT NULL CHECK(execution_package_sha256 ~ '^[0-9a-f]{64}$'),\n body_sha256 text NOT NULL CHECK(body_sha256 ~ '^[0-9a-f]{64}$'),\n created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,\n UNIQUE(activity_id,artifact_id), UNIQUE(activity_id,business_key), UNIQUE(activity_id,operation_id),\n FOREIGN KEY(activity_id,business_key) REFERENCES public.html_commands(activity_id,business_key),\n FOREIGN KEY(activity_id,operation_id) REFERENCES public.activity_operation_results(activity_id,operation_id)\n);",
+        "references": [
+          "html_commands",
+          "activity_operation_results"
+        ],
+        "line": 46,
+        "columns": [
+          {
+            "name": "artifact_id",
+            "definition": "artifact_id uuid PRIMARY KEY"
+          },
+          {
+            "name": "activity_id",
+            "definition": "activity_id uuid NOT NULL"
+          },
+          {
+            "name": "business_key",
+            "definition": "business_key uuid NOT NULL"
+          },
+          {
+            "name": "operation_id",
+            "definition": "operation_id text NOT NULL"
+          },
+          {
+            "name": "artifact_body",
+            "definition": "artifact_body text NOT NULL CHECK(octet_length(artifact_body) BETWEEN 2 AND 110592)"
+          },
+          {
+            "name": "artifact_sha256",
+            "definition": "artifact_sha256 text NOT NULL CHECK(artifact_sha256 ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "description_sha256",
+            "definition": "description_sha256 text NOT NULL CHECK(description_sha256 ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "renderer_sha256",
+            "definition": "renderer_sha256 text NOT NULL CHECK(renderer_sha256 ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "execution_package_sha256",
+            "definition": "execution_package_sha256 text NOT NULL CHECK(execution_package_sha256 ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "body_sha256",
+            "definition": "body_sha256 text NOT NULL CHECK(body_sha256 ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "created_at",
+            "definition": "created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP"
+          }
+        ]
+      },
+      {
+        "name": "html_preview_budgets",
+        "columns_detected": [
+          "activity_id",
+          "config_sha256",
+          "max_starts",
+          "max_seconds",
+          "starts_used",
+          "settled_seconds",
+          "reserved_seconds",
+          "revision"
+        ],
+        "DDL": "CREATE TABLE public.html_preview_budgets(\n activity_id uuid PRIMARY KEY REFERENCES public.activities(id), config_sha256 text NOT NULL CHECK(config_sha256 ~ '^[0-9a-f]{64}$'),\n max_starts integer NOT NULL DEFAULT 3 CHECK(max_starts=3), max_seconds integer NOT NULL DEFAULT 180 CHECK(max_seconds=180),\n starts_used integer NOT NULL DEFAULT 0 CHECK(starts_used BETWEEN 0 AND 3),\n settled_seconds integer NOT NULL DEFAULT 0 CHECK(settled_seconds BETWEEN 0 AND 180),\n reserved_seconds integer NOT NULL DEFAULT 0 CHECK(reserved_seconds BETWEEN 0 AND 180),\n revision integer NOT NULL DEFAULT 0 CHECK(revision BETWEEN 0 AND 2147483647),\n CHECK(settled_seconds+reserved_seconds<=max_seconds)\n);",
+        "references": [
+          "activities"
+        ],
+        "line": 59,
+        "columns": [
+          {
+            "name": "activity_id",
+            "definition": "activity_id uuid PRIMARY KEY REFERENCES public.activities(id)"
+          },
+          {
+            "name": "config_sha256",
+            "definition": "config_sha256 text NOT NULL CHECK(config_sha256 ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "max_starts",
+            "definition": "max_starts integer NOT NULL DEFAULT 3 CHECK(max_starts=3)"
+          },
+          {
+            "name": "max_seconds",
+            "definition": "max_seconds integer NOT NULL DEFAULT 180 CHECK(max_seconds=180)"
+          },
+          {
+            "name": "starts_used",
+            "definition": "starts_used integer NOT NULL DEFAULT 0 CHECK(starts_used BETWEEN 0 AND 3)"
+          },
+          {
+            "name": "settled_seconds",
+            "definition": "settled_seconds integer NOT NULL DEFAULT 0 CHECK(settled_seconds BETWEEN 0 AND 180)"
+          },
+          {
+            "name": "reserved_seconds",
+            "definition": "reserved_seconds integer NOT NULL DEFAULT 0 CHECK(reserved_seconds BETWEEN 0 AND 180)"
+          },
+          {
+            "name": "revision",
+            "definition": "revision integer NOT NULL DEFAULT 0 CHECK(revision BETWEEN 0 AND 2147483647)"
+          }
+        ]
+      },
+      {
+        "name": "html_preview_sessions",
+        "columns_detected": [
+          "preview_id",
+          "activity_id",
+          "artifact_id",
+          "start_key",
+          "generation",
+          "artifact_sha256",
+          "owner_id",
+          "owner_key_sha256",
+          "control_key_sha256",
+          "boot_id",
+          "nonce",
+          "image_id",
+          "reserve_seconds",
+          "elapsed_seconds",
+          "t0_ns",
+          "deadline_ns",
+          "deadline_at",
+          "cid",
+          "state",
+          "first_stop_receipt",
+          "confirmation_receipt",
+          "revision",
+          "created_at"
+        ],
+        "DDL": "CREATE TABLE public.html_preview_sessions(\n preview_id uuid PRIMARY KEY, activity_id uuid NOT NULL REFERENCES public.activities(id), artifact_id uuid NOT NULL,\n start_key uuid NOT NULL, generation integer NOT NULL CHECK(generation>0),\n artifact_sha256 text NOT NULL CHECK(artifact_sha256 ~ '^[0-9a-f]{64}$'),\n owner_id uuid NOT NULL, owner_key_sha256 text NOT NULL CHECK(owner_key_sha256 ~ '^[0-9a-f]{64}$'),\n control_key_sha256 text NOT NULL CHECK(control_key_sha256 ~ '^[0-9a-f]{64}$'),\n boot_id uuid NOT NULL, nonce text NOT NULL CHECK(nonce ~ '^[0-9a-f]{64}$'),\n image_id text NOT NULL CHECK(image_id ~ '^sha256:[0-9a-f]{64}$'),\n reserve_seconds integer NOT NULL CHECK(reserve_seconds BETWEEN 30 AND 60),\n elapsed_seconds integer CHECK(elapsed_seconds BETWEEN 0 AND 60),\n t0_ns bigint NOT NULL CHECK(t0_ns>0), deadline_ns bigint NOT NULL CHECK(deadline_ns>t0_ns),\n deadline_at timestamptz NOT NULL, cid text CHECK(cid ~ '^[0-9a-f]{64}$'),\n state text NOT NULL CHECK(state IN ('reserved','registered','start_requested','ready','running','stopping','stopped','failed_unstarted','cleanup_unconfirmed')),\n first_stop_receipt text CHECK(octet_length(first_stop_receipt) BETWEEN 2 AND 24576),\n confirmation_receipt text CHECK(octet_length(confirmation_receipt) BETWEEN 2 AND 24576),\n revision integer NOT NULL DEFAULT 0, created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,\n UNIQUE(activity_id,start_key), UNIQUE(activity_id,generation),\n FOREIGN KEY(activity_id,artifact_id) REFERENCES public.html_artifacts(activity_id,artifact_id),\n CHECK(deadline_ns=t0_ns+reserve_seconds::bigint*1000000000),\n CHECK((state IN ('stopped','failed_unstarted'))=(elapsed_seconds IS NOT NULL))\n);",
+        "references": [
+          "activities",
+          "html_artifacts"
+        ],
+        "line": 68,
+        "columns": [
+          {
+            "name": "preview_id",
+            "definition": "preview_id uuid PRIMARY KEY"
+          },
+          {
+            "name": "activity_id",
+            "definition": "activity_id uuid NOT NULL REFERENCES public.activities(id)"
+          },
+          {
+            "name": "artifact_id",
+            "definition": "artifact_id uuid NOT NULL"
+          },
+          {
+            "name": "start_key",
+            "definition": "start_key uuid NOT NULL"
+          },
+          {
+            "name": "generation",
+            "definition": "generation integer NOT NULL CHECK(generation>0)"
+          },
+          {
+            "name": "artifact_sha256",
+            "definition": "artifact_sha256 text NOT NULL CHECK(artifact_sha256 ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "owner_id",
+            "definition": "owner_id uuid NOT NULL"
+          },
+          {
+            "name": "owner_key_sha256",
+            "definition": "owner_key_sha256 text NOT NULL CHECK(owner_key_sha256 ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "control_key_sha256",
+            "definition": "control_key_sha256 text NOT NULL CHECK(control_key_sha256 ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "boot_id",
+            "definition": "boot_id uuid NOT NULL"
+          },
+          {
+            "name": "nonce",
+            "definition": "nonce text NOT NULL CHECK(nonce ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "image_id",
+            "definition": "image_id text NOT NULL CHECK(image_id ~ '^sha256:[0-9a-f]{64}$')"
+          },
+          {
+            "name": "reserve_seconds",
+            "definition": "reserve_seconds integer NOT NULL CHECK(reserve_seconds BETWEEN 30 AND 60)"
+          },
+          {
+            "name": "elapsed_seconds",
+            "definition": "elapsed_seconds integer CHECK(elapsed_seconds BETWEEN 0 AND 60)"
+          },
+          {
+            "name": "t0_ns",
+            "definition": "t0_ns bigint NOT NULL CHECK(t0_ns>0)"
+          },
+          {
+            "name": "deadline_ns",
+            "definition": "deadline_ns bigint NOT NULL CHECK(deadline_ns>t0_ns)"
+          },
+          {
+            "name": "deadline_at",
+            "definition": "deadline_at timestamptz NOT NULL"
+          },
+          {
+            "name": "cid",
+            "definition": "cid text CHECK(cid ~ '^[0-9a-f]{64}$')"
+          },
+          {
+            "name": "state",
+            "definition": "state text NOT NULL CHECK(state IN ('reserved','registered','start_requested','ready','running','stopping','stopped','failed_unstarted','cleanup_unconfirmed'))"
+          },
+          {
+            "name": "first_stop_receipt",
+            "definition": "first_stop_receipt text CHECK(octet_length(first_stop_receipt) BETWEEN 2 AND 24576)"
+          },
+          {
+            "name": "confirmation_receipt",
+            "definition": "confirmation_receipt text CHECK(octet_length(confirmation_receipt) BETWEEN 2 AND 24576)"
+          },
+          {
+            "name": "revision",
+            "definition": "revision integer NOT NULL DEFAULT 0"
+          },
+          {
+            "name": "created_at",
+            "definition": "created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP"
+          }
+        ]
+      }
+    ],
+    "alter_lines": [
+      "CREATE FUNCTION public.html_expected_renderer() RETURNS text LANGUAGE sql IMMUTABLE",
+      "CREATE FUNCTION public.html_expected_html() RETURNS text LANGUAGE sql IMMUTABLE",
+      "CREATE FUNCTION public.html_parent_eligible(aid uuid, frozen jsonb) RETURNS boolean",
+      "CREATE FUNCTION public.html_artifact_eligible(aid uuid, art uuid) RETURNS boolean",
+      "CREATE FUNCTION public.html_command_guard() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $body$",
+      "CREATE FUNCTION public.html_artifact_insert_guard() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $body$",
+      "CREATE FUNCTION public.html_immutable_guard() RETURNS trigger LANGUAGE plpgsql AS $body$",
+      "CREATE FUNCTION public.html_preview_budget_guard() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $body$",
+      "CREATE FUNCTION public.html_preview_session_guard() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public AS $body$",
+      "CREATE TRIGGER html_command_identity BEFORE INSERT OR UPDATE OR DELETE ON public.html_commands FOR EACH ROW EXECUTE FUNCTION public.html_command_guard();",
+      "CREATE TRIGGER html_artifact_insert BEFORE INSERT ON public.html_artifacts FOR EACH ROW EXECUTE FUNCTION public.html_artifact_insert_guard();",
+      "CREATE TRIGGER html_artifact_immutable BEFORE UPDATE OR DELETE ON public.html_artifacts FOR EACH ROW EXECUTE FUNCTION public.html_immutable_guard();",
+      "CREATE TRIGGER html_budget_identity BEFORE INSERT OR UPDATE OR DELETE ON public.html_preview_budgets FOR EACH ROW EXECUTE FUNCTION public.html_preview_budget_guard();",
+      "CREATE TRIGGER html_session_identity BEFORE INSERT OR UPDATE OR DELETE ON public.html_preview_sessions FOR EACH ROW EXECUTE FUNCTION public.html_preview_session_guard();",
+      "CREATE FUNCTION public.html_accept_command(aid uuid, key uuid, op text, rb text, rh text, cb text, ch text,",
+      "CREATE FUNCTION public.html_claim_command(aid uuid, key uuid) RETURNS boolean",
+      "CREATE FUNCTION public.html_commit_artifact(aid uuid, key uuid, art uuid, op text, body text, ah text, dh text, rh text, eh text, bh text) RETURNS void",
+      "CREATE FUNCTION public.html_finish_command(aid uuid,key uuid,disposition text,error text) RETURNS void",
+      "CREATE FUNCTION public.html_reserve_preview(aid uuid, art uuid, pid uuid, sk uuid, ah text, owner uuid, oh text, auth text,",
+      "CREATE FUNCTION public.html_update_preview(pid uuid, auth text, next_state text, exact_cid text, first_receipt text,",
+      "GRANT USAGE ON SCHEMA public TO retrolume_html_owner,retrolume_html_app;",
+      "GRANT SELECT ON public.activities,public.activity_scope_sources,public.material_sources,public.material_versions,",
+      "GRANT EXECUTE ON FUNCTION public.activity_memory_eligible(uuid) TO retrolume_html_owner;",
+      "GRANT SELECT (id, version_id, status, page_count) ON public.pdf_review_candidates TO retrolume_html_owner;",
+      "GRANT SELECT (candidate_id) ON public.pdf_review_pages TO retrolume_html_owner;",
+      "GRANT SELECT (version_id) ON public.pdf_extracted_pages TO retrolume_html_owner;",
+      "GRANT EXECUTE ON FUNCTION public.memory_scope_digest(uuid),public.memory_choice_digest(uuid),"
+    ]
+  }
+]

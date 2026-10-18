@@ -1,0 +1,98 @@
+{
+  "case_id": "text",
+  "source_path": "fixtures/bilingual.txt",
+  "source_sha256": "aba40206b261f94db4338a4249fa3036afb00332c232198eb8d32d2ccdd6261b",
+  "basename": "bilingual.txt",
+  "mode": "plain",
+  "adapter": "Python UTF-8 source read (no Markdown renderer)",
+  "status": "success",
+  "pages": [
+    {
+      "physical_page": null,
+      "text": "RetroLume synthetic notes\n学习目标：理解能量守恒。\nEnergy is conserved in an isolated system.\n核对单位：焦耳。 Check units: joules.\n"
+    }
+  ],
+  "evaluation": {
+    "fragments": [
+      {
+        "id": "TX1",
+        "expected": {
+          "id": "TX1",
+          "text": "学习目标：理解能量守恒。",
+          "line": 2
+        },
+        "hits": [
+          {
+            "physical_page": null,
+            "extracted_offset": 26,
+            "text": "学习目标：理解能量守恒。",
+            "excerpt": "RetroLume synthetic notes\n学习目标：理解能量守恒。\nEnergy is conserved in an iso",
+            "source_line": 2
+          }
+        ],
+        "content_unique_pass": true,
+        "location_pass": true
+      },
+      {
+        "id": "TX2",
+        "expected": {
+          "id": "TX2",
+          "text": "Energy is conserved in an isolated system.",
+          "line": 3
+        },
+        "hits": [
+          {
+            "physical_page": null,
+            "extracted_offset": 39,
+            "text": "Energy is conserved in an isolated system.",
+            "excerpt": " synthetic notes\n学习目标：理解能量守恒。\nEnergy is conserved in an isolated system.\n核对单位：焦耳。 Check units: joules.",
+            "source_line": 3
+          }
+        ],
+        "content_unique_pass": true,
+        "location_pass": true
+      },
+      {
+        "id": "TX3",
+        "expected": {
+          "id": "TX3",
+          "text": "核对单位：焦耳。 Check units: joules.",
+          "line": 4
+        },
+        "hits": [
+          {
+            "physical_page": null,
+            "extracted_offset": 82,
+            "text": "核对单位：焦耳。 Check units: joules.",
+            "excerpt": "served in an isolated system.\n核对单位：焦耳。 Check units: joules.\n",
+            "source_line": 4
+          }
+        ],
+        "content_unique_pass": true,
+        "location_pass": true
+      }
+    ],
+    "orders": [
+      {
+        "name": "source_lines",
+        "expected": [
+          "TX1",
+          "TX2",
+          "TX3"
+        ],
+        "observed": [
+          "TX1",
+          "TX2",
+          "TX3"
+        ],
+        "pass": true
+      }
+    ],
+    "page_count": null
+  },
+  "python_warnings": [],
+  "pypdf_log": "",
+  "captured_stdout": "",
+  "captured_stderr": "",
+  "status_matches_manifest": true
+}

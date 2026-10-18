@@ -1,0 +1,60 @@
+--- first-pre/backend/app/learning/api.py
++++ current/backend/app/learning/api.py
+@@ -11,6 +11,7 @@
+ from .contracts import normalize_input
+ from .evidence import LearningRefusal, read_citation
+ from .service import LearningService
++from app.retrieval.contracts import RetrievalRef
+ 
+ router = APIRouter(prefix="/api/activities")
+ 
+@@ -19,6 +20,7 @@
+     model_config = ConfigDict(extra="forbid", strict=True)
+     business_key: str
+     goal: str = Field(max_length=1024)
++    retrieval_ref: RetrievalRef | None = None
+     confirmed: Literal[True]
+ 
+     @field_validator("confirmed", mode="before")
+@@ -34,6 +36,7 @@
+     business_key: str
+     parent_operation_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:/-]+$")
+     question: str = Field(max_length=1024)
++    retrieval_ref: RetrievalRef | None = None
+     confirmed: Literal[True]
+ 
+     @field_validator("confirmed", mode="before")
+@@ -64,7 +67,7 @@
+     return _error(status, code, exc.message)
+ 
+ 
+-async def _execute(request, activity_id, key, text, parent=None):
++async def _execute(request, activity_id, key, text, parent=None,retrieval_ref=None):
+     activity_id = _uuid_text(activity_id, "activity_id")
+     key = _uuid_text(key, "business_key")
+     try:
+@@ -73,7 +76,7 @@
+         raise _error(413 if str(exc) == "input_too_large" else 400, str(exc), "请填写具体目标或问题，最多1024字和4096 UTF-8字节") from None
+     try:
+         value = await _service(request).execute(activity_id, key, text, _config(request),
+-            parent_operation_id=parent, run_tag="learn-" + secrets.token_hex(12))
++            parent_operation_id=parent, run_tag="learn-" + secrets.token_hex(12),retrieval_ref=retrieval_ref)
+     except LearningRefusal as exc:
+         if exc.kind is not None:
+             return {"status": "precheck", "model_called": False,
+@@ -98,13 +101,13 @@
+ @router.post("/{activity_id}/learning/first")
+ async def first(request: Request, activity_id: str, body: FirstInput):
+     _guard(request)
+-    return await _execute(request, activity_id, body.business_key, body.goal)
++    return await _execute(request, activity_id, body.business_key, body.goal,retrieval_ref=body.retrieval_ref)
+ 
+ 
+ @router.post("/{activity_id}/learning/followups")
+ async def followup(request: Request, activity_id: str, body: FollowupInput):
+     _guard(request)
+-    return await _execute(request, activity_id, body.business_key, body.question, body.parent_operation_id)
++    return await _execute(request, activity_id, body.business_key, body.question, body.parent_operation_id,body.retrieval_ref)
+ 
+ 
+ @router.get("/{activity_id}/learning/intents/{business_key}")

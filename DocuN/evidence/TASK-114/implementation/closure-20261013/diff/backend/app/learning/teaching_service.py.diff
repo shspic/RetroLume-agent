@@ -1,0 +1,18 @@
+--- before/backend/app/learning/teaching_service.py
++++ final/backend/app/learning/teaching_service.py
+@@ -5,6 +5,7 @@
+ G/R/S。教学效果与正文在仓储同一事务原子提交（_write_teaching_outcome）。
+ """
+ from __future__ import annotations
++from app.data_exit.maintenance import owned_service
+ 
+ import asyncio
+ import json
+@@ -52,6 +53,7 @@
+ 
+     # --- 命令入口 ---
+ 
++    @owned_service
+     async def submit_command(self, activity_id: str, command: TeachingCommandInput,
+                              config, *, run_tag: str | None = None) -> TeachingCommandReceipt:
+         if command.action not in ALL_ACTIONS:

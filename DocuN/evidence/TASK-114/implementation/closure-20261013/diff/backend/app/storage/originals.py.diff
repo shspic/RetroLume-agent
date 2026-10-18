@@ -1,0 +1,83 @@
+--- before/backend/app/storage/originals.py
++++ final/backend/app/storage/originals.py
+@@ -56,10 +56,15 @@
+         if type(max_bytes) is not int or max_bytes <= 0:
+             raise ValueError("必须给出正整数大小上限")
+ 
+-    def put(self, source: BinaryIO, *, max_bytes: int) -> Original:
++    def put(self, source: BinaryIO, *, max_bytes: int, reference_pin=None) -> Original:
+         """流式保存；未完成写入不发布，不覆盖已存在的原件。"""
+         self._limit(max_bytes)
+         self._check_root()
++        if getattr(self, "reference_coordinator", None) is not None or (self.root/'.reference.binding.json').exists():
++            if reference_pin is None:
++                from app.data_exit.contracts import DataError
++                raise DataError("reference_pin_required")
++            reference_pin.check(self.root)
+         digest = hashlib.sha256()
+         size = 0
+         temporary = None
+@@ -80,20 +85,35 @@
+                 output.flush()
+                 os.fsync(output.fileno())
+             original = Original(digest.hexdigest(), size)
++            if reference_pin is None and (self.root/'.reference.binding.json').exists():
++                from app.data_exit.contracts import DataError
++                raise DataError('reference_pin_required')
++            if reference_pin is not None:
++                reference_pin.check(self.root)
++                if (original.sha256, original.size) != (reference_pin.prepared.sha256, reference_pin.prepared.size):
++                    raise IntegrityError("原件与预分配引用不符")
+             destination = self._path(original.sha256)
+             try:
+                 # 同卷硬链接提供原子、不得覆盖的发布；不支持则明确失败。
+                 os.link(temporary, destination)
+             except FileExistsError:
+                 # 幂等命中也验证已存内容，不能用被篡改文件冒充成功。
+-                self.verify(original)
++                self.verify(original, reference_pin=reference_pin)
+             return original
+         finally:
+             if temporary is not None:
+                 # 只删除本调用创建的一个临时文件，从不删除发布的原件。
+                 temporary.unlink(missing_ok=True)
+ 
+-    def verify(self, original: Original) -> None:
++    def verify(self, original: Original, *, reference_pin=None) -> None:
++        if getattr(self, "reference_coordinator", None) is not None:
++            if reference_pin is None:
++                from app.data_exit.contracts import DataError
++                raise DataError("reference_pin_required")
++            reference_pin.check(self.root)
++        self._verify(original)
++
++    def _verify(self, original: Original) -> None:
+         if type(original.size) is not int or original.size < 0:
+             raise ValueError("无效原件长度")
+         path = self._path(original.sha256)
+@@ -113,6 +133,25 @@
+         if count != original.size or digest.hexdigest() != original.sha256:
+             raise IntegrityError("原件内容指纹不匹配")
+ 
++    def unlink_exact(self, original: Original, *, lease) -> str:
++        """仅在同根真实排他锁中删除一个已核指纹原件，不扫描目录。"""
++        lease.check()
++        if not lease.exclusive or lease.lock.root != self.root or lease.lock.path.name != ".reference.lock":
++            raise ValueError("准确清理缺少同根排他资格")
++        path = self._path(original.sha256)
++        try:
++            before = self._reject_redirect(path)
++        except FileNotFoundError:
++            return "done"
++        self._verify(original)
++        after = self._reject_redirect(path)
++        if (before.st_dev, before.st_ino, before.st_size) != (after.st_dev, after.st_ino, after.st_size):
++            raise IntegrityError("原件在清理核对中变化")
++        path.unlink()
++        if path.exists():
++            raise IntegrityError("原件删除结果未确认")
++        return "done"
++
+     def read(self, original: Original, *, max_bytes: int) -> bytes:
+         """有界回查并核对返回字节；不返回任意本地路径。"""
+         self._limit(max_bytes)

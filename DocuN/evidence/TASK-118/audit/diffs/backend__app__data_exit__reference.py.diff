@@ -1,0 +1,21 @@
+--- first-pre/backend/app/data_exit/reference.py
++++ current/backend/app/data_exit/reference.py
+@@ -54,6 +54,8 @@
+         self.check()
+         if row is None or row[0] is not True or tuple(str(row[1][key]) for key in ('dataset_id','instance_id','originals_root_id'))!=(target.dataset_id,target.instance_id,target.root_id):
+             raise DataError('target_loading_identity_unknown',503)
++        if row[1].get('schema_profile')!=target.schema_profile:
++            raise DataError('target_loading_identity_unknown',503)
+ 
+     def check(self,root=None,prepared=None):
+         self.operation.check()
+@@ -78,7 +80,8 @@
+         self.root_id = state["originals_root_id"]
+         import json,os
+         binding=self.root/'.reference.binding.json'
+-        expected={'profile':'data_exit.v1.r01','dataset_id':state['dataset_id'],'instance_id':state['instance_id'],'root_id':self.root_id}
++        from .schema_profiles import get_profile
++        expected={'profile':get_profile(state['schema_profile']).name,'dataset_id':state['dataset_id'],'instance_id':state['instance_id'],'root_id':self.root_id}
+         with self.lease.acquire(True):
+             if binding.exists():
+                 from .files import regular

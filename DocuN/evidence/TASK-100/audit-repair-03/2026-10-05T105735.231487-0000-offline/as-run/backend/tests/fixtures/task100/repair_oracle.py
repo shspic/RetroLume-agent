@@ -1,0 +1,73 @@
+"""Independent finite oracle: source premises + hand derivation, never selector self-proof.
+
+Does not import synthetic_content/output_for or execute the learner's code. It examines
+actual saved 007 catalogs, claims, positions, hash and the real HTTP citation response.
+"""
+from decimal import Decimal
+import json
+from .control import atomic_json
+
+
+def supports(kind,text):
+    compact=''.join(text.split())
+    if kind=='calculation':
+        return all(x in compact for x in ('平均速度=路程÷时间','2分钟走120米','1米/秒','分钟换秒要乘60','60m/s','数量级'))
+    if kind=='concept':
+        return all(x in compact for x in ('全部成功或全部不生效','不能单独保证隔离性','A100/B50','加10失败','未给隔离级别'))
+    if kind=='program':
+        return all(x in compact for x in ('value>0','0不满足','return在循环后','[-2,0,3,5]','0/0/1/2','返回2'))
+    return False
+
+
+def evaluate_record(fixture,client,aid,rid,kind):
+    row=fixture.rows('SELECT r.kind,r.operation_id,o.payload,o.payload_sha256,o.payload_format '
+        'FROM teaching_records r JOIN activity_operation_results o USING(activity_id,operation_id) '
+        'WHERE r.activity_id=%s AND r.record_id=%s',(aid,rid))[0]
+    from app.capabilities.contracts import validate_business_payload
+    validate_business_payload(row['payload'],row['payload_format'],row['payload_sha256'])
+    value=json.loads(row['payload'])['value'];result=value['result'];catalog={e['citation_id']:e for e in value['catalog']}
+    claims=[]
+    if result['result_type']=='path':
+        for index,node in enumerate(result['nodes']):
+            claims.append((f'n{index+1}',node['objective']+'；'+node['rationale'],node['citations'],('calculation','concept','program')[index]))
+    elif result['result_type']=='exercise':
+        for point in result['reference_points']:claims.append((point['point_id'],point['text'],point['citations'],kind))
+    elif result['result_type']=='feedback':
+        for group in ('correct_parts','errors','evidence_gaps'):
+            for index,item in enumerate(result[group]):claims.append((group+str(index),item['explanation'],item['citations'],kind))
+    else:raise AssertionError('not a grounded result')
+    checked=[]
+    for key,text,ids,expected_kind in claims:
+        assert ids,(key,text)
+        for cid in ids:
+            entry=catalog[cid];assert supports(expected_kind,entry['text']),(key,text,entry)
+            raw=fixture.originals._path(entry['original_sha256']).read_bytes()
+            import hashlib
+            assert hashlib.sha256(raw).hexdigest()==entry['original_sha256']
+            lines=raw.decode('utf-8').splitlines()
+            actual='\n'.join(lines[entry['start_line']-1:entry['end_line']])
+            assert actual.strip()==entry['text'].strip(),(actual,entry)
+            citation=client.request(f'/api/activities/{aid}/teaching/records/{rid}/citations/{cid}')['citation']
+            assert citation['text']==entry['text'] and citation['version_id']==entry['version_id']
+            checked.append({'claim_key':key,'claim_text':text,'citation_id':cid,'source_id':entry['source_id'],
+                'version_id':entry['version_id'],'original_sha256':entry['original_sha256'],
+                'start_line':entry['start_line'],'end_line':entry['end_line'],'physical_page':entry.get('physical_page'),
+                'catalog_text':entry['text'],'http_citation':citation,'supports_kind':expected_kind,'status':'pass'})
+    if kind=='calculation' and result['result_type']=='exercise':
+        quantities=result['variant']['instance_data']['quantities'];distance=Decimal(quantities[0]['value_decimal'])
+        seconds=Decimal(quantities[1]['value_decimal'])*60
+        assert distance/seconds==Decimal(1)
+    return {'activity_id':aid,'record_id':rid,'operation_id':row['operation_id'],'kind':row['kind'],
+            'payload_sha256':row['payload_sha256'],'claims':checked,'status':'pass'}
+
+
+def premises():
+    return {'calculation':{'derivation':'120 m / (2 * 60 s) = 1 m/s; 180/(3*60)=1; 60m/min=1m/s',
+                          'counterexamples':['60m/s is 60 times the required value','0.01m/s is one hundredth','1m has incompatible units']},
+        'concept':{'initial':[100,50],'deduct':10,'credit_fails':True,'atomic_final':[100,50],
+                   'property':'all or none; isolation is a separate property','isolation_level':'unknown in source'},
+        'program':{'input':[-2,0,3,5],'strict_positive_results':[False,False,True,True],
+                   'manual_count_after_each':[0,0,1,2],'returned':2,'return_position':'after loop',
+                   'user_program_executed':False},
+        'negative_citation':'speed text fails concept/program source premises',
+        'grade':'finite synthetic source/content oracle only; not real provider quality'}
