@@ -1,6 +1,6 @@
 # TASK-130 / R-124 结果
 
-两份安装说明已收口，全部未忽略候选已完成普通Review；当前正在进行本地提交与指定GitHub同步，真实回执在下方追加。本记录不签产品、父STEP或发布通过。
+两份安装说明已收口；全部未忽略项目候选已完成普通Review并提交至指定GitHub仓库main，主体快照实际远端commit/tree均核对一致。首push回执和本结果按任务卡纳入一次普通收尾提交，最终tip由回返消息及远端main核对。本记录不签产品、父STEP或发布通过。
 
 ## 接收及范围
 
@@ -35,3 +35,15 @@ Git命令及退出码见git-commands.jsonl与network-initial.json及后续回执
 Git上传只是版本交付，不证明产品完整可用。STEP018整体、019、020、M1、项目及发布不自签通过，F129-01两处P3不处理。主控收到后核本结果和Git对象，串行维护唯一执行动态及CHG，登记两份说明与本卡结果/证据变化。本窗口不维护第二份总状态账。没有新经验入库。
 
 真实提交、推送、远端commit/tree核对及必要人工在下方追加。最终收尾tip在回返消息给出，避免记录包含自身的commit/hash造成循环提交。
+
+## 首次提交及真实推送核对
+
+2026-10-23T13:10:23.296406+08:00。本地主体commit为2c40a174a5469dbc23c5905781fe7e9642e71f92，tree为43df3ffc60150775151ad09978de47bd35f35d03，parent为6302b0caa0de1864b23779ab8657239a1123e0b3，分支main，origin为https://github.com/shspic/RetroLume-agent.git。普通commit退出0，共3459文件变化；push退出0，实际ls-remote main指向该commit，再fetch取回的commit/tree分别与上述本地对象相同。见first-delivery.json及git-commands.jsonl。没有未推送的主体成果，没有新远端冲突。
+
+3451项产品/测试/配置/DocuS及既有差异原字节保护检查全部一致，见worktree-preservation.json。主体push后差异仅本卡控制记录，见control-delta.json；未忽略项目文件没有另行排除。tracked-ignored始终为空。
+
+补充真实操作限制。沙箱write-tree一次退出128，index.lock Permission denied，经正常权限申请后相同Git写操作及commit成功；属于权限边界，不是自动审批拒绝。初始fetch最终退出0，network-initial.json的unknown是当时观察，现已补齐。只读查询的主动中止、辅助脚本两次错误及误触只读重扫不改为成功，也未重置预算。没有第二次push恢复或强推。
+
+完整精确工具投入unknown；保守按permit签发至本段写入的全部墙钟时间上取整计1620/5400秒，余3780秒含600秒收尾保留，实际收尾Git操作继续占用此余量。见budget-close.json。日历未到限，旧任务投入及失败全部封存不变。
+
+本文件、首push真实回执及控制增量只做一次普通收尾提交，最终远端tip在回返消息提供，主控可直接从Git对象核对该tip的父提交和tree。为避免自指，不在文件中填入包含本文件最终内容的commit/hash，也不再为最终tip追加第三次提交。此控制记录例外不扩张为遗漏其它未忽略文件。必要用户操作无；请主控读取本结果并维护唯一状态及CHG。
