@@ -1,0 +1,24 @@
+--- before/backend/tests/fixtures/task120/run.py
++++ after/backend/tests/fixtures/task120/run.py
+@@ -8,8 +8,9 @@
+ root_id=int(os.environ['RETROLUME_TASK120_ROOT_ID'])
+ suffix=('-batch-'+os.environ['RETROLUME_TASK120_BATCH'].zfill(2)) if os.environ.get('RETROLUME_TASK120_BATCH') else ''
+ folder=ROOT/'DocuN/evidence/TASK-120/execution'
+ if os.environ.get('RETROLUME_TASK120_CONTINUATION')=='TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021':folder=folder/'audit-repair-07'
++if os.environ.get('RETROLUME_TASK120_CONTINUATION')=='TASK-120-Q-PREP-TARGETED-REPAIR-08-20261021':folder=folder/'audit-repair-08'
+ log=(folder/f'root-{root_id:02d}{suffix}-child.log').open('a',encoding='utf-8',buffering=1)
+ sys.stdout=sys.stderr=log
+ 
+ 
+@@ -42,8 +43,11 @@
+         if phase=='merged':
+             from .merged import run_batches
+             return run_batches()
+         if phase=='bootstrap':bootstrap()
++        elif phase.startswith('r08_'):
++            from tests.fixtures.task120.repair08 import execute
++            result=execute(phase[4:])
+         elif phase.startswith('a07_'):
+             from .audit07 import execute
+             execute(phase.removeprefix('a07_'))
+         elif phase.startswith('c06_'):

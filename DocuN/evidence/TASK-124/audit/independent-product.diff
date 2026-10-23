@@ -1,0 +1,450 @@
+--- a/backend/app/main.py
++++ b/backend/app/main.py
+@@ -89,6 +89,10 @@
+     )
+     app.state.activity_config = load_activity_config(Path(config_path))
+     app.state.integration_config=load_integration_config(os.environ.get('RETROLUME_INTEGRATION_CONFIG'))
++    # 保留本次已装载候选；只读诊断不重新读取配置或扫描环境。
++    candidate_activity_config=app.state.activity_config
++    candidate_integration_config=app.state.integration_config
++    embedding_key_present=bool(os.environ.get('RETROLUME_EMBEDDING_API_KEY','').strip())
+     from dataclasses import replace
+     from app.service_config import LayerState
+     from app.capabilities.transport import HttpxModelTransport
+@@ -133,6 +137,11 @@
+                 teaching_layer=closed,interview_model_layer=closed,html_generation_layer=closed)
+             app.state.integration_config=replace(app.state.integration_config,reason='q_readiness_unknown')
+             app.state.q_readiness={'available':False,'reason':'q_readiness_unknown','real_outbound_authorized':False}
++
++    from app.q_readiness import build_readiness
++    app.state.q_diagnostics=build_readiness(candidate_activity_config,candidate_integration_config,
++        effective_model=app.state.activity_config,effective_embedding=app.state.integration_config,
++        embedding_key_present=embedding_key_present,q_approval=app.state.q_readiness)
+ 
+     async def data_error(request,error):
+         from fastapi.responses import JSONResponse
+--- a/backend/app/activities/api.py
++++ b/backend/app/activities/api.py
+@@ -203,6 +203,7 @@
+ @router.get("/activities/capabilities")
+ async def capabilities(request: Request):
+     _guard(request)
++    from app.q_readiness import read_readiness
+     config = _config(request)
+     ledger = getattr(request.app.state, "activities_ledger", None)
+     storage_ready = False
+@@ -273,6 +274,7 @@
+         "provider": provider_info,
+         "retrieval":getattr(request.app.state,'integration_config',None).public() if getattr(request.app.state,'integration_config',None) is not None else {'available':False,'reason':'retrieval_not_configured'},
+         "q_approval":getattr(request.app.state,'q_readiness',{'available':False,'reason':'q_disabled','real_outbound_authorized':False}),
++        "diagnostics": {"readiness": read_readiness(request.app.state)},
+         "supervision_management_budget_seconds": SessionConfig().manager_total_seconds,
+         "window_seconds": SessionConfig().window_seconds,
+         "followup_max_chars": _FOLLOWUP_MAX_CHARS,
+--- /dev/null
++++ b/backend/app/q_readiness.py
+@@ -0,0 +1,163 @@
++"""启动时装载事实的脱敏只读投影，不授予外发资格。"""
++from __future__ import annotations
++
++from copy import deepcopy
++import re
++
++
++_REASONS = frozenset({
++    "config_missing", "config_invalid", "config_incompatible",
++    "provider_key_not_configured", "embedding_key_not_configured",
++    "retrieval_not_configured", "retrieval_disabled", "retrieval_config_invalid",
++    "outbound_not_authorized", "q_disabled", "q_readiness_unknown",
++    "learning_not_configured", "learning_config_invalid", "learning_config_incompatible",
++    "teaching_not_configured", "teaching_config_invalid", "teaching_config_incompatible",
++    "interview_not_configured", "interview_model_unavailable", "interview_config_invalid",
++    "html_not_configured", "html_config_invalid",
++})
++_IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
++
++
++def _reason(value):
++    return value if type(value) is str and value in _REASONS else "load_state_unknown"
++
++
++def _identity(value):
++    return value if isinstance(value, str) and _IDENTITY.fullmatch(value) else None
++
++
++def _layer(value):
++    if value is None:
++        return {"available": False, "reason": "load_state_unknown"}
++    available = value.available is True
++    return {"available": available, "reason": None if available else _reason(value.reason)}
++
++
++def _service(value, *, embedding=False):
++    if value is None:
++        return {"loaded": False, "identity": None, "returned_models": None,
++                "returned_models_status": "service_not_loaded", "limits": None}
++    aliases = value.returned_models
++    safe_aliases = (bool(aliases) and len(aliases) <= 16
++                    and len(set(aliases)) == len(aliases)
++                    and all(_identity(alias) is not None for alias in aliases))
++    limits = {"timeout_seconds": value.timeout_seconds,
++              "max_request_bytes": value.max_request_bytes,
++              "max_response_bytes": value.max_response_bytes}
++    if embedding:
++        limits.update(dimensions=value.dimensions, max_batch_items=4,
++                      max_item_codepoints=2048, max_query_codepoints=1024,
++                      max_query_bytes=4096)
++    else:
++        limits["max_output_tokens"] = value.max_output_tokens_limit
++    return {"loaded": True,
++            "identity": {"provider": _identity(value.provider), "model": _identity(value.model)},
++            "returned_models": list(aliases) if safe_aliases else ([] if not aliases else None),
++            "returned_models_status": "configured_not_observed" if safe_aliases else (
++                "allowlist_empty" if not aliases else "allowlist_not_projectable"),
++            "limits": limits}
++
++
++def _model(config):
++    if config is None:
++        return {"identity": None, "load": _layer(None), "execution": _layer(None),
++                "service": _service(None), "activity_limits": None, "output_limits": None}
++    quota = config.quota_preview
++    activity_limits = ({name: quota.get(name) for name in ("max_request_bytes", "max_output_tokens")}
++                       if quota is not None else None)
++    service = config.model_service
++    outputs = {}
++    for name, field, fixed in (("continue", None, 256), ("learning", "learning_output_tokens", None),
++                                ("teaching", "teaching_output_tokens", None),
++                                ("interview_model", "interview_output_tokens", None),
++                                ("html_generation", "html_output_tokens", None)):
++        layer = getattr(config, name + "_layer", None)
++        tokens = getattr(config, field, None) if field else fixed
++        outputs[name] = {"state": _layer(layer), "max_output_tokens": (
++            min(tokens, quota["max_output_tokens"], service.max_output_tokens_limit)
++            if layer is not None and layer.available and service is not None
++            and quota is not None and tokens is not None else None)}
++    return {"identity": ({"provider": _identity(config.provider), "model": _identity(config.model)}
++                         if config.provider is not None or config.model is not None else None),
++            "load": _layer(config.create_layer), "execution": _layer(config.continue_layer),
++            "service": _service(service), "activity_limits": activity_limits,
++            "output_limits": outputs}
++
++
++def _embedding(config):
++    service = config.service if config is not None else None
++    reason = config.reason if config is not None else None
++    available = config.available if config is not None else False
++    return {"load": {"available": service is not None and reason is None,
++                     "reason": None if service is not None and reason is None else _reason(reason)},
++            "execution": {"available": available,
++                          "reason": None if available else (_reason(reason) if reason else "outbound_not_authorized")},
++            "service": _service(service, embedding=True),
++            "max_index_fragments": config.max_index_fragments if config is not None else None}
++
++
++def _loaded_evidence(model, embedding):
++    """仅核装载对象之间的一致性，引用摘要不充当原件或账号核证。"""
++    grant = embedding.outbound_grant if embedding is not None else None
++    model_grant = model.outbound_grant if model is not None else None
++    manifest = embedding.outbound_source_manifest if embedding is not None else None
++    result = {"grant": {"state": "not_loaded" if grant is None else "unknown", "sha256": None},
++              "model_embedding_grant_match": None,
++              "manifest": {"state": "not_loaded" if manifest is None else "unknown",
++                           "sha256": None, "grant_match": None, "model_embedding_match": None},
++              "price": {"state": "unknown", "reference_sha256": None, "content_match": None},
++              "activation": {"state": "unknown", "reference_sha256": None, "content_match": None},
++              "instance": {"state": "unknown", "reference_sha256": None, "deployment_match": None},
++              "reason": "loaded_objects_only"}
++    if grant is None:
++        return result
++    try:
++        from app.capabilities.embedding import OutboundGrant, OutboundSourceManifest
++        trusted = OutboundGrant.from_wire(grant)
++        result["grant"] = {"state": "shape_validated", "sha256": trusted.sha256}
++        result["model_embedding_grant_match"] = model_grant == grant if model_grant is not None else None
++        result["price"].update(state="reference_only", reference_sha256=trusted.price_snapshot_sha256)
++        result["activation"].update(state="reference_only", reference_sha256=trusted.q_activation_receipt_sha256)
++        result["instance"]["reference_sha256"] = getattr(trusted, "instance_binding_sha256", None)
++        if manifest is not None:
++            loaded = OutboundSourceManifest.from_wire(manifest)
++            result["manifest"] = {"state": "shape_validated", "sha256": loaded.sha256,
++                                  "grant_match": loaded.sha256 == trusted.source_manifest_sha256,
++                                  "model_embedding_match": (
++                                      model.outbound_source_manifest == manifest if model is not None else None)}
++    except (ValueError, TypeError, KeyError, RecursionError):
++        result["reason"] = "loaded_evidence_invalid"
++    return result
++
++
++def build_readiness(candidate_model=None, candidate_embedding=None, *, effective_model=None,
++                    effective_embedding=None, embedding_key_present=None, q_approval=None):
++    """只接收正常启动已获得的对象和布尔值，不访问配置、环境、授权器或PG。"""
++    service = candidate_model.model_service if candidate_model is not None else None
++    model_key = True if service is not None else (
++        False if candidate_model is not None
++        and candidate_model.continue_layer.reason == "provider_key_not_configured" else None)
++    q = q_approval or {}
++    execution_class = q.get("execution_class")
++    return {"schema": "retrolume.q-readiness.v1", "source": "startup_loaded_snapshot",
++            "authorizes_requests": False,
++            "key_presence": {"model": model_key,
++                             "embedding": embedding_key_present if type(embedding_key_present) is bool else None},
++            "candidate": {"model": _model(candidate_model), "embedding": _embedding(candidate_embedding)},
++            "effective": {"model": _model(effective_model), "embedding": _embedding(effective_embedding)},
++            "q_approval": {"available": q.get("available") is True,
++                           "reason": None if q.get("available") is True else _reason(q.get("reason")),
++                           "execution_class": execution_class if execution_class in ("Q", "TESTONLY") else None,
++                           "real_outbound_authorized": q.get("real_outbound_authorized") is True},
++            "loaded_evidence": _loaded_evidence(
++                effective_model.model_service if effective_model is not None else None,
++                effective_embedding.service if effective_embedding is not None else None),
++            "qualification": {"state": "unknown", "account": None, "metering": None,
++                              "returned_model_observed": None, "normal_deployment": None,
++                              "reason": "external_evidence_not_evaluated"}}
++
++
++def read_readiness(state):
++    """GET仅复制启动快照；最小旧测试夹具没有快照时明确未知。"""
++    value = getattr(state, "q_diagnostics", None)
++    return deepcopy(value) if value is not None else build_readiness()
+--- /dev/null
++++ b/backend/tests/test_q_readiness.py
+@@ -0,0 +1,218 @@
++"""TASK123 启动快照与只读投影的离线行为，所有凭据为合成占位。"""
++from contextlib import ExitStack, contextmanager
++from dataclasses import replace
++import io
++import json
++import logging
++import os
++from pathlib import Path
++import tempfile
++from types import SimpleNamespace
++import unittest
++from unittest.mock import AsyncMock, Mock, patch
++
++from fastapi.testclient import TestClient
++from app.main import create_app
++from app.q_readiness import build_readiness, read_readiness
++from app.service_config import LayerState, load_activity_config
++from app.retrieval.service import IntegrationConfig
++from app.capabilities.embedding import EmbeddingServiceConfig
++from app.data_exit.contracts import DataContext, DataError, canonical
++from test_activity_workspace_config import good_config
++
++
++class ReadinessTests(unittest.TestCase):
++    @contextmanager
++    def isolated_app(self, *, model_key=True, embedding_key=True, bad_model=False,
++                     missing_model=False, integration_enabled=True):
++        with tempfile.TemporaryDirectory(prefix="task123-") as temporary, ExitStack() as stack:
++            root = Path(temporary).resolve()
++            data, backup = root / "data", root / "backup"
++            data.mkdir(); backup.mkdir()
++            activity = root / "activity.synthetic.json"
++            integration = root / "integration.synthetic.json"
++            body = good_config(model_identity={"model": "deepseek-flash"},
++                               service={"returned_models": ["deepseek-flash"]},
++                               learning={"profile": "learning.v2", "max_output_tokens": 128})
++            if not missing_model:
++                activity.write_text("{bad" if bad_model else json.dumps(body), encoding="utf-8")
++            integration.write_text(json.dumps({"schema": "retrolume.integration.v1",
++                "enabled": integration_enabled, "embedding": {"returned_models": ["embedding-3"]}}), encoding="utf-8")
++            env = {"RETROLUME_DATA_DIR": str(data), "RETROLUME_BACKUP_DIR": str(backup),
++                   "RETROLUME_ACTIVITY_CONFIG": str(activity),
++                   "RETROLUME_INTEGRATION_CONFIG": str(integration)}
++            if model_key: env["RETROLUME_TEST095_KEY"] = "TASK123_SYNTHETIC_MODEL_SECRET"
++            if embedding_key: env["RETROLUME_EMBEDDING_API_KEY"] = "TASK123_SYNTHETIC_EMBEDDING_SECRET"
++            stack.enter_context(patch.dict(os.environ, env, clear=True))
++            # 这些路径一旦被新投影误调用，立即失败并保留可观察计数。
++            tripwires = {}
++            for name in ("app.main.PostgresAdmissionLedger", "app.main.PostgresMaterials",
++                         "app.data_exit.config.ControlHub", "app.data_exit.q_store.QAuthority.bind",
++                         "app.data_exit.q_store.QAuthority.approve",
++                         "app.operator.q_request.configure_application", "app.operator.q_request.operator_ledger",
++                         "app.capabilities.transport.HttpxModelTransport.__init__",
++                         "app.capabilities.gateway.ControlledModelGateway.__init__",
++                         "app.capabilities.embedding.ControlledEmbeddingGateway.__init__",
++                         "psycopg.connect", "psycopg.AsyncConnection.connect"):
++                tripwires[name] = stack.enter_context(patch(name, side_effect=AssertionError("禁止执行 " + name)))
++            for name in ("app.main.load_activity_config", "app.main.load_integration_config"):
++                import app.main as main
++                original = getattr(main, name.rsplit(".", 1)[1])
++                tripwires[name] = stack.enter_context(patch(name, wraps=original))
++            application = create_app()
++            with TestClient(application) as client:
++                headers = {"x-retrolume-session": application.state.session_token}
++                yield application, client, headers, tripwires, activity, integration
++            for name, mock in tripwires.items():
++                self.assertEqual(mock.call_count, 1 if name.startswith("app.main.load_") else 0, name)
++
++    def diagnostic(self, client, headers):
++        response = client.get("/api/activities/capabilities", headers=headers)
++        self.assertEqual(response.status_code, 200)
++        self.assertEqual(response.headers["cache-control"], "no-store")
++        return response.json()
++
++    def test_missing_bad_and_disabled_configs(self):
++        for options, reason in (({"missing_model": True}, "config_missing"),
++                                ({"bad_model": True}, "config_invalid")):
++            with self.subTest(options=options), self.isolated_app(**options) as (app, client, headers, *_):
++                body = self.diagnostic(client, headers)
++                diag = body["diagnostics"]["readiness"]
++                self.assertEqual(diag["candidate"]["model"]["load"]["reason"], reason)
++                self.assertIsNone(diag["key_presence"]["model"])
++                self.assertFalse(body["continue"]["available"])
++                self.assertFalse(diag["authorizes_requests"])
++                self.assertEqual(body["q_approval"], app.state.q_readiness)
++                self.assertFalse(body["q_approval"]["real_outbound_authorized"])
++        with self.isolated_app(integration_enabled=False) as (app, client, headers, *_):
++            diag = self.diagnostic(client, headers)["diagnostics"]["readiness"]
++            self.assertEqual(diag["candidate"]["embedding"]["load"]["reason"], "retrieval_disabled")
++            self.assertIsNone(diag["candidate"]["embedding"]["service"]["identity"])
++
++    def test_either_key_absent_and_keys_without_grant_stay_closed(self):
++        for model_key, embedding_key in ((False, True), (True, False), (True, True)):
++            with self.subTest(model=model_key, embedding=embedding_key), self.isolated_app(
++                    model_key=model_key, embedding_key=embedding_key) as (app, client, headers, *_):
++                body = self.diagnostic(client, headers)
++                diag = body["diagnostics"]["readiness"]
++                self.assertEqual(diag["key_presence"], {"model": model_key, "embedding": embedding_key})
++                self.assertFalse(body["continue"]["available"])
++                self.assertFalse(body["retrieval"]["available"])
++                self.assertFalse(body["q_approval"]["real_outbound_authorized"])
++                self.assertIsNone(diag["qualification"]["metering"])
++                self.assertIsNone(diag["qualification"]["account"])
++                self.assertFalse(diag["authorizes_requests"])
++
++    def test_candidate_effective_limits_and_strict_allowlists(self):
++        with self.isolated_app() as (app, client, headers, *_):
++            diag = self.diagnostic(client, headers)["diagnostics"]["readiness"]
++            candidate, effective = diag["candidate"]["model"], diag["effective"]["model"]
++            self.assertTrue(candidate["execution"]["available"])
++            self.assertEqual(effective["execution"], {"available": False, "reason": "outbound_not_authorized"})
++            self.assertEqual(candidate["service"]["returned_models"], ["deepseek-flash"])
++            self.assertEqual(candidate["service"]["limits"], {"timeout_seconds": 10.0,
++                "max_request_bytes": 65536, "max_response_bytes": 65536, "max_output_tokens": 8192})
++            self.assertEqual(candidate["output_limits"]["learning"]["max_output_tokens"], 128)
++            self.assertIsNone(effective["output_limits"]["learning"]["max_output_tokens"])
++            embedding = diag["effective"]["embedding"]["service"]
++            self.assertEqual(embedding["returned_models"], ["embedding-3"])
++            self.assertEqual(embedding["limits"]["max_batch_items"], 4)
++            self.assertEqual(embedding["limits"]["dimensions"], 512)
++            self.assertEqual(embedding["returned_models_status"], "configured_not_observed")
++
++    def test_repeat_reads_never_reload_bind_or_add_pg_probes(self):
++        with self.isolated_app() as (app, client, headers, calls, activity, integration):
++            app.state.activities_ledger = SimpleNamespace(probe_memory=AsyncMock(return_value={"read": True}))
++            app.state.activity_config = replace(app.state.activity_config, memory_layer=LayerState(True))
++            # 保留原GET的storage/memory行为，只计其既有合成probe。
++            with patch("app.activities.api.ActivityService.probe_storage", new=AsyncMock(return_value=True)) as probe:
++                first = self.diagnostic(client, headers)["diagnostics"]["readiness"]
++                activity.write_text("{changed", encoding="utf-8")
++                integration.write_text("{changed", encoding="utf-8")
++                os.environ.clear()
++                with patch.object(Path, "read_text", side_effect=AssertionError("GET重读文件")), \
++                     patch.object(Path, "read_bytes", side_effect=AssertionError("GET重读文件")):
++                    second = self.diagnostic(client, headers)["diagnostics"]["readiness"]
++                self.assertEqual(first, second)
++                self.assertEqual(probe.await_count, 2)
++                self.assertEqual(app.state.activities_ledger.probe_memory.await_count, 2)
++                second["key_presence"]["model"] = False
++                self.assertTrue(read_readiness(app.state)["key_presence"]["model"])
++
++    def test_auth_context_readonly_and_error_redaction(self):
++        with self.isolated_app() as (app, client, headers, *_):
++            self.assertEqual(client.get("/api/activities/capabilities").status_code, 403)
++            for extra in ({"origin": "https://cross.invalid"}, {"sec-fetch-site": "cross-site"}):
++                self.assertEqual(client.get("/api/activities/capabilities", headers={**headers, **extra}).status_code, 403)
++            for profile in ("data_exit.v1.r01", "data_exit.v1.r02"):
++                context = DataContext("synthetic-control", 1, "synthetic-dataset", "synthetic-instance", "restored_readonly")
++                gate = Mock()
++                gate.acquire.side_effect = DataError("data_readonly")
++                app.state.data_exit = SimpleNamespace(context=lambda: context, gate=gate,
++                    profile=profile, hub=SimpleNamespace(state=Mock(return_value={})))
++                self.assertEqual(self.diagnostic(client, headers)["diagnostics"]["readiness"]["qualification"]["state"], "unknown")
++                app.state.data_exit.hub.state.assert_not_called()
++                stale = client.post("/api/activities", json={}, headers={**headers, "x-retrolume-data-context": "{}"})
++                self.assertEqual(stale.json()["code"], "selection_changed")
++                readonly = client.post("/api/activities", json={}, headers={**headers, "x-retrolume-data-context": canonical(context.public())})
++                self.assertEqual(readonly.json()["code"], "data_readonly")
++            app.state.data_exit = None
++            app.state.data_exit_error = "storage_unavailable"
++            response = client.get("/api/activities/capabilities", headers=headers)
++            self.assertEqual(response.status_code, 503)
++            for secret in ("TASK123_SYNTHETIC_MODEL_SECRET", "TASK123_SYNTHETIC_EMBEDDING_SECRET"):
++                self.assertNotIn(secret, response.text)
++
++    def test_loaded_claims_testonly_and_bad_evidence_cannot_verify(self):
++        with self.isolated_app() as (app, client, headers, *_):
++            grant = {"schema": "retrolume.outbound-grant.v2", "grant_id": "synthetic-no-authority",
++                **{name: "a" * 64 for name in ("approved_receipt_sha256", "q_activation_receipt_sha256",
++                    "source_manifest_sha256", "price_snapshot_sha256", "instance_binding_sha256")},
++                "valid_from_utc": "2000-01-01T00:00:00+00:00", "valid_until_utc": "2000-01-02T00:00:00+00:00",
++                "allowed_activity_ids": ["01800000-0000-4000-8000-000000000001"],
++                "provider_capabilities": ["deepseek_chat_completions/deepseek-flash", "zhipu_embeddings/embedding-3"],
++                "global_max_requests": 100, "global_max_cost_microunits": 25000000,
++                "capabilities_verified": True, "account_terms_verified": True, "token_upper_bound_verified": True,
++                "input_rate_cny_per_million": "2", "output_rate_cny_per_million": "8",
++                "framing_token_upper_bound": 4096, "margin_percent": 25}
++            model = replace(app.state.activity_config, model_service=app.state.activity_config.model_service.model_copy(update={"outbound_grant": grant}))
++            integration = IntegrationConfig(app.state.integration_config.service.model_copy(update={"outbound_grant": grant}), None)
++            for q_class in ("TESTONLY", "Q"):
++                result = build_readiness(model, integration, effective_model=model, effective_embedding=integration,
++                    q_approval={"available": True, "execution_class": q_class, "real_outbound_authorized": q_class == "Q"})
++                self.assertEqual(result["loaded_evidence"]["grant"]["state"], "shape_validated")
++                self.assertTrue(result["loaded_evidence"]["model_embedding_grant_match"])
++                self.assertEqual(result["loaded_evidence"]["price"]["state"], "reference_only")
++                self.assertIsNone(result["loaded_evidence"]["activation"]["content_match"])
++                self.assertIsNone(result["loaded_evidence"]["instance"]["deployment_match"])
++                self.assertFalse(result["authorizes_requests"])
++                self.assertEqual(result["qualification"]["state"], "unknown")
++            bad = IntegrationConfig(integration.service.model_copy(update={"outbound_grant": {"secret": "PRIVATE_EXCEPTION_VALUE"}}), None)
++            stream = io.StringIO(); handler = logging.StreamHandler(stream)
++            logging.getLogger().addHandler(handler)
++            try:
++                result = build_readiness(model, bad, effective_model=model, effective_embedding=bad)
++            finally:
++                logging.getLogger().removeHandler(handler)
++            self.assertEqual(result["loaded_evidence"]["reason"], "loaded_evidence_invalid")
++            self.assertNotIn("PRIVATE_EXCEPTION_VALUE", json.dumps(result) + stream.getvalue())
++
++    def test_empty_allowlist_unknown_reason_and_secret_fields_are_not_exposed(self):
++        with self.isolated_app() as (app, client, headers, *_):
++            config = app.state.activity_config
++            service = config.model_service.model_copy(update={"returned_models": ()})
++            config = replace(config, model_service=service, continue_layer=LayerState(False, "postgres://SECRET_DSN"))
++            result = build_readiness(config, effective_model=config)
++            self.assertEqual(result["candidate"]["model"]["service"]["returned_models_status"], "allowlist_empty")
++            self.assertEqual(result["candidate"]["model"]["execution"]["reason"], "load_state_unknown")
++            raw = json.dumps(result)
++            for secret in ("SECRET_DSN", "TASK123_SYNTHETIC_MODEL_SECRET", "TASK123_SYNTHETIC_EMBEDDING_SECRET", "api_key", "api_key_env"):
++                self.assertNotIn(secret, raw)
++            service = service.model_copy(update={"returned_models": ("C:/private-secret",)})
++            result = build_readiness(replace(config, model_service=service))
++            self.assertIsNone(result["candidate"]["model"]["service"]["returned_models"])
++            self.assertNotIn("private-secret", json.dumps(result))
++
++
++if __name__ == "__main__":
++    unittest.main()
+--- a/README.md
++++ b/README.md
+@@ -159,3 +159,5 @@
+ 正常operator使用同一受信本机身份，先inspect本次完整请求与实际字节，再交互输入精确APPROVE摘要，返回原页面GET核对并明确继续原键。已claim、可能已发或UNKNOWN只读对账；不得换key、重新批准重发或清空预算。部署配置与两个provider密钥只经正常服务器安全环境注入，不发送到聊天或浏览器。
+ 
+ 当前准备成果、正常配置字段、已知readiness缺口、默认关闭草案及一次后续操作包见 [TASK122前置结果](D:/shspic/project_NO3_RetroLume-agent/DocuN/results/TASK-122-result.md) 与 [后续操作包](D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-122/preparation/operation-runbook.md)。这些文档不创建资源、不启用Q；旧TESTONLY库、runner和运行许可继续封存。
++
++现有 capabilities 增加版本化只读字段 diagnostics.readiness，区分启动时候选、最终有效配置、两个 key 的存在性和未核资格；原 q_approval 不变。诊断只复制启动快照，不重新装载配置、绑定或批准，不追加数据库探测。摘要引用、配置 allowlist、key 存在与声明 verified 均不代表真实账号、计量或 normal 部署已经核证。字段和未知原因见 [本机批准部署说明](deploy/q-approval.md)；完整 GET 仍包含原 storage/memory 探测，须在获准启动后使用。
+--- a/deploy/q-approval.md
++++ b/deploy/q-approval.md
+@@ -32,6 +32,8 @@
+ 
+ 根、批准、私有 artifact、凭据和 journal 留在独立 ACL 控制根，不导出进业务数据包。普通备份、实例复制或隔离只读恢复只保留业务和金融历史，不恢复批准、launch、租约或可花余额。原件或记忆删除后不得从 artifact 重新显示已失效正文；operator inspect 也必须重新检查当前资格。
+ 
+-operator 绑定真实 Windows SID 和文件 ACL。与运行账户同 principal 的受信代码及管理员拥有操作系统层访问能力；Python 方法和私有命名空间不构成对同账户恶意代码的沙箱。密钥、ACL、进程边界和本机部署仍由部署方维护。readiness 仅公开是否可用、原因及 TESTONLY／真实授权区分，不公开配置路径、正文、DSN 或密钥。
++operator 绑定真实 Windows SID 和文件 ACL。与运行账户同 principal 的受信代码及管理员拥有操作系统层访问能力；Python 方法和私有命名空间不构成对同账户恶意代码的沙箱。密钥、ACL、进程边界和本机部署仍由部署方维护。
++
++现有 GET /api/activities/capabilities 增加 diagnostics.readiness，版本为 retrolume.q-readiness.v1。它只复制启动当次已装载事实，分别显示 candidate、effective、key_presence 和 qualification；原 q_approval 含义保持。缺 key 可为 false，装载器未保留足够事实时为 null；两者都不证明账号或服务资格。returned_models 是配置的严格允许集合，configured_not_observed 表示尚无真实返回证明。grant/manifest 只校验已装载对象的形状与相互一致性；price、activation、instance 摘要只是引用，content_match/deployment_match 未核时为 null。声明 verified 或 TESTONLY 不能把 qualification 变成已核。诊断不会授予调用权，不返回配置路径、正文、DSN、密钥及密钥摘要，也不重新装载、绑定或追加 PG 查询；该 GET 原有 storage/memory 探测仍存在，不能作为零 PG 的离线命令运行。关闭准备仍须独立补齐计量和账号依据后才能由主控裁定下一步。
+ 
+ 本机批准只授模型／embedding 的精确请求。HTML 仍须独立通过正常 host_policy、配置及父结果资格；description 批准不授予 preview、renderer、Docker 或主机启动权限。

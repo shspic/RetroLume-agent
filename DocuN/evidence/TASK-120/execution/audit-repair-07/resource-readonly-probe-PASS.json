@@ -1,0 +1,94 @@
+{
+  "status": "PASS",
+  "objects": [
+    {
+      "Id": "b89522070d4b64fc67efed810852ccc21948058f154bf4fa1889f4d8d69a102f",
+      "Name": "/retrolume-task120-qprep-pg1",
+      "Image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+      "labels": {
+        "com.docker.compose.project": "retrolume-task120-qprep",
+        "retrolume.permit": "TASK-120-Q-PREP-IMPLEMENTATION-20261018",
+        "retrolume.scope": "q-prep-testonly",
+        "retrolume.task": "TASK-120"
+      },
+      "Running": false,
+      "Pid": 0,
+      "ports": {
+        "5432/tcp": [
+          {
+            "HostIp": "127.0.0.1",
+            "HostPort": "55480"
+          }
+        ]
+      },
+      "limits": {
+        "Memory": 536870912,
+        "NanoCpus": 1000000000,
+        "PidsLimit": 128,
+        "RestartPolicy": {
+          "Name": "no",
+          "MaximumRetryCount": 0
+        }
+      },
+      "mounts": [
+        {
+          "Type": "volume",
+          "Name": "retrolume-task120-qprep-data",
+          "Destination": "/var/lib/postgresql/data"
+        }
+      ]
+    },
+    {
+      "Id": "4eb5be54b713e5412be702e27684d98d2b7de92a77f9085b3ce84a5f4b124332",
+      "Name": "/retrolume-task120-scopeui-ro1",
+      "Image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+      "labels": {
+        "retrolume.data.job": "ffe56cdc-36ae-4668-b04e-22b2b6d7f225",
+        "retrolume.data.profile": "task120-scopeui-readonly-v1",
+        "retrolume.data.purpose": "restore-readonly",
+        "retrolume.data.target": "f32e8f11-99bc-4c07-b5ed-5521b22be917"
+      },
+      "Running": false,
+      "Pid": 0,
+      "ports": {
+        "5432/tcp": [
+          {
+            "HostIp": "127.0.0.1",
+            "HostPort": "55481"
+          }
+        ]
+      },
+      "limits": {
+        "Memory": 536870912,
+        "NanoCpus": 1000000000,
+        "PidsLimit": 128,
+        "RestartPolicy": {
+          "Name": "no",
+          "MaximumRetryCount": 0
+        }
+      },
+      "mounts": [
+        {
+          "Type": "volume",
+          "Name": "retrolume-task120-scopeui-ro1-data",
+          "Destination": "/var/lib/postgresql/data"
+        }
+      ]
+    }
+  ],
+  "ports": [
+    {
+      "port": 55480,
+      "listening": false
+    },
+    {
+      "port": 55481,
+      "listening": false
+    },
+    {
+      "port": 18120,
+      "listening": false
+    }
+  ],
+  "read_only": true
+}

@@ -1,0 +1,122 @@
+{
+  "schema": "retrolume.task122.readiness-plan.v1",
+  "status": "STATIC_COMPATIBILITY_ONLY_NORMAL_RUNTIME_UNKNOWN",
+  "enabled": false,
+  "current_checks": {
+    "rules_and_declared_input_hashes_match": 32,
+    "environment_presence_file": "environment-presence.json",
+    "environment_name_count": 15,
+    "current_chat_all_declared_names": "absent",
+    "normal_server_readiness": "UNKNOWN_NOT_STARTED",
+    "account_readiness": "UNKNOWN_NOT_ACCESSED",
+    "private_configuration_read": false,
+    "product_loader_executed": false
+  },
+  "loader_chain": [
+    {
+      "source": "backend/app/main.py:87-102",
+      "entry": "RETROLUME_ACTIVITY_CONFIG -> load_activity_config; RETROLUME_INTEGRATION_CONFIG -> load_integration_config",
+      "behavior": "模型服务从api_key_env读取；embedding固定RETROLUME_EMBEDDING_API_KEY。main把embedding受信grant/manifest复制到chat；无外发grant时模型层关闭。",
+      "default_path_caveat": "main.__file__.parents[2]/config/activity.local.json定位项目根config/activity.local.json，与README一致。后续推荐显式绝对RETROLUME_ACTIVITY_CONFIG，并由正常API进程证明装载；本卡不读该私配。"
+    },
+    {
+      "source": "backend/app/retrieval/service.py:49-86",
+      "entry": "integration config enabled=false -> retrieval_disabled",
+      "behavior": "enabled=true时才检查embedding key及grant/manifest/activation/price原件；异常retrieval_config_invalid。以原文件bytes核activation/price，以canonical对象核manifest。"
+    },
+    {
+      "source": "backend/app/main.py:123-135; backend/app/operator/q_request.py:91-114",
+      "entry": "RETROLUME_Q_APPROVAL_CONFIG -> configure_application",
+      "behavior": "会访问runtime/ledger并可能QAuthority.bind，因此本卡禁止。失败q_readiness_unknown使两域关闭；不能冒只读诊断。"
+    },
+    {
+      "source": "deploy/start_local.py:34-120",
+      "entry": "--container / --port / --shutdown-stdin",
+      "behavior": "继承服务器环境到正常API子进程；会读ControlHub/PG及启动资源，不是readiness命令。没有--profile/--initialize/--migrate。deploy/initialize-materials.py只应用001，不能声称完整R03初始化。"
+    }
+  ],
+  "configuration_fields": {
+    "model": {
+      "provider": "deepseek_chat_completions",
+      "model": "deepseek-flash",
+      "base_url": "https://api.deepseek.com",
+      "thinking": "disabled",
+      "timeout_seconds_max": 10,
+      "request_bytes_max": 65536,
+      "response_bytes_max": 65536,
+      "returned_models": "必须非空、受信精确集合；本草案空列表且关闭",
+      "output_caps": {
+        "learning": 256,
+        "teaching": 2048,
+        "interview": 2048,
+        "html": 4096
+      }
+    },
+    "embedding": {
+      "provider": "zhipu_embeddings",
+      "model": "embedding-3",
+      "base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "dimensions": 512,
+      "batch_size": 4,
+      "input_codepoints_max": 2048,
+      "query_codepoints_max": 1024,
+      "query_bytes_max": 4096,
+      "request_bytes_candidate": 32768,
+      "response_bytes_max": 65536,
+      "returned_models": "仅embedding-3可被配置；本草案enabled=false且列表空"
+    },
+    "operator": {
+      "schema": "retrolume.q-approval-config.v2",
+      "enabled": false,
+      "control_root": null,
+      "database_url_env": null,
+      "root_file": null,
+      "principal": "principal_id()读取当前Windows SID；与root.operator_principals及ACL匹配。该函数本卡未运行。"
+    },
+    "bindings": [
+      "normal data_exit/profile及独立data/backup/restore/control根",
+      "固定3活动及单一PG预算账",
+      "QAuthority根一次绑定manifest/grant/instance/source注册/volume-file-id/PG cluster/database OID",
+      "部署/worker同一有效grant/manifest与returned_models"
+    ],
+    "no_automatic_secret_file_loader": "没有证据表明local.env.example会自动载入；密钥必须由正常启动进程安全环境注入，禁止命令行明文值"
+  },
+  "future_existing_readonly_entry": {
+    "method": "GET",
+    "path": "/api/activities/capabilities",
+    "source": "backend/app/activities/api.py:203-279",
+    "requires": "新正式卡允许启动且同源session/正常DataContext就绪；GET会探PG，非本卡零PG许可",
+    "fields": [
+      "storage_ready/storage_reason",
+      "create/continue/learning/teaching可用与reason",
+      "provider.provider/model",
+      "quota_preview",
+      "retrieval.available/reason/provider/model/dimensions/batch_size/reserve",
+      "q_approval.available/reason/execution_class/real_outbound_authorized"
+    ],
+    "expected_before_activation": "storage_ready true、期望候选配置可辨、q_approval.available=false/reason=q_disabled/real_outbound_authorized=false；两provider不外发。真实主体/limits仍须补下述诊断。",
+    "expected_after_future_activation": "同一normal绑定；q_approval.execution_class=Q且available/real_outbound_authorized=true，retrieval身份/分额一致；不以此单字段取代账号/计量门",
+    "failure": "任一未知/错身份/TESTONLY/只读/预算不匹配即停止后继，不用configure_application作手工试探"
+  },
+  "readonly_observability_gap": {
+    "exists": true,
+    "why": "当前capabilities不公开服务器进程key presence、returned_models/实际服务限额、grant/price/manifest/instance非敏感指纹，也不区分全部装载门。无grant时continue reason会被outbound_not_authorized覆盖。",
+    "minimum_future_implementation_location": "沿现有backend/app/activities/api.py::capabilities及main已载入app.state增加一份非敏感readiness投影；不新建平台/自动授权接口。",
+    "fields_to_add": [
+      "model_key_present/embedding_key_present（仅正常服务器当次布尔值）",
+      "configured_model/embedding及严格returned_models",
+      "effective timeout/request/response/output limits",
+      "mode/schema_profile/instance与grant/manifest/price/activation摘要是否匹配",
+      "每项verified证据引用及错误原因，绝不输出密钥/DSN/私有路径/正文"
+    ],
+    "implementation_status": "NOT_IMPLEMENTED_IN_TASK122",
+    "failure_behavior": "不完整/未知返回available=false及逐项reason；不构造ControlHub/QAuthority、不装载私有配置、不写日志/查PG以修补诊断。只从已装载、已认证状态读取；需要PG的现有storage probe明确区分。"
+  },
+  "activation_receipt_compatibility_gap": {
+    "source": "backend/app/retrieval/service.py:79-80",
+    "observation": "真实Q activation receipt的TASK目前只接受TASK-117/TASK-120；后续新正式执行卡若如实填新TASK将retrieval_config_invalid。",
+    "prohibited": "不得为通过loader冒写新操作属于旧120或借旧ticket续权。",
+    "minimum_future_change": "先由主控明确下一回执TASK字段的真实谱系及新的执行授权，既有已实现谱系若能如实表达则直接复用。只有确须新TASK字段且当前不兼容时，才在下一实施卡定向适配该明确谱系；不开放任意TASK或弱化stage/status/hash/audit门。",
+    "status": "条件性部署兼容限制，非已确认必改缺陷；下一回执尚未冻结，本卡无修改"
+  }
+}

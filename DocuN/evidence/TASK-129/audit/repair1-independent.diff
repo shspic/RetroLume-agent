@@ -1,0 +1,76 @@
+--- before/deploy/initialize_normal.py
++++ after/deploy/initialize_normal.py
+@@ -318,12 +318,15 @@
+ 
+ def connect(config, credentials):
+     # 本函数仅在显式 apply 或完整收据 verify 的本地校验通过后调用。
++    # libpq treats service='' as an actual empty service name. Reject ambient
++    # service selection before calling the driver; never read user service files.
++    require(not any(name in os.environ for name in ("PGSERVICE", "PGSERVICEFILE")), "ambient_service_rejected")
+     import psycopg
+     from psycopg.rows import dict_row
+     target = config["target"]
+     return psycopg.connect(host=target["host"], hostaddr=target["host"], port=target["port"], dbname=target["database"],
+         user=target["installer_login"], password=credentials["installer_password"],
+-        connect_timeout=3, autocommit=True, row_factory=dict_row, sslmode="disable", service="",
++        connect_timeout=3, autocommit=True, row_factory=dict_row, sslmode="disable",
+         options="-c search_path=public,pg_catalog -c statement_timeout=60000 -c lock_timeout=3000 -c idle_in_transaction_session_timeout=60000")
+ 
+ 
+--- before/backend/tests/test_normal_install.py
++++ after/backend/tests/test_normal_install.py
+@@ -489,7 +489,8 @@
+             self.assertEqual(kwargs["connect_timeout"], 3)
+             self.assertIs(kwargs["autocommit"], True)
+             self.assertIs(kwargs["row_factory"], dict_row)
+-            self.assertEqual((kwargs["sslmode"], kwargs["service"]), ("disable", ""))
++            self.assertEqual(kwargs["sslmode"], "disable")
++            self.assertNotIn("service", kwargs)
+             self.assertIn("search_path=public,pg_catalog", kwargs["options"])
+             captured.append({"purpose": purpose, **{key: kwargs[key] for key in ("host", "hostaddr", "port", "dbname", "user")}})
+             recorder = Recorder(config, self.bundle, server_address="172.18.0.2")
+@@ -511,6 +512,21 @@
+         self.assertFalse(any(call.startswith("write:") for call in recorders[-1].calls))
+         REPAIR_OBSERVATIONS["F126-01"] = {"driver_kwargs": captured, "real_authentication_exercised": False,
+                                           "synthetic_environment_preserved": True, "server_address": "172.18.0.2", "server_port": 5432}
++
++    def test_22_ambient_service_is_rejected_before_driver_without_environment_changes(self):
++        import psycopg
++        config = self.complete_config()
++        environment = self.credentials(config)
++        credentials = {"installer_password": environment[config["credential_env"]["installer_password"]]}
++        for key in ("PGSERVICE", "PGSERVICEFILE"):
++            for value in ("", "synthetic-untrusted-service"):
++                with self.subTest(key=key, value=value), patch.dict(os.environ, {**environment, key:value}, clear=True), patch.object(psycopg, "connect") as driver:
++                    before = dict(os.environ)
++                    with self.assertRaises(INSTALL.InstallError) as raised:
++                        INSTALL.connect(config, credentials)
++                    self.assertEqual(raised.exception.args[0], "ambient_service_rejected")
++                    driver.assert_not_called()
++                    self.assertEqual(dict(os.environ), before)
+ 
+     def test_20_real_short_alias_is_rejected_before_plan_or_receipt_write(self):
+         self.assertEqual(os.name, "nt", "actual_windows_short_alias_required")
+--- before/deploy/normal-install.md
++++ after/deploy/normal-install.md
+@@ -1,6 +1,8 @@
+ # 正常首次安装工具
+ 
+-`initialize_normal.py` 是独立新 PostgreSQL 17 集群中已明确创建的全新空数据库首次安装入口，目标为 `data_exit.v1.r03`。它不创建数据库、容器、卷或服务。当前交付是离线工程候选；本轮没有执行真实安装、数据库查询、角色操作或正常启动。首次真实 apply 前须完成一次安装迁移及角色权限独立审查，并由后续运行卡冻结精确资源及许可。
++`initialize_normal.py` 是独立新 PostgreSQL 17 集群中已明确创建的全新空数据库首次安装入口，目标为 `data_exit.v1.r03`。它不创建数据库、容器、卷或服务。原TASK125/126的离线工程及独审范围保留，真实操作须有冻结精确资源的运行许可。
++
++TASK128已在授权隔离库确认并修正空串service连接失败：不再传`service=''`，连接前发现环境中存在`PGSERVICE`或`PGSERVICEFILE`即以`ambient_service_rejected`拒绝，不读取用户service配置、不修改环境；显式host/hostaddr=127.0.0.1及身份核验保留。修后正式只读连接成功，两项定向离线方法通过。当前原身份预检仍拒绝PostgreSQL实际地址文本`172.19.0.2/32`，完整安装、角色权限和正常启动六项尚未通过；不得据连接修复宣称已可完成真实安装。连接增量待独立复核，地址格式问题及后续资源额度待主控处理。
+ 
+ ## 本地帮助与计划
+ 
+--- before/README.md
++++ after/README.md
+@@ -31,6 +31,8 @@
+ 设置两个互相独立、已存在的绝对目录：`RETROLUME_DATA_DIR` 与 `RETROLUME_BACKUP_DIR`。资料与备份可位于项目外，但它们是数据配置，不能指向外部源码。可参考 `config/local.env.example`，不要提交真实路径、连接串或密码。
+ 
+ 若要连接既有本地 PostgreSQL，再在当前会话设置 `RETROLUME_DATABASE_URL`，或在 `config/database.local.json` 保存仅本机使用的私有配置（该文件已忽略）。应用不会自动创建数据库或迁移用户库。旧 `deploy/initialize-materials.py` 仅处理001；完整001—015首次空库安装使用 [正常首次安装说明](deploy/normal-install.md) 中的 `deploy/initialize_normal.py`，默认只显示帮助，`plan` 无数据库操作，真实 `apply` 仍需另行精确许可与独立风险审查。模型调用需要完整配置和用户显式动作，读取、零费新建及刷新不会启动模型。
++
++TASK128已修复并实证空串service连接故障，但原身份预检仍拒绝PG实际带主机掩码的地址文本，完整安装及六项部署验证未通过，详见上述正常首次安装说明。
+ 
+ 开发健康检查可在设置上述两个目录后运行：
+ 

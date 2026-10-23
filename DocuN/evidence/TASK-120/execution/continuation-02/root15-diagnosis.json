@@ -1,0 +1,11 @@
+{
+  "failure": "root-15-batch-01-failure.json: retained_Q_assembly_not_ready",
+  "actual_runtime": "Root15 observe failed; all other stages SKIPPED_DEPENDENCY; API/Browser/Native/HTTP counts unchanged; original CID stopped/Pid0 and ports released.",
+  "source_level_diagnosis": "New recovery.observe omitted transport.install before normal create_app. operator/q_request.py configure_application rejects TESTONLY when HttpxModelTransport.is_external is true. Old observe called run_reopen first, which installed the transport; new observer deliberately removed redundant C12 work and lost that prerequisite.",
+  "evidence_grade": "A for original failure and cleanup; B for the deterministic missing-install source diagnosis, not a captured internal configure_application exception code",
+  "correction": "Install the original permitted lowest TESTONLY transport before readonly create_app, same as application/bootstrap; retain normal verifier and write safe readiness reason on any new failure.",
+  "remaining_root":16,
+  "no_budget_reset":true,
+  "no_product_guard_relaxation":true,
+  "no_C12_rerun":true
+}

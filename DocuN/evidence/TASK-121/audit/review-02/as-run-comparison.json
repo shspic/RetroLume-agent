@@ -1,0 +1,100 @@
+{
+  "products": [
+    {
+      "path": "root-62-batch-01-as-run.json",
+      "utc": "2026-10-21T11:14:11.499912+00:00",
+      "sha256": "e33714e0bae951b674794e953ab4fe4ecf55606784c34432ff43b48774bb686d",
+      "stage": {
+        "id": "admin_combination",
+        "phase": "r08_permissions",
+        "seconds": 90,
+        "depends_on": []
+      },
+      "product_count": 178,
+      "product_drift": [],
+      "fixture_differences": []
+    },
+    {
+      "path": "root-63-batch-01-as-run.json",
+      "utc": "2026-10-21T11:49:53.795337+00:00",
+      "sha256": "c30ceb14414ee501c071d48cdf2aefdd050db56c47cf2b69d1f2e82ec6132f6b",
+      "stage": {
+        "id": "memory_pending_retry",
+        "phase": "r08_memory",
+        "seconds": 300,
+        "depends_on": []
+      },
+      "product_count": 178,
+      "product_drift": [],
+      "fixture_differences": [
+        {
+          "path": "backend/tests/fixtures/task120/repair08_memory.py",
+          "sha256": "ae9c67bc1f5c98b6a684366baaad3c40cbef6ed86614a13c84d000d87ae8e2ea",
+          "actual": "8c10f1d8a18f252aa77d5fd1b9d73c5723535661b2b61bea5ec7e375ce4bcc12"
+        }
+      ]
+    },
+    {
+      "path": "root-64-batch-01-as-run.json",
+      "utc": "2026-10-21T11:57:11.938634+00:00",
+      "sha256": "38022a7814c416fa5448b7dd6edba7c5c770c3ece717df3c36547dc34e82dbe4",
+      "stage": {
+        "id": "memory_pending_retry",
+        "phase": "r08_memory",
+        "seconds": 300,
+        "depends_on": []
+      },
+      "product_count": 178,
+      "product_drift": [],
+      "fixture_differences": []
+    },
+    {
+      "path": "root-64-batch-02-as-run.json",
+      "utc": "2026-10-21T11:57:30.155810+00:00",
+      "sha256": "efa16218f49ffb23b251c092651e36b51d097a176a5acdcaa8b197f24d6b4c00",
+      "stage": {
+        "id": "financial",
+        "phase": "r08_final",
+        "seconds": 60,
+        "depends_on": [
+          "memory_pending_retry"
+        ]
+      },
+      "product_count": 178,
+      "product_drift": [],
+      "fixture_differences": []
+    }
+  ],
+  "fixtures": [
+    {
+      "folder": "asrun-root063",
+      "path": "backend/tests/fixtures/task120/repair08_memory.py",
+      "saved_sha256": "ae9c67bc1f5c98b6a684366baaad3c40cbef6ed86614a13c84d000d87ae8e2ea",
+      "final_sha256": "8c10f1d8a18f252aa77d5fd1b9d73c5723535661b2b61bea5ec7e375ce4bcc12",
+      "normalized_diff": "--- asrun-root063/backend/tests/fixtures/task120/repair08_memory.py\n\n+++ final/backend/tests/fixtures/task120/repair08_memory.py\n\n@@ -3,7 +3,7 @@\n\n The inherited three activity selections cannot normally select a new memory.\n This never pretends the dependency fixture is a normal model-chain proof.\n \"\"\"\n-import json,os,subprocess,time\n+import gc,json,os,subprocess,time\n from pathlib import Path\n from uuid import uuid4\n from copy import deepcopy\n@@ -113,6 +113,9 @@\n\n             case('F03-memory-failure-POST-and-three-GETs',lambda:{'POST':receipt,'views':projected,'closed':closed,\n                 'exact_faults':1,'file_still_same_identity_hash':True,'financial_operations_007_unchanged':True,\n                 'sample_method':'explicitly adopted non-authorizing dependency fixture; not normal model chain'})\n+        # Do not retain a closed FastAPI app/ledger cycle across API lifetimes.\n+        del c,authority\n+        gc.collect()\n     mid=state['save']['memory_id'];key=state['revoke']['business_key'];pid=state['prepared_id']\n     folder=r.PRIVATE/SLOT/('repair08-browser-'+str(r.state()['active_root']));folder.mkdir(exist_ok=True)\n     handshake=folder/'handshake';handshake.mkdir(exist_ok=True)\n@@ -135,16 +138,22 @@\n\n             done=views(c,mid,key,'done');assert not os.path.lexists(authority.hub.artifact_path('q-prepared',pid))\n             case('F03-memory-explicit-UI-retry-done',lambda:{'views':done,'file_absent':True,'closed':bodies_closed(c,authority,[row]),\n                 'financial_operations_007_unchanged':witness(authority)==state['before']})\n-        with application(SLOT) as c:\n-            authority=authority_for(c.app.state.activities_ledger);done=views(c,mid,key,'done')\n-            r.write(handshake/'api-reopened.json',{'ready':True})\n+            # Root63 already stopped the original API. This API is the actual\n+            # same-DB/control reopen; after retry, reload the same browser page.\n+            # A third concurrent app allocation is outside the needed proof.\n+            r.write(handshake/'verify-page-reopen.json',{'ready':True})\n             process.wait(timeout=60);log.close();assert process.returncode==0\n             ui=json.loads(proof.read_text(encoding='utf-8'));assert ui['status']=='PASS'\n+            from app.data_exit.control import ControlHub\n+            replayed=ControlHub(authority.hub.root)\n+            assert replayed.control_id==authority.hub.control_id\n+            assert replayed.state()['q']['requests'][pid]['cleanup']['state']=='done'\n             for identity,expected in state['unrelated_hashes'].items():assert raw_digest(authority.hub.artifact_path('q-prepared',identity).read_bytes())==expected\n             assert witness(authority)==state['before']\n             case('F03-memory-final-reopen-confirmed',lambda:{'views':done,'same_control':authority.hub.control_id,\n                 'original_DB_purge_not_rolled_back':True,'target_file_absent':True,'unrelated_files_unchanged':True,\n                 'before':state['before'],'after':witness(authority),'UI_proof':proof.name,\n+                'fresh_control_journal_replay_done':True,'API_reopen_pending_and_page_reopen_done':True,\n                 'no_new_model_or_embedding_admission':True,'no_new_approval_or_claim':True})\n     finally:\n         if process is not None and process.poll() is None:process.terminate();process.wait(timeout=5)"
+    },
+    {
+      "folder": "asrun-root063",
+      "path": "frontend/tests/task120-repair08-memory.mjs",
+      "saved_sha256": "db1b1bd2bdceec84ef5d531950a0087cfb7976c28730e8d824f8db4164b13b98",
+      "final_sha256": "e26ee14dc0630d24f07c65275be1f5e548a24b298d319d841dae266ea47d8490",
+      "normalized_diff": "--- asrun-root063/frontend/tests/task120-repair08-memory.mjs\n\n+++ final/frontend/tests/task120-repair08-memory.mjs\n\n@@ -63,8 +63,8 @@\n\n  await page.waitForLoadState('networkidle');await snapshot('explicit-retry-done','done');\n  assert.equal(proof.requests.filter(x=>x.method==='POST').length,1);mark('done',{state:'done',explicit_POSTs:1});\n  const until=Date.now()+60000;\n- while(!fs.existsSync(path.join(spec.handshake,'api-reopened.json'))){assert(Date.now()<until);await new Promise(resolve=>setTimeout(resolve,50));}\n- await page.reload({waitUntil:'networkidle'});await snapshot('second-API-reopened-done','done');\n+ while(!fs.existsSync(path.join(spec.handshake,'verify-page-reopen.json'))){assert(Date.now()<until);await new Promise(resolve=>setTimeout(resolve,50));}\n+ await page.reload({waitUntil:'networkidle'});await snapshot('page-reopened-done','done');\n  await Promise.all(pendingResponses);assert.equal(proof.errors.length,0);assert.equal(proof.requests.filter(x=>x.method==='POST').length,1);\n  proof.status='PASS';proof.one_headless_context_one_page=true;proof.no_model_or_embedding_POST=true;proof.formal_dist_hashes_bound=true;save();\n }catch(error){proof.status='FAIL';proof.error=String(error);proof.stack=error.stack;save();process.exitCode=1;}"
+    },
+    {
+      "folder": "asrun-root064",
+      "path": "frontend/tests/task120-repair08-memory.mjs",
+      "saved_sha256": "e26ee14dc0630d24f07c65275be1f5e548a24b298d319d841dae266ea47d8490",
+      "final_sha256": "e26ee14dc0630d24f07c65275be1f5e548a24b298d319d841dae266ea47d8490",
+      "normalized_diff": ""
+    },
+    {
+      "folder": "asrun-command1000",
+      "path": "backend/tests/test_q_repair08.py",
+      "saved_sha256": "afe3f5c2785e63ca3cbe2c4ab41b8684d6eab1d9f993c066b88b2d16a94a4891",
+      "final_sha256": "4e38c4c7ea162642b1d3e610b891fa9d0c62adf30da0a7deb509b6ffef957267",
+      "normalized_diff": "--- asrun-command1000/backend/tests/test_q_repair08.py\n\n+++ final/backend/tests/test_q_repair08.py\n\n@@ -47,6 +47,8 @@\n\n \n class ReadProjectionTests(TestCase):\n     def test_persistent_pending_done_unknown_and_readonly_compatibility(self):\n+        import faulthandler\n+        faulthandler.dump_traceback_later(10,exit=True)\n         root=Path(__file__).resolve().parents[2]/'.runtime/task120-audit07/offline08'/str(uuid4())\n         root.mkdir(parents=True);hub=ControlHub(root);lock=RootLease(root,'.q-policy.lock')\n         mid=str(uuid4());pid=str(uuid4())\n@@ -87,3 +89,4 @@\n\n             ledger.mutation_gate=None\n             self.assertEqual((await read_projected(ledger,raw))['purge_state'],'done')\n         asyncio.run(check())\n+        faulthandler.cancel_dump_traceback_later()"
+    }
+  ],
+  "browser_extra_hash_timing": "post-stop reconstruction, not a contemporaneous pre-execution JS digest",
+  "offline_identity_limit": "1002 method/log and later checkpoint support coverage; no invented contemporaneous all-product hash receipt"
+}

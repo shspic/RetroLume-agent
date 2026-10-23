@@ -1,0 +1,60 @@
+--- before/backend/app/data_exit/control.py
++++ after/backend/app/data_exit/control.py
+@@ -166,9 +166,10 @@
+ 
+     def q_decide(self, kind, decide):
+         """Q-only CAS. Decision seq is selected under the actual journal lock (K1)."""
+         if kind not in ('q.bind','q.prepared','q.approved','q.revoked','q.claim','q.launch_claim',
+-                        'q.admission_intent','q.admission_observed','q.closed'):
++                        'q.admission_intent','q.admission_observed','q.closed',
++                        'q.approval_seen','q.approval_invalidated','q.cleanup_pending','q.cleanup_done'):
+             raise DataError('q_event_not_allowed')
+         with self.lock.acquire(True, timeout=1):
+             cached = self._validated_locked(writable=True)
+             state, events = json.loads(cached[1]), cached[4]
+@@ -177,8 +178,29 @@
+                 return None
+             self._append(events, kind, payload)
+             return payload
+ 
++    def q_observe_approval(self,pid,result):
++        """Clock check and its irreversible witness share the journal CAS."""
++        from . import q_clock
++        with self.lock.acquire(True,timeout=1):
++            cached=self._validated_locked(writable=True)
++            state=json.loads(cached[1]);row=state.get('q',{}).get('requests',{}).get(pid)
++            if row is None or not row.get('approval'):result['valid']=False;return
++            approval=row['approval'];aid=approval['approval_id']
++            invalid=row.get('invalid_approvals',{}).get(aid)
++            if invalid:result['valid']=False;return
++            # Sample inside the lock: concurrent valid readers cannot commit
++            # observations out of order and manufacture a UTC regression.
++            try:now=q_clock.sample()
++            except (DataError,OSError,AttributeError):now=None
++            reason='q_clock_domain_unknown' if now is None else q_clock.validate(approval['body'],row.get('approval_seen'),now)
++            result['valid']=reason is None
++            payload={'prepared_id':pid,'approval_id':aid}
++            if reason:kind='q.approval_invalidated';payload['reason']=reason
++            else:kind='q.approval_seen';payload['sample']=now
++            self._append(cached[4],kind,payload)
++
+     @staticmethod
+     def receipt(job):
+         return {key: job[key] for key in PUBLIC_JOB if key in job}
+ 
+@@ -186,8 +208,15 @@
+         receipt = self.receipt(job)
+         if job.get('completion_protocol') == 1 and job['state'] in ('published','received','verified','active_readonly','deleted','deleted_pending'):
+             confirmation=job.get('completion_confirmed_ns')
+             deadline=job.get('execution',{}).get('deadline_ns')
++            if job['kind']=='source_delete' and job.get('cleanup_execution'):
++                attempt=job['cleanup_execution'];proof=job.get('cleanup_confirmation') or {}
++                deadline=attempt.get('deadline_ns')
++                confirmation=proof.get('confirmed_ns') if (
++                    proof.get('actor_id')==attempt.get('actor_id')
++                    and proof.get('clock_domain')==attempt.get('clock_domain')
++                    and proof.get('tombstone_id')) else None
+             if type(confirmation) is not int or type(deadline) is not int or not 0 < confirmation < deadline:
+                 receipt.update(state={'portable_export':'published_unconfirmed','restore_checkpoint':'published_unconfirmed',
+                     'upload':'upload_unconfirmed','restore':'restore_unconfirmed','activate':'activation_unconfirmed',
+                     'source_delete':'deletion_unconfirmed'}[job['kind']],stage='completion_unconfirmed')

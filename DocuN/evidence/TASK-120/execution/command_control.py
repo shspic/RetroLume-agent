@@ -70,9 +70,9 @@ def main():
     write_json(budget_path,budget)
     record = {'command_id':command_id,'manifest':path.name,'start_utc':now.isoformat(),'limit_seconds':manifest['seconds']}
     try:
-        if manifest['label']=='frontend-final-build':
+        if manifest['label'] in ('frontend-final-build','root-control-probe'):
             from tests.fixtures.task120.resources import root_job,count
-            count('frontend_builds')
+            if manifest['label']=='frontend-final-build':count('frontend_builds')
             owner=root_job(command_id)
         else:owner=NamedJob.create(command_id,1,max_processes=4)
         with owner as job:

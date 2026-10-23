@@ -1,0 +1,22 @@
+{
+  "status": "PASS_ENGINEERING_RISK_CHECK_NOT_INDEPENDENT_AUDIT",
+  "before_real_GRANT": true,
+  "grant_objects": [
+    [
+      "DELETE",
+      "public.activity_scope_sources",
+      "retrolume_data_app"
+    ]
+  ],
+  "migration015_sha256": "59b2e556a81a5383e9144a967fa90b5abedb26284d50cbf150db1dd77f34ef0e",
+  "001_014_exact_hashes_unchanged": true,
+  "R01_R02_all_frozen_constants_unchanged": true,
+  "new_profile": "data_exit.v1.r03",
+  "table_columns_and_codec_shape_unchanged": true,
+  "exact_acl_rejections_unit_tests": 3,
+  "guard": "Existing data_runtime_write remains BEFORE INSERT/UPDATE/DELETE; nonnormal is rejected. Table ACL is not per-activity CAS.",
+  "rollback": "Only new synthetic instance: REVOKE this DELETE plus matching R02 profile constraint/metadata/config; retains committed business data. No rollback executed.",
+  "wire_backup_format_financial_SUP_unchanged": true,
+  "runtime_validation": "NOT_YET_RUN",
+  "diff": "pre-execution.diff"
+}

@@ -245,7 +245,8 @@ class InterviewLedgerMethods:
             replay=await self._interview_replay(connection,state,aid,command)
             if replay:return
             self._interview_cas(state,command); self._interview_gate(state,command.action,command.schema_id)
-            transition(command.action,state['head'],command.body)
+            abandon_target=next((c for c in state['commands'] if str(c['business_key'])==command.body['pending_key']),None) if command.action=='abandon' else None
+            transition(command.action,state['head'],command.body,abandon_target=abandon_target)
             h=plain(state['head']) if state['head'] else dict(revision=0,goal_version=0,phase='needs_goal',last_seq=0,round_index=0,probe_depth=0,
                 goal_record_id=None,root_question_id=None,current_question_id=None,current_answer_id=None,current_feedback_id=None,pending_key=None,
                 scope_revision=state['activity']['scope_revision'])
@@ -307,7 +308,10 @@ class InterviewLedgerMethods:
                 for n in new:
                     cursor=await connection.execute('SELECT sha256 FROM public.material_versions WHERE id=%s AND source_id=%s',(n['version_id'],n['source_id']))
                     actual=await cursor.fetchone()
-                    if not actual or actual['sha256']!=n['original_sha256']:raise InterviewRefusal('source_invalid')
+                    current=locked.get(n['source_id'])
+                    if (not actual or actual['sha256']!=n['original_sha256'] or current is None
+                        or current['current_version']!=n['version_id'] or current['revision']!=n['source_revision']):
+                        raise InterviewRefusal('source_invalid')
                 await self._apply_scope_locked(connection,aid,state['activity'],locked,command.expected_scope_revision,
                     tuple(SourceSnapshot(n['source_id'],n['version_id'],n['source_revision']) for n in new),force_revision=True)
                 h.update(scope_revision=h['scope_revision']+1,goal_version=h['goal_version']+(1 if oldgoal else 0),phase='ready' if oldgoal else 'needs_goal',round_index=0,probe_depth=0,

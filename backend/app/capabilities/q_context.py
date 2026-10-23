@@ -6,9 +6,23 @@ from uuid import uuid4
 from .q_protocol import (PreparedRequest, canonical, digest, raw_digest, utcnow, service_identity)
 from .contracts import AdmissionDenied
 
+
+def public_boundary(function):
+    from functools import wraps
+    @wraps(function)
+    async def wrapped(*args,**kwargs):
+        try:return await function(*args,**kwargs)
+        except AdmissionDenied as exc:
+            import logging,re
+            code=str(exc) if re.fullmatch('[a-z0-9_]{1,80}',str(exc)) else 'q_eligibility_denied'
+            logging.getLogger(__name__).warning('q_request_rejected code=%s field=%s value_sha256=%s',code,getattr(exc,'q_path',None),getattr(exc,'q_value_sha256',None))
+            from app.data_exit.contracts import DataError
+            raise DataError('q_request_not_approved',409) from None
+    return wrapped
+
 TEXT_FIELDS=frozenset(('content','input','goal','target','focus','question','text','answer_text','title','objective',
                       'message','summary','explanation','answer_excerpt','reference_explanation','hint',
-                      'self_report','clarifications','corrections','prior_observations','previous_result'))
+                      'self_report','clarifications','corrections','prior_observations','previous_result','rationale'))
 
 DERIVATION_POLICY={'schema':'retrolume.q-derivation.v2','authority':'same-instance-same-grant-current-activity',
     'parents':['teaching-active-ancestor-records','interview-active-ancestor-records','validated-legacy-learning-007'],
@@ -20,7 +34,7 @@ def check_input_bytes(raw, parsed, service):
     """Q never silently approves text normalized by an older input validator."""
     from .q_gateway import is_v2
     if service is None or not is_v2(service):return
-    cooked=parsed.model_dump(mode='json')
+    cooked=parsed.model_dump(mode='json',by_alias=True)
     def compare(before,after):
         if isinstance(before,str):
             if not isinstance(after,str) or before.encode('utf-8')!=after.encode('utf-8'):
@@ -65,6 +79,13 @@ def target_identity(dsn):
 
 
 async def snapshot(ledger,aid):
+    gate=getattr(ledger,'mutation_gate',None)
+    q=(gate.hub.state().get('q') if gate is not None else None)
+    def qualified(operation_id,admission_id,generation):
+        if q is None:return True
+        row=next((row for row in q['requests'].values() if (row['prepared']['activity_id'],row['prepared']['operation_id'])==(aid,operation_id)),None)
+        return bool(row and row.get('claim') and not row.get('revoked') and not row.get('closed') and row.get('admission')=={
+            'activity_id':aid,'operation_id':operation_id,'admission_id':str(admission_id),'execution_generation':generation})
     async def q_snapshot(connection):
         from app.data_exit.codec import plain
         cursor=await connection.execute('SELECT public.data_state() AS state,(SELECT oid FROM pg_database WHERE datname=current_database()) AS database_oid')
@@ -106,7 +127,8 @@ async def snapshot(ledger,aid):
                     command=await cursor3.fetchone()
                     if (result and command and not command['obsolete'] and command['status']=='committed'
                         and result['state']=='received' and result['kind']=='model' and result['scope_revision']==activity['scope_revision']
-                        and result['payload_sha256']==row['body_sha256'] and raw_digest(result['payload'])==row['body_sha256']):
+                        and result['payload_sha256']==row['body_sha256'] and raw_digest(result['payload'])==row['body_sha256']
+                        and qualified(row['operation_id'],result['admission_id'],result['execution_generation'])):
                         derived.extend(string_values(json.loads(result['payload'])['value']))
                         parents[-1].update(admission_id=str(result['admission_id']),execution_generation=result['execution_generation'],payload_sha256=result['payload_sha256'])
         for domain,table in (('teaching','teaching_commands'),('interview','interview_commands'),('html','html_commands'),('retrieval','retrieval_commands')):
@@ -114,7 +136,10 @@ async def snapshot(ledger,aid):
             for row in await cur.fetchall():
                 metadata=[]
                 for name in ('request_body','context_body'):
-                    if row.get(name):metadata.extend(metadata_values(json.loads(row[name])))
+                    if row.get(name):
+                        document=json.loads(row[name]);metadata.extend(metadata_values(document))
+                        if name=='context_body' and isinstance(document.get('messages'),list):metadata.append(digest(document['messages']))
+                metadata.extend(row[name] for name in ('space_id','manifest_sha256','query_sha256') if row.get(name))
                 commands.append({'domain':domain,'business_key':str(row['business_key']),'request_sha256':row['request_sha256'],
                     'context_sha256':row.get('context_sha256',row.get('manifest_sha256')),
                     'operation_id':row.get('operation_id'),'metadata':sorted(set(metadata))})
@@ -130,6 +155,7 @@ async def snapshot(ledger,aid):
     for operation_id in await ledger._transaction(q_snapshot_legacy):
         result=await ledger.read_committed_result(aid,operation_id)
         if result.read_status.value!='committed_current' or result.payload is None:continue
+        if not qualified(operation_id,result.admission_id,result.execution_generation):continue
         try:profile,output=read_document(json.loads(result.payload)['value'],activity_id=aid,operation_id=operation_id)
         except (ValueError,TypeError,KeyError):continue
         if profile.scope_revision!=state['activity']['scope_revision']:continue
@@ -137,6 +163,10 @@ async def snapshot(ledger,aid):
             'execution_generation':result.execution_generation,'payload_sha256':result.payload_sha256})
         ids.extend((operation_id,result.payload_sha256,profile.request_sha256))
         derived.extend(string_values(output.model_dump(mode='json')))
+        # Legacy followup serializes this exact validated parent output as one
+        # canonical history string. Trust that immutable whole value, rather
+        # than admitting arbitrary nested keys or reconstructed history text.
+        derived.append(canonical(output.model_dump()))
     return state,ids,derived
 
 
@@ -165,11 +195,11 @@ def validate_provenance(authority,request,payload,state,ids,derived,action,bindi
     identity=set(ids)|{aid}|{s['source_id'] for s in state['sources']}|{s['version_id'] for s in state['sources']}
     # Only server-built identity/hash fields may carry these values; text fields are checked separately.
     structural={'schema','profile','activity_id','operation_id','business_key','command_key','request_sha256','context_sha256',
-        'goal_record_id','path_record_id','exercise_record_id','answer_record_id','correction_record_id','parent_record_id',
+        'goal_record_id','path_record_id','node_id','exercise_record_id','answer_record_id','correction_record_id','parent_record_id',
         'parent_operation_id','parent_payload_sha256','parent_feedback_record_id','parent_exercise_record_id','record_id',
         'source_id','version_id','source_version_id','original_sha256','unit_sha256','fragment_sha256','evidence_id','citation_id','identity_sha256','manifest_sha256',
         'id','space_id','query_sha256','result_sha256','memory_id','body_sha256','selection_sha256','dependency_sha256',
-        'memory_selection_sha256','memory_dependency_sha256','assembled_messages_sha256','messages_sha256','renderer_sha256'}
+        'memory_selection_sha256','memory_dependency_sha256','assembled_messages_sha256','messages_sha256','renderer_sha256','config_sha256'}
     metadata=set()
     def collect(value):
         if isinstance(value,dict):
@@ -197,6 +227,37 @@ def validate_provenance(authority,request,payload,state,ids,derived,action,bindi
     allowed_derived=set(derived)
     source_hashes={x['input_sha256'] for x in manifest.fragments}
     records=[]
+    # Frozen interview contexts are typed data inside a JSON message. Property
+    # names declared by those closed schemas are structure, including names
+    # supplied as Python keyword arguments (not literal template atoms). Their
+    # text values still require the same finite source/literal/parent proof.
+    context_fields=set()
+    teaching_node_fields=set()
+    if request.get('teaching_profile') is not None:
+        from app.learning.teaching_contracts import PathNode
+        teaching_node_fields=set(PathNode.model_fields)|{'node_id'}
+    if request.get('interview_profile'):
+        from app.interview.contracts import InterviewContext,InterviewHybridContext
+        def context_schema(value):
+            if isinstance(value,dict):
+                context_fields.update(value.get('properties',{}))
+                for child in value.values():context_schema(child)
+            elif isinstance(value,list):
+                for child in value:context_schema(child)
+        for model in (InterviewContext,InterviewHybridContext):context_schema(model.model_json_schema())
+    for parent in state.get('parents',[]):
+        if parent.get('operation_id') and 'admission_id' not in parent:raise AdmissionDenied('q_parent_unqualified')
+    profile=request.get('learning_profile') or {}
+    if profile.get('parent_operation_id') and not any(parent.get('operation_id')==profile['parent_operation_id'] for parent in state.get('parents',[])):
+        raise AdmissionDenied('q_parent_unqualified')
+    if request.get('html_profile'):
+        html=json.loads(request['html_profile']['context_json']);parent=html.get('parent',{})
+        if parent.get('kind')=='learning' and not any(row.get('operation_id')==parent.get('operation_id') for row in state.get('parents',[])):
+            raise AdmissionDenied('q_parent_unqualified')
+    def deny(code,path,value):
+        exc=AdmissionDenied(code)
+        exc.q_path='/'.join(map(str,path));exc.q_value_sha256=digest(value)
+        raise exc
     def walk(value,path=()):
         if isinstance(value,str):
             if value in authority.bundle['templates']:
@@ -219,11 +280,13 @@ def validate_provenance(authority,request,payload,state,ids,derived,action,bindi
             if field not in TEXT_FIELDS and (value in allowed_atoms or value in identity or (field in structural and value in metadata)):
                 return
             if value=='':return
-            raise AdmissionDenied('q_unapproved_text')
+            deny('q_unapproved_text',path,value)
         if isinstance(value,dict):
             for key,item in value.items():
-                if key not in allowed_atoms and key not in structural:
-                    raise AdmissionDenied('q_unapproved_field')
+                teaching_node_field=(len(path)>=3 and path[-3:-1]==('task','path_nodes')
+                    and type(path[-1]) is int and key in teaching_node_fields)
+                if key not in allowed_atoms and key not in structural and not ('json' in path and key in context_fields) and not teaching_node_field:
+                    deny('q_unapproved_field',path,key)
                 walk(item,path+(key,))
         elif isinstance(value,(list,tuple)):
             for index,item in enumerate(value):walk(item,path+(index,))
@@ -234,6 +297,7 @@ def validate_provenance(authority,request,payload,state,ids,derived,action,bindi
     return records
 
 
+@public_boundary
 async def prepare(ledger,aid,key,operation_id,request,service,payload,*,domain,action,intent=None):
     from app.data_exit.q_store import authority_for
     authority=authority_for(ledger)
@@ -262,22 +326,96 @@ async def prepare(ledger,aid,key,operation_id,request,service,payload,*,domain,a
             configured_model=service.model,service_sha256=service_identity(service),template_set_sha256=authority.manifest.template_set_sha256,
             snapshot=state,provenance_sha256=digest(provenance),max_output_tokens=getattr(request,'max_output_tokens',0),
             created_at=utcnow().isoformat(),valid_until=min(datetime.fromisoformat(state['activity']['deadline_at']),datetime.fromisoformat(authority.grant.valid_until_utc)).isoformat())
-        row=authority.prepare(p,raw,payload,provenance,intent)
-        projection=authority.projection(row,current=row['prepared']['snapshot']==state)
+        dependencies=await cleanup_dependencies(ledger,aid,state,raw,payload,intent)
+        row=authority.prepare(p,raw,payload,provenance,intent,dependencies=dependencies)
+        projection=authority.projection(row,current=row['prepared']['snapshot']==state,
+            pg_consumed=(await command_fact(ledger,row))['consumed'])
         ref=authority.reference(row) if projection['can_continue'] else None
         return projection,service.model_copy(update={'outbound_authorization':ref}) if ref else service
 
 
-async def public_projection(ledger,aid,key):
+async def cleanup_dependencies(ledger,aid,state,*documents):
+    """All selected historical versions and transitive memory/source edges.
+
+    This denial index contains identifiers only. The artifact digest continues
+    to bind the complete request/payload/provenance/intent original bytes.
+    """
+    from uuid import UUID
+    sources={s['source_id'] for s in state['sources']}
+    memories={m['memory_id'] for m in state['memory'].get('refs',[])}
+    def walk(value):
+        if isinstance(value,dict):
+            for key,item in value.items():
+                if key in ('source_id','memory_id','upstream_memory_id') and isinstance(item,str):
+                    try:identity=str(UUID(item))
+                    except ValueError:pass
+                    else:(sources if key=='source_id' else memories).add(identity)
+                walk(item)
+        elif isinstance(value,(list,tuple)):
+            for item in value:walk(item)
+        elif isinstance(value,str) and value[:1] in ('{','['):
+            try:parsed=json.loads(value)
+            except (ValueError,RecursionError):return
+            walk(parsed)
+    for document in documents:walk(document)
+    async def q_snapshot_dependencies(connection):
+        cursor=await connection.execute("""WITH RECURSIVE selected(memory_id,version) AS(
+          SELECT memory_id,version FROM public.activity_memory_choices WHERE activity_id=%s
+          UNION SELECT d.upstream_memory_id,d.upstream_version FROM public.learning_memory_dependencies d
+          JOIN selected s USING(memory_id,version) WHERE d.upstream_memory_id IS NOT NULL
+        ) SELECT s.memory_id::text,d.source_id::text,d.upstream_memory_id::text
+          FROM selected s LEFT JOIN public.learning_memory_dependencies d USING(memory_id,version)""",(aid,))
+        return await cursor.fetchall()
+    for dep in await ledger._transaction(q_snapshot_dependencies):
+        memories.add(dep['memory_id'])
+        if dep['upstream_memory_id']:memories.add(dep['upstream_memory_id'])
+        if dep['source_id']:sources.add(dep['source_id'])
+    return {'sources':sorted(sources),'memories':sorted(memories)}
+
+
+async def public_projection(ledger,aid,key,*,expected=False):
     from app.data_exit.q_store import authority_for
     authority=authority_for(ledger)
     if authority is None:return None
     rows=[r for r in authority.hub.state()['q']['requests'].values() if r['prepared']['activity_id']==aid and r['prepared']['business_key']==key]
-    if not rows:return None
+    if not rows:return {'state':'unavailable','can_continue':False,'reason':'q_request_not_prepared'} if expected else None
     state,_,_=await snapshot(ledger,aid)
-    values=[authority.projection(r,current=r['prepared']['snapshot']==state) for r in rows]
+    values=[authority.projection(r,current=r['prepared']['snapshot']==state,
+            pg_consumed=(await command_fact(ledger,r))['consumed']) for r in rows]
     if len(values)==1:return values[0]
     return {'state':'approved' if all(x['can_continue'] for x in values) else 'pending','can_continue':all(x['can_continue'] for x in values),'batches':values}
+
+
+async def q_snapshot_command_fact(ledger,row):
+    """Volatile PG consumption facts stay outside the frozen request snapshot.
+
+    A worker legitimately sees a started command after the API claim; it uses
+    check_reference/check_snapshot_sql instead of this UI/operator-only gate.
+    """
+    p=row['prepared'];domain=p['domain']
+    tables={'teaching':'teaching_commands','interview':'interview_commands',
+            'html':'html_commands','retrieval':'retrieval_commands'}
+    async def q_snapshot_command(connection):
+        if domain=='learning':
+            cursor=await connection.execute('SELECT state,disposition FROM public.activity_operations WHERE activity_id=%s AND operation_id=%s',
+                (p['activity_id'],p['operation_id']))
+            fact=await cursor.fetchone()
+            return {'exists':fact is not None,'status':fact['state'] if fact else None,'launch_claimed':False,
+                    'terminal':fact['disposition'] if fact else None,'consumed':fact is not None}
+        table=tables.get(domain)
+        if table is None:raise AdmissionDenied('q_command_domain_unknown')
+        cursor=await connection.execute('SELECT to_jsonb(c) AS fact FROM public.'+table+' c WHERE activity_id=%s AND business_key=%s',
+            (p['activity_id'],p['business_key']))
+        found=await cursor.fetchone();fact=found['fact'] if found else None
+        if fact is None:return {'exists':False,'status':None,'launch_claimed':False,'terminal':None,'consumed':True}
+        claimed=bool(fact.get('launch_claimed') or fact.get('launch_claimed_at'))
+        terminal=fact.get('terminal_disposition') or fact.get('effect_applied') or fact.get('obsolete') or fact.get('obsolete_at') or fact.get('abandoned_at')
+        return {'exists':True,'status':fact['status'],'launch_claimed':claimed,'terminal':bool(terminal),
+                'consumed':claimed or bool(terminal) or fact['status']!='accepted'}
+    return await ledger._transaction(q_snapshot_command)
+
+
+command_fact=q_snapshot_command_fact
 
 
 async def check_snapshot_sql(connection,state,authority):
@@ -302,8 +440,20 @@ async def check_snapshot_sql(connection,state,authority):
     for fact in authority.hub.state()['q']['observed'].values():
         cur=await connection.execute('SELECT 1 FROM activity_operations WHERE activity_id=%s AND operation_id=%s AND admission_id=%s AND execution_generation=%s',(fact['activity_id'],fact['operation_id'],fact['admission_id'],fact['execution_generation']))
         if await cur.fetchone() is None:raise AdmissionDenied('q_pg_rollback_detected')
+    # The intent/COMMIT/observation gap is not fresh money. An actual concurrent
+    # live writer can finish, but a dead/reused owner or unconfirmed ACK closes
+    # further admissions. This OS observation acquires no lease under a PG lock.
+    from app.preview.process import birth
+    from app.data_exit.q_kernel import admission_active
+    for row in authority.hub.state()['q']['requests'].values():
+        if not row.get('admission_intent') or row.get('admission') or row.get('closed')=='admission_denied':continue
+        owner=row.get('admission_owner',{});actual=birth(owner.get('pid',0))
+        if (row.get('closed') or actual.get('state')!='running' or actual.get('birth')!=owner.get('birth')
+            or not admission_active(owner.get('signal'))):
+            raise AdmissionDenied('q_admission_commit_unconfirmed')
 
 
+@public_boundary
 async def claim_approved(ledger,services,callback=None):
     """Explicit POST only; serialize last approval/currentness check with launch claim."""
     from app.data_exit.q_store import authority_for
@@ -317,6 +467,7 @@ async def claim_approved(ledger,services,callback=None):
         for service in services:
             row=authority.check_reference(service.outbound_authorization)
             if row.get('claim') or row.get('launch_claimed'):raise AdmissionDenied('q_launch_consumed')
+            if (await command_fact(ledger,row))['consumed']:raise AdmissionDenied('q_launch_consumed')
             state,_,_=await snapshot(ledger,row['prepared']['activity_id'])
             check_instance(authority,ledger,state)
             if state!=row['prepared']['snapshot']:raise AdmissionDenied('q_prepared_changed')

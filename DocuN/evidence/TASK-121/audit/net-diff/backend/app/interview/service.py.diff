@@ -1,0 +1,23 @@
+--- initial/backend/app/interview/service.py
++++ final/backend/app/interview/service.py
+@@ -119,11 +119,19 @@
+         if service.timeout_seconds>session.request_timeout_seconds:raise InterviewRefusal('interview_config_invalid','模型超时超过监督窗口',503)
+         try:OneCallInput(operation_id(command.business_key,command.schema_id),request,service).to_wire()
+         except (ValueError,TypeError):raise InterviewRefusal('interview_context_too_large','完整受控请求超过通道上限',422) from None
+         receipt=await self.ledger.accept_interview_command(aid,command,frozen) if stored is None else await self.ledger.read_interview_command(aid,command.business_key)
+         if receipt['status']!='accepted' or receipt['duplicate_of']:return receipt
+-        claim=await self.ledger.claim_interview_launch(aid,command.business_key,command.request_hash(aid))
++        from app.capabilities.q_gateway import is_v2
++        if is_v2(service):
++            from app.capabilities.q_context import prepare
++            from app.capabilities.gateway import ControlledModelGateway
++            projection,service=await prepare(self.ledger,aid,command.business_key,operation_id(command.business_key,command.schema_id),
++                request,service,ControlledModelGateway(service)._build_payload(request),domain='interview',action=command.action)
++            if not projection['can_continue']:return {**receipt,'outbound_approval':projection,'model_called':False}
++        from app.capabilities.q_context import claim_approved
++        claim=await claim_approved(self.ledger,service,lambda:self.ledger.claim_interview_launch(aid,command.business_key,command.request_hash(aid)))
+         if not claim['launch_allowed']:return await self.ledger.read_interview_command(aid,command.business_key)
+         task=asyncio.create_task(asyncio.to_thread(run_one_call,self.ledger,session,aid,'local-ui',claim['operation_id'],request,service,run_tag=run_tag))
+         cancelled=False;supervision=None
+         # The existing ASGI middleware also uses AnyIO level cancellation.
+         # Shield its scope while retaining explicit asyncio caller cancellation.

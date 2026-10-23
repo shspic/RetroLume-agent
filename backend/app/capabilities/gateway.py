@@ -240,6 +240,9 @@ class ControlledModelGateway:
             stage = "dispatch_scope_check"
             check_approved_scope()
         except AdmissionDenied as exc:
+            if stage=='admit':
+                from .q_gateway import admission_failed
+                admission_failed(definitely_denied=True)
             code = str(exc)
             if stage=="dispatch_scope_check":
                 # 已预扣/登记dispatch但尚未调用transport，明确未发送且不退款。
@@ -248,6 +251,8 @@ class ControlledModelGateway:
                 code = "admission_denied"
             return self._result(context, CallStatus.REJECTED, code)
         except AdmissionUnavailable:
+            from .q_gateway import admission_failed
+            admission_failed(definitely_denied=False)
             return self._result(context, CallStatus.REJECTED, "admission_unavailable")
         except Exception as exc:
             # 意外异常：稳定独立错误码，保持 REJECTED 且不发送；保守账本语义不变
@@ -258,6 +263,8 @@ class ControlledModelGateway:
                 uuid4().hex,
                 type(exc).__name__,
             )
+            from .q_gateway import admission_failed
+            admission_failed(definitely_denied=False)
             return self._result(context, CallStatus.REJECTED, "admission_internal_error")
 
         try:

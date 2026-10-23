@@ -1,0 +1,29 @@
+{
+  "schema": "retrolume.task122.orchestration-source-check.v1",
+  "at": "2026-10-22T00:19:11.451055+08:00",
+  "scope": "对关键计量缺口作有限官方原文抽查；非重复122全量研究，非账号或实际API调用",
+  "sources": [
+    {
+      "url": "https://api-docs.deepseek.com/zh-cn/quick_start/token_usage/",
+      "observation": "公开说明为近似字符比例、实际以usage为准，并给tokenizer压缩包；本次返回正文未给Flash-1017模板及W+F保守证明。"
+    },
+    {
+      "url": "https://api-docs.deepseek.com/api/create-chat-completion/",
+      "observation": "公开schema含deepseek-flash、thinking disabled及max_tokens；没有据此将账号或完整计量上界改为已核。"
+    },
+    {
+      "url": "https://docs.bigmodel.cn/cn/guide/models/embedding/embedding-3",
+      "observation": "公开技术参数有3072 token和数组64项；支持512维。容量与费用证明仍分开，未实际调用。"
+    },
+    {
+      "url": "https://api-docs.deepseek.com/api/list-models/",
+      "observation": "针对用户是否全部用DeepSeek，核公开模型与API目录，未找到可替代Embedding-3的公开向量接口。只表示本次公开支持未建立，不宣称私有或未来产品不存在。"
+    },
+    {
+      "url": "https://api-docs.deepseek.com/zh-cn/",
+      "observation": "官方当前公开模型/调用方式为生成模型入口，未建立当前项目向量端点替换依据。"
+    }
+  ],
+  "download_or_provider_request": 0,
+  "Q": "FROZEN"
+}

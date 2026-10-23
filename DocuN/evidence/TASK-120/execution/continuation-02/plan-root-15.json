@@ -1,0 +1,13 @@
+{
+  "schema":"task120.finite-plan.v1",
+  "permit_id":"TASK-120-Q-PREP-CONTINUATION-01-20261019",
+  "root_id":15,
+  "stages":[
+    {"id":"observe","phase":"c02_observe","seconds":40,"depends_on":[]},
+    {"id":"memory_bootstrap","phase":"c02_bootstrap_memory","seconds":120,"depends_on":["observe"]},
+    {"id":"normal_core","phase":"c02_core","seconds":300,"depends_on":["observe"]},
+    {"id":"selected_memory","phase":"c02_memory","seconds":240,"depends_on":["memory_bootstrap"]},
+    {"id":"source_scope_memory_races","phase":"c02_races","seconds":240,"depends_on":["selected_memory"]},
+    {"id":"five_entry_UI","phase":"c02_ui","seconds":300,"depends_on":["observe"]}
+  ]
+}

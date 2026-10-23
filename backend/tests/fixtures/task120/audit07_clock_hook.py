@@ -1,0 +1,22 @@
+"""TESTONLY: replace only the private approval clock, in API and real workers."""
+from datetime import datetime,timedelta
+import json,os
+from . import resources as r
+
+
+def install():
+    if os.environ.get('RETROLUME_TASK120_CONTINUATION')!='TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021':return
+    from app.data_exit import q_clock
+    if getattr(q_clock.sample,'_audit07',False):return
+    original=q_clock.sample
+    def sample():
+        mode=r.PRIVATE/'clock-mode.json'
+        value=json.loads(mode.read_text(encoding='utf-8')) if mode.exists() else {'offset_seconds':0}
+        assert set(value)=={'offset_seconds'} and value['offset_seconds'] in (0,2)
+        raw=original();offset=value['offset_seconds']
+        raw.update(utc=(datetime.fromisoformat(raw['utc'])+timedelta(seconds=offset)).isoformat(),
+                   mono_ns=raw['mono_ns']+offset*1_000_000_000,upper_ns=raw['upper_ns']+offset*1_000_000_000)
+        with (r.EVIDENCE/'F04-API-worker-clock-samples.jsonl').open('a',encoding='utf-8') as f:
+            f.write(json.dumps({'pid':os.getpid(),'offset_seconds':offset,**raw})+'\n')
+        return raw
+    sample._audit07=True;q_clock.sample=sample

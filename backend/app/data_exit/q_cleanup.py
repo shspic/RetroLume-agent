@@ -1,0 +1,114 @@
+"""Exact, journaled prepared-body cleanup. No directory scan or arbitrary path.
+
+The Q policy lease is held before the business tombstone and through cleanup.
+Pending is an irreversible denial; a retry confirms the same registered file
+or its absence, never a replacement. Only the body file is removed, not events,
+prepared digests, business keys, 007 records or financial reservations.
+"""
+import ctypes
+from ctypes import wintypes
+import os
+import stat
+
+from .contracts import DataError, digest
+from .files import regular,safe_root
+
+
+def dependencies(row):
+    result={'sources':set(),'memories':set()}
+    stored=row.get('dependencies')
+    if stored is not None:
+        for key in result:result[key].update(stored[key])
+    snapshot=row['prepared']['snapshot']
+    result['sources'].update(x['source_id'] for x in snapshot.get('sources',[]))
+    result['memories'].update(x['memory_id'] for x in snapshot.get('memory',{}).get('refs',[]))
+    return result
+
+
+def remove_registered(hub,pid,identity):
+    """Windows handle deletion: deny rename/write races and reparse objects."""
+    if os.name!='nt':raise DataError('q_cleanup_platform_unknown',503)
+    hub.assert_writable();safe_root(hub.root)
+    path=hub.artifact_path('q-prepared',pid)
+    try:info=regular(path)
+    except FileNotFoundError:return 'absent_confirmed'
+    if identity is None:raise DataError('q_cleanup_identity_unknown',503)
+    if (info.st_dev,info.st_ino,info.st_size)!=(identity['volume'],identity['file_id'],identity['bytes']):
+        raise DataError('q_cleanup_file_changed',503)
+    kernel=ctypes.WinDLL('kernel32',use_last_error=True)
+    kernel.CreateFileW.argtypes=[wintypes.LPCWSTR,wintypes.DWORD,wintypes.DWORD,ctypes.c_void_p,wintypes.DWORD,wintypes.DWORD,wintypes.HANDLE]
+    kernel.CreateFileW.restype=wintypes.HANDLE
+    kernel.CloseHandle.argtypes=[wintypes.HANDLE]
+    kernel.GetFileInformationByHandleEx.argtypes=[wintypes.HANDLE,ctypes.c_int,ctypes.c_void_p,wintypes.DWORD]
+    kernel.SetFileInformationByHandle.argtypes=[wintypes.HANDLE,ctypes.c_int,ctypes.c_void_p,wintypes.DWORD]
+    invalid=ctypes.c_void_p(-1).value
+    # A held directory handle disallows replacing the root while opening the
+    # exact child. Both handles explicitly open the reparse point itself.
+    directory=kernel.CreateFileW(str(hub.root),0x80,3,None,3,0x02200000,None)
+    if directory==invalid:raise ctypes.WinError(ctypes.get_last_error())
+    handle=None
+    try:
+        attrs=(wintypes.DWORD*2)()
+        if not kernel.GetFileInformationByHandleEx(directory,9,attrs,ctypes.sizeof(attrs)) or attrs[0]&0x400:
+            raise DataError('q_cleanup_root_changed',503)
+        safe_root(hub.root)
+        handle=kernel.CreateFileW(str(path),0x10081,1,None,3,0x00200000,None)
+        if handle==invalid:handle=None;raise ctypes.WinError(ctypes.get_last_error())
+        if not kernel.GetFileInformationByHandleEx(handle,9,attrs,ctypes.sizeof(attrs)) or attrs[0]&(0x400|0x10):
+            raise DataError('q_cleanup_file_changed',503)
+        import msvcrt
+        descriptor=msvcrt.open_osfhandle(handle,os.O_RDONLY|os.O_BINARY);handle=None
+        with os.fdopen(descriptor,'rb') as stream:
+            opened=os.fstat(stream.fileno())
+            if not stat.S_ISREG(opened.st_mode) or opened.st_nlink!=1 or (opened.st_dev,opened.st_ino,opened.st_size)!=(identity['volume'],identity['file_id'],identity['bytes']):
+                raise DataError('q_cleanup_file_changed',503)
+            raw=stream.read(262145)
+            if len(raw)!=identity['bytes'] or digest(raw)!=identity['sha256']:raise DataError('q_cleanup_file_changed',503)
+            hub.assert_writable();safe_root(hub.root)
+            deletion=wintypes.BOOL(True)
+            if not kernel.SetFileInformationByHandle(msvcrt.get_osfhandle(stream.fileno()),4,ctypes.byref(deletion),ctypes.sizeof(deletion)):
+                raise ctypes.WinError(ctypes.get_last_error())
+        if os.path.lexists(path):raise DataError('q_cleanup_unconfirmed',503)
+        return 'removed_confirmed'
+    finally:
+        if handle:kernel.CloseHandle(handle)
+        kernel.CloseHandle(directory)
+
+
+def cleanup(hub,*,source_ids=(),memory_ids=()):
+    from .q_store import POLICY
+    if 'q' not in hub.state():return []
+    policy=POLICY.get()
+    if policy is None or policy!=(hub.control_id,False):raise DataError('q_cleanup_policy_required',503)
+    sources=set(source_ids);memories=set(memory_ids);outcomes=[]
+    for pid,row in hub.state()['q']['requests'].items():
+        refs=dependencies(row)
+        if not (sources&refs['sources'] or memories&refs['memories']):continue
+        pending=row.get('cleanup')
+        if pending is None:
+            identity=None
+            try:
+                path=hub.artifact_path('q-prepared',pid);info=regular(path)
+                if info.st_size>262144:raise DataError('q_artifact_limit')
+                raw=hub.read_artifact('q-prepared',pid,row['artifact_sha256'],262144)
+                identity={'volume':info.st_dev,'file_id':info.st_ino,'bytes':info.st_size,'sha256':digest(raw)}
+            except FileNotFoundError:pass
+            except (OSError,DataError):
+                # Mark denial even if the existing path cannot be identified.
+                identity=None
+            pending={'state':'pending','identity':identity,'source_ids':sorted(sources&refs['sources']),
+                     'memory_ids':sorted(memories&refs['memories'])}
+            hub.q_decide('q.cleanup_pending',lambda state,seq,pid=pid,pending=pending:
+                None if state['q']['requests'][pid].get('cleanup') else {'prepared_id':pid,'cleanup':pending})
+        if pending['state']=='done':
+            # A recreated path is never deleted under an old confirmation.
+            if os.path.lexists(hub.artifact_path('q-prepared',pid)):
+                outcomes.append({'prepared_id':pid,'state':'physical_result_unknown'});continue
+            outcomes.append({'prepared_id':pid,'state':'absent_confirmed'});continue
+        try:
+            state=remove_registered(hub,pid,pending['identity'])
+            hub.q_decide('q.cleanup_done',lambda current,seq,pid=pid,state=state:{'prepared_id':pid,'outcome':state})
+            outcomes.append({'prepared_id':pid,'state':state})
+        except (OSError,DataError):
+            outcomes.append({'prepared_id':pid,'state':'physical_result_unknown'})
+    return outcomes

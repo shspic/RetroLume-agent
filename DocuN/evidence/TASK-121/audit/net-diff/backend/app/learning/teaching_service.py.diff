@@ -1,0 +1,43 @@
+--- initial/backend/app/learning/teaching_service.py
++++ final/backend/app/learning/teaching_service.py
+@@ -110,11 +110,16 @@
+ 
+     async def read_workspace(self, activity_id: str, history_limit: int = 20) -> dict | None:
+         return await self.ledger.read_teaching_workspace(activity_id, history_limit)
+ 
+     async def read_command(self, activity_id: str, business_key: str) -> dict | None:
+-        return await self.ledger.read_teaching_command(activity_id, business_key)
++        value=await self.ledger.read_teaching_command(activity_id, business_key)
++        if value is not None:
++            from app.capabilities.q_context import public_projection
++            row=value['command']
++            value['outbound_approval']=await public_projection(self.ledger,activity_id,business_key,expected=row['status']=='accepted' and row['action'] in MODEL_ACTIONS)
++        return value
+ 
+     async def read_history(self, activity_id: str, limit: int = 20, before_seq: int | None = None):
+         return await self.ledger.read_teaching_history(activity_id, limit, before_seq)
+ 
+     async def read_record(self, activity_id: str, record_id: str) -> dict | None:
+@@ -173,12 +178,20 @@
+             raise TeachingRefusal("teaching_config_incompatible", "模型超时配置超过本地监督预算")
+         receipt = (await self.ledger.accept_teaching_command(activity_id, command, frozen)
+                    if recovered is None else self._read_receipt(recovered[0]))
+         if receipt.status != "accepted" or receipt.duplicate_of:
+             return receipt
+-        decision = await self.ledger.claim_teaching_launch(activity_id, command.business_key,
+-                                                           receipt.request_sha256)
++        from app.capabilities.q_gateway import is_v2
++        if is_v2(service):
++            from app.capabilities.q_context import prepare
++            projection,service=await prepare(self.ledger,activity_id,command.business_key,command.operation_id(activity_id),
++                request,service,ControlledModelGateway(service)._build_payload(request),domain='teaching',action=command.action)
++            if not projection['can_continue']:
++                return receipt.model_copy(update={'outbound_approval':projection,'model_called':False})
++        from app.capabilities.q_context import claim_approved
++        decision = await claim_approved(self.ledger,service,lambda:self.ledger.claim_teaching_launch(
++            activity_id,command.business_key,receipt.request_sha256))
+         if not decision.get("launch_allowed"):
+             # 已被其他线程 claim：只读核对，不再创建第二执行。
+             current = await self.ledger.read_teaching_command(activity_id, command.business_key)
+             if current is not None:
+                 row = current["command"]

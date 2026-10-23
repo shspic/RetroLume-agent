@@ -1,0 +1,1697 @@
+--- /dev/null
++++ after/backend/tests/fixtures/task120/__init__.py
+@@ -0,0 +1 @@
++"""Isolated TASK-120 TESTONLY fixtures. Never imported by product code."""
+--- before/backend/tests/fixtures/task120/api_runtime.py
++++ after/backend/tests/fixtures/task120/api_runtime.py
+@@ -27,13 +27,18 @@
+         result=self.client.request(method,path,json=body,headers=self.headers)
+         try:response=result.json()
+         except ValueError:response={}
++        detail=response;safe_code=None
++        for depth in range(4):
++            if not isinstance(detail,dict):break
++            safe_code=detail.get('code')
++            if safe_code is not None:break
++            detail=detail.get('detail',detail.get('error'))
++        if not isinstance(safe_code,str) or not __import__('re').fullmatch(r'[a-zA-Z0-9_.-]{1,96}',safe_code):safe_code=None
+         self.timeline.append({'at_ns':start,'method':method,'path':path,'status':result.status_code,
+-            'receipt':{key:response.get(key) for key in ('status','error_code','terminal_disposition','operation_id','retry_policy','model_called')},
++            'receipt':{key:response.get(key) for key in ('status','error_code','terminal_disposition','operation_id','retry_policy','model_called')},'rejection_code':safe_code,
+             'body_sha256':__import__('app.capabilities.q_protocol',fromlist=['digest']).digest(body) if body is not None else None})
+         if result.status_code not in expect:
+-            try:value=result.json();detail=value.get('detail',value.get('error',value));code=detail.get('code') if isinstance(detail,dict) else 'http_rejected'
+-            except ValueError:code='non_json'
+-            raise RuntimeError('task120_http_'+str(result.status_code)+'_'+str(code))
++            raise RuntimeError('task120_http_'+str(result.status_code)+'_'+str(safe_code or 'http_rejected'))
+         return result.json()
+ 
+     def approve(self,aid,key):
+--- /dev/null
++++ after/backend/tests/fixtures/task120/budget.py
+@@ -0,0 +1,187 @@
++"""TASK120 original-instance PG observations, never financial fixture UPDATEs."""
++from . import resources as r,setup
++from .api_runtime import run,financials
++
++
++def run_budget(stage='budget'):
++    import asyncio,json,os,time
++    from uuid import uuid4
++    import psycopg
++    from psycopg.rows import dict_row
++    from app.capabilities.q_protocol import ROSTER
++    from app.capabilities.contracts import ModelCallRequest,CallContext,CallStatus,AdmissionIntent,AdmissionDenied
++    from app.capabilities.gateway import ControlledModelGateway
++    from app.capabilities.embedding import ControlledEmbeddingGateway,EmbeddingRequest,EmbeddingAdmissionIntent
++    from app.capabilities.q_context import claim_approved,prepare
++    from app.data_exit.q_store import authority_for
++    from app.operator.q_request import inspect_request,approve_request
++    from app.learning.teaching_service import TeachingService
++    from app.learning.teaching_contracts import TeachingCommandInput
++    from app.retrieval.service import RetrievalService
++    from app.retrieval.contracts import RetrievalCommandInput
++    setup.environment('budget-01',include_admin=False)
++    from .transport import install
++    install()
++    from app.main import create_app
++    app=create_app();ledger=app.state.activities_ledger;config=app.state.activity_config
++    if not app.state.q_readiness['available']:raise RuntimeError('budget_actual_loader_not_ready')
++    service=TeachingService(ledger,app.state.materials,app.state.originals)
++    root=authority_for(ledger);base=r.PRIVATE/'budget-01'
++    progress_file=base/'baseline-progress.json'
++    progress=json.loads(progress_file.read_text(encoding='utf-8')) if progress_file.exists() else {'completed':{},'commands':{}}
++    # Inherit only completed, observed actual reservations. A killed phase may
++    # leave a financial/command tail; never fill it by resending its intent.
++    initial=financials('budget-01')
++    for current in initial['activities']:
++        if current['requests_reserved']!=progress['completed'].get(current['id'],0):
++            raise RuntimeError('budget_checkpoint_requires_actual_tail_reconciliation')
++    async def local(aid,action,body):
++        view=await ledger.read_teaching_workspace(aid);h=view['head'] or {}
++        command=TeachingCommandInput(business_key=str(uuid4()),action=action,expected_revision=h.get('revision',0),expected_goal_version=h.get('goal_version',0),expected_scope_revision=1,body=body)
++        return await ledger.apply_teaching_local(aid,command)
++    async def approve(row):
++        inspected=await inspect_request(ledger,row['prepared_id'])
++        if not inspected['request_available']:raise RuntimeError('budget_inspection_invalidated')
++        await approve_request(ledger,row['prepared_id'],inspected['prepared_sha256'])
++    async def pending(aid,name):
++        view=await ledger.read_teaching_workspace(aid);h=view['head']
++        body=progress['commands'].get(name)
++        if body is None:
++            body={'business_key':str(uuid4()),'action':'plan','expected_revision':h['revision'],'expected_goal_version':h['goal_version'],'expected_scope_revision':1,'body':{'confirmed':True}}
++            progress['commands'][name]=body;r.write(progress_file,progress,private=True)
++        command=TeachingCommandInput.model_validate(body)
++        result=await service.submit_command(aid,command,config,run_tag='budget-freeze')
++        if result.status!='accepted':raise RuntimeError('budget_pending_original_requires_reconciliation')
++        row=root.by_operation(aid,command.operation_id(aid));await approve(row)
++        actual=ModelCallRequest.model_validate_json(json.dumps(root.artifact(row)['request']))
++        configured=config.model_service.model_copy(update={'outbound_authorization':root.reference(root.request(row['prepared_id']))})
++        decision=await claim_approved(ledger,configured,lambda:ledger.claim_teaching_launch(aid,command.business_key,result.request_sha256))
++        if not decision['launch_allowed']:raise RuntimeError('budget_launch_not_allowed')
++        return command,actual,configured
++    async def go():
++        leases={};started={}
++        async def finish(aid,lease,begin):
++            await ledger.begin_window_close(aid,'task120-budget',lease.execution_generation)
++            await ledger.settle_execution_window(aid,'task120-budget',lease.execution_generation,window_seconds=lease.window_seconds,elapsed_seconds=time.monotonic()-begin)
++        for aid,target in zip(ROSTER,(47,28,24)):
++            if stage=='budget_race' or stage=='budget_a2' and aid!=ROSTER[1] or stage=='budget_a3' and aid!=ROSTER[2]:continue
++            # A prior stopped fixture may have left its running-time reserve.
++            # Only the production expired-lease fold may conservatively charge
++            # it. No fabricated elapsed measurement or financial UPDATE.
++            with psycopg.connect(setup.dsn('budget-01'),row_factory=dict_row) as connection:
++                old=connection.execute('SELECT status,executor_id,lease_expires_at,CURRENT_TIMESTAMP AS observed_at FROM activities WHERE id=%s',(aid,)).fetchone()
++            if old['status']=='running':
++                if old['executor_id']!='task120-budget' or old['lease_expires_at']>old['observed_at']:raise RuntimeError('prior_budget_lease_not_expired')
++                begin=time.monotonic();lease=await ledger.claim_lease(aid,'task120-budget',lease_seconds=90,window_seconds=90)
++                if lease is None:raise RuntimeError('budget_running_reserve_exhausted')
++                await finish(aid,lease,begin)
++                r.event('actual_expired_budget_window_folded',activity_id=aid,old_elapsed_unknown=True,old_reserve_not_refunded=True)
++            view=await ledger.read_teaching_workspace(aid)
++            if view['head'] is None:await local(aid,'goal',{'goal':setup.SAMPLES['inputs']['numeric_goal']})
++            for ordinal in range(progress['completed'].get(aid,0),target):
++                command,request,configured=await pending(aid,aid+'.'+str(ordinal))
++                operation=command.operation_id(aid)
++                begin=time.monotonic();lease=await ledger.claim_lease(aid,'task120-budget',lease_seconds=90,window_seconds=90)
++                if lease is None:raise RuntimeError('budget_lease_unavailable')
++                # Determinately NOT_SENT keeps the real financial reservation
++                # while permitting a fresh explicit business intent in this
++                # parent slot. UNKNOWN is retained by the final race winner;
++                # it must never be reused to build this baseline.
++                mode='not_sent'
++                r.write(base/'faults.json',{operation:mode},private=True)
++                context=CallContext(activity_id=aid,operation_id=operation,executor_id='task120-budget',execution_generation=lease.execution_generation,scope_revision=1)
++                try:result=await ControlledModelGateway(configured,ledger=ledger).call(context,request)
++                finally:await finish(aid,lease,begin)
++                expected=CallStatus.NOT_SENT if mode=='not_sent' else CallStatus.UNKNOWN
++                if result.status is not expected:raise RuntimeError('budget_baseline_actual_gateway_'+str(result.error_code))
++                await local(aid,'abandon',{'target_business_key':command.business_key})
++                progress['completed'][aid]=ordinal+1;r.write(progress_file,progress,private=True)
++        if stage in ('budget_a2','budget_a3'):
++            r.write(r.EVIDENCE/f"root-{r.state()['active_root']:02d}-{stage}-result.json",{'stage':stage,'completed':progress['completed'],'actual_financials':financials('budget-01'),'provider_calls':0,'fees':0})
++            return
++        baseline=financials('budget-01')
++        if [row['requests_reserved'] for row in baseline['activities']]!=[47,28,24] or (baseline['requests'],baseline['cost'])!=(99,24750000):raise RuntimeError('actual_99_baseline_mismatch')
++        r.write(r.EVIDENCE/'budget-99-baseline.json',baseline)
++        aid=ROSTER[0];view=await ledger.read_teaching_workspace(aid);h=view['head']
++        command=TeachingCommandInput(business_key=str(uuid4()),action='plan',expected_revision=h['revision'],expected_goal_version=h['goal_version'],expected_scope_revision=1,body={'confirmed':True})
++        frozen,identity=await service._freeze_model_context(aid,command,config)
++        await ledger.accept_teaching_command(aid,command,frozen)
++        retrieval=RetrievalService(ledger,app.state.materials,app.state.originals)
++        status=await retrieval.status(aid,app.state.integration_config)
++        emb_command=RetrievalCommandInput(business_key=str(uuid4()),action='source_index',expected_scope_revision=1,expected_domain_revision=status['domain_revision'],confirmed=True)
++        receipt=await retrieval.submit(aid,emb_command,app.state.integration_config)
++        profile=service._build_profile(aid,command,frozen,identity)
++        request=ModelCallRequest(messages=[{'role':m['role'],'content':m['content']} for m in frozen.messages],max_output_tokens=frozen.max_output_tokens,allowed_tools=frozenset(),teaching_profile=profile)
++        _,configured=await prepare(ledger,aid,command.business_key,command.operation_id(aid),request,config.model_service,ControlledModelGateway(config.model_service)._build_payload(request),domain='teaching',action='plan')
++        model_row=root.by_operation(aid,command.operation_id(aid));emb_row=next(row for row in root.hub.state()['q']['requests'].values() if row['prepared']['business_key']==emb_command.business_key)
++        await approve(model_row);await approve(emb_row)
++        configured=config.model_service.model_copy(update={'outbound_authorization':root.reference(root.request(model_row['prepared_id']))})
++        embedded=app.state.integration_config.service.model_copy(update={'outbound_authorization':root.reference(root.request(emb_row['prepared_id']))})
++        emb_request=EmbeddingRequest.model_validate_json(json.dumps(root.artifact(emb_row)['request']))
++        await claim_approved(ledger,configured,lambda:ledger.claim_teaching_launch(aid,command.business_key,command.request_sha256(aid)))
++        await claim_approved(ledger,embedded,lambda:ledger.retrieval_claim(aid,emb_command.business_key,emb_row['prepared']['command_request_sha256']))
++        started[aid]=time.monotonic();lease=await ledger.claim_lease(aid,'task120-budget',lease_seconds=90,window_seconds=90)
++        if lease is None:raise RuntimeError('budget_race_lease_unavailable')
++        leases[aid]=lease
++        mc=CallContext(activity_id=aid,operation_id=model_row['prepared']['operation_id'],executor_id='task120-budget',execution_generation=lease.execution_generation,scope_revision=1)
++        ec=CallContext(activity_id=aid,operation_id=emb_row['prepared']['operation_id'],executor_id='task120-budget',execution_generation=lease.execution_generation,scope_revision=1)
++        r.write(base/'faults.json',{mc.operation_id:'unknown',ec.operation_id:'unknown'},private=True)
++        # A genuine administrative session holds the same production advisory
++        # key while two independent production connections enter their SUM gate.
++        with psycopg.connect(setup.dsn('budget-01',True),autocommit=True,row_factory=dict_row) as barrier:
++            barrier.execute("SELECT pg_advisory_lock(hashtextextended('retrolume.outbound-roster.v1',0))")
++            tasks=[asyncio.create_task(ControlledModelGateway(configured,ledger=ledger).call(mc,request)),asyncio.create_task(ControlledEmbeddingGateway(embedded,ledger=ledger).call(ec,emb_request))]
++            until=time.monotonic()+1.7;waiting=[]
++            try:
++                while time.monotonic()<until:
++                    waiting=barrier.execute("SELECT pid,wait_event_type,wait_event FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid() AND wait_event='advisory' ORDER BY pid").fetchall()
++                    if len(waiting)>=2:break
++                    await asyncio.sleep(.01)
++            finally:barrier.execute("SELECT pg_advisory_unlock(hashtextextended('retrolume.outbound-roster.v1',0))")
++            results=await asyncio.gather(*tasks)
++            if len(waiting)!=2 or waiting[0]['pid']==waiting[1]['pid']:raise RuntimeError('two_actual_backend_lock_window_not_observed')
++        final=financials('budget-01')
++        if (final['requests'],final['cost'])!=(100,25000000):raise RuntimeError('actual_100_final_mismatch')
++        statuses=[result.status.value for result in results]
++        if statuses.count('unknown')!=1 or statuses.count('rejected')!=1:raise RuntimeError('last_slot_outcomes_invalid')
++        from app.capabilities.contracts import Provider
++        negative=[]
++        async with root.async_policy(shared=True):
++            intents=[AdmissionIntent(mc,Provider(configured.provider),configured.model,model_row['prepared']['payload_bytes_count'],request.max_output_tokens,(),outbound_grant=configured.outbound_grant,outbound_source_manifest=configured.outbound_source_manifest),
++                EmbeddingAdmissionIntent(ec,embedded.model,emb_row['prepared']['payload_bytes_count'],emb_request.binding,emb_request,embedded.outbound_grant,embedded.outbound_source_manifest)]
++            for method,intent in zip((ledger.admit,ledger.admit_embedding),intents):
++                try:await method(intent)
++                except AdmissionDenied as exc:
++                    if str(exc)!='outbound_grant_exhausted':raise
++                    negative.append({'provider':str(intent.provider),'denial':str(exc),'stage':'actual_production_global_SUM_before_later_Q_proof'})
++                else:raise RuntimeError('post100_admitted')
++        if financials('budget-01')!=final:raise RuntimeError('post100_negative_changed_financials')
++        r.write(r.EVIDENCE/'budget-last-slot-race.json',{'waiting_backends':waiting,'baseline':{'requests':99,'cost':24750000},'final':final,'model_status':statuses[0],'embedding_status':statuses[1],
++            'post100_both_providers':negative,'real_production_connections':True,'same_eligible_lease':{'activity_id':aid,'generation':lease.execution_generation},'provider_calls':0,'fee':0})
++        for current,lease in leases.items():
++            await ledger.begin_window_close(current,'task120-budget',lease.execution_generation)
++            elapsed=time.monotonic()-started[current]
++            await ledger.settle_execution_window(current,'task120-budget',lease.execution_generation,window_seconds=lease.window_seconds,elapsed_seconds=elapsed)
++    run(go())
++
++
++def run_reopen():
++    import json,os
++    setup.environment('flow',include_admin=False)
++    from .transport import install
++    install()
++    from app.main import create_app
++    app=create_app();ledger=app.state.activities_ledger
++    state=json.loads((r.PRIVATE/'flow/flow-progress.json').read_text(encoding='utf-8'))
++    commands=[]
++    for name,body in state.items():
++        if name.endswith('.done') or not name.startswith('teaching-'):continue
++        value=run(ledger.read_teaching_command('01800000-0000-4000-8000-000000000001',body['business_key']))
++        if value:
++            row=value['command'];commands.append({'name':name,**{key:row.get(key) for key in ('business_key','status','operation_id','error_code','launch_claimed_at','obsolete_at','abandoned_at')}})
++    from app.data_exit.codec import plain
++    r.write(r.EVIDENCE/f"root-{r.state()['active_root']:02d}-batch-{int(os.environ.get('RETROLUME_TASK120_BATCH','0')):02d}-original-pg-observation.json",plain({'commands':commands,'financials':financials('flow'),'q_readiness':app.state.q_readiness}))
++    if (r.EVIDENCE/'budget-last-slot-race.json').exists():
++        final=financials('budget-01')
++        if (final['requests'],final['cost'])!=(100,25000000):raise RuntimeError('budget_reopen_changed_SUM')
++        r.write(r.EVIDENCE/f"root-{r.state()['active_root']:02d}-budget-reopen.json",{'same_database':True,'requests':final['requests'],'cost':final['cost'],'financials':final,'execution_authority_restored':False})
+--- /dev/null
++++ after/backend/tests/fixtures/task120/control_job.py
+@@ -0,0 +1,21 @@
++"""Use the unchanged native Job implementation without app.worker exports.
++
++Only finite TESTONLY controllers import this module. Production SUP/worker
++imports, Job ABI, names, security, limits and code bytes are unchanged.
++"""
++import hashlib
++import importlib.util
++from pathlib import Path
++
++SOURCE=Path(__file__).resolve().parents[3]/'app/worker/windows_job.py'
++SOURCE_SHA256=hashlib.sha256(SOURCE.read_bytes()).hexdigest()
++_spec=importlib.util.spec_from_file_location('task120_native_job_control',SOURCE)
++_native=importlib.util.module_from_spec(_spec)
++_spec.loader.exec_module(_native)
++NamedJob=_native.NamedJob
++JobOpenError=_native.JobOpenError
++_EXTENDED_LIMIT=_native._EXTENDED_LIMIT
++JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS=_native.JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS
++JOB_OBJECT_LIMIT_ACTIVE_PROCESS=_native.JOB_OBJECT_LIMIT_ACTIVE_PROCESS
++JOB_OBJECT_LIMIT_JOB_MEMORY=_native.JOB_OBJECT_LIMIT_JOB_MEMORY
++JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE=_native.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+--- /dev/null
++++ after/backend/tests/fixtures/task120/diagnose.py
+@@ -0,0 +1,54 @@
++"""Finite readonly original-PG diagnostics; no schema learning or repair."""
++import json
++from . import resources as r,setup
++from .api_runtime import run
++
++def diagnose():
++    setup.environment('flow',include_admin=False)
++    from .transport import install
++    install()
++    from app.main import create_app
++    from app.capabilities.q_protocol import digest,canonical,ROSTER
++    from app.data_exit.schema_checks import legacy_business_shape,html_qualification_profile
++    from app.data_exit.q_store import authority_for
++    import psycopg
++    from psycopg.rows import dict_row
++    app=create_app();ledger=app.state.activities_ledger;authority=authority_for(ledger)
++    result={'readonly':True,'schema_modified':False}
++    async def go():
++        async with await psycopg.AsyncConnection.connect(setup.dsn('flow'),row_factory=dict_row) as db:
++            await db.execute('BEGIN READ ONLY')
++            await db.execute("SET LOCAL statement_timeout='4s'")
++            result['backend_pid']=(await (await db.execute('SELECT pg_backend_pid() AS pid')).fetchone())['pid']
++            shape=await ledger.html_schema_shape(db)
++            r.write(r.EVIDENCE/f"root-{r.state()['active_root']:02d}-html-raw-shape.json",shape)
++            normalized=await html_qualification_profile(db,legacy_business_shape(shape))
++            r.write(r.EVIDENCE/f"root-{r.state()['active_root']:02d}-html-normalized-shape.json",normalized)
++            expected=json.loads((r.ROOT/'backend/app/preview/schema-fingerprint.json').read_text(encoding='utf-8'))['data_exit_013_sha256']
++            result['html_shape']={'expected':expected,'observed':digest(normalized),'matches':digest(normalized)==expected}
++            baseline=json.loads((r.ROOT/'DocuN/evidence/TASK-114/implementation/control/html-shape-normalized-1088472437000000.json').read_text(encoding='utf-8-sig'))
++            differences=[]
++            for key in set(baseline)|set(normalized):
++                if baseline.get(key)==normalized.get(key):continue
++                old=baseline.get(key,[]);new=normalized.get(key,[])
++                for index in range(max(len(old),len(new))):
++                    left=old[index] if index<len(old) else None;right=new[index] if index<len(new) else None
++                    if left!=right:differences.append({'section':key,'index':index,'before':left,'after':right})
++            r.write(r.EVIDENCE/f"root-{r.state()['active_root']:02d}-html-shape-difference.json",{'baseline_sha256':digest(baseline),'expected_sha256':expected,'differences':differences})
++            from app.interview.contracts import InterviewHybridContext
++            schema=InterviewHybridContext.model_json_schema()
++            fields=set()
++            def collect(value):
++                if isinstance(value,dict):
++                    fields.update(value.get('properties',{}))
++                    for child in value.values():collect(child)
++                elif isinstance(value,list):
++                    for child in value:collect(child)
++            collect(schema)
++            result['interview_schema_fields_missing_from_template_atoms']=sorted(fields-set(authority.bundle['template_atoms']))
++            cursor=await db.execute('SELECT revision,goal_version,goal_record_id::text,pending_business_key::text FROM teaching_heads WHERE activity_id=%s',(ROSTER[0],))
++            result['original_a1_head']=await cursor.fetchone()
++            cursor=await db.execute("SELECT business_key::text,action,status,expected_revision,goal_version,slot_sha256,launch_claimed_at IS NOT NULL AS claimed,abandoned_at IS NOT NULL AS abandoned FROM teaching_commands WHERE activity_id=%s ORDER BY created_at",(ROSTER[0],))
++            result['original_a1_commands']=await cursor.fetchall()
++    run(go())
++    r.write(r.EVIDENCE/f"root-{r.state()['active_root']:02d}-readonly-diagnosis.json",result)
+--- /dev/null
++++ after/backend/tests/fixtures/task120/html_eol.py
+@@ -0,0 +1,45 @@
++"""User-approved exact EOL-only correction in the original TESTONLY flow DB."""
++import hashlib,json
++from . import resources as r,setup
++from .api_runtime import run,financials
++
++def apply():
++    folder=r.EVIDENCE/'continuation-01'
++    permission=json.loads((folder/'html-eol-user-permission.json').read_text(encoding='utf-8'))
++    raw=(folder/'proposed-html-eol-repair.sql').read_bytes()
++    if hashlib.sha256(raw).hexdigest()!=permission['patch_sha256']:raise RuntimeError('reviewed_DDL_patch_changed')
++    before_shape=json.loads((r.EVIDENCE/'root-12-html-raw-shape.json').read_text(encoding='utf-8'))
++    names={x['function'] for x in json.loads((folder/'proposed-html-eol-repair.json').read_text(encoding='utf-8'))['functions']}
++    before_financials=financials('flow')
++    setup.environment('flow',include_admin=False)
++    from .transport import install
++    install()
++    from app.main import create_app
++    app=create_app();ledger=app.state.activities_ledger
++    import psycopg
++    from psycopg.rows import dict_row
++    from app.capabilities.q_protocol import digest
++    async def go():
++        async with await psycopg.AsyncConnection.connect(setup.dsn('flow',True),row_factory=dict_row) as db:
++            async with db.transaction():
++                await db.execute("SET LOCAL statement_timeout='5s'")
++                if await ledger.html_schema_shape(db)!=before_shape:raise RuntimeError('DDL_preimage_changed')
++                # Same reviewed bytes; transaction ownership remains here so a
++                # failed strict fingerprint rolls back all nine replacements.
++                text=raw.decode('utf-8')
++                lines=text.splitlines(keepends=True)
++                if not lines[0].startswith('-- REVIEW ONLY') or lines[1]!='BEGIN;\n' or lines[-1]!='COMMIT;\n':raise RuntimeError('DDL_closed_transaction')
++                await db.execute(''.join(lines[2:-1]),prepare=False)
++                await ledger._html_assert_schema(db)
++                after=await ledger.html_schema_shape(db)
++                for old,new in zip(before_shape['functions'],after['functions']):
++                    expected=dict(old,prosrc=old['prosrc'].replace('\r\n','\n')) if old['proname'] in names else old
++                    if expected!=new:raise RuntimeError('DDL_non_EOL_function_change')
++                if any(before_shape[k]!=after[k] for k in before_shape if k!='functions'):raise RuntimeError('DDL_non_function_change')
++            proof={'actual_admin_backend_pid':(await (await db.execute('SELECT pg_backend_pid() AS pid')).fetchone())['pid'],'preimage_sha256':digest(before_shape),'postimage_sha256':digest(after)}
++        # Ordinary application principal checks the committed catalog too.
++        await ledger._transaction(ledger._html_assert_schema)
++        return proof
++    proof=run(go())
++    if financials('flow')!=before_financials:raise RuntimeError('DDL_financial_rows_changed')
++    r.write(r.EVIDENCE/f"root-{r.state()['active_root']:02d}-html-eol-applied.json",{'status':'PASS','permission_file':'continuation-01/html-eol-user-permission.json','patch_sha256':permission['patch_sha256'],'nine_exact_functions':True,'owner_ACL_and_strict_fingerprint_verified':True,'normal_app_role_verified':True,'financial_rows_unchanged':True,'preview_creates':0,'preview_starts':0,**proof})
+--- /dev/null
++++ after/backend/tests/fixtures/task120/lifecycle.py
+@@ -0,0 +1,88 @@
++"""本卡唯一进程内有界控制器。截止线程直接执行回调，不依赖第二次工具调用。"""
++from __future__ import annotations
++import threading,time
++
++class BoundedResources:
++    def __init__(self,*,deadline,clock=time.monotonic,on_close=lambda report:None):
++        self.deadline,self.clock,self.on_close=deadline,clock,on_close
++        self._condition=threading.Condition(threading.RLock());self._entries=[]
++        self.closing=False;self.closed=threading.Event();self.report=None;self._thread=None
++        self.cleanup_deadline=deadline+120
++        self._memory_probe=None;self._memory_every=2;self._memory_next=0;self._memory_lows=0
++        self.memory={'samples':0,'minimum_bytes':None,'maximum_bytes':None,'pressure_events':[]}
++
++    def monitor_memory(self,probe,*,every=2,minimum=256*1024**2):
++        self._memory_probe=probe;self._memory_every=every;self._memory_minimum=minimum
++
++    def _memory_tick(self):
++        if self._memory_probe is None or self.clock()<self._memory_next:return None
++        self._memory_next=self.clock()+self._memory_every
++        try:
++            available=self._memory_probe()
++            if not isinstance(available,int) or available<0:raise ValueError('invalid physical memory sample')
++        except BaseException as exc:
++            self.memory['pressure_events'].append({'at':self.clock(),'error_type':type(exc).__name__})
++            return 'memory_sample_failed'
++        self.memory['samples']+=1;self.memory['last']={'at':self.clock(),'available_bytes':available}
++        for key,op in [('minimum_bytes',min),('maximum_bytes',max)]:
++            self.memory[key]=available if self.memory[key] is None else op(self.memory[key],available)
++        self._memory_lows=self._memory_lows+1 if available<self._memory_minimum else 0
++        if self._memory_lows and len(self.memory['pressure_events'])<8:self.memory['pressure_events'].append({**self.memory['last'],'consecutive':self._memory_lows})
++        return 'memory_pressure' if self._memory_lows>=2 else None
++
++    def remaining_cleanup(self,maximum):
++        return max(.1,min(maximum,self.cleanup_deadline-self.clock()))
++
++    def __enter__(self):
++        self._thread=threading.Thread(target=self._watch,name='task120-bounded-cleanup',daemon=False)
++        self._thread.start();return self
++
++    def check(self):
++        if self.closing or self.clock()>=self.deadline:raise RuntimeError('本根已拒新启动或mutation')
++
++    def register(self,name,cleanup,*,priority=0):
++        # 必须在真正启动前登记；启动只完成一半时回调仍能按已知身份收尾。
++        with self._condition:
++            self.check();self._entries.append((priority,len(self._entries),name,cleanup))
++
++    def wake(self):
++        with self._condition:self._condition.notify_all()
++
++    def _watch(self):
++        pressure=None
++        with self._condition:
++            while not self.closing:
++                remaining=self.deadline-self.clock()
++                if remaining<=0:break
++                pressure=self._memory_tick()
++                if pressure:break
++                self._condition.wait(min(remaining,1,self._memory_every))
++            timed_out=not self.closing
++        if timed_out:self.close(pressure or 'business_deadline')
++
++    def close(self,reason='normal_exit'):
++        with self._condition:
++            if self.closing:
++                waiter=True
++            else:
++                self.closing=True;waiter=False;self._condition.notify_all()
++        if waiter:
++            if threading.current_thread() is not self._thread:self.closed.wait(120)
++            return self.report
++        report={'reason':reason,'resources':[],'all_confirmed':True,'physical_memory':self.memory}
++        try:
++            for _,_,name,callback in sorted(self._entries,reverse=True):
++                try:
++                    value=callback()
++                    if value is False:raise RuntimeError('停止组合证据未确认')
++                    report['resources'].append({'name':name,'confirmed':True,'proof':value})
++                except BaseException as exc:
++                    report['all_confirmed']=False;report['resources'].append({'name':name,'confirmed':False,'error_type':type(exc).__name__,'error':str(exc)[:200]})
++            self.report=report;self.on_close(report)
++        finally:self.closed.set()
++        return report
++
++    def __exit__(self,kind,value,tb):
++        self.close('exception' if kind else 'normal_exit')
++        if self._thread and self._thread is not threading.current_thread():self._thread.join(timeout=5)
++        return False
+--- /dev/null
++++ after/backend/tests/fixtures/task120/merged.py
+@@ -0,0 +1,97 @@
++"""Finite TASK120 subbatches inside one already-owned, bounded PG lifecycle."""
++import hashlib
++import json
++import os
++from pathlib import Path
++import subprocess
++import sys
++import time
++from . import resources as r
++from .control_job import NamedJob
++
++
++def members(job):
++    import ctypes
++    from ctypes import wintypes
++    from app.preview.process import birth
++    class Pids(ctypes.Structure):
++        _fields_=[('assigned',wintypes.DWORD),('listed',wintypes.DWORD),('pids',ctypes.c_size_t*64)]
++    value=Pids()
++    if not job.api.QueryInformationJobObject(job.handle,3,ctypes.byref(value),ctypes.sizeof(value),None):raise ctypes.WinError()
++    if value.assigned!=value.listed or value.listed>32:raise RuntimeError('subbatch_members_unknown')
++    result=[]
++    for pid in list(value.pids)[:value.listed]:
++        identity=birth(pid)
++        if identity.get('state')!='running':raise RuntimeError('subbatch_member_birth_unknown')
++        result.append({'pid':pid,'birth':identity['birth']})
++    return sorted(result,key=lambda row:row['pid'])
++
++
++def await_members(job,baseline,seconds=2):
++    until=time.monotonic()+seconds
++    while True:
++        current=members(job)
++        if current==baseline:return current
++        if time.monotonic()>=until:raise RuntimeError('subbatch_descendants_not_stopped')
++        time.sleep(.02)
++
++
++def validate(value,ordinal,previous):
++    if (set(value)!={'ordinal','phase','seconds','previous_exit'} or value['ordinal']!=ordinal
++        or value['phase'] not in ('flow','budget','ui','reopen','stop') or type(value['seconds']) is not int
++        or not 1<=value['seconds']<=300 or value['previous_exit']!=previous):raise ValueError('task120_closed_subbatch')
++    return value
++
++
++def await_request(path,until):
++    while not path.exists():
++        if time.monotonic()>=until:return None
++        time.sleep(min(.1,max(0,until-time.monotonic())))
++    return json.loads(path.read_text(encoding='utf-8'))
++
++
++def run_batches():
++    root=r.state()['active_root'];slot=next(x for x in r.state()['roots'] if x['id']==root)
++    previous=None
++    folder=r.PRIVATE/f'root-{root:02d}';folder.mkdir(exist_ok=True)
++    job=NamedJob.open_existing(slot['identity'],1)
++    try:baseline=members(job)
++    finally:job.close()
++    r.event('merged_manager_members',root=root,members=baseline)
++    for ordinal in range(1,9):
++        request=folder/f'batch-{ordinal:02d}.json'
++        until=min(time.monotonic()+60,slot['business_deadline_ns']/1e9-5)
++        r.event('awaiting_explicit_task120_subbatch',root=root,ordinal=ordinal,until_mono=until)
++        value=await_request(request,until)
++        if value is None:return previous or 0
++        value=validate(value,ordinal,previous)
++        if value['phase']=='stop':return previous or 0
++        env=r.public_environment()
++        env.update({name:os.environ[name] for name in ('PYTHONPATH','PYTHONIOENCODING','RETROLUME_TASK120_ROOT_ID','RETROLUME_TASK120_TESTONLY')})
++        env['RETROLUME_TASK120_BATCH']=str(ordinal)
++        files=[]
++        for directory in ('backend/app','backend/tests/fixtures/task120','frontend/src','frontend/dist'):
++            for path in sorted((r.ROOT/directory).rglob('*')):
++                if path.is_file() and '__pycache__' not in path.parts:files.append({'path':path.relative_to(r.ROOT).as_posix(),'sha256':hashlib.sha256(path.read_bytes()).hexdigest()})
++        stem=f'root-{root:02d}-batch-{ordinal:02d}'
++        r.write(r.EVIDENCE/(stem+'-as-run.json'),{'files':files,'utc':r.utc(),'request':value})
++        start=time.monotonic()
++        result=subprocess.run([sys.executable,'-m','tests.fixtures.task120.run',value['phase']],cwd=r.ROOT/'backend',env=env,
++            timeout=min(value['seconds'],max(1,slot['business_deadline_ns']/1e9-time.monotonic()-3)))
++        previous=result.returncode
++        job=NamedJob.open_existing(slot['identity'],1)
++        try:
++            await_members(job,baseline)
++        finally:job.close()
++        r.write(r.EVIDENCE/(stem+'-receipt.json'),{'phase':value['phase'],'exit_code':previous,'wall_seconds':time.monotonic()-start,'descendants_stopped':True,'utc':r.utc()})
++        if previous:r.update(lambda state:state['failures'].append({'root':root,'batch':ordinal,'phase':value['phase'],'receipt':stem+'-receipt.json'}))
++    return previous or 0
++
++
++if __name__=='__main__':
++    job=NamedJob.open_existing(sys.argv[1],1)
++    try:
++        before=members(job);subprocess.run([sys.executable,'-c','pass'],check=True,timeout=3)
++        after=await_members(job,before)
++        print(json.dumps({'before':before,'after':after,'exact_members_restored':before==after}))
++    finally:job.close()
+--- /dev/null
++++ after/backend/tests/fixtures/task120/observe.py
+@@ -0,0 +1,26 @@
++"""Own immutable instances/deadlines and retained financials, actual PG only."""
++import json
++from datetime import datetime,timezone
++from . import setup,resources as r
++from .api_runtime import run,financials
++
++def observe():
++    import psycopg
++    from psycopg.rows import dict_row
++    from .budget import run_reopen
++    run_reopen()
++    values=[]
++    for slot in ('flow','budget-01'):
++        setup.environment(slot,include_admin=False)
++        from app.main import create_app
++        app=create_app()
++        if not app.state.q_readiness['available']:raise RuntimeError('actual_q_root_unavailable')
++        from app.data_exit.q_store import authority_for
++        authority=authority_for(app.state.activities_ledger)
++        with psycopg.connect(setup.dsn(slot),row_factory=dict_row) as connection:
++            identity=connection.execute('SELECT current_database() AS database,public.data_state() AS control,(SELECT oid FROM pg_database WHERE datname=current_database()) AS database_oid').fetchone()
++            rows=connection.execute('SELECT id::text,status,deadline_at,scope_revision,outbound_grant_sha256,execution_generation,running_reserved_seconds,running_settled_seconds FROM activities ORDER BY id').fetchall()
++        if len(rows)!=3 or any(x['deadline_at']<=datetime.now(timezone.utc) or x['outbound_grant_sha256']!=authority.grant.sha256 for x in rows):raise RuntimeError('activity_expired_or_rebound')
++        values.append({'slot':slot,'identity':identity,'activities':rows,'financials':financials(slot),'real_outbound_authorized':False})
++    from app.data_exit.codec import plain
++    r.write(r.EVIDENCE/f"root-{r.state()['active_root']:02d}-instance-observation.json",plain({'slots':values,'same_CID_reused':True,'old_reserves_retained':True}))
+--- /dev/null
++++ after/backend/tests/fixtures/task120/offline.py
+@@ -0,0 +1,54 @@
++from datetime import datetime,timedelta,timezone
++from pathlib import Path
++from uuid import uuid4
++from app.capabilities.q_protocol import digest,raw_digest,InstanceBinding,PreparedRequest
++from app.data_exit.control import ControlHub
++from app.data_exit.files import private_file,regular
++from app.data_exit.q_store import QAuthority
++from app.operator.q_request import principal_id
++
++ROOT=Path(__file__).resolve().parents[4]
++AID='01800000-0000-4000-8000-000000000001'
++TEXT='根据速度.md学习单位换算。'
++
++
++def store(*,template_atoms_extra=()):
++    root=ROOT/'.runtime/TASK-120/offline'/str(uuid4())
++    root.mkdir(parents=True)
++    private_file(root,directory=True)
++    hub=ControlHub(root)
++    source={'dataset_id':str(uuid4()),'instance_id':str(uuid4()),'originals_root_id':str(uuid4()),'schema_profile':'data_exit.v1.r02','mode':'normal','reference_epoch':0}
++    hub.commit('source.register',source)
++    stat=regular(hub.path)
++    b=InstanceBinding(hub_control_id=hub.control_id,selection_generation=0,dataset_id=source['dataset_id'],instance_id=source['instance_id'],originals_root_id=source['originals_root_id'],schema_profile=source['schema_profile'],
++        source_registration_sha256=digest(source),connection_target_sha256=digest('offline-not-a-database'),cluster_system_identifier='OFFLINE',database_oid=1,control_root=str(root),control_volume=stat.st_dev,control_file_id=stat.st_ino)
++    literal={'alias':'L01.goal','purpose':'goal','raw_text_sha256':raw_digest(TEXT),'json_string_sha256':digest(TEXT),'max_utf8_bytes':4096,'allowed_activity_ids':[AID],'allowed_actions':['first','plan']}
++    source_id=str(uuid4());version_id=str(uuid4())
++    templates=['fixed test system'];atoms=['messages','role','system','user','content','model','max_tokens','stream','thinking','type','disabled','goal']
++    atoms.extend(template_atoms_extra)
++    manifest={'schema':'retrolume.outbound-sources.v2','frozen_samples_sha256':'304a4b131d04cd4132334bebd091f94ff62bec5660698457487e14136023c113',
++        'acceptance_contract_sha256':digest('offline-contract'),'sources':[{'source_id':source_id,'source_version_id':version_id,'source_revision':1,'original_sha256':raw_digest('synthetic original')}],
++        'fragments':[{'identity_sha256':digest('offline-fragment'),'input_sha256':digest('synthetic original')}],'fixed_inputs':[literal],
++        'derivation_policy_sha256':digest(__import__('app.capabilities.q_context',fromlist=['DERIVATION_POLICY']).DERIVATION_POLICY),'template_set_sha256':digest({'messages':templates,'atoms':atoms}),'instance_binding_sha256':b.sha256}
++    now=datetime.now(timezone.utc)
++    grant={'schema':'retrolume.outbound-grant.v2','grant_id':str(uuid4()),'approved_receipt_sha256':digest('offline-not-activation'),'q_activation_receipt_sha256':digest('offline-not-activation'),
++        'source_manifest_sha256':digest(manifest),'price_snapshot_sha256':digest('offline-zero-price'),'valid_from_utc':now.isoformat(),'valid_until_utc':(now+timedelta(hours=1)).isoformat(),
++        'data_class':'synthetic','allowed_activity_ids':[AID],'provider_capabilities':['deepseek_chat_completions/deepseek-flash','zhipu_embeddings/embedding-3'],
++        'global_max_requests':100,'global_max_cost_microunits':25000000,'capabilities_verified':True,'account_terms_verified':True,'token_upper_bound_verified':True,
++        'input_rate_cny_per_million':'0','output_rate_cny_per_million':'0','framing_token_upper_bound':0,'margin_percent':25,'instance_binding_sha256':b.sha256}
++    bundle={'schema':'retrolume.q-root.v2','execution_class':'TESTONLY','grant':grant,'manifest':manifest,'binding':b.model_dump(mode='json'),
++            'templates':templates,'template_atoms':atoms,'operator_principals':[principal_id()]}
++    return QAuthority.bind(hub,bundle)
++
++
++def prepared(authority,*,key=None,operation_id='offline.request',request=None,payload=None,snapshot=None):
++    request=request or {'goal':TEXT};payload=payload or {'messages':[{'role':'user','content':TEXT}]}
++    provenance=[]
++    p=PreparedRequest(prepared_id=str(uuid4()),root_sha256=authority.manifest.sha256,grant_sha256=authority.grant.sha256,
++        instance_binding_sha256=authority.binding.sha256,activity_id=AID,domain='learning',action='first',business_key=key or str(uuid4()),operation_id=operation_id,batch_ordinal=0,
++        command_request_sha256=digest(request),frozen_context_sha256=digest(request),typed_request_sha256=digest(request),payload_object_sha256=digest(payload),
++        payload_bytes_sha256=digest(payload),payload_bytes_count=len(__import__('app.capabilities.q_protocol',fromlist=['canonical']).canonical(payload).encode('utf-8')),
++        provider='deepseek_chat_completions',endpoint='https://api.deepseek.com/chat/completions',configured_model='deepseek-flash',service_sha256=digest('offline-service'),
++        template_set_sha256=authority.manifest.template_set_sha256,snapshot=snapshot or {},provenance_sha256=digest(provenance),max_output_tokens=256,
++        created_at=datetime.now(timezone.utc).isoformat(),valid_until=authority.grant.valid_until_utc)
++    return authority.prepare(p,request,payload,provenance)
+--- before/backend/tests/fixtures/task120/pg_boundaries.py
++++ after/backend/tests/fixtures/task120/pg_boundaries.py
+@@ -148,7 +148,7 @@
+         finally:ledger.claim_interview_launch=original
+         native=r.state()['counts']['native_business_sessions']
+         one=client.request('GET',path+'/'+body['business_key']);two=client.request('GET',path+'/'+body['business_key'])
+-        assert one['launch_claimed'] and two['launch_claimed'] and one['status']=='accepted'
++        assert one['launch_claimed'] and two['launch_claimed'] and one['status']=='started' and two['status']=='started'
+         if financials('flow')!=before or r.state()['counts']['native_business_sessions']!=native:raise RuntimeError('claimed_ACK_GET_changed_finances_or_launched')
+         persist('ACK.done',{'business_key':body['business_key'],'accept_COMMIT_real':True,'claim_COMMIT_real':True,'prepared_ACK_readonly_recovered':True,'claim_ACK_readonly_only':True,'never_resent_after_claim':True,'financials_unchanged':True})
+     if 'gap.done' not in state:
+--- before/backend/tests/fixtures/task120/queued.py
++++ after/backend/tests/fixtures/task120/queued.py
+@@ -8,11 +8,16 @@
+ PHASES=frozenset(('observe','diagnose','html_eol','integrated_core','integrated_ui','teaching','interview','interview_repaired','legacy_html','gap','budget','budget_a2','budget_a3','budget_race','boundaries','ui','reopen'))
+ PERMIT='TASK-120-Q-PREP-CONTINUATION-01-20261019'
+ PHASES=PHASES|frozenset(('c02_observe','c02_bootstrap_memory','c02_core','c02_memory','c02_ui','c02_races'))
++REPAIR_PERMIT='TASK-120-Q-PREP-REPAIR-03-20261019'
++PHASES=PHASES|frozenset(('r03_diagnose','r03_core','r03_memory','r03_boundaries','r03_ui','r03_races'))
++PHASES=PHASES|frozenset(('r03_ui_teaching','r03_ui_interview','r03_ui_legacy_html'))
++PHASES=PHASES|frozenset(('r03_fences',))
+ 
+ def read_plan(path):
+     value=json.loads(Path(path).read_text(encoding='utf-8'))
+-    if set(value)!={'schema','permit_id','root_id','stages'} or value['schema']!='task120.finite-plan.v1' or value['permit_id']!=PERMIT:raise ValueError('closed_plan')
+-    if type(value['root_id']) is not int or not 9<=value['root_id']<=16 or not isinstance(value['stages'],list) or not 1<=len(value['stages'])<=12:raise ValueError('plan_limit')
++    if set(value)!={'schema','permit_id','root_id','stages'} or value['schema']!='task120.finite-plan.v1' or value['permit_id'] not in (PERMIT,REPAIR_PERMIT):raise ValueError('closed_plan')
++    low,high=(17,20) if value['permit_id']==REPAIR_PERMIT else (9,16)
++    if type(value['root_id']) is not int or not low<=value['root_id']<=high or not isinstance(value['stages'],list) or not 1<=len(value['stages'])<=12:raise ValueError('plan_limit')
+     seen=set()
+     for stage in value['stages']:
+         if (set(stage)!={'id','phase','seconds','depends_on'} or stage['phase'] not in PHASES or type(stage['seconds']) is not int or not 1<=stage['seconds']<=300
+@@ -20,6 +25,7 @@
+             or any(x not in seen for x in stage['depends_on']) or len(set(stage['depends_on']))!=len(stage['depends_on'])):raise ValueError('invalid_stage')
+         seen.add(stage['id'])
+     if sum(s['seconds'] for s in value['stages'])>1680:raise ValueError('plan_root_deadline')
++    if any(s['phase']=='r03_diagnose' for s in value['stages']) and (len(value['stages'])!=1 or value['stages'][0]['seconds']>300):raise ValueError('readonly_diagnostic_closed_plan')
+     return value
+ 
+ def runnable(stage,outcomes):return all(outcomes.get(x)=='PASS' for x in stage['depends_on'])
+@@ -27,7 +33,7 @@
+ def run_plan():
+     path=Path(os.environ['RETROLUME_TASK120_PLAN']);plan=read_plan(path)
+     root=r.state()['active_root'];slot=next(x for x in r.state()['roots'] if x['id']==root)
+-    if plan['root_id']!=root or slot['permit_id']!=PERMIT or hashlib.sha256(path.read_bytes()).hexdigest()!=slot['plan_sha256']:raise RuntimeError('plan_identity')
++    if plan['root_id']!=root or slot['permit_id']!=plan['permit_id'] or hashlib.sha256(path.read_bytes()).hexdigest()!=slot['plan_sha256']:raise RuntimeError('plan_identity')
+     job=NamedJob.open_existing(slot['identity'],1)
+     try:baseline=members(job)
+     finally:job.close()
+--- before/backend/tests/fixtures/task120/recovery_races.py
++++ after/backend/tests/fixtures/task120/recovery_races.py
+@@ -32,6 +32,10 @@
+             body=retain(name,{'business_key':str(uuid4()),'action':action,'expected_scope_revision':1,'expected_domain_revision':current['domain_revision'],'confirmed':True,**({'query':setup.SAMPLES['inputs']['interview_goal']} if action=='query' else {})})
+             url=f'/api/activities/{aid}/retrieval/commands';pending=c.request('POST',url,body)
+             if pending['terminal_disposition']=='received':return remember(name+'.done',pending)
++            if action=='source_index' and pending['terminal_disposition']=='cache_ready':
++                status=c.request('GET',f'/api/activities/{aid}/retrieval/status')
++                if not status['ready'] or status['cached_fragments']!=status['fragments'] or not status['fragments']:raise RuntimeError('race_cache_not_complete')
++                return remember(name+'.done',pending)
+             rows=c.approve(aid,body['business_key'])
+             for row in rows:r.count('native_business_sessions')
+             value=c.request('POST',url,body)
+--- /dev/null
++++ after/backend/tests/fixtures/task120/repair03.py
+@@ -0,0 +1,346 @@
++"""Repair03 finite checks and normal chains; original resources only."""
++import json,sys,time,re
++from pathlib import Path
++from types import SimpleNamespace
++from unittest.mock import patch
++from . import resources as r,setup
++from .api_runtime import run,financials,application
++from app.capabilities.q_protocol import ROSTER,canonical,digest
++HERE=r.EVIDENCE/'repair-03'
++OLD_I='430a4e36-08e1-411f-a73e-097506a6278b'
++OLD_T='3b561488-07b7-4d6d-8b98-05e793c96749'
++
++def write(name,value):
++    target=HERE/name
++    if target.exists():
++        old=target.read_bytes();new=json.dumps(value,ensure_ascii=False,indent=2).encode()
++        if old!=new:
++            folder=HERE/'history';folder.mkdir(exist_ok=True)
++            (folder/(target.stem+'-before-root-'+str(r.state()['active_root'])+'-'+str(time.monotonic_ns())+target.suffix)).write_bytes(old)
++    r.write(target,value)
++
++def terminal_retrieval(action,receipt,status=None):
++    if receipt.get('status')!='terminal':return False
++    if receipt.get('terminal_disposition')=='received':return True
++    return bool(action=='source_index' and receipt.get('terminal_disposition')=='cache_ready' and status
++        and status.get('ready') and status.get('fragments',0)>0 and status.get('cached_fragments')==status['fragments'])
++def safe_error(exc):
++    code=getattr(exc,'code',None)
++    return {'type':type(exc).__name__,'code':code if isinstance(code,str) and re.fullmatch(r'[a-zA-Z0-9_.-]{1,96}',code) else None,'sqlstate':getattr(exc,'sqlstate',None)}
++
++def diagnose():
++    from .transport import install
++    from app.main import create_app
++    from app.data_exit.q_store import authority_for
++    from app.capabilities.contracts import ModelCallRequest
++    from app.learning.teaching_adapter import validate_teaching_request
++    from app.learning.contracts import read_document,normalize_input
++    import psycopg
++    from psycopg.rows import dict_row
++    install();setup.environment('flow',include_admin=False)
++    until=time.monotonic()+15
++    while True:
++        try:
++            with psycopg.connect(setup.dsn('flow'),connect_timeout=2) as c:c.execute('SELECT 1').fetchone()
++            break
++        except psycopg.Error:
++            if time.monotonic()>until:raise RuntimeError('repair03_PG_readiness_timeout') from None
++            time.sleep(.2)
++    app=create_app()
++    ledger=app.state.activities_ledger;authority=authority_for(ledger)
++    if not app.state.q_readiness['available']:raise RuntimeError('repair03_original_assembly_unavailable')
++    before=financials('flow');journal_before=__import__('hashlib').sha256((r.PRIVATE/'flow/control/journal.bin').read_bytes()).hexdigest()
++    result={'readonly':True,'new_business_POST':0,'SUP':0,'admit_mark_record_claim':0,'checks':{},'exceptions':[]}
++    def trace(frame,event,arg):
++        if event=='exception':
++            filename=Path(frame.f_code.co_filename)
++            if filename.is_relative_to(r.ROOT/'backend/app'):
++                exc=arg[1];record={**safe_error(exc),'file':filename.relative_to(r.ROOT).as_posix(),'function':frame.f_code.co_name,'line':frame.f_lineno}
++                if record not in result['exceptions']:result['exceptions'].append(record)
++        return trace
++    async def validate():
++        row=next(x for x in authority.hub.state()['q']['requests'].values() if x['prepared']['business_key']==OLD_T)
++        request=ModelCallRequest.model_validate(authority.artifact(row)['request'])
++        p=row['prepared'];context=SimpleNamespace(activity_id=p['activity_id'],scope_revision=request.teaching_profile.scope_revision,operation_id=p['operation_id'])
++        from app.data_exit.q_store import is_read_method
++        for old in (True,False):
++            with patch('app.data_exit.q_store.is_read_method',side_effect=lambda name:False if old and name=='_teaching_read_snapshot' else is_read_method(name)):
++                previous=sys.gettrace();sys.settrace(trace)
++                try:
++                    async with authority.async_policy(shared=True):code=await validate_teaching_request(context,request,ledger)
++                finally:sys.settrace(previous)
++            result['checks']['teaching_before' if old else 'teaching_after']={'returned_code':code,'request_sha256':digest(request.model_dump(mode='json')),'business_key':OLD_T}
++        result['checks']['teaching_read_fix_verified']=result['checks']['teaching_before']['returned_code']=='teaching_validation_unavailable' and result['checks']['teaching_after']['returned_code'] is None
++    until=time.monotonic()+15
++    while True:
++        try:
++            with psycopg.connect(setup.dsn('flow'),connect_timeout=2) as c:c.execute('SELECT 1').fetchone()
++            break
++        except psycopg.Error:
++            if time.monotonic()>until:raise RuntimeError('repair03_PG_readiness_timeout') from None
++            time.sleep(.2)
++    run(validate())
++    progress=json.loads((r.PRIVATE/'flow/flow-progress.json').read_text(encoding='utf-8'))
++    parent_op=progress['legacy-first.done']['operation_id']
++    parent=run(ledger.read_committed_result(ROSTER[2],parent_op))
++    document=json.loads(parent.payload)['value'];profile,output=read_document(document,activity_id=ROSTER[2],operation_id=parent_op)
++    result['checks']['legacy_parent']={'operation_id':parent_op,'kind':parent.kind,'read_status':parent.read_status.value,'output_kind':output.kind,'payload_sha256':parent.payload_sha256,'segment_count':len(output.segments),'profile':profile.profile}
++    for name,text in [('followup',setup.SAMPLES['inputs']['numeric_initial_question']),('focus',setup.SAMPLES['inputs']['numeric_goal'])]:
++        result['checks'][name+'_input_canonical']=normalize_input(text)==text
++    async def guards():
++        async with await psycopg.AsyncConnection.connect(setup.dsn('flow'),row_factory=dict_row) as c:
++            await c.execute('BEGIN READ ONLY');await c.execute("SET LOCAL statement_timeout='5s'")
++            a=await (await c.execute('SELECT * FROM activities WHERE id=%s',(ROSTER[2],))).fetchone()
++            for name,fn in [('legacy_domain',lambda:ledger._interview_require_non_domain(c,ROSTER[2])),
++                ('html_schema',lambda:ledger._html_assert_schema(c)),
++                ('html_parent',lambda:ledger._html_parent_locked(c,a,{'kind':'learning','operation_id':parent_op,'payload_sha256':parent.payload_sha256,'segment_index':0}))]:
++                try:
++                    async with c.transaction():value=await fn()
++                except Exception as exc:result['checks'][name]={'status':'REFUSED',**safe_error(exc)}
++                else:result['checks'][name]={'status':'PASS','context_sha256':digest(value) if value else None}
++            for table,fields in [('teaching_heads','revision,goal_version,goal_record_id::text,pending_business_key::text'),('interview_heads','revision,goal_version,goal_record_id::text,pending_key::text')]:
++                result[table]=await (await c.execute(f'SELECT activity_id::text,{fields} FROM {table} ORDER BY activity_id')).fetchall()
++            for table in ('teaching_commands','interview_commands'):
++                result[table]=await (await c.execute(f'SELECT activity_id::text,business_key::text,action,status,operation_id FROM {table} ORDER BY created_at')).fetchall()
++    run(guards())
++    result['financials_unchanged']=financials('flow')==before
++    result['journal_unchanged']=__import__('hashlib').sha256((r.PRIVATE/'flow/control/journal.bin').read_bytes()).hexdigest()==journal_before
++    write('readonly-diagnosis.json',__import__('app.data_exit.codec',fromlist=['plain']).plain(result))
++    if not result['financials_unchanged'] or not result['journal_unchanged']:raise RuntimeError('readonly_diagnostic_changed_authority')
++
++def execute(mode):
++    if mode=='diagnose':return diagnose()
++    if mode=='core':return core()
++    if mode=='memory':return memory()
++    if mode=='ui':return flow_tail()
++    if mode=='fences':
++        tail=json.loads((HERE/'flow-tail-result.json').read_text(encoding='utf-8'))
++        if not tail['outcomes'].get('interview',{}).get('status','').startswith('PASS'):raise RuntimeError('repair03_UI_interview_positive_required_before_head_scope_fences')
++        from .ui import run_ui
++        return run_ui(mode='fences')
++    if mode=='races':
++        if not (HERE/'selected-memory-positive.json').exists():raise RuntimeError('repair03_memory_positive_required_before_races')
++        from .recovery_races import run_races
++        return run_races()
++    raise ValueError('repair03_closed_mode')
++
++class Flow:
++    def __init__(self,c,slot):
++        self.c=c;self.slot=slot;self.path=r.PRIVATE/slot/'r03-progress.json'
++        self.state=json.loads(self.path.read_text(encoding='utf-8')) if self.path.exists() else {}
++    def save(self,name,value):self.state[name]=value;r.write(self.path,self.state,private=True);return value
++    def retain(self,name,value):return self.state[name] if name in self.state else self.save(name,value)
++    def body(self,name,value):
++        from uuid import uuid4
++        return self.retain(name,dict(business_key=str(uuid4()),**value))
++    def head(self,aid,domain):return self.c.request('GET',f'/api/activities/{aid}/{domain}/workspace')['head']
++    def local(self,aid,domain,action,body,name):
++        if name+'.done' in self.state:return self.state[name+'.done']
++        h=self.head(aid,domain) or {};interview=domain=='interview'
++        value={'action':action,'expected_goal_version':h.get('goal_version',0),'expected_scope_revision':1,'body':body}
++        value['expected_head_revision' if interview else 'expected_revision']=h.get('revision',0)
++        if interview:value['schema']='interview.command.v2'
++        command=self.body(name,value);receipt=self.c.request('POST',f'/api/activities/{aid}/{domain}/commands',command)
++        if receipt['status']!='committed':raise RuntimeError('repair03_local_not_committed_'+name)
++        return self.save(name+'.done',receipt)
++    def goal(self,aid,domain,text,name):
++        if name+'.parent-proof' in self.state:return self.state[name+'.parent-proof']
++        before=self.head(aid,domain)
++        self.local(aid,domain,'start' if domain=='interview' and not before else 'goal',
++            {'goal':{'target':text,'material_roles':[]}} if domain=='interview' else {'goal':text},name)
++        after=self.head(aid,domain)
++        if after['revision']!=(before or {}).get('revision',0)+1 or after['goal_version']!=(before or {}).get('goal_version',0)+1 or after['goal_record_id']==(before or {}).get('goal_record_id'):raise RuntimeError('repair03_goal_no_new_parent_'+name)
++        return self.save(name+'.parent-proof',{'before':before,'after':after})
++    def retrieve(self,aid,action,name,query=None):
++        path=f'/api/activities/{aid}/retrieval/commands'
++        if name not in self.state:
++            status=self.c.request('GET',f'/api/activities/{aid}/retrieval/status')
++            self.body(name,{'action':action,'expected_scope_revision':1,'expected_domain_revision':status['domain_revision'],'confirmed':True,**({'query':query} if query else {})})
++        command=self.state[name];receipt=self.c.request('GET',path+'/'+command['business_key'],expect=(200,202,404))
++        if not receipt.get('status'):receipt=self.c.request('POST',path,command)
++        if receipt.get('status')=='terminal':
++            status=self.c.request('GET',f'/api/activities/{aid}/retrieval/status') if receipt.get('terminal_disposition')=='cache_ready' else None
++            if not terminal_retrieval(action,receipt,status):raise RuntimeError('repair03_retained_retrieval_not_qualified')
++            return self.save(name+'.done',receipt)
++        if receipt.get('launch_claimed') or receipt.get('launch_claimed_at') or receipt.get('status') in ('unknown','launch_claimed'):raise RuntimeError('repair03_retained_claim_not_resent')
++        approval=receipt.get('outbound_approval')
++        if not approval:
++            receipt=self.c.request('POST',path,command);approval=receipt.get('outbound_approval')
++        if not approval:raise RuntimeError('repair03_retrieval_approval_absent')
++        before=financials(self.slot);native=r.state()['counts']['native_business_sessions']
++        self.c.request('GET',path+'/'+command['business_key'])
++        if financials(self.slot)!=before or r.state()['counts']['native_business_sessions']!=native:raise RuntimeError('repair03_GET_side_effect')
++        if not approval['can_continue']:self.c.approve(aid,command['business_key'])
++        if financials(self.slot)!=before:raise RuntimeError('repair03_approval_financial_side_effect')
++        r.count('native_business_sessions');receipt=self.c.request('POST',path,command)
++        if receipt.get('terminal_disposition')!='received':raise RuntimeError('repair03_query_not_received_'+str(receipt.get('error_code')))
++        return self.save(name+'.done',receipt)
++    def model(self,aid,domain,action,body,name,ref=None):
++        path=f'/api/activities/{aid}/{domain}/commands'
++        if name not in self.state:
++            h=self.head(aid,domain);value={'action':action,'expected_goal_version':h['goal_version'],'expected_scope_revision':1,'body':body}
++            value['expected_head_revision' if domain=='interview' else 'expected_revision']=h['revision']
++            if domain=='interview':value['schema']='interview.command.v2'
++            if ref:value['retrieval_ref']=ref
++            self.body(name,value)
++        command=self.state[name]
++        if name+'.done' in self.state:
++            receipt=self.c.request('GET',path+'/'+command['business_key'])
++            if receipt['status']!='committed':raise RuntimeError('repair03_saved_COMMIT_not_reconciled')
++            return receipt
++        receipt=self.c.request('GET',path+'/'+command['business_key'],expect=(200,202,404))
++        if receipt.get('launch_claimed') or receipt.get('launch_claimed_at') or receipt.get('status') in ('unknown','started'):raise RuntimeError('repair03_old_model_never_resent')
++        receipt=self.c.request('POST',path,command)
++        if receipt['status']!='accepted' or not receipt.get('outbound_approval'):raise RuntimeError('repair03_model_prepare_not_pending')
++        before=financials(self.slot);self.c.request('GET',path+'/'+command['business_key']);self.c.approve(aid,command['business_key'])
++        if financials(self.slot)!=before:raise RuntimeError('repair03_model_GET_approval_financial_side_effect')
++        r.count('native_business_sessions');receipt=self.c.request('POST',path,command)
++        fact=run(self.c.app.state.activities_ledger.read_committed_result(aid,receipt['operation_id']))
++        if receipt['status']!='committed' or fact.read_status.value!='committed_current' or not fact.payload:raise RuntimeError('repair03_model_missing_domain_007_'+domain+'_'+str(receipt.get('error_code')))
++        self.save(name+'.007',{'operation_id':receipt['operation_id'],'payload_sha256':fact.payload_sha256,'read_status':fact.read_status.value})
++        return self.save(name+'.done',receipt)
++
++def abandon_originals(f):
++    from app.data_exit.q_store import authority_for
++    ledger=f.c.app.state.activities_ledger;authority=authority_for(ledger)
++    for domain,aid,key in [('interview',ROSTER[1],OLD_I),('teaching',ROSTER[2],OLD_T)]:
++        name='abandon-'+domain
++        if name+'.done' in f.state:
++            if domain=='teaching' and not (HERE/(name+'-witness.json')).exists():
++                view=run(ledger.read_teaching_command(aid,key));row=view['command']
++                if row['abandoned_at'] is None or (view['head'] or {}).get('pending_business_key') is not None:raise RuntimeError('repair03_teaching_abandon_not_effective')
++                qrow=next(x for x in authority.hub.state()['q']['requests'].values() if x['prepared']['business_key']==key)
++                write(name+'-witness.json',{'old_business_key':key,'original_UNKNOWN_status_retained':row['status'],'abandoned_at':str(row['abandoned_at']),'pending_cleared':True,'Q_claim_retained':qrow.get('claim'),'Q_admission_retained':qrow.get('admission'),'financials_after':financials(f.slot),'resend_count':0,'initial_assertion_failed_before_this_readonly_reconciliation':True})
++            continue
++        money=financials(f.slot);q=authority.hub.state()['q'];before=f.head(aid,domain)
++        path=f'/api/activities/{aid}/{domain}/commands/'+key;old=f.c.request('GET',path)
++        if old['status']!='unknown':raise RuntimeError('repair03_original_unknown_state_changed')
++        f.local(aid,domain,'abandon',{'pending_key' if domain=='interview' else 'target_business_key':key},name)
++        after=f.c.request('GET',path)
++        ended=after['status']=='abandoned' if domain=='interview' else run(ledger.read_teaching_command(aid,key))['command']['abandoned_at'] is not None
++        if not ended or financials(f.slot)!=money or authority.hub.state()['q']!=q:raise RuntimeError('repair03_abandon_changed_Q_or_finances')
++        write(name+'-witness.json',{'old_business_key':key,'before_command':old,'after_command':after,'before_head':before,'after_head':f.head(aid,domain),'Q_claim_operation_finances_unchanged':True,'resend_count':0,'old_semantic_slot_retained':True})
++
++def legacy_and_html(f):
++    from app.learning.contracts import read_document
++    aid=ROSTER[2];ledger=f.c.app.state.activities_ledger
++    old=json.loads((r.PRIVATE/'flow/flow-progress.json').read_text(encoding='utf-8'))
++    parent_op=old['legacy-first.done']['operation_id'];parent=run(ledger.read_committed_result(aid,parent_op))
++    _,output=read_document(json.loads(parent.payload)['value'],activity_id=aid,operation_id=parent_op)
++    if parent.read_status.value!='committed_current' or output.kind!='answer' or not output.segments:raise RuntimeError('repair03_legacy_parent_ineligible')
++    name='legacy-followup';body=f.body(name,{'parent_operation_id':parent_op,'question':setup.SAMPLES['inputs']['numeric_initial_question'],'confirmed':True})
++    if name+'.done' not in f.state:
++        url=f'/api/activities/{aid}/learning/followups';value=f.c.request('POST',url,body)
++        if value['status']!='awaiting_approval' or not value.get('outbound_approval'):raise RuntimeError('repair03_legacy_not_pending')
++        before=financials('flow');f.c.request('GET',f'/api/activities/{aid}/learning/intents/{body["business_key"]}?action=followup');f.c.approve(aid,body['business_key'])
++        if financials('flow')!=before:raise RuntimeError('repair03_legacy_approval_reserved')
++        r.count('native_business_sessions');value=f.c.request('POST',url,body)
++        if value['status']!='committed_current':raise RuntimeError('repair03_legacy_not_COMMIT_'+value['status'])
++        f.save(name+'.done',value)
++    if 'html.done' not in f.state:
++        caps=f.c.request('GET',f'/api/activities/{aid}/html/capabilities')
++        if not caps['available']:raise RuntimeError('repair03_original_html_host_unavailable')
++        body=f.body('html',{'parent':{'kind':'learning','operation_id':parent_op,'payload_sha256':parent.payload_sha256,'segment_index':0},'focus':setup.SAMPLES['inputs']['numeric_goal'],'expected_config_sha256':caps['config_sha256'],'confirmed':True})
++        url=f'/api/activities/{aid}/html/commands';value=f.c.request('POST',url,body)
++        if value.get('status')!='accepted' or not value.get('outbound_approval'):raise RuntimeError('repair03_html_not_pending')
++        before=financials('flow');f.c.request('GET',url+'/'+body['business_key']);f.c.approve(aid,body['business_key'])
++        if financials('flow')!=before:raise RuntimeError('repair03_HTML_approval_reserved')
++        r.count('native_business_sessions');value=f.c.request('POST',url,body)
++        if value['status']!='terminal' or value['terminal_disposition']!='succeeded' or value['read_status']!='current':raise RuntimeError('repair03_HTML_not_COMMIT_'+str(value.get('error_code')))
++        f.save('html.done',value)
++    write('legacy-html-positive.json',{'status':'PASS','original_first_inherited':parent_op,'first_answer_parent_verified':True,'followup':f.state['legacy-followup.done'],'html':f.state['html.done'],'preview_creates_starts':[0,0]})
++
++def core():
++    gate=json.loads((HERE/'readonly-diagnosis.json').read_text(encoding='utf-8'))
++    if not gate['checks']['teaching_read_fix_verified'] or any(gate['checks'][x]['status']!='PASS' for x in ('legacy_domain','html_schema','html_parent')):raise RuntimeError('repair03_cause_gate_not_closed')
++    with application('flow') as c:
++        f=Flow(c,'flow');abandon_originals(f)
++        outcomes={}
++        for name,action in [('teaching',lambda:teaching(f)),('interview',lambda:interview(f)),('legacy_html',lambda:legacy_and_html(f))]:
++            try:action()
++            except Exception as exc:
++                outcomes[name]={'status':'FAIL',**safe_error(exc),'safe_code':str(exc) if type(exc) is RuntimeError else None}
++                r.update(lambda b:b['failures'].append({'root':r.state()['active_root'],'case':'repair03-'+name,'receipt':'repair-03/core-result.json'}))
++            else:outcomes[name]={'status':'PASS'}
++            write('core-result.json',{'outcomes':outcomes,'actual_PG_HTTP_SUP':True,'provider_fee_preview_Git':0})
++    if any(x['status']!='PASS' for x in outcomes.values()):raise RuntimeError('repair03_core_partial')
++
++def teaching(f):
++    aid=ROSTER[2]
++    f.goal(aid,'teaching',setup.SAMPLES['inputs']['concept_goal'],'t-concept-goal')
++    f.goal(aid,'teaching',setup.SAMPLES['inputs']['numeric_goal'],'t-numeric-goal')
++    f.retrieve(aid,'source_index','t-index')
++    ref=f.retrieve(aid,'query','t-query',setup.SAMPLES['inputs']['numeric_goal'])['retrieval_ref']
++    plan=f.model(aid,'teaching','plan',{'confirmed':True},'t-plan',ref)
++    proposal=next(x['record_id'] for x in plan['record_ids'] if x['kind']=='path_proposal')
++    f.local(aid,'teaching','accept_path',{'proposal_record_id':proposal},'t-path')
++    head=f.head(aid,'teaching')
++    exercise_ref=f.retrieve(aid,'query','t-exercise-query',setup.SAMPLES['inputs']['numeric_goal'])['retrieval_ref']
++    f.model(aid,'teaching','exercise',{'confirmed':True,'path_record_id':head['path_record_id'],'node_id':head['node_id'],'purpose':'initial'},'t-exercise',exercise_ref)
++    write('teaching-positive.json',{'status':'PASS','activity_id':aid,'plan':f.state['t-plan.007'],'exercise':f.state['t-exercise.007'],'query_business_key':f.state['t-query']['business_key'],'query_result_sha256':f.state['t-query.done']['retrieval_ref']['result_sha256']})
++
++def interview(f,prefix='i'):
++    aid=ROSTER[1];f.goal(aid,'interview',setup.SAMPLES['inputs']['interview_goal'],prefix+'-new-goal')
++    f.retrieve(aid,'source_index',prefix+'-index')
++    ref=f.retrieve(aid,'query',prefix+'-query',setup.SAMPLES['inputs']['interview_goal'])['retrieval_ref']
++    f.model(aid,'interview','ask',{'mode':'first'},prefix+'-ask',ref)
++    write(f.slot+'-interview-positive.json',{'status':'PASS','activity_id':aid,'model':f.state[prefix+'-ask.007'],'query_business_key':f.state[prefix+'-query']['business_key'],'query_result_sha256':f.state[prefix+'-query.done']['retrieval_ref']['result_sha256']})
++
++def memory():
++    from .recovery import bootstrap_memory
++    if not (r.EVIDENCE/'budget-02-selected-memory-binding.json').exists():bootstrap_memory()
++    with application('budget-02') as c:
++        f=Flow(c,'budget-02')
++        # Original root18 stopped its worker. Its claimed key is GET-only;
++        # explicitly end this local pending, then create a new real goal parent.
++        if 'i-ask' in f.state and 'i-ask.done' not in f.state and 'memory-abandon-root18.done' not in f.state:
++            old=f.state['i-ask']['business_key'];url=f'/api/activities/{ROSTER[1]}/interview/commands/'+old
++            before=c.request('GET',url);money=financials('budget-02')
++            if before['status']=='unknown':f.local(ROSTER[1],'interview','abandon',{'pending_key':old},'memory-abandon-root18')
++            after=c.request('GET',url)
++            if after['status']!='abandoned' or financials('budget-02')!=money:raise RuntimeError('repair03_memory_unknown_not_locally_closed')
++            write('memory-unknown-root18-retained.json',{'before':before,'after':after,'never_resent':True,'finances_unchanged':True})
++        interview(f,'i2')
++        from app.data_exit.q_store import authority_for
++        authority=authority_for(c.app.state.activities_ledger);command=f.state['i2-ask'];aid=ROSTER[1]
++        row=next(x for x in authority.hub.state()['q']['requests'].values() if x['prepared']['business_key']==command['business_key'])
++        request=authority.artifact(row)['request'];value=json.loads(request['messages'][1]['content'])
++        background=value['learning_background'];selection=run(c.app.state.activities_ledger.read_memory_selection(aid,include_bodies=True))
++        if len(background)!=1 or background[0]['text']!=setup.SAMPLES['inputs']['memory_body'] or background[0]['memory_id']!=selection['entries'][0]['memory_id']:raise RuntimeError('repair03_selected_memory_not_in_actual_request')
++        write('selected-memory-positive.json',{'status':'PASS','prepared_id':row['prepared_id'],'007':f.state['i2-ask.007'],'full_request_sha256':digest(request),'memory_id':background[0]['memory_id'],'frozen_text_sha256':__import__('hashlib').sha256(background[0]['text'].encode()).hexdigest(),'real_PG_SUP':True})
++
++def boundaries(c):
++    if not (HERE/'flow-interview-positive.json').exists():raise RuntimeError('repair03_interview_positive_required_before_boundaries')
++    import psycopg
++    with psycopg.connect(setup.dsn('flow')) as db:
++        unknown=db.execute("SELECT count(*) FROM interview_commands WHERE activity_id=%s AND status='unknown' AND execution_kind='model'",(ROSTER[1],)).fetchone()[0]
++    if unknown:raise RuntimeError('repair03_new_UI_UNKNOWN_must_not_be_reissued')
++    from .pg_boundaries import probe_approved,run_ack_and_gap
++    f=Flow(c,'flow');aid=ROSTER[1]
++    f.goal(aid,'interview',setup.SAMPLES['inputs']['interview_goal'],'b-new-goal')
++    ref=f.retrieve(aid,'query','b-query',setup.SAMPLES['inputs']['interview_goal'])['retrieval_ref']
++    c.after_approval=lambda rows:probe_approved(c,rows)
++    try:f.model(aid,'interview','ask',{'mode':'first'},'b-result-ACK-model',ref)
++    finally:c.after_approval=None
++    write('result-ACK-positive.json',{'status':'PASS','007':f.state['b-result-ACK-model.007'],'real_COMMIT_ACK_loss':True,'GET_recovered':True})
++    run_ack_and_gap(c)
++
++def flow_tail():
++    from .ui import run_ui
++    outcomes={};gates={'teaching':'teaching-positive.json','interview':'flow-interview-positive.json','legacy_html':'legacy-html-positive.json'}
++    with application('flow') as c:
++        for mode,gate in gates.items():
++            if not (HERE/gate).exists():outcomes[mode]={'status':'SKIPPED_NO_BACKEND_POSITIVE'};continue
++            try:run_ui(c,mode)
++            except Exception as exc:
++                outcomes[mode]={'status':'FAIL',**safe_error(exc),'safe_code':str(exc) if type(exc) is RuntimeError else None}
++                r.update(lambda b:b['failures'].append({'root':b['active_root'],'case':'repair03-UI-'+mode,'receipt':'repair-03/flow-tail-result.json'}))
++            else:outcomes[mode]={'status':'PASS_FOR_LISTED_FLOW'}
++            write('flow-tail-result.json',{'outcomes':outcomes,'remaining_late_fences_not_inherited_as_pass':['head','scope','namespace','DataContext']})
++        try:boundaries(c)
++        except Exception as exc:
++            outcomes['boundaries']={'status':'FAIL',**safe_error(exc),'safe_code':str(exc) if type(exc) is RuntimeError else None}
++            r.update(lambda b:b['failures'].append({'root':b['active_root'],'case':'repair03-boundaries','receipt':'repair-03/flow-tail-result.json'}))
++        else:outcomes['boundaries']={'status':'PASS_FOR_LISTED_GATES_AND_ACK_K2'}
++        write('flow-tail-result.json',{'outcomes':outcomes,'remaining_late_fences_not_inherited_as_pass':['head','scope','namespace','DataContext']})
++    if any(not x['status'].startswith('PASS') for x in outcomes.values()):raise RuntimeError('repair03_flow_tail_partial')
+--- /dev/null
++++ after/backend/tests/fixtures/task120/resources.py
+@@ -0,0 +1,221 @@
++"""Exact TASK-120 resources, counters and cleanup; no legacy runner imports."""
++from __future__ import annotations
++import ctypes
++from ctypes import wintypes
++from contextlib import contextmanager
++from datetime import datetime,timezone
++import json
++import os
++from pathlib import Path
++import re
++import secrets
++import shutil
++import socket
++import subprocess
++import time
++from uuid import uuid4
++from app.data_exit.files import RootLease,private_file
++from app.preview.process import birth
++from .control_job import NamedJob
++
++ROOT=Path(__file__).resolve().parents[4]
++EVIDENCE=ROOT/'DocuN/evidence/TASK-120/execution'
++PRIVATE=ROOT/'.runtime/TASK-120'
++BUDGET=EVIDENCE/'budget.json'
++NAME='retrolume-task120-qprep-pg1'
++VOLUME='retrolume-task120-qprep-data'
++IMAGE='pgvector/pgvector@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f'
++LABELS={'retrolume.task':'TASK-120','retrolume.scope':'q-prep-testonly','retrolume.permit':'TASK-120-Q-PREP-IMPLEMENTATION-20261018'}
++
++
++def utc():return datetime.now(timezone.utc).isoformat()
++
++
++def write(path,value,private=False):
++    path=Path(path);temp=path.with_suffix('.new')
++    temp.write_text(json.dumps(value,ensure_ascii=False,indent=2),encoding='utf-8')
++    if private:private_file(temp)
++    # Concurrent readonly watchdog snapshots can briefly deny DELETE sharing
++    # on Windows. Retry only the atomic rename, retaining the same bytes and
++    # the caller's finite metadata lock; persistent ACL errors still fail.
++    until=time.monotonic()+1
++    while True:
++        try:os.replace(temp,path);break
++        except PermissionError:
++            if time.monotonic()>=until:raise
++            time.sleep(.01)
++
++
++def state():return json.loads(BUDGET.read_text(encoding='utf-8-sig'))
++
++
++def update(function):
++    lock=RootLease(EVIDENCE,'.operation.lock')
++    try:
++        with lock.acquire(True,timeout=2):
++            value=state();result=function(value);write(BUDGET,value);return result
++    finally:lock.close()
++
++
++def count(name):
++    def reserve(value):
++        if value['counts'][name]>=value['caps'][name]:raise RuntimeError('task120_count_exhausted_'+name)
++        value['counts'][name]+=1
++        return value['counts'][name]
++    return update(reserve)
++
++
++def event(kind,**details):
++    with (EVIDENCE/'events.jsonl').open('a',encoding='utf-8') as stream:
++        stream.write(json.dumps({'utc':utc(),'mono_ns':time.monotonic_ns(),'kind':kind,**details})+'\n')
++
++
++class Memory(ctypes.Structure):
++    _fields_=[('length',wintypes.DWORD),('load',wintypes.DWORD)]+[(name,ctypes.c_ulonglong) for name in ('total_phys','avail_phys','total_page','avail_page','total_virtual','avail_virtual','avail_extended')]
++
++
++def available_memory():
++    sample=Memory();sample.length=ctypes.sizeof(sample)
++    if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(sample)):raise ctypes.WinError()
++    return int(sample.avail_phys)
++
++
++def memory_gate(kind):
++    amount=available_memory();minimum=(768 if kind=='browser' else 512)*1024**2
++    event('memory_gate',stage=kind,available_bytes=amount,minimum_bytes=minimum)
++    if amount<minimum:raise RuntimeError('task120_low_memory_'+kind)
++
++
++def settled_memory_gate(kind,seconds=12):
++    # Docker warmup can briefly reclaim pages. This finite internal stage does
++    # not start the next layer until its unchanged real threshold is met.
++    until=time.monotonic()+seconds
++    while True:
++        try:return memory_gate(kind)
++        except RuntimeError:
++            if time.monotonic()>=until:raise
++            time.sleep(min(2,max(0,until-time.monotonic())))
++
++
++def docker(args,*,timeout=25):
++    executable=shutil.which('docker')
++    if not executable:raise RuntimeError('docker_missing')
++    result=subprocess.run([executable,*args],capture_output=True,timeout=timeout)
++    if result.returncode:raise RuntimeError('docker_command_failed_'+str(result.returncode))
++    return result.stdout.decode('utf-8').strip()
++
++
++def container():
++    # Full inspect remains only in memory. Env/command/config are never recorded.
++    raw=json.loads(docker(['container','inspect',NAME]))[0]
++    value={key:raw.get(key) for key in ('Id','Name','Image')}
++    value.update(labels=raw['Config'].get('Labels',{}),state={k:raw['State'].get(k) for k in ('Running','Pid','Status')},
++        ports=raw['HostConfig'].get('PortBindings'),mounts=[{k:m.get(k) for k in ('Type','Name','Destination')} for m in raw['Mounts']],
++        limits={k:raw['HostConfig'].get(k) for k in ('Memory','NanoCpus','PidsLimit','RestartPolicy','Privileged','CapAdd','NetworkMode')})
++    return value
++
++
++def owned(value,registry=None):
++    if any(value['labels'].get(k)!=v for k,v in LABELS.items()):raise RuntimeError('foreign_container_labels')
++    if registry and (value['Id']!=registry['Id'] or value['Image']!=registry['Image']):raise RuntimeError('container_identity_changed')
++    if not any(x['Type']=='volume' and x['Name']==VOLUME and x['Destination']=='/var/lib/postgresql/data' for x in value['mounts']):raise RuntimeError('container_mount_changed')
++    return value
++
++
++def choose_ports():
++    saved=state().get('ports')
++    if saved:return saved
++    result=subprocess.run(['netsh','interface','ipv4','show','excludedportrange','protocol=tcp'],capture_output=True,timeout=10)
++    if result.returncode:raise RuntimeError('port_exclusion_unknown')
++    ranges=[]
++    for line in result.stdout.decode('utf-8',errors='replace').splitlines():
++        match=re.fullmatch(r'\s*(\d+)\s+(\d+)\s*\*?\s*',line)
++        if match:ranges.append(tuple(map(int,match.groups())))
++    choices={};checks=[]
++    for kind,candidates in (('pg',range(55480,55484)),('api',range(18120,18124))):
++        for port in candidates:
++            if any(a<=port<=b for a,b in ranges):checks.append({'port':port,'excluded':True});continue
++            try:
++                with socket.socket() as probe:
++                    probe.setsockopt(socket.SOL_SOCKET,socket.SO_EXCLUSIVEADDRUSE,1)
++                    probe.bind(('127.0.0.1',port))
++            except OSError as exc:checks.append({'port':port,'bind':False,'errno':exc.errno});continue
++            choices[kind]=port;checks.append({'port':port,'bind':True});break
++        if kind not in choices:raise RuntimeError('task120_no_authorized_port_'+kind)
++    update(lambda value:value.update(ports=choices))
++    write(EVIDENCE/'ports.json',{'selected':choices,'excluded_ranges':ranges,'actual_bind':checks,'utc':utc()})
++    return choices
++
++
++def ensure_pg():
++    images=json.loads(docker(['image','inspect',IMAGE]))
++    if len(images)!=1 or IMAGE not in images[0].get('RepoDigests',[]):raise RuntimeError('cached_image_digest_missing')
++    image_id=images[0]['Id']
++    write(EVIDENCE/'image.json',{'reference':IMAGE,'Id':image_id,'RepoDigests':images[0]['RepoDigests']})
++    registry=state().get('pg_registry')
++    if registry:
++        return owned(container(),registry)
++    existing=docker(['container','ls','-a','--filter','name=^/'+NAME+'$','--format','{{.ID}}'])
++    if existing:
++        value=owned(container())
++        if value['Image']!=image_id:raise RuntimeError('existing_image_mismatch')
++        update(lambda state:state.update(pg_registry=value))
++        return value
++    PRIVATE.mkdir(parents=True,exist_ok=True);private_file(PRIVATE,directory=True)
++    credentials=PRIVATE/'cluster.json'
++    if not credentials.exists():write(credentials,{'password':secrets.token_urlsafe(32)},private=True)
++    password=json.loads(credentials.read_text(encoding='utf-8'))['password']
++    env_file=PRIVATE/'pg.env'
++    env_file.write_text('POSTGRES_USER=postgres\nPOSTGRES_DB=postgres\nPOSTGRES_PASSWORD='+password+'\n',encoding='utf-8')
++    private_file(env_file)
++    volumes=docker(['volume','ls','--filter','name=^'+VOLUME+'$','--format','{{.Name}}'])
++    if not volumes:
++        count('volume_create_attempts')
++        docker(['volume','create',*[x for k,v in LABELS.items() for x in ('--label',k+'='+v)],VOLUME])
++        count('volumes')
++    volume=json.loads(docker(['volume','inspect',VOLUME]))[0]
++    if any(volume.get('Labels',{}).get(k)!=v for k,v in LABELS.items()):raise RuntimeError('foreign_volume')
++    ports=state()['ports'];count('pg_create_attempts')
++    docker(['container','create','--pull=never','--name',NAME,'--cpus','1','--memory','512m','--pids-limit','128','--restart','no',
++        *[x for k,v in LABELS.items() for x in ('--label',k+'='+v)],'--label','com.docker.compose.project=retrolume-task120-qprep',
++        '--publish','127.0.0.1:'+str(ports['pg'])+':5432','--mount','type=volume,source='+VOLUME+',target=/var/lib/postgresql/data','--env-file',str(env_file),IMAGE])
++    value=owned(container());count('pg_objects')
++    if value['Image']!=image_id:raise RuntimeError('created_image_mismatch')
++    update(lambda state:state.update(pg_registry=value))
++    return value
++
++
++def start_pg():
++    registry=ensure_pg();value=owned(container(),registry)
++    if value['state']['Running']:raise RuntimeError('previous_pg_still_running')
++    memory_gate('pg');count('pg_starts')
++    update(lambda state:state['roots'][-1].update(holding_started_ns=time.monotonic_ns()))
++    docker(['container','start',registry['Id']])
++    event('pg_started',Id=registry['Id'])
++
++
++def stop_pg():
++    registry=state().get('pg_registry')
++    if registry is None:return {'created':False}
++    value=owned(container(),registry)
++    if value['state']['Running']:docker(['container','stop','--time','5',registry['Id']],timeout=15)
++    value=owned(container(),registry)
++    if value['state']['Running'] or value['state']['Pid']!=0:raise RuntimeError('pg_stop_unknown')
++    return value
++
++
++def public_environment():
++    # Read only the finite OS variables needed to run local test processes.
++    return {name:value for name in ('SYSTEMROOT','WINDIR','PATH','TEMP','TMP','USERPROFILE','LOCALAPPDATA','APPDATA','COMSPEC') if (value:=os.environ.get(name)) is not None}
++
++
++def root_job(identity):
++    # A test-controller Job is separate from the unchanged <=4-process native
++    # business Job. Chromium needs more processes; no breakaway is allowed.
++    from .control_job import _EXTENDED_LIMIT,JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,JOB_OBJECT_LIMIT_ACTIVE_PROCESS,JOB_OBJECT_LIMIT_JOB_MEMORY,JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
++    job=NamedJob.create(identity,1)
++    limits=_EXTENDED_LIMIT();limits.BasicLimitInformation.LimitFlags=JOB_OBJECT_LIMIT_ACTIVE_PROCESS|JOB_OBJECT_LIMIT_JOB_MEMORY|JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
++    limits.BasicLimitInformation.ActiveProcessLimit=32;limits.JobMemoryLimit=1024**3
++    if not job.api.SetInformationJobObject(job.handle,JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,ctypes.byref(limits),ctypes.sizeof(limits)):
++        job.close();raise ctypes.WinError()
++    return job
+--- before/backend/tests/fixtures/task120/run.py
++++ after/backend/tests/fixtures/task120/run.py
+@@ -41,6 +41,9 @@
+             from .merged import run_batches
+             return run_batches()
+         if phase=='bootstrap':bootstrap()
++        elif phase.startswith('r03_'):
++            from . import repair03
++            repair03.execute(phase.removeprefix('r03_'))
+         elif phase in ('flow','teaching','interview','interview_repaired','legacy_html','gap'):
+             from .flow import run_flow
+             run_flow(None if phase=='flow' else phase)
+--- /dev/null
++++ after/backend/tests/fixtures/task120/synthetic_replies.py
+@@ -0,0 +1,60 @@
++"""仅最低传输的有限JSON合成响应；不评价真实服务语义质量。"""
++import json
++
++def reply(payload):
++    values=[]
++    for item in payload['messages']:
++        if item.get('role')=='user':
++            try:values.append(json.loads(item['content']))
++            except (ValueError,KeyError):pass
++    value=next((x for x in reversed(values) if isinstance(x,dict) and 'task' in x),values[-1] if values else {})
++    if 'task' in value:
++        ids=[e['id'] for e in value['evidence']][:1]
++        task=value['task'];action=task['kind']
++        if not ids:return {'result_type':'no_evidence','message':'合成传输没有目录证据','missing':['当前资料片段']}
++        goal=value.get('goal',''); evidence=value['evidence']
++        if '火星' in goal:return {'result_type':'no_evidence','message':'冻结资料没有温度依据','missing':['火星平均温度的可靠资料']}
++        if 'Java' in goal and '编程语言' not in goal:
++            return {'result_type':'clarification','message':'Java有两个已选含义','questions':['你指编程语言还是咖啡产地？请明确资料范围。']}
++        if ('冲突' in goal or '说法不同' in goal) and len(evidence)>1:
++            return {'result_type':'conflict','message':'同时保留冲突位置，按秒重新核算','claims':[{'text':e['text'][:256],'citations':[e['id']]} for e in evidence[:2]]}
++        concept='原子性' in goal; program='range' in goal or '循环' in goal
++        dimension='definitions' if concept else 'reasoning' if program else 'units'
++        point='原子性是一起提交或撤销，持久性是提交后在约定恢复条件下保留；二者不相互推出。' if concept else 'range(1,4)只取1、2、3，逐次累加为1、3、6；不运行用户代码。' if program else '先换成秒，再计算米每秒'
++        if action=='plan':
++            return {'result_type':'path','message':'合成路径，仅验证结构与位置','nodes':[{'title':'事务的两个性质' if concept else '循环逐步推理' if program else '分钟换秒与平均速度','objective':point,'prerequisites':[],'rationale':'按当前已核资料安排练习','citations':ids,'completion_dimensions':[{'dimension':dimension,'required_point':point}]}]}
++        if action=='exercise':
++            purpose=task['purpose']
++            distance,minutes,seconds,speed={'initial':('120','2','120','1'),'continuation':('180','1.5','90','2'),'retest':('360','2','120','3')}[purpose]
++            if purpose=='retest' and '360米' in json.dumps(task.get('parent_feedback',{}),ensure_ascii=False):distance,minutes,seconds,speed='240','1','60','4'
++            numeric={'value_decimal':speed,'unit':'米每秒','operation':'divide','left':distance,'right':seconds,'tolerance_decimal':'0'}
++            instance={'kind':'calculation','quantities':[{'name':'路程','value_decimal':distance,'unit':'米'},{'name':'时间','value_decimal':minutes,'unit':'分钟'}]}
++            if concept:instance={'kind':'concept','scenarios':[{'label':'事务提交与恢复','text':'一组修改一起提交；发生约定故障后已提交结果保留。请区分两性质。'}]}
++            if program:instance={'kind':'program','language':'Python','code':'total = 0\nfor i in range(1,4):\n    total += i','inputs':[],'manual_expected':'1、3、6，最终6；只阅读推理。'}
++            return {'result_type':'exercise','message':'冻结合成题目结构验证','exercise_type':'concept' if concept else 'program' if program else 'calculation','difficulty':1,'stem':'解释原子性和持久性，并说明两者能否相互推出。' if concept else '阅读range(1,4)累加代码，逐步推理total，不执行代码。' if program else f'{distance}米用{minutes}分钟，平均速度是多少？请说明换算与单位。','reference_points':[{'point_id':'p1','text':point if concept or program else f'{minutes}分钟为{seconds}秒，平均速度{distance}/{seconds}={speed}米每秒','citations':ids,**({} if concept or program else {'numeric':numeric})}],'reference_explanation':point,'dimensions':[{'id':dimension,'point_ids':['p1'],'description':point}],'hint':'先辨明定义或逐步推理。' if concept or program else '先将分钟转换成秒。','variant':{'purpose':purpose,'parent_exercise_record_id':task.get('parent_exercise_record_id'),'parent_feedback_record_id':task.get('parent_feedback_record_id'),'instance_data':instance}}
++        answer=task['answer_text']
++        wrong=answer.strip()=='1米' or any(x in answer for x in ('60米每秒','1000米每秒','不是1米每秒','range包含4','得到10','原子性可以推出持久性'))
++        uncertain='没确定' in answer or '不能说明持久性' in answer
++        detail={'answer_excerpt':answer[:200],'explanation':'冻结反例遗漏换秒、单位、否定或定义条件。' if wrong else '引用冻结作答，最终资格仍由本地政策核对。','point_ids':['p1'],'citations':ids}
++        correct=[detail] if not wrong and not uncertain else []
++        if wrong and '120' in answer and '除以2' in answer:correct=[{'answer_excerpt':answer[:200],'explanation':'120除以2得到60的除法正确，但该商的单位是米每分钟，不能标成米每秒。','point_ids':['p1'],'citations':ids}]
++        if uncertain and concept:correct=[{'answer_excerpt':answer[:200],'explanation':'已说明原子性的共同提交或撤销，持久性仍需补充。','point_ids':['p1'],'citations':ids}]
++        return {'result_type':'feedback','message':('冻结合成反馈；'+str(task.get('exercise',{}).get('stem','')))[:240],'correct_parts':correct,'errors':[detail] if wrong else [],'evidence_gaps':[detail] if uncertain else [],'cause_hypotheses':[],'dimension_observations':[{'id':dimension,'observation':'not_met' if wrong else 'partial' if uncertain else 'met','reason':'冻结输入的有限反馈；不推断长期掌握','point_ids':['p1']}],'next_focus':{'focus_dimension':dimension,'reason':'需要新实例独立复测并说明依据','suggested_mode':'continuation' if wrong else 'retest'}}
++    context=value.get('context',value)
++    if str(context.get('schema','')).startswith('interview.context.'):
++        ids=[e['citation_id'] for e in context.get('catalog',[])][:1]
++        if context['action']=='ask':return {'type':'question','purpose':'interview','reason':'topic','text':'请区分虚构项目中的个人分工自报与合成测量口径，说明100毫秒到80毫秒能支持什么结论。','reference_ids':ids}
++        if context.get('probe_depth',0)==0:return {'type':'probe','reason':'missing_claim_evidence','text':'请说明同环境各1000次、100到80毫秒的下降比例，以及尚未得到资料证明的个人分工和吞吐收益。','recognitions':[],'gaps':[],'reference_ids':ids}
++        return {'type':'feedback','summary':'合成口径：耗时下降20%；不能推断吞吐、费用或雇主，个人分工仍是自报。','recognitions':[],'gaps':[],'conflicts':[],'next_steps':['请补足独立个人分工依据，再选择下一题。']}
++    if context.get('schema')=='html.context.v2':
++        citations=[]
++        def visit(x):
++            if isinstance(x,dict):
++                for k,v in x.items():
++                    if k in ('citation_id','id') and isinstance(v,str) and v.startswith(('lc_','ic_','hc_')):citations.append(v)
++                    else:visit(v)
++            elif isinstance(x,list):
++                for y in x:visit(y)
++        visit(context);ids=list(dict.fromkeys(citations))[:1]
++        return {'schema':'interactive_description.v1','title':'平均速度换算','concept':'合成固定解释，只验证受控输入、计算与显示。','inputs':[{'id':'hctl_distance','kind':'number','label':'路程（米）','description':'本轮冻结值','min':'1','max':'1000','step':'1','default':'120'},{'id':'hctl_time','kind':'number','label':'时间（秒）','description':'先统一成秒；零值前拒','min':'1','max':'600','step':'1','default':'120'}],'calculations':[{'id':'hcalc_speed','expression':{'op':'div','args':[{'op':'input','id':'hctl_distance'},{'op':'input','id':'hctl_time'}]}}],'views':[{'id':'hout_speed','kind':'readout','label':'平均速度','calculation':'hcalc_speed','unit':'米每秒'}],'actions':[{'id':'hact_reset','kind':'reset','label':'重置'}],'calculation_notes':[{'formula':'v=d/t','domain':'d为1至1000米，t为1至600秒；t不能为0','error':'不含测量误差','samples':[{'input':'d=120,t=120','expected':'1'},{'input':'d=120,t=240','expected':'0.5'}],'citations':ids}],'limitations':['合成传输不构成真实服务语义验收'],'citations':ids}
++    raise ValueError('synthetic_model_profile_not_implemented')
+--- /dev/null
++++ after/backend/tests/fixtures/task120/transport.py
+@@ -0,0 +1,96 @@
++"""Only the lowest provider transport is replaced. PG/SUP/Job stay real."""
++import asyncio
++import hashlib
++import json
++import os
++from pathlib import Path
++import socket
++import time
++
++
++def install():
++    if os.environ.get('RETROLUME_TASK120_TESTONLY')!='TASK-120-Q-PREP-IMPLEMENTATION-20261018':return False
++    from . import resources as r
++    if str(r.state().get('active_root'))!=os.environ.get('RETROLUME_TASK120_ROOT_ID'):raise RuntimeError('task120_fixture_without_root')
++    from app.capabilities.transport import HttpxModelTransport,TransportResponse,DeliveryUnknown,RequestNotSent
++    if getattr(HttpxModelTransport,'_task120_installed',False):return True
++    async def forbid_legacy(self,**kwargs):raise RequestNotSent('TESTONLY_legacy_path_not_permitted')
++    async def frozen(self,*,endpoint,api_key,payload_bytes,timeout_seconds,max_response_bytes):
++        from app.capabilities.q_gateway import CURRENT
++        current=CURRENT.get()
++        if current is None:raise RuntimeError('test_transport_without_actual_q_lease')
++        p=current.prepared;payload=json.loads(payload_bytes)
++        root=r.PRIVATE/os.environ['RETROLUME_TASK120_SLOT']
++        faults=json.loads((root/'faults.json').read_text(encoding='utf-8')) if (root/'faults.json').exists() else {}
++        mode=faults.get(p['operation_id'],'normal')
++        if mode=='commit_ack_lost':
++            # Inject only an acknowledgement loss AFTER the original real PG
++            # record_outcome (including 007/domain transaction) has returned.
++            # No SQL, outcome or transaction result is synthesized.
++            original=current.ledger.record_outcome
++            async def lost_ack(permit,outcome):
++                result=await original(permit,outcome)
++                r.event('actual_pg_result_COMMIT_ack_lost',operation_id=p['operation_id'],pid=os.getpid(),prepared_id=p['prepared_id'])
++                from app.capabilities.contracts import AdmissionUnavailable
++                raise AdmissionUnavailable('TESTONLY_actual_commit_ack_lost')
++            current.ledger.record_outcome=lost_ack
++        r.event('synthetic_provider_transport',pid=os.getpid(),operation_id=p['operation_id'],prepared_id=p['prepared_id'],
++            provider=p['provider'],payload_bytes_sha256=hashlib.sha256(payload_bytes).hexdigest(),external=False,actual_fee_microunits=0,mode=mode)
++        if mode=='unknown':raise DeliveryUnknown('TESTONLY_delivery_unknown')
++        if mode=='not_sent':raise RequestNotSent('TESTONLY_connection_not_sent')
++        if mode=='block':
++            ready=root/'transport-ready.json'
++            r.write(ready,{'operation_id':p['operation_id'],'pid':os.getpid()},private=True)
++            deadline=time.monotonic()+5
++            while not (root/'transport-release').exists():
++                if time.monotonic()>deadline:raise DeliveryUnknown('TESTONLY_gate_timeout')
++                await asyncio.sleep(.01)
++        if p['provider']=='zhipu_embeddings':
++            if endpoint!='https://open.bigmodel.cn/api/paas/v4/embeddings':raise RuntimeError('fixture_endpoint')
++            rows=[]
++            for index,text in enumerate(payload['input']):
++                vector=[0.0]*512;vector[0]=1.0;vector[1+hashlib.sha256(text.encode()).digest()[0]]=1.0
++                rows.append({'index':index,'embedding':vector})
++            value={'model':'embedding-3','data':rows,'usage':{'prompt_tokens':sum(len(x) for x in payload['input'])}}
++        else:
++            if endpoint!='https://api.deepseek.com/chat/completions' or payload['model']!='deepseek-flash':raise RuntimeError('fixture_endpoint')
++            from .synthetic_replies import reply
++            user=json.loads(next(m['content'] for m in reversed(payload['messages']) if m['role']=='user'))
++            if 'evidence' in user and 'task' not in user:
++                business={'kind':'answer','message':'合成受控结果；不代表真实服务语义验收','segments':[{'text':user['evidence'][0]['text'][:200],'citations':[user['evidence'][0]['id']]}],'questions':[]}
++            else:business=reply(payload)
++            value={'id':'TESTONLY.task120','model':'unknown-test-alias' if mode=='unknown_alias' else 'deepseek-flash',
++                'choices':[{'index':0,'message':{'role':'assistant','content':json.dumps(business,ensure_ascii=False)},'finish_reason':'stop'}],
++                'usage':{'prompt_tokens':100,'completion_tokens':100,'total_tokens':200}}
++        body=json.dumps(value,ensure_ascii=False,separators=(',',':')).encode('utf-8')
++        if mode=='release_gap':
++            class GapResponse(TransportResponse):
++                def __getattribute__(self,name):
++                    if name=='status_code' and not getattr(self,'_task120_observed',False):
++                        from app.data_exit.q_store import POLICY
++                        # This hook controls only delivery of a synthetic
++                        # response. The real gateway must already have released
++                        # both its dispatch context and its actual policy lease.
++                        if CURRENT.get() is not None or POLICY.get() is not None:raise RuntimeError('result_parser_still_holds_q_shared')
++                        object.__setattr__(self,'_task120_observed',True)
++                        tag=hashlib.sha256(p['operation_id'].encode()).hexdigest()
++                        r.write(root/('gap-ready-'+tag+'.json'),{'operation_id':p['operation_id'],'dispatch_released':True,'worker_pid':os.getpid(),'worker_thread':__import__('threading').get_ident(),'utc':r.utc()},private=True)
++                        deadline=time.monotonic()+5
++                        while not (root/('gap-release-'+tag)).exists():
++                            if time.monotonic()>=deadline:raise RuntimeError('release_gap_fixture_timeout')
++                            time.sleep(.01)
++                    return super().__getattribute__(name)
++            return GapResponse(200,body,len(body))
++        return TransportResponse(200,body,len(body))
++    HttpxModelTransport.send=forbid_legacy
++    HttpxModelTransport.send_frozen=frozen
++    HttpxModelTransport.is_external=False
++    HttpxModelTransport._task120_installed=True
++    original=socket.socket.connect
++    def local_only(self,address):
++        if isinstance(address,tuple) and address[0] not in ('127.0.0.1','::1','localhost'):
++            r.event('external_socket_attempt_denied',pid=os.getpid())
++            raise OSError('TASK120_nonloopback_connection_forbidden')
++        return original(self,address)
++    socket.socket.connect=local_only
++    return True
+--- before/backend/tests/fixtures/task120/ui.py
++++ after/backend/tests/fixtures/task120/ui.py
+@@ -12,10 +12,13 @@
+     folder=r.PRIVATE/stem;folder.mkdir(exist_ok=False)
+     with (application('flow') if client is None else nullcontext(client)) as client:
+         progress=json.loads((r.PRIVATE/'flow/flow-progress.json').read_text(encoding='utf-8'))
++        repair=r.PRIVATE/'flow/r03-progress.json'
++        repair_progress=json.loads(repair.read_text(encoding='utf-8')) if repair.exists() else {}
+         spec={'permit':'TASK-120-Q-PREP-IMPLEMENTATION-20261018','project':str(r.ROOT),'origin':client.base,
+             'activities':list(ROSTER),'interview_goal':setup.SAMPLES['inputs']['interview_goal'],
+             'mode':mode,'numeric_goal':setup.SAMPLES['inputs']['numeric_goal'],'concept_goal':setup.SAMPLES['inputs']['concept_goal'],'numeric_question':setup.SAMPLES['inputs']['numeric_initial_question'],
+-            'legacy_operation':progress.get('legacy-first.done',{}).get('operation_id'),
++            'scope_remove_title':next(s['filename'] for s in setup.SAMPLES['sources'] if s['alias']=='M'),
++            'legacy_operation':repair_progress.get('legacy-followup.done',progress.get('legacy-first.done',{})).get('operation_id'),
+             'profile':str(folder/'browser'),'handshake':str(folder),'proof':str(r.EVIDENCE/(stem+'-proof.json')),
+             'screenshotTeaching':str(r.EVIDENCE/(stem+'-teaching.png')),'screenshotInterview':str(r.EVIDENCE/(stem+'-interview.png'))}
+         r.write(folder/'spec.json',spec,private=True)
+--- /dev/null
++++ after/backend/tests/test_task120_repair03.py
+@@ -0,0 +1,187 @@
++"""Control-flow checks only; connection replacement is not PostgreSQL evidence."""
++import unittest
++from unittest.mock import patch, AsyncMock
++from types import SimpleNamespace as NS
++from contextlib import asynccontextmanager
++from datetime import datetime, timezone
++from app.activities.repository import PostgresAdmissionLedger
++from app.data_exit.q_store import QAuthority, POLICY, method_name, is_read_method
++from app.data_exit.contracts import DataError
++
++class Connection:
++    def __init__(self):self.sql=[]
++    async def __aenter__(self):return self
++    async def __aexit__(self,*args):pass
++    @asynccontextmanager
++    async def transaction(self):yield
++    async def execute(self,sql,*args):self.sql.append(sql);return self
++    async def fetchone(self):
++        return dict(activity={},head=None,sources=[],record_sources=[],pending=[],history=[],bodies=[],exposures=[],
++                    command={'context_body':'{}'},memory_qualified=True,memory_selected=False,read_at=datetime.now(timezone.utc))
++
++class Repair03(unittest.IsolatedAsyncioTestCase):
++    def setUp(self):
++        self.ledger=PostgresAdmissionLedger('CONTROL_FLOW_ONLY');self.ledger.data_enabled=False
++        self.authority=object.__new__(QAuthority);self.authority.hub=NS(control_id='control-flow')
++        self.connection=Connection();self.connect=AsyncMock(return_value=self.connection)
++        self.aid='01800000-0000-4000-8000-000000000003';self.key='00000000-0000-4000-8000-000000000001'
++
++    async def test_actual_read_closure_inside_inherited_shared_policy(self):
++        observed=[];transaction=self.ledger._transaction
++        async def record(operation,**kw):
++            observed.append(method_name(operation));return await transaction(operation,**kw)
++        token=POLICY.set(('control-flow',True))
++        try:
++            with patch('app.data_exit.q_store.authority_for',return_value=self.authority),patch('psycopg.AsyncConnection.connect',self.connect),\
++                 patch.object(self.ledger,'_transaction',record),patch.object(self.ledger,'_memory_teaching_sql',AsyncMock(side_effect=lambda c,s:s)):
++                value=await self.ledger.read_teaching_command(self.aid,self.key)
++            self.assertEqual(observed,['_teaching_read_snapshot']);self.assertTrue(is_read_method(observed[0]))
++            self.assertIsNotNone(value);self.connect.assert_awaited_once();self.assertTrue(self.connection.sql)
++            self.assertEqual(POLICY.get(),('control-flow',True))
++        finally:POLICY.reset(token)
++
++    async def test_actual_write_closure_denied_before_connection_or_SQL(self):
++        captured=[]
++        async def capture(operation,**kw):captured.append(operation);raise StopAsyncIteration
++        with patch.object(self.ledger,'_transaction',capture):
++            with self.assertRaises(StopAsyncIteration):await self.ledger.cancel_activity(self.aid)
++        self.assertEqual(method_name(captured[0]),'cancel_activity');self.assertFalse(is_read_method(method_name(captured[0])))
++        token=POLICY.set(('control-flow',True))
++        try:
++            with patch('app.data_exit.q_store.authority_for',return_value=self.authority),patch('psycopg.AsyncConnection.connect',self.connect):
++                with self.assertRaises(DataError) as error:await self.ledger._transaction(captured[0])
++            self.assertEqual(error.exception.code,'q_policy_upgrade_forbidden');self.connect.assert_not_called();self.assertEqual(self.connection.sql,[])
++        finally:POLICY.reset(token)
++
++    async def test_actual_interview_and_HTML_read_validators_do_not_upgrade_shared(self):
++        class ReachedReadValidator(Exception):pass
++        for name,helper in [('validate_interview_request','_interview_lock'),('verify_html_request','_memory_lock_prefix')]:
++            with self.subTest(name=name):
++                token=POLICY.set(('control-flow',True));self.connect.reset_mock()
++                try:
++                    with patch('app.data_exit.q_store.authority_for',return_value=self.authority),patch('psycopg.AsyncConnection.connect',self.connect),\
++                         patch.object(self.ledger,helper,AsyncMock(side_effect=ReachedReadValidator)):
++                        with self.assertRaises(ReachedReadValidator):
++                            if name=='validate_interview_request':await self.ledger.validate_interview_request(NS(activity_id=self.aid),NS(business_key=self.key),None)
++                            else:await self.ledger.verify_html_request(NS(activity_id=self.aid))
++                    self.connect.assert_awaited_once();self.assertTrue(is_read_method(name))
++                finally:POLICY.reset(token)
++
++    async def test_v2_v3_read_branches_with_and_without_selected_memory(self):
++        from app.learning.teaching_adapter import validate_teaching_request
++        from app.learning.teaching_contracts import TeachingMemoryProfile,TeachingHybridProfile,TeachingMemoryFrozenContext,TeachingHybridFrozenContext
++        from app.capabilities.contracts import Message
++        from app.learning.contracts import sha,canonical
++        messages=[Message(role='user',content='CONTROL_FLOW_ONLY')];dumped=[m.model_dump(mode='json',exclude_none=True) for m in messages]
++        for version,selected in [('teaching.v3',False),('teaching.v2',True),('teaching.v3',True)]:
++            with self.subTest(version=version,selected=selected):
++                refs=[];profile=NS(profile=version,activity_id=self.aid,scope_revision=1,max_output_tokens=64,command_key=self.key,request_sha256='a'*64,
++                    context_sha256='b'*64,memory_selection_sha256='c'*64,memory_refs=refs,retrieval_ref=None,memory_dependency_sha256='d'*64,
++                    messages_sha256=sha(canonical(dumped)),catalog=[])
++                profile.model_dump=lambda:{}
++                cls=TeachingHybridFrozenContext if version=='teaching.v3' else TeachingMemoryFrozenContext
++                frozen=cls.model_construct(context_sha256=profile.context_sha256,memory_refs=refs,retrieval_ref=None,memory_dependency_sha256='d'*64,
++                    recipe={} if selected else None,messages=None if selected else dumped,assembled_messages_sha256=profile.messages_sha256,catalog=[])
++                request=NS(teaching_profile=profile,learning_profile=None,allowed_tools=[],max_output_tokens=64,messages=messages,retrieval_ref=None)
++                context=NS(activity_id=self.aid,scope_revision=1,operation_id='teach8m.'+self.key+'.'+'a'*64)
++                token=POLICY.set(('control-flow',True))
++                try:
++                    with patch('app.data_exit.q_store.authority_for',return_value=self.authority),patch('psycopg.AsyncConnection.connect',self.connect),\
++                         patch.object(self.ledger,'_memory_teaching_sql',AsyncMock(side_effect=lambda c,s:s)),\
++                         patch.object(TeachingMemoryProfile,'model_validate',return_value=profile),patch.object(TeachingHybridProfile,'model_validate',return_value=profile),\
++                         patch('app.learning.teaching_contracts.parse_frozen_context',return_value=frozen),\
++                         patch('app.memory.context.materialize_recipe',AsyncMock(return_value=dumped)),\
++                         patch.object(self.ledger,'read_memory_selection',AsyncMock(return_value={'selection_sha256':'c'*64,'selected':selected})),\
++                         patch.object(self.ledger,'read_learning_snapshot',AsyncMock(return_value={'sources':[]})):
++                        self.assertIsNone(await validate_teaching_request(context,request,self.ledger))
++                finally:POLICY.reset(token)
++
++class ProvenanceRepair03(unittest.TestCase):
++    def setUp(self):
++        self.authority=NS(bundle={'templates':[],'template_atoms':['messages','role','user','content','html_profile','context_json']},
++            manifest=NS(fixed_inputs=[],fragments=[],model_dump=lambda **kw:{}))
++        self.state={'activity':{'id':'a'},'sources':[],'commands':[],'parents':[]}
++
++    def test_only_exact_qualified_parent_history_is_derived(self):
++        from app.capabilities.q_context import validate_provenance
++        from app.capabilities.q_protocol import canonical
++        from app.capabilities.contracts import AdmissionDenied
++        history=canonical({'kind':'answer','segments':[{'text':'parent-body','citations':['lc_parent']}],'questions':[],'message':'parent-message'})
++        request={'messages':[{'role':'user','content':history}]}
++        validate_provenance(self.authority,request,{},self.state,[],[history],'followup')
++        for derived,text in [([],history),([history],history.replace('parent-body','foreign-body')),([history],history+' ')]:
++            with self.assertRaises(AdmissionDenied):validate_provenance(self.authority,{'messages':[{'role':'user','content':text}]},{},self.state,[],derived,'followup')
++
++    def test_HTML_config_hash_requires_server_command_metadata(self):
++        from app.capabilities.q_context import validate_provenance
++        from app.capabilities.q_protocol import canonical
++        from app.capabilities.contracts import AdmissionDenied
++        request={'html_profile':{'context_json':canonical({'config_sha256':'a'*64})}}
++        self.state['commands']=[{'metadata':['a'*64]}]
++        validate_provenance(self.authority,request,{},self.state,[],[],'generate')
++        self.state['commands']=[]
++        with self.assertRaises(AdmissionDenied):validate_provenance(self.authority,request,{},self.state,[],[],'generate')
++        self.state['commands']=[{'metadata':['b'*64]}]
++        with self.assertRaises(AdmissionDenied):validate_provenance(self.authority,request,{},self.state,[],[],'generate')
++
++    def test_teaching_node_id_requires_frozen_server_command_identity(self):
++        from app.capabilities.q_context import validate_provenance
++        from app.capabilities.contracts import AdmissionDenied
++        self.state['commands']=[{'metadata':['n1']}]
++        validate_provenance(self.authority,{'node_id':'n1'},{},self.state,[],[],'exercise')
++        with self.assertRaises(AdmissionDenied):validate_provenance(self.authority,{'node_id':'n2'},{},self.state,[],[],'exercise')
++        self.state['commands']=[]
++        with self.assertRaises(AdmissionDenied):validate_provenance(self.authority,{'node_id':'n1'},{},self.state,[],[],'exercise')
++
++class HistoricalAbandonRepair03(unittest.TestCase):
++    def test_only_exact_obsolete_unknown_without_other_pending_can_be_abandoned(self):
++        from app.interview.policy import transition
++        from app.interview.contracts import InterviewRefusal
++        head={'phase':'ready','pending_key':None};body={'pending_key':'old-key'}
++        target={'business_key':'old-key','status':'unknown','obsolete':True}
++        transition('abandon',head,body,abandon_target=target)
++        for changed in [None,dict(target,obsolete=False),dict(target,status='committed'),dict(target,business_key='foreign')]:
++            with self.assertRaises(InterviewRefusal):transition('abandon',head,body,abandon_target=changed)
++        with self.assertRaises(InterviewRefusal):transition('abandon',dict(head,pending_key='different'),body,abandon_target=target)
++        transition('abandon',dict(head,pending_key='old-key'),body)
++
++class TeachingNodeFieldsRepair03(unittest.TestCase):
++    def test_only_typed_path_node_location_admits_parent_rationale(self):
++        from app.capabilities.q_context import validate_provenance
++        from app.capabilities.q_protocol import canonical
++        from app.capabilities.contracts import AdmissionDenied
++        authority=NS(bundle={'templates':[],'template_atoms':['messages','role','user','content','teaching_profile','task','path_nodes']},
++            manifest=NS(fixed_inputs=[],fragments=[],model_dump=lambda **kw:{}))
++        state={'activity':{'id':'a'},'sources':[],'commands':[],'parents':[]}
++        def request(document):return {'teaching_profile':{},'messages':[{'role':'user','content':canonical(document)}]}
++        body={'task':{'path_nodes':[{'rationale':'verified-parent-rationale'}]}}
++        validate_provenance(authority,request(body),{},state,[],['verified-parent-rationale'],'exercise')
++        for document,derived in [(body,[]),({'task':{'rationale':'verified-parent-rationale'}},['verified-parent-rationale']),({'task':{'path_nodes':[{'invented_field':'verified-parent-rationale'}]}},['verified-parent-rationale'])]:
++            with self.assertRaises(AdmissionDenied):validate_provenance(authority,request(document),{},state,[],derived,'exercise')
++
++class RetrievalReceiptsRepair03(unittest.TestCase):
++    def test_cache_ready_requires_index_and_current_complete_cache(self):
++        from tests.fixtures.task120.repair03 import terminal_retrieval
++        receipt={'status':'terminal','terminal_disposition':'cache_ready'}
++        ready={'ready':True,'fragments':4,'cached_fragments':4}
++        self.assertTrue(terminal_retrieval('source_index',receipt,ready))
++        self.assertFalse(terminal_retrieval('query',receipt,ready))
++        self.assertFalse(terminal_retrieval('source_index',receipt,dict(ready,cached_fragments=3)))
++        self.assertFalse(terminal_retrieval('source_index',receipt,dict(ready,ready=False)))
++        self.assertFalse(terminal_retrieval('source_index',receipt,None))
++        self.assertTrue(terminal_retrieval('query',dict(receipt,terminal_disposition='received')))
++        self.assertFalse(terminal_retrieval('query',dict(receipt,terminal_disposition='unknown')))
++
++class HttpRejectionRepair03(unittest.TestCase):
++    def test_bounded_nested_codes_saved_without_error_bodies(self):
++        from tests.fixtures.task120.api_runtime import Client
++        for response in [{'code':'q_denied'},{'detail':{'code':'q_denied'}},{'detail':{'error':{'code':'q_denied'}}}]:
++            client=object.__new__(Client);client.headers={};client.timeline=[]
++            client.client=NS(request=lambda *args,**kw:NS(status_code=409,json=lambda:response))
++            with self.assertRaisesRegex(RuntimeError,'task120_http_409_q_denied'):client.request('POST','/TESTONLY',{})
++            self.assertEqual(client.timeline[0]['rejection_code'],'q_denied');self.assertNotIn('detail',client.timeline[0])
++        client.client=NS(request=lambda *args,**kw:NS(status_code=409,json=lambda:{'code':'untrusted arbitrary error body'}))
++        with self.assertRaisesRegex(RuntimeError,'task120_http_409_http_rejected'):client.request('POST','/TESTONLY',{})
++        self.assertIsNone(client.timeline[-1]['rejection_code'])
++
++if __name__=='__main__':unittest.main()
+--- before/frontend/tests/task120-ui-continuation.mjs
++++ after/frontend/tests/task120-ui-continuation.mjs
+@@ -8,7 +8,7 @@
+ assert(process.env.RETROLUME_TASK120_UI_SPEC,'owned finite TASK120 root required');
+ const spec=JSON.parse(fs.readFileSync(process.env.RETROLUME_TASK120_UI_SPEC,'utf8'));
+ assert.equal(spec.permit,'TASK-120-Q-PREP-IMPLEMENTATION-20261018');
+-assert(['teaching','interview','legacy_html'].includes(spec.mode));
++assert(['teaching','interview','legacy_html','fences'].includes(spec.mode));
+ const sha=x=>createHash('sha256').update(x).digest('hex');
+ const proof={execution_class:'TESTONLY',mode:spec.mode,status:'RUNNING',real_PG:true,real_Windows_SUP:true,
+  fixture_sha256:sha(fs.readFileSync(fileURLToPath(import.meta.url))),assets:[],requests:[],actions:[],cases:[],external_attempts:[],errors:[]};
+@@ -119,6 +119,44 @@
+   assert.equal(result.body.business_key,model.body.business_key);assert.equal(result.receipt.status,'committed');
+   proof.cases.push({name:'interview-query-and-model-wait-GET-reopen-owner-view-late-explicit-original-commit',status:'PASS',query_key:query.body.business_key,model_key:model.body.business_key});
+   await page.screenshot({path:spec.screenshotInterview,fullPage:true});
++ }else if(spec.mode==='fences'){
++  const domain=`/api/activities/${a2}/interview/commands`,retrieval=`/api/activities/${a2}/retrieval/commands`;
++  for(const fence of ['head','scope']){
++   await page.reload({waitUntil:'networkidle'});let area=await select(page,a2,true);
++   await area.getByLabel('面试目标',{exact:true}).fill(spec.interview_goal);
++   await action(page,domain,`fence_${fence}_new_goal`,()=>area.getByRole('button',{name:'保存修正目标（另存版本）',exact:true}).click());
++   const query=await action(page,retrieval,`fence_${fence}_query_prepare`,()=>area.getByRole('button',{name:'开始提问',exact:true}).click());
++   assert(query.receipt.outbound_approval);await operator(a2,query.body.business_key);
++   let panel=area.locator('section[aria-label="资料检索与恢复"]');
++   await panel.getByRole('button',{name:'按原键只读核对',exact:true}).last().click();
++   await action(page,retrieval,`fence_${fence}_query_continue`,()=>panel.getByRole('button',{name:'明确继续已批准的原检索请求',exact:true}).last().click());
++   const model=await action(page,domain,`fence_${fence}_model_prepare`,()=>panel.getByRole('button',{name:'明确继续尚未发送的原动作',exact:true}).last().click());
++   await operator(a2,model.body.business_key);
++   const intent=area.locator(`[data-interview-intent-key="${model.body.business_key}"]`);
++   await intent.getByRole('button',{name:'只读核对原提交',exact:true}).click();
++   const other=await context.newPage();other.setDefaultTimeout(13000);await other.goto(spec.origin,{waitUntil:'networkidle'});
++   const second=await select(other,a2,true);let hit=false,release;const barrier=new Promise(resolve=>release=resolve);
++   const pattern=`**${domain}/${model.body.business_key}`;
++   await page.route(pattern,async route=>{const response=await route.fetch();hit=true;await barrier;await route.fulfill({response});});
++   const oldKeyPosts=()=>posts(domain).filter(x=>x.body?.business_key===model.body.business_key).length;
++   const before=oldKeyPosts();
++   try{
++    await intent.getByRole('button',{name:'在安全条件下显式重交原意图',exact:true}).click();await until(()=>hit);
++    if(fence==='head'){
++     await second.getByLabel('面试目标',{exact:true}).fill(spec.interview_goal);
++     await action(other,domain,'concurrent_actual_local_goal',()=>second.getByRole('button',{name:'保存修正目标（另存版本）',exact:true}).click());
++    }else{
++     await second.getByRole('button',{name:'读取当前资料，明确更新范围',exact:true}).click();
++     await second.locator('label').filter({hasText:spec.scope_remove_title}).filter({has:other.locator('input[type="checkbox"]')}).getByRole('checkbox').uncheck();
++     await action(other,domain,'concurrent_actual_scope_binding',()=>second.getByRole('button',{name:'确认新的资料范围',exact:true}).click());
++    }
++    const refresh=page.waitForResponse(r=>r.request().method()==='GET'&&new URL(r.url()).pathname===`/api/activities/${a2}/interview/workspace`);
++    await area.getByRole('button',{name:'只读刷新／恢复场次',exact:true}).click();await refresh;await sleep(300);release();await sleep(350);
++    assert.equal(oldKeyPosts(),before,'late original model GET must not POST after observed head/scope change');
++    proof.cases.push({name:`actual-${fence}-mutation-during-approved-GET-no-original-model-POST`,status:'PASS',business_key:model.body.business_key});
++   }finally{release();await page.unroute(pattern);await other.close();}
++  }
++  proof.not_run=['namespace-switch','DataContext-switch'];
+  }else{
+   assert(spec.legacy_operation,'actual committed legacy parent');
+   let learning=await reopenLegacy(page);const follow=`/api/activities/${a3}/learning/followups`,html=`/api/activities/${a3}/html/commands`;

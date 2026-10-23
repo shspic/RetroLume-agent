@@ -1,0 +1,19 @@
+--- before/backend/app/memory/service.py
++++ after/backend/app/memory/service.py
+@@ -10,8 +10,16 @@
+         self.ledger=ledger
+ 
+     async def capabilities(self):
+         return await self.ledger.probe_memory()
++
++    async def read_command(self,key):
++        from .cleanup_projection import read_projected
++        return await read_projected(self.ledger,lambda:self.ledger.read_memory_command(key))
++
++    async def read_snapshot(self,*args,**kwargs):
++        from .cleanup_projection import read_projected
++        return await read_projected(self.ledger,lambda:self.ledger.read_memory_snapshot(*args,**kwargs))
+ 
+     @owned_service
+     async def submit_command(self,command):
+         from app.data_exit.q_store import authority_for

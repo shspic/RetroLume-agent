@@ -1,0 +1,105 @@
+--- initial/backend/app/activities/repository.py
++++ final/backend/app/activities/repository.py
+@@ -335,11 +335,22 @@
+             from psycopg.rows import dict_row
+         except ImportError:
+             raise AdmissionUnavailable("PostgreSQL 驱动不可用") from None
+         guarded = None
+         outgoing = None
++        policy = None
++        policy_entered = False
+         try:
++            from app.data_exit.q_store import authority_for, method_name, is_read_method, DISPATCH_METHODS
++            # A sealed reader has no normal Q authority. Its named pure reads
++            # still run through the unchanged readonly PG connection guard.
++            readonly_projection=self.data_readonly and is_read_method(method_name(operation))
++            authority=None if readonly_projection else authority_for(self)
++            if authority is not None and not is_read_method(method_name(operation)):
++                policy=authority.async_policy(shared=method_name(operation) in DISPATCH_METHODS)
++                await policy.__aenter__()
++                policy_entered = True
+             connection = await psycopg.AsyncConnection.connect(
+                 self._dsn,
+                 connect_timeout=self._connect_timeout,
+                 row_factory=dict_row,
+             )
+@@ -379,10 +390,11 @@
+         except psycopg.Error:
+             raise AdmissionUnavailable("持久准入账本暂不可用") from None
+         finally:
+             if guarded is not None:guarded.close_permit()
+             if outgoing is not None:outgoing.__exit__(None,None,None)
++            if policy_entered:await policy.__aexit__(None,None,None)
+ 
+     @staticmethod
+     def _uuid(value: str, field: str) -> str:
+         try:
+             return str(UUID(value))
+@@ -535,15 +547,20 @@
+         for x in sources:
+             actual=locked[x.source_id]
+             if actual is None or str(actual["current_version"])!=x.version_id or actual["revision"]!=x.revision:
+                 raise ActivityLedgerConflict("source_invalid")
+         new_key=tuple(sorted((x.source_id,x.version_id,x.revision) for x in sources))
+-        if not force_revision and self._scope_key(await self._source_rows(connection,activity_id))==new_key:return ScopeSnapshot(activity_id,expected_scope_revision,sources)
++        previous=await self._source_rows(connection,activity_id)
++        if not force_revision and self._scope_key(previous)==new_key:return ScopeSnapshot(activity_id,expected_scope_revision,sources)
+         if expected_scope_revision==2_147_483_647:raise ActivityLedgerConflict("scope_revision_limit")
+-        await connection.execute("DELETE FROM activity_scope_sources WHERE activity_id=%s",(activity_id,))
++        keep={x.source_id for x in sources}
++        for old in previous:
++            if str(old['source_id']) not in keep:
++                await connection.execute("DELETE FROM activity_scope_sources WHERE activity_id=%s AND source_id=%s",(activity_id,old['source_id']))
+         for x in sources:
+-            await connection.execute("INSERT INTO activity_scope_sources(activity_id,source_id,version_id,source_revision) VALUES (%s,%s,%s,%s)",(activity_id,x.source_id,x.version_id,x.revision))
++            await connection.execute("""INSERT INTO activity_scope_sources(activity_id,source_id,version_id,source_revision) VALUES (%s,%s,%s,%s)
++              ON CONFLICT(activity_id,source_id) DO UPDATE SET version_id=EXCLUDED.version_id,source_revision=EXCLUDED.source_revision""",(activity_id,x.source_id,x.version_id,x.revision))
+         await connection.execute("UPDATE activities SET scope_revision=scope_revision+1,updated_at=CURRENT_TIMESTAMP WHERE id=%s",(activity_id,))
+         return ScopeSnapshot(activity_id,expected_scope_revision+1,sources)
+ 
+     async def create_activity(self, spec: ActivitySpec, *, memory_selection=None) -> None:
+         activity_id, sources = self._validate_spec(spec)
+@@ -1130,10 +1147,12 @@
+     async def admit(self, intent: AdmissionIntent) -> AdmissionPermit:
+         activity_id, operation_id, executor_id, provider, model = self._intent_fields(intent)
+ 
+         async def operation(connection: object) -> AdmissionPermit:
+             await self._outbound_lock(connection,activity_id,intent.outbound_grant,provider,model,intent.request_bytes,intent.max_output_tokens,intent.outbound_source_manifest)
++            from app.capabilities.q_gateway import transaction_check
++            await transaction_check(connection,self,activity_id,operation_id,intent=intent)
+             memory_state=await self._memory_lock_prefix(connection,activity_id)
+             snapshots=memory_state['snapshots']
+             sources_valid=memory_state['sources_valid']
+             activity=memory_state['activity']
+             await self._interview_require_call(connection,activity,operation_id,intent.interview_binding)
+@@ -1569,11 +1588,15 @@
+             and activity["deadline_at"] > now
+         )
+ 
+     async def mark_dispatch_started(self, permit: AdmissionPermit, *, retrieval_ref=None) -> None:
+         async def operation(connection: object) -> AdmissionPermit:
++            from app.capabilities.q_gateway import mark_prefix
++            await mark_prefix(connection,self)
+             activity, call, sources_valid = await self._locked_operation(connection, permit)
++            from app.capabilities.q_gateway import transaction_check
++            await transaction_check(connection,self,str(activity['id']),call['operation_id'],call=call)
+             if retrieval_ref is not None:await self._require_retrieval_ref(connection,activity,retrieval_ref)
+             if call["operation_id"].startswith("html11m."):
+                 await self._html_locked_binding(connection,activity,call["operation_id"])
+             if call["operation_id"].startswith("teach8m."):
+                 # G8：mark 锁内复核教学命令仍为 started 且未被废弃。
+@@ -1765,10 +1788,14 @@
+                     await self._teaching_confirm_integrity(connection,call,payload_triple)
+                 if call["operation_id"].startswith(("int10m.",'int18m.')):
+                     await self._interview_confirm_integrity(connection,call,payload_triple)
+                 return confirmed
+             current = self._operation_is_current(activity, call, sources_valid)
++            from app.capabilities.q_gateway import history_only_result
++            if outcome.disposition is not LedgerDisposition.UNKNOWN and await history_only_result(connection,self,call):
++                await self._write_outcome(connection,call,values,payload_triple)
++                return RecordOutcome.RECORDED
+             if not current and outcome.disposition is not LedgerDisposition.UNKNOWN:
+                 raise AdmissionDenied("失效或过期执行只能登记 unknown 诊断")
+             if call["state"] == "reserved" and outcome.disposition is not LedgerDisposition.UNKNOWN:
+                 raise AdmissionDenied("尚未越过发送边界的调用不能登记该结果")
+             if payload_triple is not None and activity["dispatch_closed"]:

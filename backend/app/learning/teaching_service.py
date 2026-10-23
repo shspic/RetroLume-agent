@@ -115,7 +115,8 @@ class TeachingService:
         value=await self.ledger.read_teaching_command(activity_id, business_key)
         if value is not None:
             from app.capabilities.q_context import public_projection
-            value['outbound_approval']=await public_projection(self.ledger,activity_id,business_key)
+            row=value['command']
+            value['outbound_approval']=await public_projection(self.ledger,activity_id,business_key,expected=row['status']=='accepted' and row['action'] in MODEL_ACTIONS)
         return value
 
     async def read_history(self, activity_id: str, limit: int = 20, before_seq: int | None = None):

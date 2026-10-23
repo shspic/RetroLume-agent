@@ -1,0 +1,66 @@
+--- initial/frontend/src/activities/InterviewWorkspace.tsx
++++ final/frontend/src/activities/InterviewWorkspace.tsx
+@@ -4,11 +4,11 @@
+ import {makeInterviewCommand,interviewSha,requestText} from "./interviewDrafts";
+ import {interviewEditorOwner,loadInterviewIntents,readInterviewDraft,saveInterviewIntent,noteInterviewReceipt,type InterviewIntent} from "./interviewIntents";
+ import {InterviewCitations} from "./InterviewCitations";
+ import "./interview-workspace.css";
+ import {RetrievalPanel} from './RetrievalPanel';
+-import {retrieveForCommand,retrievalChains,storeRetrievalChain,type RetrievalChain,type ServiceIdentity} from './retrieval-api';
++import {qApprovalText,retrieveForCommand,retrievalChains,storeRetrievalChain,type RetrievalChain,type ServiceIdentity} from './retrieval-api';
+ import type {InterviewCommand} from './interviewApi';
+ 
+ const PHASE:Record<string,string>={needs_goal:"请补充具体目标",ready:"可开始提问",question_ready:"等待你的回答",answer_ready:"回答已保存，可请求追问或反馈",feedback_ready:"本轮反馈已保存",ended:"本场次已结束，只读历史"};
+ const ROLES:Record<MaterialRole,string>={unspecified:"用途未定（按自报）",reference:"概念对照资料",resume:"简历（自报）",experience:"经历（自报）",measurement:"测量／收益（自报）"};
+ const LABEL:Record<string,string>={start:"开始场次",goal:"目标版本",scope:"范围确认",question:"问题",probe:"必要追问",answer:"回答",feedback:"反馈建议",finish:"结束场次",abandon:"显式放弃未确认意图"};
+@@ -71,11 +71,11 @@
+       const currentGoal=view.head?.goal_record_id?details[view.head.goal_record_id]?.body?.value.goal:null;
+       if(!currentGoal?.target?.trim()){setError('当前目标正文尚未核对完成，请等待读取后再明确提交');return;}
+       setBusy(true);setError('');
+       try{
+         if(recovered&&requestText(aid,command)!==requestText(aid,recovered.domain_input as InterviewCommand))throw new Error('原动作版本不同，不能改绑');
+-        const result=await retrieveForCommand(token,aid,expectedOwner,'interview',command as unknown as Record<string,unknown>,view.head?.scope_revision??scopeRevision,view.head?.revision??0,[currentGoal.target,currentGoal.focus].filter(Boolean).join(' ').slice(0,1024),()=>alive(stamp,aid)&&active.current.owner===expectedOwner&&active.current.viewToken===expectedView,recovered,modelService);
++        const result=await retrieveForCommand(token,aid,expectedOwner,'interview',command as unknown as Record<string,unknown>,view.head?.scope_revision??scopeRevision,view.head?.revision??0,[currentGoal.target,currentGoal.focus].filter(Boolean).join(' '),()=>alive(stamp,aid)&&active.current.owner===expectedOwner&&active.current.viewToken===expectedView,recovered,modelService);
+         if(!result.ref||!alive(stamp,aid)||active.current.owner!==expectedOwner||active.current.viewToken!==expectedView)return;
+         command={...command,retrieval_ref:result.ref};
+       }catch(e){if(alive(stamp,aid))setError((e as Error).message);return;}
+       finally{if(alive(stamp,aid))setBusy(false);}
+     }
+@@ -95,11 +95,11 @@
+       const lastOwner=await interviewEditorOwner();if(!stillCurrent()||lastOwner!==expectedOwner)return;
+       const c=controller();let receipt:InterviewReceipt;
+       try{receipt=await postInterview(token,aid,command,c.signal,stillCurrent);}finally{controllers.current.delete(c);}
+       if(!stillCurrent()||receipt.business_key!==command.business_key||receipt.activity_id!==aid||receipt.request_sha256!==hash)return;
+       await noteInterviewReceipt(receipt,expectedOwner,stillCurrent);if(!stillCurrent())return;
+-      setNotice(receipt.status==="unknown"?"尚未确认是否完成，请查看原提交结果；不会自动重发。":receipt.effect_applied?"已持久保存。继续与下一题都需要你的明确选择。":"已核对原回执；没有第二次业务效果。");
++      setNotice(receipt.outbound_approval?qApprovalText(receipt.outbound_approval):receipt.status==="unknown"?"尚未确认是否完成，请查看原提交结果；不会自动重发。":receipt.effect_applied?"已持久保存。继续与下一题都需要你的明确选择。":"已核对原回执；没有第二次业务效果。");
+       if(action==="answer"||action==="correct_answer")setAnswer("");
+       await refresh();if(alive(stamp,aid))onChanged?.();
+     }catch(reason){if(alive(stamp,aid))setError(reason instanceof Error?reason.message:"请求未确认，请按原键只读核对，不会自动提交");}
+     finally{if(alive(stamp,aid)){setBusy(false);setIntents(localIntents(active.current.owner));}}
+   }
+@@ -123,10 +123,11 @@
+       // Confirm this key's durable facts independently of a changed client view.
+       // A response's new server view is not itself a client-panel invalidation.
+       if(receipt){await noteInterviewReceipt(receipt,expectedOwner,factLive);if(!factLive())return;}
+       if(!live())return;
+       if(resubmit){
++        if(receipt?.outbound_approval&&!receipt.outbound_approval.can_continue){setNotice(qApprovalText(receipt.outbound_approval));return;}
+         if(receipt&&!(receipt.status==="accepted"&&!receipt.launch_claimed&&!receipt.duplicate_of)){setNotice("原提交已进入处理或已有终态，只读核对；不会再启动。");}
+         else{
+           const draft=await readInterviewDraft(frozen.key);if(!live())return;
+           const now=await interviewEditorOwner();if(!live()||now!==expectedOwner)return;
+           if(!draft||draft.owner!==expectedOwner||draft.activity_id!==aid||draft.hash!==frozen.hash||draft.command.business_key!==frozen.key||draft.command.action!==frozen.action||draft.command.expected_head_revision!==frozen.head_revision||draft.command.expected_goal_version!==frozen.goal_version||draft.command.expected_scope_revision!==frozen.scope_revision)throw new Error("原键正文或编辑身份缺失，不能重交");
+@@ -135,11 +136,11 @@
+           if(!live())return;
+           receipt=await postInterview(token,aid,draft.command,undefined,factLive);if(!factLive())return;
+           verify(receipt);await noteInterviewReceipt(receipt,expectedOwner,factLive);if(!live())return;
+         }
+       }
+-      if(receipt){if(!live())return;setNotice(`原提交状态：${receipt.status}。未重新生成业务键。`);}
++      if(receipt){if(!live())return;setNotice(receipt.outbound_approval?qApprovalText(receipt.outbound_approval):`原提交状态：${receipt.status}。未重新生成业务键。`);}
+       else setNotice("服务器未找到原提交；请保留本机正文，可显式重交原意图。");
+       await refresh();
+     }catch(reason){if(live())setError(reason instanceof Error?reason.message:"原提交无法核对");}
+     finally{if(panelLive()){setBusy(false);const current=loadInterviewIntents();if(current.ok)setIntents(current.items.filter(i=>i.activity_id===aid&&i.owner===expectedOwner));reconciliation.current=null;}}
+   }

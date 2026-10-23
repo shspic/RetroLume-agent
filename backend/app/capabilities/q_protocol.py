@@ -100,8 +100,25 @@ class SourceManifestV2(Closed):
     def check_model(self, request, payload=None):
         from .embedding import approved_fragment_identity
         from .contracts import AdmissionDenied
-        profile = request.learning_profile or request.teaching_profile or request.interview_profile
-        catalog = profile.catalog if profile else load_json(request.html_profile.context_json).get('catalog', []) if request.html_profile else []
+        profile = request.learning_profile or request.teaching_profile
+        if request.interview_profile is not None:
+            # InterviewProfile contains bindings, not a catalog. Its actual
+            # typed catalog is in the already frozen second message. Recheck
+            # the exact profile/prompt pair before using those source entries.
+            from app.interview.contracts import parse_context,profile_for,InterviewHybridContext
+            from app.interview.prompt import messages
+            try:
+                value=load_json(request.messages[1].content)
+                frozen=parse_context(value.get('context',value))
+                background=value.get('learning_background') if isinstance(frozen,InterviewHybridContext) else None
+                if (profile_for(frozen)!=request.interview_profile
+                    or [m.model_dump(mode='json',exclude_none=True) for m in request.messages]!=messages(frozen,background)):
+                    raise ValueError('interview_binding_invalid')
+                catalog=frozen.catalog
+            except (ValueError,TypeError,KeyError,IndexError):
+                raise AdmissionDenied('outbound_profile_not_approved') from None
+        else:
+            catalog = profile.catalog if profile else load_json(request.html_profile.context_json).get('catalog', []) if request.html_profile else []
         if not catalog:
             raise AdmissionDenied('outbound_profile_required')
         allowed = {x['identity_sha256'] for x in self.fragments}
@@ -119,7 +136,7 @@ class InstanceBinding(Closed):
     instance_id: str
     originals_root_id: str
     selection_generation: int = Field(ge=0)
-    schema_profile: Literal['data_exit.v1.r02']
+    schema_profile: Literal['data_exit.v1.r02','data_exit.v1.r03']
     source_registration_sha256: str = Field(pattern=HEX)
     connection_target_sha256: str = Field(pattern=HEX)
     cluster_system_identifier: str = Field(min_length=1, max_length=64)
@@ -183,6 +200,14 @@ class PreparedRequest(Closed):
         return digest(self.model_dump(mode='json'))
 
 
+class ApprovalClock(Closed):
+    schema: Literal['retrolume.q-clock.v1'] = 'retrolume.q-clock.v1'
+    domain: str = Field(pattern=HEX)
+    issued_mono_ns: int = Field(ge=0)
+    issued_upper_ns: int = Field(ge=0)
+    deadline_mono_ns: int = Field(gt=0)
+
+
 class DecisionBody(Closed):
     schema: Literal['retrolume.q-decision.v2'] = 'retrolume.q-decision.v2'
     prepared_sha256: str = Field(pattern=HEX)
@@ -192,11 +217,12 @@ class DecisionBody(Closed):
     expires_at: str
     decision: Literal['approve'] = 'approve'
     event_seq: int = Field(gt=0)
+    clock: ApprovalClock | None = None
 
     @property
     def approval_id(self):
         # K1: this object has no approval_id field and its seq is fixed under the journal lock.
-        return digest(self.model_dump(mode='json'))
+        return digest(self.model_dump(mode='json',exclude_none=True))
 
 
 def utcnow():

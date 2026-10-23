@@ -1,0 +1,621 @@
+--- before/backend/tests/fixtures/task120/api_runtime.py
++++ after/backend/tests/fixtures/task120/api_runtime.py
+@@ -55,6 +55,16 @@
+         if getattr(self,'after_approval',None):self.after_approval(rows)
+         return rows
+ 
++def transaction_failure_metadata(exc):
++    """Exception classes and SQLSTATE only; never messages or SQL values."""
++    chain=[];seen=set();current=exc
++    while current is not None and id(current) not in seen and len(chain)<4:
++        seen.add(id(current));state=getattr(current,'sqlstate',None)
++        if not isinstance(state,str) or not __import__('re').fullmatch('[A-Z0-9]{5}',state):state=None
++        chain.append({'error_type':type(current).__name__,'sqlstate':state})
++        current=current.__cause__ or current.__context__
++    return chain
++
+ 
+ @contextmanager
+ def application(slot):
+@@ -72,6 +82,15 @@
+         psycopg.AsyncConnection._task120_observed=True
+     app=create_app()
+     if app.state.data_exit_error or not app.state.q_readiness['available']:raise RuntimeError('normal_assembly_not_ready_'+str(app.state.q_readiness.get('reason')))
++    ledger=app.state.activities_ledger;original_transaction=ledger._transaction
++    async def observed_transaction(operation,*args,**kwargs):
++        try:return await original_transaction(operation,*args,**kwargs)
++        except BaseException as exc:
++            from app.data_exit.q_store import method_name
++            try:r.event('actual_PG_transaction_failure',operation_method=method_name(operation),exception_chain=transaction_failure_metadata(exc))
++            except Exception as diagnostic:print('transaction_diagnostic_unavailable',type(diagnostic).__name__)
++            raise
++    ledger._transaction=observed_transaction
+     # Observe the real SUP result without altering arguments, return values,
+     # exceptions, worker code, Job limits or the normal launcher.
+     from dataclasses import asdict
+--- before/backend/tests/fixtures/task120/pg_boundaries.py
++++ after/backend/tests/fixtures/task120/pg_boundaries.py
+@@ -25,17 +25,25 @@
+     state,ids,derived=run(snapshot(ledger,p['activity_id']));check_instance(authority,ledger,state)
+     validate_provenance(authority,request.model_dump(mode='json'),artifact['payload'],state,ids,derived,p['action'],p)
+     authority.manifest.check_model(request,artifact['payload'])
+-    cases=[]
+-    for label,text in [('answer','UNAPPROVED_ANSWER'),('history','UNAPPROVED_HISTORY'),('memory','UNAPPROVED_MEMORY'),('title','UNAPPROVED_TITLE')]:
++    class RecordedCases(list):
++        def append(self,value):
++            super().append(value)
++            r.write(r.EVIDENCE/f"root-{r.state()['active_root']:02d}-PG-approval-boundary-step-{len(self):02d}.json",{'status':'PASS_FOR_THIS_RECORDED_GATE_ONLY','case':value,'prepared_id':row['prepared_id'],'financials_unchanged':financials('flow')==base,'original_claim_present':bool(authority.request(row['prepared_id']).get('claim'))})
++    cases=RecordedCases()
++    for label,text in [('answer','UNAPPROVED_ANSWER'),('goal','UNAPPROVED_GOAL'),('memory','UNAPPROVED_MEMORY'),('title','UNAPPROVED_TITLE')]:
+         value=json.loads(request.messages[1].content)
+         if label=='memory':value['learning_background']=[{'text':text}]
+         elif label=='title':value['context']['catalog'][0]['title']=text
++        elif label=='answer':
++            actual=next(x for x in state['parents'] if x['record_id']==value['context']['goal_record_id'])
++            ref={'record_id':actual['record_id'],'kind':'answer','body_sha256':actual['body_sha256'],'body':{'text':text}}
++            value['context']['parent_record_refs'].append(ref)
+         else:value['context']['goal_body']['target']=text
+         changed=request.model_copy(update={'messages':(request.messages[0],request.messages[1].model_copy(update={'content':canonical(value)}))})
+         payload=ControlledModelGateway(service)._build_payload(changed)
+         try:validate_provenance(authority,changed.model_dump(mode='json'),payload,state,ids,derived,p['action'],p)
+         except AdmissionDenied as exc:
+-            cases.append({'case':'unapproved_'+label,'denied':str(exc),'typed_request_sha256':digest(changed.model_dump(mode='json')),'provider_bytes_sha256':raw_digest(canonical(payload))})
++            cases.append({'case':'unapproved_'+label,'layer':'actual_PG_snapshot_whole_request_provenance_before_claim','denied':str(exc),'typed_request_sha256':digest(changed.model_dump(mode='json')),'provider_bytes_sha256':raw_digest(canonical(payload))})
+         else:raise RuntimeError('actual_PG_provenance_allowed_'+label)
+     context=CallContext(activity_id=p['activity_id'],operation_id=p['operation_id'],executor_id='local-ui',execution_generation=1,scope_revision=1)
+     changed=request.model_copy(update={'messages':(request.messages[0],request.messages[1].model_copy(update={'content':request.messages[1].content+' '}))})
+@@ -54,6 +62,16 @@
+     # Full other-activity typed request, never a fabricated parent or ID string.
+     foreign_row=next(x for x in authority.hub.state()['q']['requests'].values() if x['prepared']['domain']=='learning' and x['prepared']['activity_id']!=p['activity_id'])
+     other=authority.artifact(foreign_row)
++    legacy=next(x for x in authority.hub.state()['q']['requests'].values() if x['prepared']['domain']=='learning' and x['prepared']['action']=='followup')
++    legacy_artifact=authority.artifact(legacy);legacy_request=ModelCallRequest.model_validate(legacy_artifact['request'])
++    legacy_state,legacy_ids,legacy_derived=run(snapshot(ledger,legacy['prepared']['activity_id']))
++    value=json.loads(legacy_request.messages[1].content);value['previous_result']=value['previous_result']+' UNAPPROVED_HISTORY'
++    changed=legacy_request.model_copy(update={'messages':(legacy_request.messages[0],legacy_request.messages[1].model_copy(update={'content':canonical(value)}))})
++    legacy_service=service.model_copy(update={'outbound_authorization':authority.reference(legacy)})
++    payload=ControlledModelGateway(legacy_service)._build_payload(changed)
++    try:validate_provenance(authority,changed.model_dump(mode='json'),payload,legacy_state,legacy_ids,legacy_derived,'followup',legacy['prepared'])
++    except AdmissionDenied as exc:cases.append({'case':'unapproved_history','layer':'actual_legacy_full_request_provenance','denied':str(exc),'original_operation_id':legacy['prepared']['operation_id'],'typed_request_sha256':digest(changed.model_dump(mode='json'))})
++    else:raise RuntimeError('actual_PG_provenance_allowed_history')
+     try:validate_provenance(authority,other['request'],other['payload'],state,ids,derived,foreign_row['prepared']['action'],foreign_row['prepared'])
+     except AdmissionDenied as exc:cases.append({'case':'actual_foreign_activity_full_request','denied':str(exc),'foreign_operation_id':foreign_row['prepared']['operation_id']})
+     else:raise RuntimeError('foreign_actual_request_allowed')
+@@ -78,7 +96,7 @@
+             with copied.open('ab') as stream:stream.write(b'\xff')
+         try:QAuthority(ControlHub(folder))
+         except DataError as exc:
+-            permitted={'q_instance_identity'} if kind=='copied_instance' else {'control_tail','control_corrupt'}
++            permitted={'q_instance_identity'} if kind=='copied_instance' else {'control_tail','control_corrupt','control_tail_unconfirmed'}
+             if exc.code not in permitted:raise RuntimeError('copy_denied_at_unrelated_boundary_'+exc.code)
+             cases.append({'case':kind,'copied_control_denied':True,'denied':exc.code,'live_original_untouched':True})
+         else:raise RuntimeError('copied_or_damaged_control_allowed')
+--- before/backend/tests/fixtures/task120/queued.py
++++ after/backend/tests/fixtures/task120/queued.py
+@@ -12,11 +12,14 @@
+ PHASES=PHASES|frozenset(('r03_diagnose','r03_core','r03_memory','r03_boundaries','r03_ui','r03_races'))
+ PHASES=PHASES|frozenset(('r03_ui_teaching','r03_ui_interview','r03_ui_legacy_html'))
+ PHASES=PHASES|frozenset(('r03_fences',))
++VALIDATION_PERMIT='TASK-120-Q-PREP-VALIDATION-04-20261019'
++PHASES=PHASES|frozenset(('v04_exercise','v04_ui','v04_boundaries','v04_races','v04_financials','v04_flow_final'))
+ 
+ def read_plan(path):
+     value=json.loads(Path(path).read_text(encoding='utf-8'))
+-    if set(value)!={'schema','permit_id','root_id','stages'} or value['schema']!='task120.finite-plan.v1' or value['permit_id'] not in (PERMIT,REPAIR_PERMIT):raise ValueError('closed_plan')
+-    low,high=(17,20) if value['permit_id']==REPAIR_PERMIT else (9,16)
++    if set(value)!={'schema','permit_id','root_id','stages'} or value['schema']!='task120.finite-plan.v1' or value['permit_id'] not in (PERMIT,REPAIR_PERMIT,VALIDATION_PERMIT):raise ValueError('closed_plan')
++    low,high=(21,24) if value['permit_id']==VALIDATION_PERMIT else (17,20) if value['permit_id']==REPAIR_PERMIT else (9,16)
++    if value['permit_id']==VALIDATION_PERMIT and any(not s.get('phase','').startswith('v04_') for s in value['stages']):raise ValueError('validation04_closed_phase')
+     if type(value['root_id']) is not int or not low<=value['root_id']<=high or not isinstance(value['stages'],list) or not 1<=len(value['stages'])<=12:raise ValueError('plan_limit')
+     seen=set()
+     for stage in value['stages']:
+--- before/backend/tests/fixtures/task120/recovery_races.py
++++ after/backend/tests/fixtures/task120/recovery_races.py
+@@ -104,5 +104,17 @@
+             try:inspection=run(inspect_request(c.app.state.activities_ledger,row['prepared_id']))
+             except (AdmissionDenied,DataError) as exc:inspection={'request_available':False,'denial':getattr(exc,'code',str(exc))}
+             if inspection.get('request_available'):raise RuntimeError('invalidated_request_body_returned_'+name)
+-            proof=remember(name+'.done',{'case':name,'activity_id':aid,'operation_id':operation,'prepared_id':row['prepared_id'],'007_payload_sha256':fact['payload_sha256'],'window':window,'mutation_started':mutation_started,'head_after_mutation':after_mutation,'late_result_head_unchanged':True,'fees_retained':True,'invalidated_inspection_returns_no_body':True,'never_resent_after_claim':True})
++            proof=remember(name+'.done',{'case':name,'activity_id':aid,'operation_id':operation,'prepared_id':row['prepared_id'],'007_payload_sha256':fact['payload_sha256'],'window':window,'mutation_started':mutation_started,'head_after_mutation':after_mutation,'late_result_head_unchanged':True,'fees_retained':True,'financials_before':before,'financials_after':after,'invalidated_inspection_returns_no_body':True,'never_resent_after_claim':True})
+             proofs.append(proof);r.write(r.EVIDENCE/f"root-{r.state()['active_root']:02d}-c02-mutation-races.json",{'status':'PASS_FOR_COMPLETED_CASES','cases':proofs,'real_PG':True,'provider_calls':0})
++        if r.state().get('current_permit_id')=='TASK-120-Q-PREP-VALIDATION-04-20261019':
++            # Last action in this instance: normal deletion/tombstone service.
++            # No remaining positive may depend on this original N source.
++            source=state['source.done']['activity_id'];sid=str(sources['N']['id'])
++            current=c.app.state.materials.get(sid);before=financials(slot)
++            preview=c.request('POST',f'/api/data/materials/{sid}/deletion-preview',{'expected_revision':current['revision']})
++            body=retain('final-source-delete',{'business_key':str(uuid4()),'expected_revision':current['revision'],'impact_sha256':preview['impact_sha256'],'confirm':True})
++            deleted=c.request('POST',f'/api/data/materials/{sid}/deletions',body)
++            response=c.request('GET',f'/api/materials/{sid}/content',expect=(404,409,410))
++            after=financials(slot)
++            if before!=after:raise RuntimeError('v04_delete_changed_financials')
++            r.write(r.EVIDENCE/'validation-04'/'deleted-source-body-closed.json',{'status':'PASS_FOR_BODY_CLOSURE','source_id':sid,'deletion_receipt':deleted,'financials_before':before,'financials_after':after,'content_GET_denied':True,'actual_memory_purge_already_completed':True,'physical_cleanup_state':deleted.get('state'),'not_all_cleanup_claimed':True})
+--- before/backend/tests/fixtures/task120/repair03.py
++++ after/backend/tests/fixtures/task120/repair03.py
+@@ -195,6 +195,8 @@
+         before=financials(self.slot);self.c.request('GET',path+'/'+command['business_key']);self.c.approve(aid,command['business_key'])
+         if financials(self.slot)!=before:raise RuntimeError('repair03_model_GET_approval_financial_side_effect')
+         r.count('native_business_sessions');receipt=self.c.request('POST',path,command)
++        if receipt.get('status') in ('unknown','started'):
++            receipt=self.c.request('GET',path+'/'+command['business_key'])
+         fact=run(self.c.app.state.activities_ledger.read_committed_result(aid,receipt['operation_id']))
+         if receipt['status']!='committed' or fact.read_status.value!='committed_current' or not fact.payload:raise RuntimeError('repair03_model_missing_domain_007_'+domain+'_'+str(receipt.get('error_code')))
+         self.save(name+'.007',{'operation_id':receipt['operation_id'],'payload_sha256':fact.payload_sha256,'read_status':fact.read_status.value})
+--- before/backend/tests/fixtures/task120/resources.py
++++ after/backend/tests/fixtures/task120/resources.py
+@@ -81,12 +81,15 @@
+ 
+ 
+ def memory_gate(kind):
+-    amount=available_memory();minimum=(768 if kind=='browser' else 512)*1024**2
++    amount=available_memory()
++    prospective=state().get('current_permit_id')=='TASK-120-Q-PREP-VALIDATION-04-20261019'
++    minimum=(512 if prospective or kind!='browser' else 768)*1024**2
+     event('memory_gate',stage=kind,available_bytes=amount,minimum_bytes=minimum)
+     if amount<minimum:raise RuntimeError('task120_low_memory_'+kind)
+ 
+ 
+ def settled_memory_gate(kind,seconds=12):
++    if state().get('current_permit_id')=='TASK-120-Q-PREP-VALIDATION-04-20261019':return memory_gate(kind)
+     # Docker warmup can briefly reclaim pages. This finite internal stage does
+     # not start the next layer until its unchanged real threshold is met.
+     until=time.monotonic()+seconds
+--- before/backend/tests/fixtures/task120/run.py
++++ after/backend/tests/fixtures/task120/run.py
+@@ -41,6 +41,9 @@
+             from .merged import run_batches
+             return run_batches()
+         if phase=='bootstrap':bootstrap()
++        elif phase.startswith('v04_'):
++            from .validation04 import execute
++            execute(phase.removeprefix('v04_'))
+         elif phase.startswith('r03_'):
+             from . import repair03
+             repair03.execute(phase.removeprefix('r03_'))
+@@ -80,7 +83,7 @@
+         return 0
+     except BaseException as exc:
+         # Test data only. Secrets/DSNs/SQL arguments are not printed.
+-        print(type(exc).__name__,getattr(exc,'sqlstate',None),getattr(getattr(exc,'diag',None),'message_primary',None))
++        print(type(exc).__name__,getattr(exc,'sqlstate',None))
+         for item in traceback.extract_tb(exc.__traceback__):print(item.filename,item.lineno,item.name)
+         r.write(r.EVIDENCE/f'root-{root_id:02d}{suffix}-failure.json',{'phase':phase,'error_type':type(exc).__name__,'sqlstate':getattr(exc,'sqlstate',None),'safe_code':str(exc) if type(exc) is RuntimeError else None})
+         return 1
+--- before/backend/tests/fixtures/task120/ui.py
++++ after/backend/tests/fixtures/task120/ui.py
+@@ -22,28 +22,77 @@
+             'profile':str(folder/'browser'),'handshake':str(folder),'proof':str(r.EVIDENCE/(stem+'-proof.json')),
+             'screenshotTeaching':str(r.EVIDENCE/(stem+'-teaching.png')),'screenshotInterview':str(r.EVIDENCE/(stem+'-interview.png'))}
+         r.write(folder/'spec.json',spec,private=True)
++        if mode=='fences' and r.state().get('current_permit_id')=='TASK-120-Q-PREP-VALIDATION-04-20261019':raise RuntimeError('validation04_single_page_fences_required')
+         r.settled_memory_gate('browser');r.count('browser_starts')
+         env=os.environ.copy();env['RETROLUME_TASK120_UI_SPEC']=str(folder/'spec.json')
+         with (r.EVIDENCE/(stem+'-node.log')).open('wb') as log:
+             process=subprocess.Popen([shutil.which('node'),str(r.ROOT/'frontend/tests/task120-ui-continuation.mjs')],cwd=r.ROOT/'frontend',env=env,stdout=log,stderr=subprocess.STDOUT,creationflags=subprocess.CREATE_NO_WINDOW)
+             from app.preview.process import birth
+             r.event('ui_node_started',pid=process.pid,birth=birth(process.pid),root=number)
+-            deadline=time.monotonic()+90;ordinal=1
++            deadline=time.monotonic()+(280 if mode=='remaining' else 240 if mode=='all' else 90);ordinal=1
+             try:
+                 while process.poll() is None:
+                     if time.monotonic()>=deadline:raise RuntimeError('task120_ui_timeout')
+                     request=folder/f'request-{ordinal}.json'
+                     if request.exists():
+                         value=json.loads(request.read_text(encoding='utf-8'))
+-                        if set(value)!={'ordinal','kind','activity_id','business_key'} or value['ordinal']!=ordinal or value['kind']!='approve' or value['activity_id'] not in ROSTER:raise RuntimeError('closed_ui_operator_request')
++                        if set(value)!={'ordinal','kind','activity_id','business_key'} or value['ordinal']!=ordinal or value['activity_id'] not in ROSTER:raise RuntimeError('closed_ui_operator_request')
++                        if value['kind']!='approve':
++                            if mode!='remaining' or value['kind'] not in ('boundaries','head','scope','freeze','native_attempt'):raise RuntimeError('closed_ui_driver_request')
++                            try:
++                                if value['kind']=='native_attempt':r.count('native_business_sessions')
++                                elif value['kind']=='boundaries':client.validation04_boundaries()
++                                else:driver_mutation(client,value)
++                            except Exception as exc:
++                                import traceback
++                                diagnostic={'kind':value['kind'],'error_type':type(exc).__name__,'safe_code':str(exc) if type(exc) is RuntimeError else None,'frames':[{'function':f.name,'line':f.lineno,'file':str(f.filename).replace(str(r.ROOT),'PROJECT')} for f in traceback.extract_tb(exc.__traceback__)]}
++                                r.write(r.EVIDENCE/'validation-04'/('driver-'+value['kind']+'-failure.json'),diagnostic)
++                                r.update(lambda b:b['failures'].append({'root':number,'case':'validation04-driver-'+value['kind'],'diagnostic':diagnostic}))
++                                answer={'status':'FAILED','error_type':type(exc).__name__}
++                            else:answer={'status':'COMPLETED'}
++                            r.write(folder/f'reply-{ordinal}.json',answer,private=True);ordinal+=1;continue
+                         before=financials('flow');rows=client.approve(value['activity_id'],value['business_key'])
+                         if financials('flow')!=before:raise RuntimeError('ui_approval_changed_financials')
+                         # Reserve an attempt before the explicitly requested UI
+                         # continuation. A fenced late attempt is conservative.
+-                        for row in rows:r.count('native_business_sessions')
++                        if mode!='remaining':
++                            for row in rows:r.count('native_business_sessions')
+                         r.write(folder/f'reply-{ordinal}.json',{'status':'APPROVED'},private=True);ordinal+=1
+                     time.sleep(.04)
+             finally:
+                 if process.poll() is None:process.terminate()
+                 process.wait(timeout=8)
+         if process.returncode:raise RuntimeError('task120_browser_assertion_failed')
++
++def driver_mutation(c,value):
++    from .api_runtime import run
++    from .repair03 import Flow
++    from app.capabilities.q_protocol import canonical
++    aid=value['activity_id'];kind=value['kind'];f=Flow(c,'flow')
++    if kind=='head':
++        f.local(aid,'interview','goal',{'goal':{'target':setup.SAMPLES['inputs']['interview_goal'],'material_roles':[]}},'v04-UI-head-mutation')
++    elif kind=='scope':
++        sources=json.loads((r.PRIVATE/'flow/sources.json').read_text(encoding='utf-8'))
++        item=sources['R'];entries=[{'source_id':str(item['id']),'version_id':str(item['version_id']),'source_revision':item['revision'],'original_sha256':item['sha256']}]
++        f.local(aid,'interview','bind_scope',{'sources':entries,'material_roles':[]},'v04-UI-scope-mutation')
++    elif kind=='freeze':
++        from app.data_exit.q_store import authority_for
++        from app.operator.q_request import inspect_request
++        from app.capabilities.q_context import snapshot,check_instance
++        from app.capabilities.contracts import AdmissionDenied
++        from app.data_exit.contracts import DataError
++        ledger=c.app.state.activities_ledger;authority=authority_for(ledger)
++        row=next(x for x in authority.hub.state()['q']['requests'].values() if x['prepared']['business_key']==value['business_key'])
++        if row.get('claim'):raise RuntimeError('v04_readonly_case_already_claimed')
++        before=financials('flow');context=c.app.state.data_exit.context()
++        with authority.policy():
++            lease=run(c.app.state.data_exit.maintenance.drain_for_readonly_switch(context.generation,time.monotonic()+20))
++            lease.close()
++        actual=c.app.state.data_exit.context().public();state,_,_=run(snapshot(ledger,aid))
++        try:check_instance(authority,ledger,state)
++        except AdmissionDenied as exc:denial=str(exc)
++        else:raise RuntimeError('v04_frozen_actual_PG_instance_allowed')
++        try:inspection=run(inspect_request(ledger,row['prepared_id']))
++        except (DataError,AdmissionDenied) as exc:inspection={'request_available':False,'denial':getattr(exc,'code',str(exc))}
++        if inspection.get('request_available') or authority.request(row['prepared_id']).get('claim') or financials('flow')!=before:raise RuntimeError('v04_frozen_body_claim_financial_failure')
++        r.write(r.EVIDENCE/'validation-04'/'actual-readonly-body-closed.json',{'status':'PASS','prepared_id':row['prepared_id'],'business_key':value['business_key'],'before_context':context.public(),'after_context':actual,'actual_PG_mode':state['control']['state']['mode'],'Q_denial':denial,'request_body_closed':True,'claim_not_created':True,'financials_unchanged':True,'never_unfreeze':True})
+--- /dev/null
++++ after/backend/tests/fixtures/task120/validation04.py
+@@ -0,0 +1,136 @@
++"""Finite original-key validation. Successful old requests are read only."""
++import hashlib,json
++from . import resources as r,setup
++from .api_runtime import application,financials,run
++from .repair03 import Flow
++from app.capabilities.q_protocol import ROSTER,canonical,digest
++HERE=r.EVIDENCE/'validation-04'
++def write(name,value):r.write(HERE/name,value)
++def money(name):
++    value={'utc':r.utc(),'new_PG_connections':True,'flow':financials('flow'),'budget-02':financials('budget-02')}
++    write(name,value);return value
++
++def positive_map(c,*,exercise_required=False):
++    """Read exact committed operation/hash and query identity, not filename gates."""
++    from app.data_exit.q_store import authority_for
++    facts=[];ledger=c.app.state.activities_ledger;authority=authority_for(ledger)
++    progress=json.loads((r.PRIVATE/'flow/r03-progress.json').read_text(encoding='utf-8'))
++    for name,aid,domain,query in [('t-plan',ROSTER[2],'teaching','t-query'),('i-ask',ROSTER[1],'interview','i-query'),('legacy-followup',ROSTER[2],'learning',None),('html',ROSTER[2],'html',None)]+([('t-exercise',ROSTER[2],'teaching','t-exercise-query')] if exercise_required else []):
++        cmd=progress[name];receipt=progress[name+'.done'];op=receipt['operation_id']
++        fact=run(ledger.read_committed_result(aid,op))
++        import psycopg
++        with psycopg.connect(setup.dsn('flow')) as db:
++            db.execute('BEGIN READ ONLY')
++            raw=db.execute('SELECT payload,payload_sha256 FROM activity_operation_results WHERE activity_id=%s AND operation_id=%s',(aid,op)).fetchone()
++        if raw is None or raw[1]!=hashlib.sha256(raw[0].encode()).hexdigest():raise RuntimeError('v04_original_007_integrity_'+name)
++        q=next(x for x in authority.hub.state()['q']['requests'].values() if x['prepared']['business_key']==cmd['business_key'] and x['prepared']['operation_id']==op)
++        if not q.get('claim') or not q.get('admission'):raise RuntimeError('v04_original_Q_claim_missing_'+name)
++        a=authority.artifact(q)
++        entry={'name':name,'activity_id':aid,'business_key':cmd['business_key'],'domain':domain,'operation_id':op,'payload_sha256':raw[1],'current_read_status':fact.read_status.value,'qualified_payload_available':fact.payload is not None,'prepared_id':q['prepared_id'],'prepared_sha256':q['prepared_sha256'],'artifact_request_sha256':digest(a['request']),'claim':q['claim'],'admission':q['admission'],'business_resends':0}
++        if query:
++            entry.update(query_business_key=progress[query]['business_key'],query_result_sha256=progress[query+'.done']['retrieval_ref']['result_sha256'])
++            current=c.request('GET',f'/api/activities/{aid}/retrieval/commands/'+entry['query_business_key'])
++            if current['result_sha256']!=entry['query_result_sha256']:raise RuntimeError('v04_original_query_hash_changed')
++            entry['query_current']=current.get('current')
++        if domain in ('teaching','interview'):
++            entry['domain_receipt']=c.request('GET',f'/api/activities/{aid}/{domain}/commands/'+cmd['business_key'])
++        facts.append(entry)
++    write('positive-operation-map-root-'+str(r.state()['active_root'])+'.json',{'utc':r.utc(),'facts':facts,'historical_success_not_assumed_current':True,'new_send':0})
++    return facts
++
++def exercise():
++    from app.capabilities.contracts import ModelCallRequest
++    from app.capabilities.gateway import ControlledModelGateway
++    from app.capabilities.q_context import snapshot,check_instance,validate_provenance
++    from app.learning.teaching_adapter import validate_teaching_request
++    from app.learning.teaching_service import TeachingService
++    from app.learning.teaching_contracts import TeachingCommandInput,parse_frozen_context
++    from app.data_exit.q_store import authority_for
++    from app.data_exit.codec import plain
++    from types import SimpleNamespace
++    baseline=money('financial-baseline.json')
++    with application('flow') as c:
++        f=Flow(c,'flow');aid=ROSTER[2];command=TeachingCommandInput.model_validate(f.state['t-exercise']);key=command.business_key
++        ledger=c.app.state.activities_ledger;authority=authority_for(ledger)
++        current=run(ledger.read_teaching_command(aid,key));row=current['command'];head=current['head']
++        qrows=[x for x in authority.hub.state()['q']['requests'].values() if x['prepared']['business_key']==key]
++        if row['status']!='accepted' or row.get('launch_claimed_at') or row.get('launch_claimed') or any(q.get('claim') for q in qrows):raise RuntimeError('v04_original_exercise_not_unclaimed')
++        if head['revision']!=command.expected_revision or head['goal_version']!=command.expected_goal_version or current['activity']['scope_revision']!=command.expected_scope_revision:raise RuntimeError('v04_original_exercise_parent_changed')
++        if row['request_sha256']!=command.request_sha256(aid):raise RuntimeError('v04_original_exercise_request_changed')
++        frozen=parse_frozen_context(json.loads(row['context_body']))
++        if getattr(frozen,'recipe',None) is not None:raise RuntimeError('v04_unexpected_original_memory_recipe')
++        identity={n:head.get(n) for n in ('goal_record_id','goal_version','path_record_id','node_id','exercise_record_id','answer_record_id')};identity['correction_record_id']=command.body.get('correction_record_id')
++        service=TeachingService(ledger,c.app.state.materials,c.app.state.originals)
++        profile=service._build_profile(aid,command,frozen,identity)
++        req=ModelCallRequest(messages=[{'role':m['role'],'content':m['content']} for m in frozen.messages],max_output_tokens=frozen.max_output_tokens,allowed_tools=frozenset(),teaching_profile=profile,retrieval_ref=frozen.retrieval_ref)
++        payload=ControlledModelGateway(c.app.state.activity_config.model_service)._build_payload(req)
++        before=financials('flow');qbefore=authority.hub.state()['q']
++        async def dry():
++            async with authority.async_policy(shared=True):
++                state,ids,derived=await snapshot(ledger,aid);check_instance(authority,ledger,state)
++                validate_provenance(authority,req.model_dump(mode='json'),payload,state,ids,derived,command.action,{'operation_id':command.operation_id(aid),'business_key':key,'command_request_sha256':command.request_sha256(aid),'frozen_context_sha256':frozen.context_sha256})
++                authority.manifest.check_model(req,payload)
++                code=await validate_teaching_request(SimpleNamespace(activity_id=aid,scope_revision=command.expected_scope_revision,operation_id=command.operation_id(aid)),req,ledger)
++                if code:raise RuntimeError('v04_original_exercise_validation_'+code)
++        run(dry())
++        if before!=financials('flow') or qbefore!=authority.hub.state()['q']:raise RuntimeError('v04_dry_validation_mutated_authority')
++        write('original-exercise-before-send.json',{'utc':r.utc(),'business_key':key,'request_sha256':row['request_sha256'],'context_sha256':row['context_sha256'],'full_request_sha256':digest(req.model_dump(mode='json')),'original_Q_rows':plain(qrows),'accepted_unclaimed':True,'full_frozen_request_validation':'PASS','financials_before':before,'dry_claim_send':0})
++        f.model(aid,'teaching','exercise',command.body,'t-exercise',command.retrieval_ref.model_dump())
++        after=financials('flow')
++        if after['requests']!=before['requests']+1 or after['cost']!=before['cost']+250000:raise RuntimeError('v04_exercise_financial_delta')
++        write('original-exercise-positive.json',{'status':'PASS','business_key':key,'007':f.state['t-exercise.007'],'receipt':f.state['t-exercise.done'],'financials_before':before,'financials_after':after,'no_new_plan_or_key':True})
++        positive_map(c,exercise_required=True)
++    money('financial-after-exercise.json')
++
++def boundary_cases(c):
++    from .pg_boundaries import probe_approved,run_ack_and_gap
++    positive_map(c,exercise_required=True)
++    f=Flow(c,'flow');aid=ROSTER[1]
++    f.goal(aid,'interview',setup.SAMPLES['inputs']['interview_goal'],'v04-b-goal')
++    ref=f.retrieve(aid,'query','v04-b-query',setup.SAMPLES['inputs']['interview_goal'])['retrieval_ref']
++    before=financials('flow');c.after_approval=lambda rows:probe_approved(c,rows)
++    try:f.model(aid,'interview','ask',{'mode':'first'},'v04-b-result-ACK-model',ref)
++    finally:c.after_approval=None
++    write('result-ACK-positive.json',{'status':'PASS','007':f.state['v04-b-result-ACK-model.007'],'financials_before':before,'financials_after':financials('flow')})
++    run_ack_and_gap(c)
++    money('financial-after-boundaries.json')
++
++def flow_final():
++    from .ui import run_ui
++    from app.activities.repository import PostgresAdmissionLedger
++    with application('flow') as c:
++        positive_map(c,exercise_required=True)
++        before=financials('flow');view=run(c.app.state.activities_ledger.read_teaching_workspace(ROSTER[2]))
++        selected=run(PostgresAdmissionLedger(setup.dsn('budget-02')).read_memory_selection(ROSTER[1],include_bodies=False))
++        if view['memory_selected'] or not view['memory_qualified'] or not selected['selected']:raise RuntimeError('v04_memory_display_projection_not_proven')
++        write('memory-display-PG.json',{'status':'PASS','unselected_flow_teaching_v3_memory_selected':view['memory_selected'],'memory_eligibility_unchanged':view['memory_qualified'],'budget02_actual_selected':selected['selected'],'financials_unchanged':financials('flow')==before,'only_display_projection_changed':True})
++        c.validation04_boundaries=lambda:boundary_cases(c)
++        run_ui(c,'remaining')
++
++def execute(mode):
++    if mode=='exercise':return exercise()
++    if mode=='financials':return money('financial-final-new-connection-root-'+str(r.state()['active_root'])+'.json')
++    if mode=='flow_final':return flow_final()
++    if mode=='ui':
++        from .ui import run_ui
++        with application('flow') as c:
++            positive_map(c,exercise_required=True)
++            return run_ui(c,'all')
++    if mode=='boundaries':
++        with application('flow') as c:
++            return boundary_cases(c)
++    if mode=='races':
++        from .recovery_races import run_races
++        ui_path=r.EVIDENCE/f"root-{r.state()['active_root']:02d}-batch-01-ui-remaining-proof.json"
++        ui=json.loads(ui_path.read_text(encoding='utf-8'))
++        if not any(x['name'].startswith('A3-teaching-query-model') and x['status']=='PASS' for x in ui.get('cases',[])):raise RuntimeError('v04_normal_teaching_UI_required_before_final_instance_mutations')
++        old=json.loads((r.PRIVATE/'budget-02/r03-progress.json').read_text(encoding='utf-8'))
++        from app.activities.repository import PostgresAdmissionLedger
++        from .transport import install
++        setup.environment('budget-02',include_admin=False);install()
++        from app.main import create_app
++        app=create_app();fact=run(app.state.activities_ledger.read_committed_result(ROSTER[1],old['i2-ask.007']['operation_id']))
++        if fact.read_status.value!='committed_current' or fact.payload_sha256!=old['i2-ask.007']['payload_sha256']:raise RuntimeError('v04_memory_positive_current_qualification_lost')
++        write('memory-positive-fresh-before-destructive.json',{'utc':r.utc(),'operation_id':old['i2-ask.007']['operation_id'],'payload_sha256':fact.payload_sha256,'read_status':fact.read_status.value,'new_send':0})
++        return run_races()
++    raise ValueError('v04_closed_mode')
+--- /dev/null
++++ after/backend/tests/fixtures/task120/validation_memory.py
+@@ -0,0 +1,33 @@
++"""Metadata-only working sets for the exact owned runtime Job, at each sample."""
++import ctypes,json,time
++from ctypes import wintypes
++from . import resources as r
++from .control_job import NamedJob,JobOpenError
++from .merged import members
++class Counters(ctypes.Structure):
++    _fields_=[('cb',wintypes.DWORD),('PageFaultCount',wintypes.DWORD)]+[(n,ctypes.c_size_t) for n in ('PeakWorkingSetSize','WorkingSetSize','QuotaPeakPagedPoolUsage','QuotaPagedPoolUsage','QuotaPeakNonPagedPoolUsage','QuotaNonPagedPoolUsage','PagefileUsage','PeakPagefileUsage')]
++kernel=ctypes.WinDLL('kernel32',use_last_error=True);psapi=ctypes.WinDLL('psapi',use_last_error=True)
++kernel.OpenProcess.argtypes=[wintypes.DWORD,wintypes.BOOL,wintypes.DWORD];kernel.OpenProcess.restype=wintypes.HANDLE
++kernel.CloseHandle.argtypes=[wintypes.HANDLE]
++psapi.GetProcessMemoryInfo.argtypes=[wintypes.HANDLE,ctypes.POINTER(Counters),wintypes.DWORD]
++def probe(identity,root):
++    available=r.available_memory();values=[]
++    try:job=NamedJob.open_existing(identity,1)
++    except JobOpenError as exc:
++        values=[{'job_not_created_or_closed':True,'Windows_error':exc.code}]
++    else:
++        try:rows=members(job)
++        except (OSError,RuntimeError) as exc:values=[{'exiting_job_snapshot_unknown':type(exc).__name__}]
++        else:
++            for row in rows:
++                handle=kernel.OpenProcess(0x0410,False,row['pid'])
++                if not handle:values.append({**row,'query_unavailable':ctypes.get_last_error()});continue
++                try:
++                    counter=Counters();counter.cb=ctypes.sizeof(counter)
++                    ok=psapi.GetProcessMemoryInfo(handle,ctypes.byref(counter),counter.cb)
++                    values.append({**row,'working_set_bytes':counter.WorkingSetSize if ok else None})
++                finally:kernel.CloseHandle(handle)
++        finally:job.close()
++    path=r.EVIDENCE/'validation-04'/f'root-{root:02d}-memory-samples.jsonl'
++    with path.open('a',encoding='utf-8') as stream:stream.write(json.dumps({'utc':r.utc(),'mono_ns':time.monotonic_ns(),'available_bytes':available,'owned_processes':values})+'\n')
++    return available
+--- before/frontend/tests/task120-ui-continuation.mjs
++++ after/frontend/tests/task120-ui-continuation.mjs
+@@ -8,7 +8,7 @@
+ assert(process.env.RETROLUME_TASK120_UI_SPEC,'owned finite TASK120 root required');
+ const spec=JSON.parse(fs.readFileSync(process.env.RETROLUME_TASK120_UI_SPEC,'utf8'));
+ assert.equal(spec.permit,'TASK-120-Q-PREP-IMPLEMENTATION-20261018');
+-assert(['teaching','interview','legacy_html','fences'].includes(spec.mode));
++assert(['teaching','interview','legacy_html','fences','all','remaining'].includes(spec.mode));
+ const sha=x=>createHash('sha256').update(x).digest('hex');
+ const proof={execution_class:'TESTONLY',mode:spec.mode,status:'RUNNING',real_PG:true,real_Windows_SUP:true,
+  fixture_sha256:sha(fs.readFileSync(fileURLToPath(import.meta.url))),assets:[],requests:[],actions:[],cases:[],external_attempts:[],errors:[]};
+@@ -17,16 +17,24 @@
+ async function until(f,seconds=12){const end=Date.now()+seconds*1000;while(!f()){assert(Date.now()<end,'bounded observation timeout');await sleep(25);}}
+ let context,ordinal=0;
+ const observations=new Set();
++const approvedKeys=new Set(),countedNativeKeys=new Set();
+ const observe=f=>{const p=Promise.resolve().then(f).catch(e=>proof.errors.push(String(e))).finally(()=>observations.delete(p));observations.add(p);};
+ const posts=p=>proof.requests.filter(x=>x.method==='POST'&&x.path===p);
+ async function operator(aid,key){
+  ordinal++;fs.writeFileSync(path.join(spec.handshake,`request-${ordinal}.json`),JSON.stringify({ordinal,kind:'approve',activity_id:aid,business_key:key}));
+  const reply=path.join(spec.handshake,`reply-${ordinal}.json`);await until(()=>fs.existsSync(reply));assert.equal(JSON.parse(fs.readFileSync(reply)).status,'APPROVED');
++ approvedKeys.add(key);
+  proof.actions.push({at:Date.now(),action:'actual_local_operator_approved',activity_id:aid,business_key:key});save();
+ }
++async function driver(kind,aid,key='metadata-only'){
++ ordinal++;fs.writeFileSync(path.join(spec.handshake,`request-${ordinal}.json`),JSON.stringify({ordinal,kind,activity_id:aid,business_key:key}));
++ const file=path.join(spec.handshake,`reply-${ordinal}.json`);await until(()=>fs.existsSync(file),150);
++ const reply=JSON.parse(fs.readFileSync(file));proof.actions.push({action:`actual_backend_${kind}`,reply});save();return reply;
++}
+ async function action(page,p,label,click){
+- const waiting=page.waitForResponse(r=>r.request().method()==='POST'&&new URL(r.url()).pathname===p);
+- proof.actions.push({at:Date.now(),action:label});await click();const response=await waiting;assert(response.ok(),`${label}: HTTP ${response.status()}`);
++ proof.actions.push({at:Date.now(),action:label});save();
++ const [response]=await Promise.all([page.waitForResponse(r=>r.request().method()==='POST'&&new URL(r.url()).pathname===p),click()]);assert(response.ok(),`${label}: HTTP ${response.status()}`);
++ save();
+  return {body:response.request().postDataJSON(),receipt:await response.json()};
+ }
+ async function select(page,aid,interview=false){
+@@ -49,21 +57,35 @@
+ try{
+  assert(fs.existsSync(chromium.executablePath()),'cached Chromium only');
+  context=await chromium.launchPersistentContext(spec.profile,{headless:true,viewport:{width:1440,height:1050},serviceWorkers:'block',args:['--disable-background-networking']});
+- await context.route('**/*',async route=>{const url=new URL(route.request().url());if(url.origin!==spec.origin){proof.external_attempts.push(url.origin);await route.abort();return;}await route.continue();});
++ await context.route('**/*',async route=>{const req=route.request(),url=new URL(req.url());if(url.origin!==spec.origin){proof.external_attempts.push(url.origin);await route.abort();return;}
++  if(spec.mode==='remaining'&&req.method()==='POST'){
++    const body=req.postDataJSON(),key=body?.business_key;
++    if(approvedKeys.has(key)&&!countedNativeKeys.has(key)){
++      const aid=url.pathname.match(/^\/api\/activities\/([^/]+)\//)?.[1];assert(aid);
++      assert.equal((await driver('native_attempt',aid,key)).status,'COMPLETED');countedNativeKeys.add(key);
++    }
++  }
++  await route.continue();});
+  context.on('request',request=>{const url=new URL(request.url());proof.requests.push({at:Date.now(),method:request.method(),path:url.pathname,
+   ...(request.method()==='POST'?{body:request.postDataJSON()}: {})});});
+  context.on('response',response=>{if(new URL(response.url()).pathname.startsWith('/assets/'))observe(async()=>{
+   const rel=new URL(response.url()).pathname.slice(1),bytes=await response.body();assert.equal(sha(bytes),sha(fs.readFileSync(path.join(spec.project,'frontend/dist',rel))));
+   proof.assets.push({path:rel,response_sha256:sha(bytes),file_sha256:sha(fs.readFileSync(path.join(spec.project,'frontend/dist',rel)))});
++ });if(new URL(response.url()).pathname==='/api/data/capabilities')observe(async()=>{
++   const header=response.headers()['x-retrolume-data-context'];if(header){proof.data_contexts??=[];proof.data_contexts.push(JSON.parse(header));}
+  });});
+  const page=context.pages()[0]??await context.newPage();page.setDefaultTimeout(13000);page.on('pageerror',e=>proof.errors.push(String(e)));
+  await page.goto(spec.origin,{waitUntil:'networkidle'});
+  const [a1,a2,a3]=spec.activities;
+- if(spec.mode==='teaching'){
++ for(const mode of spec.mode==='remaining'?['teaching','fences']:spec.mode==='all'?['teaching','interview','legacy_html']:[spec.mode]){
++ try{
++ await page.reload({waitUntil:'networkidle'});
++ if(mode==='teaching'){
+   let area=await select(page,a3);const domain=`/api/activities/${a3}/teaching/commands`,retrieval=`/api/activities/${a3}/retrieval/commands`;
+   // A3 has a real unused local-goal slot after the completed normal chain.
+   // Both local actions are frozen texts; only the final numeric goal is sent.
+-  for(const [name,text] of [['concept',spec.concept_goal],['numeric',spec.numeric_goal]]){
++  for(const [name,text] of spec.mode==='remaining'?[]:[['concept',spec.concept_goal],['numeric',spec.numeric_goal]]){
++   await page.waitForFunction(()=>document.querySelector('section.ws-teaching .section-title .quiet')?.textContent?.includes('修订'));
+    await area.getByLabel('学习目标（零费保存，不调用模型）',{exact:true}).fill(text);
+    const goal=await action(page,domain,`explicit_A3_local_goal_${name}`,()=>area.getByRole('button',{name:'保存目标（不调用模型）',exact:true}).click());
+    assert.equal(goal.receipt.status,'committed');
+@@ -90,7 +112,7 @@
+   assert.equal(result.body.business_key,model.body.business_key);assert.equal(result.receipt.status,'committed');
+   proof.cases.push({name:'A3-teaching-query-model-wait-reopen-owner-view-late-original-COMMIT',status:'PASS',query_key:query.body.business_key,model_key:model.body.business_key});
+   await page.screenshot({path:spec.screenshotTeaching,fullPage:true});
+- }else if(spec.mode==='interview'){
++ }else if(mode==='interview'){
+   let area=await select(page,a2,true);const domain=`/api/activities/${a2}/interview/commands`,retrieval=`/api/activities/${a2}/retrieval/commands`;
+   await area.getByLabel('面试目标',{exact:true}).fill(spec.interview_goal);
+   await action(page,domain,'explicit_interview_goal',()=>area.getByRole('button',{name:'保存修正目标（另存版本）',exact:true}).click());
+@@ -119,7 +141,9 @@
+   assert.equal(result.body.business_key,model.body.business_key);assert.equal(result.receipt.status,'committed');
+   proof.cases.push({name:'interview-query-and-model-wait-GET-reopen-owner-view-late-explicit-original-commit',status:'PASS',query_key:query.body.business_key,model_key:model.body.business_key});
+   await page.screenshot({path:spec.screenshotInterview,fullPage:true});
+- }else if(spec.mode==='fences'){
++ }else if(mode==='fences'){
++  const boundary=await driver('boundaries',a2);
++  proof.backend_boundary=boundary;
+   const domain=`/api/activities/${a2}/interview/commands`,retrieval=`/api/activities/${a2}/retrieval/commands`;
+   for(const fence of ['head','scope']){
+    await page.reload({waitUntil:'networkidle'});let area=await select(page,a2,true);
+@@ -128,35 +152,51 @@
+    const query=await action(page,retrieval,`fence_${fence}_query_prepare`,()=>area.getByRole('button',{name:'开始提问',exact:true}).click());
+    assert(query.receipt.outbound_approval);await operator(a2,query.body.business_key);
+    let panel=area.locator('section[aria-label="资料检索与恢复"]');
++   // Same-document prepare does not reload the read-only panel's stored list.
++   // Refresh that list explicitly before reconciling its exact original key.
++   await panel.getByRole('button',{name:'只读核对索引与原意图',exact:true}).click();
+    await panel.getByRole('button',{name:'按原键只读核对',exact:true}).last().click();
+    await action(page,retrieval,`fence_${fence}_query_continue`,()=>panel.getByRole('button',{name:'明确继续已批准的原检索请求',exact:true}).last().click());
+    const model=await action(page,domain,`fence_${fence}_model_prepare`,()=>panel.getByRole('button',{name:'明确继续尚未发送的原动作',exact:true}).last().click());
+    await operator(a2,model.body.business_key);
+    const intent=area.locator(`[data-interview-intent-key="${model.body.business_key}"]`);
+    await intent.getByRole('button',{name:'只读核对原提交',exact:true}).click();
+-   const other=await context.newPage();other.setDefaultTimeout(13000);await other.goto(spec.origin,{waitUntil:'networkidle'});
+-   const second=await select(other,a2,true);let hit=false,release;const barrier=new Promise(resolve=>release=resolve);
++   let hit=false,release;const barrier=new Promise(resolve=>release=resolve);
+    const pattern=`**${domain}/${model.body.business_key}`;
+    await page.route(pattern,async route=>{const response=await route.fetch();hit=true;await barrier;await route.fulfill({response});});
+    const oldKeyPosts=()=>posts(domain).filter(x=>x.body?.business_key===model.body.business_key).length;
+    const before=oldKeyPosts();
+    try{
+     await intent.getByRole('button',{name:'在安全条件下显式重交原意图',exact:true}).click();await until(()=>hit);
+-    if(fence==='head'){
+-     await second.getByLabel('面试目标',{exact:true}).fill(spec.interview_goal);
+-     await action(other,domain,'concurrent_actual_local_goal',()=>second.getByRole('button',{name:'保存修正目标（另存版本）',exact:true}).click());
+-    }else{
+-     await second.getByRole('button',{name:'读取当前资料，明确更新范围',exact:true}).click();
+-     await second.locator('label').filter({hasText:spec.scope_remove_title}).filter({has:other.locator('input[type="checkbox"]')}).getByRole('checkbox').uncheck();
+-     await action(other,domain,'concurrent_actual_scope_binding',()=>second.getByRole('button',{name:'确认新的资料范围',exact:true}).click());
+-    }
++    const changed=await driver(fence,a2,model.body.business_key);assert.equal(changed.status,'COMPLETED');
+     const refresh=page.waitForResponse(r=>r.request().method()==='GET'&&new URL(r.url()).pathname===`/api/activities/${a2}/interview/workspace`);
+     await area.getByRole('button',{name:'只读刷新／恢复场次',exact:true}).click();await refresh;await sleep(300);release();await sleep(350);
+     assert.equal(oldKeyPosts(),before,'late original model GET must not POST after observed head/scope change');
+     proof.cases.push({name:`actual-${fence}-mutation-during-approved-GET-no-original-model-POST`,status:'PASS',business_key:model.body.business_key});
+-   }finally{release();await page.unroute(pattern);await other.close();}
+-  }
+-  proof.not_run=['namespace-switch','DataContext-switch'];
++   }finally{release();await page.unroute(pattern);}
++  }
++  // A separate live, still-approved teaching request observes permanent source
++  // freeze only after every normal flow and head/scope case has been saved.
++  {
++  await page.reload({waitUntil:'networkidle'});let area=await select(page,a3);
++  const teaching=`/api/activities/${a3}/teaching/commands`,retrieval=`/api/activities/${a3}/retrieval/commands`;
++  await action(page,teaching,'DataContext_accept_existing_UI_path',()=>area.getByRole('button',{name:'接受当前路径（零费）',exact:true}).click());
++  const query=await action(page,retrieval,'DataContext_exercise_query_prepare',()=>area.getByRole('button',{name:'获取练习（1 次模型）',exact:true}).click());
++  await operator(a3,query.body.business_key);let panel=area.locator('section[aria-label="资料检索与恢复"]');
++  await panel.getByRole('button',{name:'只读核对索引与原意图',exact:true}).click();
++  await panel.getByRole('button',{name:'按原键只读核对',exact:true}).last().click();
++  await action(page,retrieval,'DataContext_query_explicit_continue',()=>panel.getByRole('button',{name:'明确继续已批准的原检索请求',exact:true}).last().click());
++  const model=await action(page,teaching,'DataContext_original_exercise_prepare',()=>panel.getByRole('button',{name:'明确继续尚未发送的原动作',exact:true}).last().click());
++  await operator(a3,model.body.business_key);await area.getByRole('button',{name:'核对（只读）',exact:true}).last().click();
++  await late(page,`**${teaching}/${model.body.business_key}`,()=>area.getByRole('button',{name:'明确恢复原意图（同键）',exact:true}).last().click(),async()=>{
++    const frozen=await driver('freeze',a3,model.body.business_key);assert.equal(frozen.status,'COMPLETED');
++    await page.getByRole('button',{name:'数据与备份',exact:true}).click();
++    await page.getByRole('heading',{name:'数据与备份',exact:true}).waitFor();
++    await page.getByRole('status').filter({hasText:/只读/}).first().waitFor();
++  },teaching);
++  proof.cases.push({name:'actual-frozen-DataContext-and-view-late-approved-GET-no-POST',status:'PASS',business_key:model.body.business_key,isolated_DataContext_guard:false});
++  }
++  proof.not_run=['namespace-switch-with-existing-target-selection'];
+  }else{
+   assert(spec.legacy_operation,'actual committed legacy parent');
+   let learning=await reopenLegacy(page);const follow=`/api/activities/${a3}/learning/followups`,html=`/api/activities/${a3}/html/commands`;
+@@ -186,7 +226,16 @@
+   proof.cases.push({name:'HTML-description-wait-reopen-GET-approved-same-key-preview-zero',status:'PASS',business_key:pending.body.business_key});
+   await page.screenshot({path:spec.screenshotTeaching,fullPage:true});
+  }
++ }catch(error){
++  proof.mode_failures??=[];proof.mode_failures.push({mode,name:error.name,message:String(error.message),stack:error.stack});
++  proof.last_visible_body=(await page.locator('body').innerText()).slice(-14000);
++  await page.screenshot({path:spec.screenshotTeaching.replace('.png',`-${mode}-failure.png`),fullPage:true});save();
++ }
++ }
++ assert.equal(context.pages().length,1,'one page for every serial mode');
++ proof.browser_contexts=1;proof.maximum_pages=1;
+  await Promise.allSettled([...observations]);assert(proof.assets.some(x=>x.path.endsWith('.js'))&&proof.assets.some(x=>x.path.endsWith('.css')));
+- assert.equal(proof.external_attempts.length,0);assert.equal(proof.errors.length,0);proof.status='PASS_FOR_LISTED_CHAINS';
++ assert.equal(proof.external_attempts.length,0);assert.equal(proof.errors.length,0);proof.status=proof.mode_failures?.length||proof.backend_boundary?.status==='FAILED'?'PARTIAL_FOR_LISTED_CHAINS':'PASS_FOR_LISTED_CHAINS';
++ if(proof.mode_failures?.length||proof.backend_boundary?.status==='FAILED')process.exitCode=1;
+ }catch(error){proof.status='FAIL';proof.failure={name:error.name,message:String(error.message),stack:error.stack};process.exitCode=1;}
+ finally{if(context)await context.close();await Promise.allSettled([...observations]);proof.context_closed=true;save();}

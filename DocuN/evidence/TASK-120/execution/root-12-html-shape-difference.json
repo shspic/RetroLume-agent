@@ -1,0 +1,254 @@
+{
+  "baseline_sha256": "573ba0d1e7c70f11834920837a694ee52cfa705eed4206dfcc272b914b33abac",
+  "expected_sha256": "573ba0d1e7c70f11834920837a694ee52cfa705eed4206dfcc272b914b33abac",
+  "differences": [
+    {
+      "section": "functions",
+      "index": 0,
+      "before": {
+        "proname": "html_accept_command",
+        "arguments": "aid uuid, key uuid, op text, rb text, rh text, cb text, ch text, renderer text, scope integer, pk text, loc text, ph text",
+        "prosrc": "\n INSERT INTO public.html_commands(activity_id,business_key,operation_id,request_body,request_sha256,context_body,context_sha256,\n renderer_sha256,scope_revision,parent_kind,parent_locator,parent_sha256) VALUES(aid,key,op,rb,rh,cb,ch,renderer,scope,pk,loc,ph)\n",
+        "prosecdef": true,
+        "provolatile": "v",
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ],
+        "acl": "{retrolume_html_owner=X/retrolume_html_owner,retrolume_html_app=X/retrolume_html_owner}",
+        "owner": "retrolume_html_owner"
+      },
+      "after": {
+        "proname": "html_accept_command",
+        "arguments": "aid uuid, key uuid, op text, rb text, rh text, cb text, ch text, renderer text, scope integer, pk text, loc text, ph text",
+        "prosrc": "\r\n INSERT INTO public.html_commands(activity_id,business_key,operation_id,request_body,request_sha256,context_body,context_sha256,\r\n renderer_sha256,scope_revision,parent_kind,parent_locator,parent_sha256) VALUES(aid,key,op,rb,rh,cb,ch,renderer,scope,pk,loc,ph)\r\n",
+        "prosecdef": true,
+        "provolatile": "v",
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ],
+        "acl": "{retrolume_html_owner=X/retrolume_html_owner,retrolume_html_app=X/retrolume_html_owner}",
+        "owner": "retrolume_html_owner"
+      }
+    },
+    {
+      "section": "functions",
+      "index": 1,
+      "before": {
+        "proname": "html_artifact_eligible",
+        "arguments": "aid uuid, art uuid",
+        "prosrc": "\n SELECT COALESCE((SELECT c.status='terminal' AND c.terminal_disposition='succeeded'\n   AND o.kind='model' AND o.state='received' AND r.payload_sha256=b.body_sha256\n   AND r.admission_id=o.admission_id AND r.execution_generation=o.execution_generation\n   AND b.renderer_sha256=public.html_expected_renderer() AND c.renderer_sha256=b.renderer_sha256\n   AND public.html_parent_eligible(aid,c.context_body::jsonb)\n  FROM public.html_artifacts b JOIN public.html_commands c ON c.activity_id=b.activity_id AND c.business_key=b.business_key\n   JOIN public.activity_operations o ON o.activity_id=b.activity_id AND o.operation_id=b.operation_id\n   JOIN public.activity_operation_results r ON r.activity_id=b.activity_id AND r.operation_id=b.operation_id\n  WHERE b.activity_id=aid AND b.artifact_id=art),false)\n",
+        "prosecdef": true,
+        "provolatile": "s",
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ],
+        "acl": "{retrolume_html_owner=X/retrolume_html_owner,retrolume_html_app=X/retrolume_html_owner}",
+        "owner": "retrolume_html_owner"
+      },
+      "after": {
+        "proname": "html_artifact_eligible",
+        "arguments": "aid uuid, art uuid",
+        "prosrc": "\r\n SELECT COALESCE((SELECT c.status='terminal' AND c.terminal_disposition='succeeded'\r\n   AND o.kind='model' AND o.state='received' AND r.payload_sha256=b.body_sha256\r\n   AND r.admission_id=o.admission_id AND r.execution_generation=o.execution_generation\r\n   AND b.renderer_sha256=public.html_expected_renderer() AND c.renderer_sha256=b.renderer_sha256\r\n   AND public.html_parent_eligible(aid,c.context_body::jsonb)\r\n  FROM public.html_artifacts b JOIN public.html_commands c ON c.activity_id=b.activity_id AND c.business_key=b.business_key\r\n   JOIN public.activity_operations o ON o.activity_id=b.activity_id AND o.operation_id=b.operation_id\r\n   JOIN public.activity_operation_results r ON r.activity_id=b.activity_id AND r.operation_id=b.operation_id\r\n  WHERE b.activity_id=aid AND b.artifact_id=art),false)\r\n",
+        "prosecdef": true,
+        "provolatile": "s",
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ],
+        "acl": "{retrolume_html_owner=X/retrolume_html_owner,retrolume_html_app=X/retrolume_html_owner}",
+        "owner": "retrolume_html_owner"
+      }
+    },
+    {
+      "section": "functions",
+      "index": 3,
+      "before": {
+        "proname": "html_claim_command",
+        "arguments": "aid uuid, key uuid",
+        "prosrc": "\nBEGIN UPDATE public.html_commands SET status='launch_claimed',updated_at=CURRENT_TIMESTAMP WHERE activity_id=aid AND business_key=key AND status='accepted'; RETURN FOUND; END;\n",
+        "prosecdef": true,
+        "provolatile": "v",
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ],
+        "acl": "{retrolume_html_owner=X/retrolume_html_owner,retrolume_html_app=X/retrolume_html_owner}",
+        "owner": "retrolume_html_owner"
+      },
+      "after": {
+        "proname": "html_claim_command",
+        "arguments": "aid uuid, key uuid",
+        "prosrc": "\r\nBEGIN UPDATE public.html_commands SET status='launch_claimed',updated_at=CURRENT_TIMESTAMP WHERE activity_id=aid AND business_key=key AND status='accepted'; RETURN FOUND; END;\r\n",
+        "prosecdef": true,
+        "provolatile": "v",
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ],
+        "acl": "{retrolume_html_owner=X/retrolume_html_owner,retrolume_html_app=X/retrolume_html_owner}",
+        "owner": "retrolume_html_owner"
+      }
+    },
+    {
+      "section": "functions",
+      "index": 5,
+      "before": {
+        "proname": "html_commit_artifact",
+        "arguments": "aid uuid, key uuid, art uuid, op text, body text, ah text, dh text, rh text, eh text, bh text",
+        "prosrc": "\n INSERT INTO public.html_artifacts(artifact_id,activity_id,business_key,operation_id,artifact_body,artifact_sha256,\n description_sha256,renderer_sha256,execution_package_sha256,body_sha256) VALUES(art,aid,key,op,body,ah,dh,rh,eh,bh)\n",
+        "prosecdef": true,
+        "provolatile": "v",
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ],
+        "acl": "{retrolume_html_owner=X/retrolume_html_owner,retrolume_html_app=X/retrolume_html_owner}",
+        "owner": "retrolume_html_owner"
+      },
+      "after": {
+        "proname": "html_commit_artifact",
+        "arguments": "aid uuid, key uuid, art uuid, op text, body text, ah text, dh text, rh text, eh text, bh text",
+        "prosrc": "\r\n INSERT INTO public.html_artifacts(artifact_id,activity_id,business_key,operation_id,artifact_body,artifact_sha256,\r\n description_sha256,renderer_sha256,execution_package_sha256,body_sha256) VALUES(art,aid,key,op,body,ah,dh,rh,eh,bh)\r\n",
+        "prosecdef": true,
+        "provolatile": "v",
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ],
+        "acl": "{retrolume_html_owner=X/retrolume_html_owner,retrolume_html_app=X/retrolume_html_owner}",
+        "owner": "retrolume_html_owner"
+      }
+    },
+    {
+      "section": "functions",
+      "index": 8,
+      "before": {
+        "proname": "html_finish_command",
+        "arguments": "aid uuid, key uuid, disposition text, error text",
+        "prosrc": "\nBEGIN\n IF disposition='succeeded' AND NOT EXISTS(SELECT 1 FROM public.html_artifacts WHERE activity_id=aid AND business_key=key)\n THEN RAISE EXCEPTION 'html missing committed artifact'; END IF;\n UPDATE public.html_commands SET status='terminal',terminal_disposition=disposition,error_code=error,updated_at=CURRENT_TIMESTAMP\n WHERE activity_id=aid AND business_key=key AND status='launch_claimed';\nEND;\n",
+        "prosecdef": true,
+        "provolatile": "v",
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ],
+        "acl": "{retrolume_html_owner=X/retrolume_html_owner,retrolume_html_app=X/retrolume_html_owner}",
+        "owner": "retrolume_html_owner"
+      },
+      "after": {
+        "proname": "html_finish_command",
+        "arguments": "aid uuid, key uuid, disposition text, error text",
+        "prosrc": "\r\nBEGIN\r\n IF disposition='succeeded' AND NOT EXISTS(SELECT 1 FROM public.html_artifacts WHERE activity_id=aid AND business_key=key)\r\n THEN RAISE EXCEPTION 'html missing committed artifact'; END IF;\r\n UPDATE public.html_commands SET status='terminal',terminal_disposition=disposition,error_code=error,updated_at=CURRENT_TIMESTAMP\r\n WHERE activity_id=aid AND business_key=key AND status='launch_claimed';\r\nEND;\r\n",
+        "prosecdef": true,
+        "provolatile": "v",
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ],
+        "acl": "{retrolume_html_owner=X/retrolume_html_owner,retrolume_html_app=X/retrolume_html_owner}",
+        "owner": "retrolume_html_owner"
+      }
+    },
+    {
+      "section": "functions",
+      "index": 9,
+      "before": {
+        "proname": "html_immutable_guard",
+        "arguments": "",
+        "prosrc": "\nBEGIN RAISE EXCEPTION 'html artifact immutable'; END;\n",
+        "prosecdef": false,
+        "provolatile": "v",
+        "proconfig": null,
+        "acl": "{retrolume_html_owner=X/retrolume_html_owner}",
+        "owner": "retrolume_html_owner"
+      },
+      "after": {
+        "proname": "html_immutable_guard",
+        "arguments": "",
+        "prosrc": "\r\nBEGIN RAISE EXCEPTION 'html artifact immutable'; END;\r\n",
+        "prosecdef": false,
+        "provolatile": "v",
+        "proconfig": null,
+        "acl": "{retrolume_html_owner=X/retrolume_html_owner}",
+        "owner": "retrolume_html_owner"
+      }
+    },
+    {
+      "section": "functions",
+      "index": 10,
+      "before": {
+        "proname": "html_parent_eligible",
+        "arguments": "aid uuid, frozen jsonb",
+        "prosrc": "\n SELECT COALESCE((SELECT a.status<>'cancelled' AND a.deadline_at>CURRENT_TIMESTAMP\n  AND a.scope_revision=(frozen->>'scope_revision')::integer\n  AND public.activity_memory_eligible(a.id)\n  AND (NOT EXISTS(SELECT 1 FROM public.activity_memory_bindings m WHERE m.activity_id=a.id)\n       OR EXISTS(SELECT 1 FROM public.activity_memory_bindings m WHERE m.activity_id=a.id\n             AND m.selection_sha256=frozen->>'memory_selection_sha256'))\n  AND EXISTS(SELECT 1 FROM public.activity_scope_sources s WHERE s.activity_id=a.id)\n  AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(frozen->'sources') ref WHERE NOT EXISTS(\n    SELECT 1 FROM public.activity_scope_sources s JOIN public.material_sources m ON m.id=s.source_id\n      JOIN public.material_versions v ON v.id=s.version_id AND v.source_id=s.source_id\n     WHERE s.activity_id=a.id AND s.source_id::text=ref->>'source_id' AND s.version_id::text=ref->>'version_id'\n      AND s.source_revision=(ref->>'source_revision')::integer AND m.current_version=s.version_id\n      AND m.revision=s.source_revision AND v.sha256=ref->>'original_sha256'))\n  AND jsonb_array_length(frozen->'sources')=(SELECT count(*) FROM public.activity_scope_sources s WHERE s.activity_id=a.id)\n  AND CASE WHEN frozen->'parent'->>'kind'='learning' THEN EXISTS(\n    SELECT 1 FROM public.activity_operations o JOIN public.activity_operation_results r\n     ON r.activity_id=o.activity_id AND r.operation_id=o.operation_id\n    WHERE o.activity_id=a.id AND o.operation_id=frozen->'parent'->>'operation_id' AND o.kind='model'\n     AND o.state='received' AND o.scope_revision=a.scope_revision AND r.payload_sha256=frozen->'parent'->>'payload_sha256'\n     AND r.admission_id=o.admission_id AND r.execution_generation=o.execution_generation\n     AND r.payload::jsonb->'value'->>'profile'='learning.v1' AND r.payload::jsonb->'value'->'result'->>'kind'='answer')\n   ELSE EXISTS(SELECT 1 FROM public.teaching_heads h JOIN public.teaching_records r ON r.activity_id=h.activity_id\n    WHERE h.activity_id=a.id AND r.record_id::text=frozen->'parent'->>'record_id'\n     AND r.body_sha256=frozen->'parent'->>'body_sha256' AND r.goal_version=h.goal_version\n     AND r.scope_revision=a.scope_revision AND (r.kind='exercise' AND r.record_id=h.exercise_record_id\n       OR r.kind='feedback' AND r.record_id=h.feedback_record_id))\n    AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(frozen->'dependencies') d WHERE NOT EXISTS(\n      SELECT 1 FROM public.teaching_records r WHERE r.activity_id=a.id AND r.record_id::text=d->>'record_id'\n       AND r.body_sha256=d->>'body_sha256' AND r.scope_revision=a.scope_revision)) END\n FROM public.activities a WHERE a.id=aid),false)\n",
+        "prosecdef": true,
+        "provolatile": "s",
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ],
+        "acl": "{retrolume_html_owner=X/retrolume_html_owner,retrolume_html_app=X/retrolume_html_owner}",
+        "owner": "retrolume_html_owner"
+      },
+      "after": {
+        "proname": "html_parent_eligible",
+        "arguments": "aid uuid, frozen jsonb",
+        "prosrc": "\r\n SELECT COALESCE((SELECT a.status<>'cancelled' AND a.deadline_at>CURRENT_TIMESTAMP\r\n  AND a.scope_revision=(frozen->>'scope_revision')::integer\r\n  AND public.activity_memory_eligible(a.id)\r\n  AND (NOT EXISTS(SELECT 1 FROM public.activity_memory_bindings m WHERE m.activity_id=a.id)\r\n       OR EXISTS(SELECT 1 FROM public.activity_memory_bindings m WHERE m.activity_id=a.id\r\n             AND m.selection_sha256=frozen->>'memory_selection_sha256'))\r\n  AND EXISTS(SELECT 1 FROM public.activity_scope_sources s WHERE s.activity_id=a.id)\r\n  AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(frozen->'sources') ref WHERE NOT EXISTS(\r\n    SELECT 1 FROM public.activity_scope_sources s JOIN public.material_sources m ON m.id=s.source_id\r\n      JOIN public.material_versions v ON v.id=s.version_id AND v.source_id=s.source_id\r\n     WHERE s.activity_id=a.id AND s.source_id::text=ref->>'source_id' AND s.version_id::text=ref->>'version_id'\r\n      AND s.source_revision=(ref->>'source_revision')::integer AND m.current_version=s.version_id\r\n      AND m.revision=s.source_revision AND v.sha256=ref->>'original_sha256'))\r\n  AND jsonb_array_length(frozen->'sources')=(SELECT count(*) FROM public.activity_scope_sources s WHERE s.activity_id=a.id)\r\n  AND CASE WHEN frozen->'parent'->>'kind'='learning' THEN EXISTS(\r\n    SELECT 1 FROM public.activity_operations o JOIN public.activity_operation_results r\r\n     ON r.activity_id=o.activity_id AND r.operation_id=o.operation_id\r\n    WHERE o.activity_id=a.id AND o.operation_id=frozen->'parent'->>'operation_id' AND o.kind='model'\r\n     AND o.state='received' AND o.scope_revision=a.scope_revision AND r.payload_sha256=frozen->'parent'->>'payload_sha256'\r\n     AND r.admission_id=o.admission_id AND r.execution_generation=o.execution_generation\r\n     AND r.payload::jsonb->'value'->>'profile'='learning.v1' AND r.payload::jsonb->'value'->'result'->>'kind'='answer')\r\n   ELSE EXISTS(SELECT 1 FROM public.teaching_heads h JOIN public.teaching_records r ON r.activity_id=h.activity_id\r\n    WHERE h.activity_id=a.id AND r.record_id::text=frozen->'parent'->>'record_id'\r\n     AND r.body_sha256=frozen->'parent'->>'body_sha256' AND r.goal_version=h.goal_version\r\n     AND r.scope_revision=a.scope_revision AND (r.kind='exercise' AND r.record_id=h.exercise_record_id\r\n       OR r.kind='feedback' AND r.record_id=h.feedback_record_id))\r\n    AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(frozen->'dependencies') d WHERE NOT EXISTS(\r\n      SELECT 1 FROM public.teaching_records r WHERE r.activity_id=a.id AND r.record_id::text=d->>'record_id'\r\n       AND r.body_sha256=d->>'body_sha256' AND r.scope_revision=a.scope_revision)) END\r\n FROM public.activities a WHERE a.id=aid),false)\r\n",
+        "prosecdef": true,
+        "provolatile": "s",
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ],
+        "acl": "{retrolume_html_owner=X/retrolume_html_owner,retrolume_html_app=X/retrolume_html_owner}",
+        "owner": "retrolume_html_owner"
+      }
+    },
+    {
+      "section": "functions",
+      "index": 13,
+      "before": {
+        "proname": "html_reserve_preview",
+        "arguments": "aid uuid, art uuid, pid uuid, sk uuid, ah text, owner uuid, oh text, auth text, boot uuid, nn text, image text, reserve integer, t0 bigint, wall timestamp with time zone, conf text",
+        "prosrc": "\nDECLARE b public.html_preview_budgets; gen integer;\nBEGIN\n -- 已有预算不能先触发INSERT守卫再靠ON CONFLICT跳过；其会核已有session总数。\n INSERT INTO public.html_preview_budgets(activity_id,config_sha256)\n SELECT aid,conf WHERE NOT EXISTS(SELECT 1 FROM public.html_preview_budgets WHERE activity_id=aid)\n ON CONFLICT(activity_id) DO NOTHING;\n SELECT * INTO b FROM public.html_preview_budgets WHERE activity_id=aid FOR UPDATE;\n IF b.starts_used>=3 OR reserve<30 OR reserve>60 OR b.settled_seconds+b.reserved_seconds+reserve>180\n   OR b.config_sha256<>conf OR EXISTS(SELECT 1 FROM public.html_preview_sessions WHERE activity_id=aid AND elapsed_seconds IS NULL)\n THEN RAISE EXCEPTION 'html preview budget or owner unavailable'; END IF;\n SELECT COALESCE(max(generation),0)+1 INTO gen FROM public.html_preview_sessions WHERE activity_id=aid;\n INSERT INTO public.html_preview_sessions(preview_id,activity_id,artifact_id,start_key,generation,artifact_sha256,owner_id,\n owner_key_sha256,control_key_sha256,boot_id,nonce,image_id,reserve_seconds,t0_ns,deadline_ns,deadline_at,state)\n VALUES(pid,aid,art,sk,gen,ah,owner,oh,auth,boot,nn,image,reserve,t0,t0+reserve::bigint*1000000000,wall,'reserved');\n UPDATE public.html_preview_budgets SET starts_used=starts_used+1,reserved_seconds=reserved_seconds+reserve,revision=revision+1 WHERE activity_id=aid;\n RETURN gen;\nEND;\n",
+        "prosecdef": true,
+        "provolatile": "v",
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ],
+        "acl": "{retrolume_html_owner=X/retrolume_html_owner,retrolume_html_app=X/retrolume_html_owner}",
+        "owner": "retrolume_html_owner"
+      },
+      "after": {
+        "proname": "html_reserve_preview",
+        "arguments": "aid uuid, art uuid, pid uuid, sk uuid, ah text, owner uuid, oh text, auth text, boot uuid, nn text, image text, reserve integer, t0 bigint, wall timestamp with time zone, conf text",
+        "prosrc": "\r\nDECLARE b public.html_preview_budgets; gen integer;\r\nBEGIN\r\n -- 已有预算不能先触发INSERT守卫再靠ON CONFLICT跳过；其会核已有session总数。\r\n INSERT INTO public.html_preview_budgets(activity_id,config_sha256)\r\n SELECT aid,conf WHERE NOT EXISTS(SELECT 1 FROM public.html_preview_budgets WHERE activity_id=aid)\r\n ON CONFLICT(activity_id) DO NOTHING;\r\n SELECT * INTO b FROM public.html_preview_budgets WHERE activity_id=aid FOR UPDATE;\r\n IF b.starts_used>=3 OR reserve<30 OR reserve>60 OR b.settled_seconds+b.reserved_seconds+reserve>180\r\n   OR b.config_sha256<>conf OR EXISTS(SELECT 1 FROM public.html_preview_sessions WHERE activity_id=aid AND elapsed_seconds IS NULL)\r\n THEN RAISE EXCEPTION 'html preview budget or owner unavailable'; END IF;\r\n SELECT COALESCE(max(generation),0)+1 INTO gen FROM public.html_preview_sessions WHERE activity_id=aid;\r\n INSERT INTO public.html_preview_sessions(preview_id,activity_id,artifact_id,start_key,generation,artifact_sha256,owner_id,\r\n owner_key_sha256,control_key_sha256,boot_id,nonce,image_id,reserve_seconds,t0_ns,deadline_ns,deadline_at,state)\r\n VALUES(pid,aid,art,sk,gen,ah,owner,oh,auth,boot,nn,image,reserve,t0,t0+reserve::bigint*1000000000,wall,'reserved');\r\n UPDATE public.html_preview_budgets SET starts_used=starts_used+1,reserved_seconds=reserved_seconds+reserve,revision=revision+1 WHERE activity_id=aid;\r\n RETURN gen;\r\nEND;\r\n",
+        "prosecdef": true,
+        "provolatile": "v",
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ],
+        "acl": "{retrolume_html_owner=X/retrolume_html_owner,retrolume_html_app=X/retrolume_html_owner}",
+        "owner": "retrolume_html_owner"
+      }
+    },
+    {
+      "section": "functions",
+      "index": 14,
+      "before": {
+        "proname": "html_update_preview",
+        "arguments": "pid uuid, auth text, next_state text, exact_cid text, first_receipt text, confirmation text, elapsed integer",
+        "prosrc": "\nDECLARE s public.html_preview_sessions;\nBEGIN\n SELECT * INTO s FROM public.html_preview_sessions WHERE preview_id=pid FOR UPDATE;\n IF s.preview_id IS NULL OR encode(sha256(decode(auth,'hex')),'hex')<>s.control_key_sha256 THEN RAISE EXCEPTION 'html control authority invalid'; END IF;\n UPDATE public.html_preview_sessions SET state=next_state,cid=COALESCE(exact_cid,cid),\n first_stop_receipt=COALESCE(first_stop_receipt,first_receipt),confirmation_receipt=COALESCE(confirmation_receipt,confirmation),\n elapsed_seconds=COALESCE(elapsed_seconds,elapsed),revision=revision+1 WHERE preview_id=pid;\n IF elapsed IS NOT NULL AND s.elapsed_seconds IS NULL THEN\n  UPDATE public.html_preview_budgets SET reserved_seconds=reserved_seconds-s.reserve_seconds,\n   settled_seconds=settled_seconds+elapsed,revision=revision+1 WHERE activity_id=s.activity_id;\n END IF;\nEND;\n",
+        "prosecdef": true,
+        "provolatile": "v",
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ],
+        "acl": "{retrolume_html_owner=X/retrolume_html_owner,retrolume_html_app=X/retrolume_html_owner}",
+        "owner": "retrolume_html_owner"
+      },
+      "after": {
+        "proname": "html_update_preview",
+        "arguments": "pid uuid, auth text, next_state text, exact_cid text, first_receipt text, confirmation text, elapsed integer",
+        "prosrc": "\r\nDECLARE s public.html_preview_sessions;\r\nBEGIN\r\n SELECT * INTO s FROM public.html_preview_sessions WHERE preview_id=pid FOR UPDATE;\r\n IF s.preview_id IS NULL OR encode(sha256(decode(auth,'hex')),'hex')<>s.control_key_sha256 THEN RAISE EXCEPTION 'html control authority invalid'; END IF;\r\n UPDATE public.html_preview_sessions SET state=next_state,cid=COALESCE(exact_cid,cid),\r\n first_stop_receipt=COALESCE(first_stop_receipt,first_receipt),confirmation_receipt=COALESCE(confirmation_receipt,confirmation),\r\n elapsed_seconds=COALESCE(elapsed_seconds,elapsed),revision=revision+1 WHERE preview_id=pid;\r\n IF elapsed IS NOT NULL AND s.elapsed_seconds IS NULL THEN\r\n  UPDATE public.html_preview_budgets SET reserved_seconds=reserved_seconds-s.reserve_seconds,\r\n   settled_seconds=settled_seconds+elapsed,revision=revision+1 WHERE activity_id=s.activity_id;\r\n END IF;\r\nEND;\r\n",
+        "prosecdef": true,
+        "provolatile": "v",
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ],
+        "acl": "{retrolume_html_owner=X/retrolume_html_owner,retrolume_html_app=X/retrolume_html_owner}",
+        "owner": "retrolume_html_owner"
+      }
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+--- initial/backend/app/data_exit/files.py
++++ final/backend/app/data_exit/files.py
+@@ -133,11 +133,11 @@
+ 
+ class RootLease:
+     """每次取锁使用非继承句柄，常驻句柄禁止锁文件被删除或替换。"""
+     def __init__(self, root, name=".reference.lock"):
+         self.root = safe_root(root)
+-        if name not in (".reference.lock", ".journal.lock", ".mutation.lock", ".operation.lock", ".admission.lock"):
++        if name not in (".reference.lock", ".journal.lock", ".mutation.lock", ".operation.lock", ".admission.lock", ".q-policy.lock"):
+             raise ValueError("锁名称未受信")
+         self.path = self.root / name
+         self._keeper = self._open()
+         self.identity = self._identity()
+ 

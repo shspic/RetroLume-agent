@@ -1,0 +1,13 @@
+--- before/backend/tests/fixtures/task120/api_runtime.py
++++ after/backend/tests/fixtures/task120/api_runtime.py
+@@ -88,9 +88,9 @@
+     ledger=app.state.activities_ledger;original_transaction=ledger._transaction
+     async def observed_transaction(operation,*args,**kwargs):
+         observed_operation=operation
+         transaction_identity={}
+-        if r.state().get('current_permit_id') in ('TASK-120-Q-PREP-FINALIZATION-05-20261019','TASK-120-Q-PREP-CONTINUATION-06-20261020'):
++        if r.state().get('current_permit_id') in ('TASK-120-Q-PREP-FINALIZATION-05-20261019','TASK-120-Q-PREP-CONTINUATION-06-20261020','TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021'):
+             import functools
+             class ObservedConnection:
+                 def __init__(self,connection):self.connection=connection
+                 def __getattr__(self,name):return getattr(self.connection,name)

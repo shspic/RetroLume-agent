@@ -1,0 +1,965 @@
+{
+  "F01": [
+    {
+      "file": "F01-missing-insert-PASS.json",
+      "root": 52,
+      "preconditions": {
+        "SELECT": true,
+        "INSERT": false,
+        "UPDATE": true
+      },
+      "error": {
+        "sqlstate": "P0001",
+        "message": "scope_delete_migration_requires_exact_quiescent_r02"
+      },
+      "endpoint": {
+        "backend_pid": 37,
+        "database": "retrolume_task120_audit07_r02",
+        "cluster_system_identifier": "7697981369175429158"
+      },
+      "before_after_equal": true,
+      "new_connection_equal": true
+    },
+    {
+      "file": "F01-missing-update-PASS.json",
+      "root": 52,
+      "preconditions": {
+        "SELECT": true,
+        "INSERT": true,
+        "UPDATE": false
+      },
+      "error": {
+        "sqlstate": "P0001",
+        "message": "scope_delete_migration_requires_exact_quiescent_r02"
+      },
+      "endpoint": {
+        "backend_pid": 39,
+        "database": "retrolume_task120_audit07_r02",
+        "cluster_system_identifier": "7697981369175429158"
+      },
+      "before_after_equal": true,
+      "new_connection_equal": true
+    },
+    {
+      "file": "F01-select-only-PASS.json",
+      "root": 52,
+      "preconditions": {
+        "SELECT": true,
+        "INSERT": false,
+        "UPDATE": false
+      },
+      "error": {
+        "sqlstate": "P0001",
+        "message": "scope_delete_migration_requires_exact_quiescent_r02"
+      },
+      "endpoint": {
+        "backend_pid": 41,
+        "database": "retrolume_task120_audit07_r02",
+        "cluster_system_identifier": "7697981369175429158"
+      },
+      "before_after_equal": true,
+      "new_connection_equal": true
+    }
+  ],
+  "F02": [
+    {
+      "file": "F02-admin-without-inherit-or-set-PASS.json",
+      "root": 54,
+      "name": "admin-without-inherit-or-set",
+      "endpoint": {
+        "backend_pid": 50,
+        "database": "retrolume_task120_audit07_main",
+        "cluster_system_identifier": "7697981369175429158"
+      },
+      "subject": "retrolume_data_snapshot",
+      "exact_uncommitted_statements": [
+        "GRANT retrolume_data_app TO retrolume_data_snapshot WITH ADMIN TRUE, INHERIT FALSE, SET FALSE"
+      ],
+      "actual_PG_capability": {
+        "actual_delete": false,
+        "can_set_app": false
+      },
+      "actual_snapshot_login": null,
+      "actual_DELETE_false_rows": null,
+      "schema_check_error": "data_role_capability_mismatch",
+      "ROLLBACK_confirmed": true,
+      "new_connection_graph_exact": true,
+      "temporary_bridges_retained": false
+    },
+    {
+      "file": "F02-application-inherit-controller-owner-PASS.json",
+      "root": 54,
+      "name": "application-inherit-controller-owner",
+      "endpoint": {
+        "backend_pid": 48,
+        "database": "retrolume_task120_audit07_main",
+        "cluster_system_identifier": "7697981369175429158"
+      },
+      "subject": "retrolume_data_app",
+      "exact_uncommitted_statements": [
+        "GRANT retrolume_data_owner TO retrolume_data_app WITH INHERIT TRUE, SET FALSE"
+      ],
+      "actual_PG_capability": {
+        "actual_delete": true,
+        "can_set_app": true
+      },
+      "actual_snapshot_login": null,
+      "actual_DELETE_false_rows": null,
+      "schema_check_error": "data_role_capability_mismatch",
+      "ROLLBACK_confirmed": true,
+      "new_connection_graph_exact": true,
+      "temporary_bridges_retained": false
+    },
+    {
+      "file": "F02-application-inherit-write-all-data-PASS.json",
+      "root": 57,
+      "name": "application-inherit-write-all-data",
+      "endpoint": {
+        "backend_pid": 37,
+        "database": "retrolume_task120_audit07_main",
+        "cluster_system_identifier": "7697981369175429158"
+      },
+      "subject": "retrolume_data_app",
+      "exact_uncommitted_statements": [
+        "GRANT pg_write_all_data TO retrolume_data_app WITH INHERIT TRUE, SET FALSE"
+      ],
+      "actual_PG_capability": {
+        "actual_delete": true,
+        "can_set_app": true
+      },
+      "actual_management_capability": {
+        "actual_control_update": true,
+        "can_set_server_program": false
+      },
+      "actual_snapshot_login": null,
+      "actual_DELETE_false_rows": null,
+      "schema_check_error": "data_role_capability_mismatch",
+      "ROLLBACK_confirmed": true,
+      "new_connection_graph_exact": true,
+      "temporary_bridges_retained": false
+    },
+    {
+      "file": "F02-direct-inherit-snapshot-PASS.json",
+      "root": 54,
+      "name": "direct-inherit-snapshot",
+      "endpoint": {
+        "backend_pid": 38,
+        "database": "retrolume_task120_audit07_main",
+        "cluster_system_identifier": "7697981369175429158"
+      },
+      "subject": "retrolume_data_snapshot",
+      "exact_uncommitted_statements": [
+        "GRANT retrolume_data_app TO retrolume_data_snapshot WITH INHERIT TRUE, SET FALSE"
+      ],
+      "actual_PG_capability": {
+        "actual_delete": true,
+        "can_set_app": false
+      },
+      "actual_snapshot_login": "task120_flow_snapshot",
+      "actual_DELETE_false_rows": 0,
+      "schema_check_error": "data_role_capability_mismatch",
+      "ROLLBACK_confirmed": true,
+      "new_connection_graph_exact": true,
+      "temporary_bridges_retained": false
+    },
+    {
+      "file": "F02-indirect-inherit-snapshot-PASS.json",
+      "root": 54,
+      "name": "indirect-inherit-snapshot",
+      "endpoint": {
+        "backend_pid": 40,
+        "database": "retrolume_task120_audit07_main",
+        "cluster_system_identifier": "7697981369175429158"
+      },
+      "subject": "retrolume_data_snapshot",
+      "exact_uncommitted_statements": [
+        "CREATE ROLE retrolume_task120_audit07_bridge1 NOLOGIN",
+        "GRANT retrolume_data_app TO retrolume_task120_audit07_bridge1 WITH INHERIT TRUE, SET FALSE",
+        "GRANT retrolume_task120_audit07_bridge1 TO retrolume_data_snapshot WITH INHERIT TRUE, SET FALSE"
+      ],
+      "actual_PG_capability": {
+        "actual_delete": true,
+        "can_set_app": false
+      },
+      "actual_snapshot_login": "task120_flow_snapshot",
+      "actual_DELETE_false_rows": 0,
+      "schema_check_error": "data_role_capability_mismatch",
+      "ROLLBACK_confirmed": true,
+      "new_connection_graph_exact": true,
+      "temporary_bridges_retained": false
+    },
+    {
+      "file": "F02-legal-harmless-membership-current-management-PASS.json",
+      "root": 57,
+      "name": "legal-harmless-membership-current-management",
+      "endpoint": {
+        "backend_pid": 41,
+        "database": "retrolume_task120_audit07_main",
+        "cluster_system_identifier": "7697981369175429158"
+      },
+      "subject": "retrolume_data_snapshot",
+      "exact_uncommitted_statements": [
+        "CREATE ROLE retrolume_task120_audit07_bridge1 NOLOGIN",
+        "GRANT retrolume_task120_audit07_bridge1 TO retrolume_data_snapshot WITH INHERIT TRUE, SET FALSE"
+      ],
+      "actual_PG_capability": {
+        "actual_delete": false,
+        "can_set_app": false
+      },
+      "actual_management_capability": {
+        "actual_control_update": false,
+        "can_set_server_program": false
+      },
+      "actual_snapshot_login": null,
+      "actual_DELETE_false_rows": null,
+      "schema_check_error": null,
+      "ROLLBACK_confirmed": true,
+      "new_connection_graph_exact": true,
+      "temporary_bridges_retained": false
+    },
+    {
+      "file": "F02-legal-harmless-membership-PASS.json",
+      "root": 54,
+      "name": "legal-harmless-membership",
+      "endpoint": {
+        "backend_pid": 52,
+        "database": "retrolume_task120_audit07_main",
+        "cluster_system_identifier": "7697981369175429158"
+      },
+      "subject": "retrolume_data_snapshot",
+      "exact_uncommitted_statements": [
+        "CREATE ROLE retrolume_task120_audit07_bridge1 NOLOGIN",
+        "GRANT retrolume_task120_audit07_bridge1 TO retrolume_data_snapshot WITH INHERIT TRUE, SET FALSE"
+      ],
+      "actual_PG_capability": {
+        "actual_delete": false,
+        "can_set_app": false
+      },
+      "actual_snapshot_login": null,
+      "actual_DELETE_false_rows": null,
+      "schema_check_error": null,
+      "ROLLBACK_confirmed": true,
+      "new_connection_graph_exact": true,
+      "temporary_bridges_retained": false
+    },
+    {
+      "file": "F02-loader-inherit-app-PASS.json",
+      "root": 54,
+      "name": "loader-inherit-app",
+      "endpoint": {
+        "backend_pid": 44,
+        "database": "retrolume_task120_audit07_main",
+        "cluster_system_identifier": "7697981369175429158"
+      },
+      "subject": "retrolume_data_restore_loader",
+      "exact_uncommitted_statements": [
+        "GRANT retrolume_data_app TO retrolume_data_restore_loader WITH INHERIT TRUE, SET FALSE"
+      ],
+      "actual_PG_capability": {
+        "actual_delete": true,
+        "can_set_app": false
+      },
+      "actual_snapshot_login": null,
+      "actual_DELETE_false_rows": null,
+      "schema_check_error": "data_role_capability_mismatch",
+      "ROLLBACK_confirmed": true,
+      "new_connection_graph_exact": true,
+      "temporary_bridges_retained": false
+    },
+    {
+      "file": "F02-normal-snapshot-read-and-write-denial-current-management-PASS.json",
+      "root": 57,
+      "actual_login": "task120_flow_snapshot",
+      "normal_configuration_passed": true,
+      "write_error": "42501"
+    },
+    {
+      "file": "F02-normal-snapshot-read-and-write-denial-PASS.json",
+      "root": 54,
+      "actual_login": "task120_flow_snapshot",
+      "normal_configuration_passed": true,
+      "write_error": "42501"
+    },
+    {
+      "file": "F02-set-only-indirect-snapshot-PASS.json",
+      "root": 54,
+      "name": "set-only-indirect-snapshot",
+      "endpoint": {
+        "backend_pid": 42,
+        "database": "retrolume_task120_audit07_main",
+        "cluster_system_identifier": "7697981369175429158"
+      },
+      "subject": "retrolume_data_snapshot",
+      "exact_uncommitted_statements": [
+        "CREATE ROLE retrolume_task120_audit07_bridge1 NOLOGIN",
+        "CREATE ROLE retrolume_task120_audit07_bridge2 NOLOGIN",
+        "GRANT retrolume_data_app TO retrolume_task120_audit07_bridge2 WITH INHERIT FALSE, SET TRUE",
+        "GRANT retrolume_task120_audit07_bridge2 TO retrolume_task120_audit07_bridge1 WITH INHERIT FALSE, SET TRUE",
+        "GRANT retrolume_task120_audit07_bridge1 TO retrolume_data_snapshot WITH INHERIT FALSE, SET TRUE"
+      ],
+      "actual_PG_capability": {
+        "actual_delete": false,
+        "can_set_app": true
+      },
+      "actual_snapshot_login": "task120_flow_snapshot",
+      "actual_DELETE_false_rows": 0,
+      "schema_check_error": "data_role_capability_mismatch",
+      "ROLLBACK_confirmed": true,
+      "new_connection_graph_exact": true,
+      "temporary_bridges_retained": false
+    },
+    {
+      "file": "F02-snapshot-SET-only-server-program-PASS.json",
+      "root": 57,
+      "name": "snapshot-SET-only-server-program",
+      "endpoint": {
+        "backend_pid": 39,
+        "database": "retrolume_task120_audit07_main",
+        "cluster_system_identifier": "7697981369175429158"
+      },
+      "subject": "retrolume_data_snapshot",
+      "exact_uncommitted_statements": [
+        "CREATE ROLE retrolume_task120_audit07_bridge1 NOLOGIN",
+        "GRANT pg_execute_server_program TO retrolume_task120_audit07_bridge1 WITH INHERIT FALSE, SET TRUE",
+        "GRANT retrolume_task120_audit07_bridge1 TO retrolume_data_snapshot WITH INHERIT FALSE, SET TRUE"
+      ],
+      "actual_PG_capability": {
+        "actual_delete": false,
+        "can_set_app": false
+      },
+      "actual_management_capability": {
+        "actual_control_update": false,
+        "can_set_server_program": true
+      },
+      "actual_snapshot_login": null,
+      "actual_DELETE_false_rows": null,
+      "schema_check_error": "data_role_capability_mismatch",
+      "ROLLBACK_confirmed": true,
+      "new_connection_graph_exact": true,
+      "temporary_bridges_retained": false
+    },
+    {
+      "file": "F02-trusted-owner-inherit-app-PASS.json",
+      "root": 54,
+      "name": "trusted-owner-inherit-app",
+      "endpoint": {
+        "backend_pid": 46,
+        "database": "retrolume_task120_audit07_main",
+        "cluster_system_identifier": "7697981369175429158"
+      },
+      "subject": "retrolume_interview_owner",
+      "exact_uncommitted_statements": [
+        "GRANT retrolume_data_app TO retrolume_interview_owner WITH INHERIT TRUE, SET FALSE"
+      ],
+      "actual_PG_capability": {
+        "actual_delete": true,
+        "can_set_app": false
+      },
+      "actual_snapshot_login": null,
+      "actual_DELETE_false_rows": null,
+      "schema_check_error": "data_role_capability_mismatch",
+      "ROLLBACK_confirmed": true,
+      "new_connection_graph_exact": true,
+      "temporary_bridges_retained": false
+    }
+  ],
+  "F03": [
+    {
+      "file": "F03-normal-memory-revoke-purge-PASS.json",
+      "root": 58,
+      "witness_equal": {
+        "operations": true,
+        "007_hashes": true,
+        "prepared_hashes": true,
+        "financials": true
+      },
+      "requests_before": 5,
+      "cost_before": 1250000,
+      "before_operation_count": 5,
+      "before_007": [
+        {
+          "activity_id": "01800000-0000-4000-8000-000000000001",
+          "operation_id": "learn-first-v1.b6cccac886892c07f76511ced5a96a930609cbf6928bba6bcf5e9cdc0cac8344",
+          "payload_sha256": "5c14d811511589c40d56ab244b16c1881ed1958633694cec123e303ad8afa566"
+        },
+        {
+          "activity_id": "01800000-0000-4000-8000-000000000002",
+          "operation_id": "emb18i.ec9cc428-f735-41dd-aafb-6ce9aa9ef3e1.0",
+          "payload_sha256": "5f57531e3ff28890d82035bad8ba7a5329d14fe4ada7ae5d2ad16cf31fc9e4dd"
+        },
+        {
+          "activity_id": "01800000-0000-4000-8000-000000000002",
+          "operation_id": "emb18q.399d59ac-31f9-4d04-ad3e-aa7afc553492.0",
+          "payload_sha256": "8a380636b3eb407f4b720c8fe36d0028fb799e8bb014b3c03e0751b37b666e3d"
+        },
+        {
+          "activity_id": "01800000-0000-4000-8000-000000000003",
+          "operation_id": "emb18i.bdb721f0-a0be-49b8-9ba3-6dc7feaf318d.0",
+          "payload_sha256": "10d82f36731d9d1a4796f85c65d1b90c494622f137f5806524db63e32da97f52"
+        },
+        {
+          "activity_id": "01800000-0000-4000-8000-000000000003",
+          "operation_id": "emb18q.cbab636d-98ab-426a-b063-3750bf128de0.0",
+          "payload_sha256": "bf97f7552d619f740aecaa74238a7cbc497af545ccee834c8b591c4a419dd0a6"
+        }
+      ],
+      "normal_HTTP_receipt": {
+        "schema": "memory.receipt.v1",
+        "business_key": "967420dc-fbcb-4e06-9362-5ecc86ced958",
+        "action": "revoke",
+        "request_sha256": "5e08364c4cbc7098177a9054a483d349183190c3853fc207085b29f28ff64c79",
+        "manifest_sha256": "e845d992cb3e44c5e7be2456fce97b5c906c22f15574d3a0f5ce18515cd6c0df",
+        "memory_id": "3a3d2ec6-a821-48a3-9908-cc18755c96ed",
+        "revision_after": 2,
+        "revocation_key": "967420dc-fbcb-4e06-9362-5ecc86ced958",
+        "status": "committed",
+        "version_after": 1,
+        "duplicate_of": null,
+        "qualification_now": "revoked",
+        "purge_state_now": "done"
+      },
+      "memory": {
+        "state": "revoked",
+        "revision": 2,
+        "purge_state": "done",
+        "body_rows": 0
+      },
+      "Q_bodies": [
+        {
+          "prepared_id": "2601b76b-490a-417b-bf95-0729f7505f34",
+          "cleanup": "done",
+          "artifact_read_error": "q_body_cleanup_closed",
+          "operator_request_available": false,
+          "authorization_reference": null
+        },
+        {
+          "prepared_id": "3f1aafed-1499-4bb4-b167-d5caf2b634b6",
+          "cleanup": "done",
+          "artifact_read_error": "q_body_cleanup_closed",
+          "operator_request_available": false,
+          "authorization_reference": null
+        },
+        {
+          "prepared_id": "6ecb47fc-9232-4ab3-adf2-5041352353e6",
+          "cleanup": "done",
+          "artifact_read_error": "q_body_cleanup_closed",
+          "operator_request_available": false,
+          "authorization_reference": null
+        },
+        {
+          "real_worker_gateway_logic": "ControlledModelGateway.call -> q_gateway.call_with_policy -> actual check_reference",
+          "error_code": "q_authorization_denied",
+          "new_native_launch": false,
+          "original_approved_body_and_reference_used": true
+        }
+      ]
+    },
+    {
+      "file": "F03-source-cleanup-failure-closed-PASS.json",
+      "root": 59,
+      "witness_equal": {
+        "operations": true,
+        "007_hashes": true,
+        "prepared_hashes": true,
+        "financials": true
+      },
+      "requests_before": 5,
+      "cost_before": 1250000,
+      "before_operation_count": 5,
+      "before_007": [
+        {
+          "activity_id": "01800000-0000-4000-8000-000000000001",
+          "operation_id": "learn-first-v1.b6cccac886892c07f76511ced5a96a930609cbf6928bba6bcf5e9cdc0cac8344",
+          "payload_sha256": "5c14d811511589c40d56ab244b16c1881ed1958633694cec123e303ad8afa566"
+        },
+        {
+          "activity_id": "01800000-0000-4000-8000-000000000002",
+          "operation_id": "emb18i.ec9cc428-f735-41dd-aafb-6ce9aa9ef3e1.0",
+          "payload_sha256": "5f57531e3ff28890d82035bad8ba7a5329d14fe4ada7ae5d2ad16cf31fc9e4dd"
+        },
+        {
+          "activity_id": "01800000-0000-4000-8000-000000000002",
+          "operation_id": "emb18q.399d59ac-31f9-4d04-ad3e-aa7afc553492.0",
+          "payload_sha256": "8a380636b3eb407f4b720c8fe36d0028fb799e8bb014b3c03e0751b37b666e3d"
+        },
+        {
+          "activity_id": "01800000-0000-4000-8000-000000000003",
+          "operation_id": "emb18i.bdb721f0-a0be-49b8-9ba3-6dc7feaf318d.0",
+          "payload_sha256": "10d82f36731d9d1a4796f85c65d1b90c494622f137f5806524db63e32da97f52"
+        },
+        {
+          "activity_id": "01800000-0000-4000-8000-000000000003",
+          "operation_id": "emb18q.cbab636d-98ab-426a-b063-3750bf128de0.0",
+          "payload_sha256": "bf97f7552d619f740aecaa74238a7cbc497af545ccee834c8b591c4a419dd0a6"
+        }
+      ],
+      "normal_source_HTTP_receipt": {
+        "job_id": "20a5b68a-3e4d-432b-b979-ff661855326c",
+        "business_key": "d0c63984-481d-4957-a6f4-a8424239f1db",
+        "kind": "source_delete",
+        "request_sha256": "cd9cf515facdd0b745a8f33345fbd00e7bdc7cfef22b36b2760e42c3f64909ab",
+        "state": "deleted_pending",
+        "stage": "cleanup_unconfirmed",
+        "revision": 5,
+        "control_seq": 169,
+        "created_at": "2026-10-21T06:50:11.241038+00:00",
+        "updated_at": "2026-10-21T06:50:13.200669+00:00",
+        "counts": {
+          "originals": 1,
+          "unconfirmed": 1
+        },
+        "receipt_id": "9498e7ee-2b53-4f93-bb6a-d12394db5795",
+        "receipt_sha256": "754ffd0a89876b15e9243025bad1d2bcbecc313d4b9ad6ef237c9e113a864d25"
+      },
+      "normal_Q_GET_projection": {
+        "state": "invalidated",
+        "prepared_id": "bfa581e5-c98f-455e-b8eb-367f93146e1a",
+        "purpose": "followup",
+        "provider": "deepseek_chat_completions",
+        "model": "deepseek-flash",
+        "request_count": 1,
+        "reserve_microunits": 250000,
+        "expires_at": "2026-10-21T06:57:32.076351+00:00",
+        "can_continue": false,
+        "reason": "q_invalidated"
+      },
+      "normal_content_GET_error": {
+        "HTTP": 404,
+        "detail": "资料不存在"
+      },
+      "normal_continue_POST_error": "result_invalidated"
+    },
+    {
+      "file": "F03-exact-cleanup-replay-and-retry-PASS.json",
+      "root": 60,
+      "witness_equal": {
+        "operations": true,
+        "007_hashes": true,
+        "prepared_hashes": true,
+        "financials": true
+      },
+      "requests_before": 5,
+      "cost_before": 1250000,
+      "before_operation_count": 5,
+      "before_007": [
+        {
+          "activity_id": "01800000-0000-4000-8000-000000000001",
+          "operation_id": "learn-first-v1.b6cccac886892c07f76511ced5a96a930609cbf6928bba6bcf5e9cdc0cac8344",
+          "payload_sha256": "5c14d811511589c40d56ab244b16c1881ed1958633694cec123e303ad8afa566"
+        },
+        {
+          "activity_id": "01800000-0000-4000-8000-000000000002",
+          "operation_id": "emb18i.ec9cc428-f735-41dd-aafb-6ce9aa9ef3e1.0",
+          "payload_sha256": "5f57531e3ff28890d82035bad8ba7a5329d14fe4ada7ae5d2ad16cf31fc9e4dd"
+        },
+        {
+          "activity_id": "01800000-0000-4000-8000-000000000002",
+          "operation_id": "emb18q.399d59ac-31f9-4d04-ad3e-aa7afc553492.0",
+          "payload_sha256": "8a380636b3eb407f4b720c8fe36d0028fb799e8bb014b3c03e0751b37b666e3d"
+        },
+        {
+          "activity_id": "01800000-0000-4000-8000-000000000003",
+          "operation_id": "emb18i.bdb721f0-a0be-49b8-9ba3-6dc7feaf318d.0",
+          "payload_sha256": "10d82f36731d9d1a4796f85c65d1b90c494622f137f5806524db63e32da97f52"
+        },
+        {
+          "activity_id": "01800000-0000-4000-8000-000000000003",
+          "operation_id": "emb18q.cbab636d-98ab-426a-b063-3750bf128de0.0",
+          "payload_sha256": "bf97f7552d619f740aecaa74238a7cbc497af545ccee834c8b591c4a419dd0a6"
+        }
+      ],
+      "receipt": {
+        "job_id": "20a5b68a-3e4d-432b-b979-ff661855326c",
+        "business_key": "d0c63984-481d-4957-a6f4-a8424239f1db",
+        "kind": "source_delete",
+        "request_sha256": "cd9cf515facdd0b745a8f33345fbd00e7bdc7cfef22b36b2760e42c3f64909ab",
+        "state": "deleted",
+        "stage": "deleted",
+        "revision": 8,
+        "control_seq": 176,
+        "created_at": "2026-10-21T06:50:11.241038+00:00",
+        "updated_at": "2026-10-21T08:12:51.781959+00:00",
+        "counts": {
+          "originals": 1,
+          "unconfirmed": 0
+        },
+        "receipt_id": "62fbe296-6bbb-44ca-aa77-9c45c669e7c1",
+        "receipt_sha256": "db7ba7c555741543538de0be71660d49fe6a084a81f42d323325d4feaa6c2cc9"
+      },
+      "all_target_Q_body_paths_absent": true,
+      "same_pending_job": "20a5b68a-3e4d-432b-b979-ff661855326c",
+      "replayed_before_retry": [
+        {
+          "prepared_id": "76dcb38e-7bcf-4510-aff1-bd50724b242e",
+          "cleanup": "done",
+          "artifact_read_error": "q_body_cleanup_closed",
+          "operator_request_available": false,
+          "authorization_reference": null
+        },
+        {
+          "prepared_id": "bfa581e5-c98f-455e-b8eb-367f93146e1a",
+          "cleanup": "pending",
+          "artifact_read_error": "q_body_cleanup_closed",
+          "operator_request_available": false,
+          "authorization_reference": null
+        }
+      ],
+      "after_retry": [
+        {
+          "prepared_id": "76dcb38e-7bcf-4510-aff1-bd50724b242e",
+          "cleanup": "done",
+          "artifact_read_error": "q_body_cleanup_closed",
+          "operator_request_available": false,
+          "authorization_reference": null
+        },
+        {
+          "prepared_id": "bfa581e5-c98f-455e-b8eb-367f93146e1a",
+          "cleanup": "done",
+          "artifact_read_error": "q_body_cleanup_closed",
+          "operator_request_available": false,
+          "authorization_reference": null
+        }
+      ]
+    }
+  ],
+  "F04": {
+    "cases": [
+      "legal_same_domain_and_decision_idempotence",
+      "seen_expiry_then_UTC_rollback_irreversible",
+      "unobserved_monotonic_expiry_with_UTC_rollback",
+      "unknown_domain_cannot_recover",
+      "observed_UTC_regression_irreversible",
+      "reopen_same_boot_comparable_and_changed_boot_denied",
+      "claim_irreversible_zero_resend"
+    ],
+    "positive_root": 55,
+    "sample_count": 68,
+    "process_ids": [
+      10792,
+      16444,
+      19508,
+      19700,
+      24580,
+      35400,
+      37500,
+      39768
+    ],
+    "domains": [
+      "f1e40c812880c94a87f8fe3609f048c6d630ec5a78ff73ca0ad2e0a8cf1b7884"
+    ],
+    "offsets": [
+      2
+    ],
+    "positive": {
+      "API_pid": 19508,
+      "actual_clock_process_ids": [
+        16444,
+        19508
+      ],
+      "same_boot_domain": "f1e40c812880c94a87f8fe3609f048c6d630ec5a78ff73ca0ad2e0a8cf1b7884",
+      "clock_dependency_only_offset_seconds": 2,
+      "normal_unclaimed_positive": true,
+      "original_business_key": "44d15c77-9648-4b3c-9af9-d7ea97aac4ce",
+      "prepared_id": "76dcb38e-7bcf-4510-aff1-bd50724b242e",
+      "result": {
+        "status": "committed_current",
+        "operation_id": "learn-first-v1.b6cccac886892c07f76511ced5a96a930609cbf6928bba6bcf5e9cdc0cac8344",
+        "payload_sha256": null
+      },
+      "financials_before": {
+        "activities": [
+          {
+            "id": "01800000-0000-4000-8000-000000000001",
+            "requests_reserved": 0,
+            "cost_reserved_microunits": 0,
+            "running_reserved_seconds": 0,
+            "running_settled_seconds": 0,
+            "tools_reserved": 0
+          },
+          {
+            "id": "01800000-0000-4000-8000-000000000002",
+            "requests_reserved": 0,
+            "cost_reserved_microunits": 0,
+            "running_reserved_seconds": 0,
+            "running_settled_seconds": 0,
+            "tools_reserved": 0
+          },
+          {
+            "id": "01800000-0000-4000-8000-000000000003",
+            "requests_reserved": 0,
+            "cost_reserved_microunits": 0,
+            "running_reserved_seconds": 0,
+            "running_settled_seconds": 0,
+            "tools_reserved": 0
+          }
+        ],
+        "operations": [],
+        "requests": 0,
+        "cost": 0
+      },
+      "financials_after": {
+        "activities": [
+          {
+            "id": "01800000-0000-4000-8000-000000000001",
+            "requests_reserved": 1,
+            "cost_reserved_microunits": 250000,
+            "running_reserved_seconds": 0,
+            "running_settled_seconds": 4,
+            "tools_reserved": 0
+          },
+          {
+            "id": "01800000-0000-4000-8000-000000000002",
+            "requests_reserved": 0,
+            "cost_reserved_microunits": 0,
+            "running_reserved_seconds": 0,
+            "running_settled_seconds": 0,
+            "tools_reserved": 0
+          },
+          {
+            "id": "01800000-0000-4000-8000-000000000003",
+            "requests_reserved": 0,
+            "cost_reserved_microunits": 0,
+            "running_reserved_seconds": 0,
+            "running_settled_seconds": 0,
+            "tools_reserved": 0
+          }
+        ],
+        "operations": [
+          {
+            "activity_id": "01800000-0000-4000-8000-000000000001",
+            "operation_id": "learn-first-v1.b6cccac886892c07f76511ced5a96a930609cbf6928bba6bcf5e9cdc0cac8344",
+            "admission_id": "3ac7e43a-d715-496c-b78f-77ec0ee6c6ad",
+            "state": "received"
+          }
+        ],
+        "requests": 1,
+        "cost": 250000
+      },
+      "real_provider_calls": 0,
+      "one_production_admission": true,
+      "real_SUP_worker_and_result_commit": true
+    }
+  },
+  "F05": {
+    "root": 57,
+    "PG_fact": {
+      "command": {
+        "business_key": "18aa9c03-c255-4fd9-a3a1-8d7f6ab37ad8",
+        "status": "started",
+        "launch_claimed": true,
+        "operation_id": "int18m.18aa9c03c2554fd9a3a18d7f6ab37ad8",
+        "request_sha256": "fe6b08a2fa296570fda1f4028c824bd4020a747eacd039b8823011f131dba82c",
+        "effect_applied": false
+      },
+      "operation": null,
+      "007": null
+    },
+    "Q_claim_absent": true,
+    "snapshot_unchanged": true,
+    "immediate": {
+      "can_continue": false,
+      "expires_at": "2026-10-21T06:58:03.266151+00:00",
+      "model": "deepseek-flash",
+      "prepared_id": "debc404c-41b9-412a-844a-0ef33d11d3ef",
+      "provider": "deepseek_chat_completions",
+      "purpose": "ask",
+      "reason": "q_consumed",
+      "request_count": 1,
+      "reserve_microunits": 250000,
+      "state": "consumed"
+    },
+    "repeated": {
+      "can_continue": false,
+      "expires_at": "2026-10-21T06:58:03.266151+00:00",
+      "model": "deepseek-flash",
+      "prepared_id": "debc404c-41b9-412a-844a-0ef33d11d3ef",
+      "provider": "deepseek_chat_completions",
+      "purpose": "ask",
+      "reason": "q_consumed",
+      "request_count": 1,
+      "reserve_microunits": 250000,
+      "state": "consumed"
+    },
+    "errors": [
+      "q_approval_consumed",
+      "q_approval_consumed"
+    ],
+    "financials_equal": true,
+    "new_approvals": 0,
+    "dispatches": 0
+  },
+  "exact_cleanup_manifest": {
+    "count": 6,
+    "cap": 16,
+    "root": "D:\\shspic\\project_NO3_RetroLume-agent\\.runtime\\task120-audit07",
+    "files": [
+      {
+        "path": "D:\\shspic\\project_NO3_RetroLume-agent\\.runtime\\task120-audit07\\audit07-main\\control\\q-prepared-2601b76b-490a-417b-bf95-0729f7505f34.bin",
+        "volume": 1031070048549017791,
+        "file_id": 1407374884016062,
+        "bytes": 28240,
+        "sha256": "76b55ed1605fe593e9a8ffa80fe07543d82d0f06c7084276480d10b1a1849276",
+        "purpose": "normal memory revoke/purge or normal sourceN deletion and exact Q dependency closure",
+        "synthetic_frozen_input_only": true,
+        "personal_content": false
+      },
+      {
+        "path": "D:\\shspic\\project_NO3_RetroLume-agent\\.runtime\\task120-audit07\\audit07-main\\control\\q-prepared-3f1aafed-1499-4bb4-b167-d5caf2b634b6.bin",
+        "volume": 1031070048549017791,
+        "file_id": 2533274790858683,
+        "bytes": 8096,
+        "sha256": "3ba2b4947d8b6f6683203bf0a2cad0657aec03aa48f0b8588dc80f1948604d1a",
+        "purpose": "normal memory revoke/purge or normal sourceN deletion and exact Q dependency closure",
+        "synthetic_frozen_input_only": true,
+        "personal_content": false
+      },
+      {
+        "path": "D:\\shspic\\project_NO3_RetroLume-agent\\.runtime\\task120-audit07\\audit07-main\\control\\q-prepared-6ecb47fc-9232-4ab3-adf2-5041352353e6.bin",
+        "volume": 1031070048549017791,
+        "file_id": 1407374884016061,
+        "bytes": 5553,
+        "sha256": "9eac4e836e3824c401e0be18cebee2598feae110e5f412dc0da8b4ee34da968f",
+        "purpose": "normal memory revoke/purge or normal sourceN deletion and exact Q dependency closure",
+        "synthetic_frozen_input_only": true,
+        "personal_content": false
+      },
+      {
+        "path": "D:\\shspic\\project_NO3_RetroLume-agent\\.runtime\\task120-audit07\\audit07-main\\control\\q-prepared-76dcb38e-7bcf-4510-aff1-bd50724b242e.bin",
+        "volume": 1031070048549017791,
+        "file_id": 844424930594699,
+        "bytes": 15496,
+        "sha256": "539b31438997828c98c5f0697713838ba8e6a57866a0ee29ef1d7aaabf82942f",
+        "purpose": "normal memory revoke/purge or normal sourceN deletion and exact Q dependency closure",
+        "synthetic_frozen_input_only": true,
+        "personal_content": false
+      },
+      {
+        "path": "D:\\shspic\\project_NO3_RetroLume-agent\\.runtime\\task120-audit07\\audit07-main\\control\\q-prepared-bfa581e5-c98f-455e-b8eb-367f93146e1a.bin",
+        "volume": 1031070048549017791,
+        "file_id": 1125899907305356,
+        "bytes": 18619,
+        "sha256": "f21a96be2d4f0bb0d8eb730feb29cd7cd7d12e96de80498ba5e8c86aaa1e3998",
+        "purpose": "normal memory revoke/purge or normal sourceN deletion and exact Q dependency closure",
+        "synthetic_frozen_input_only": true,
+        "personal_content": false
+      },
+      {
+        "path": "D:\\shspic\\project_NO3_RetroLume-agent\\.runtime\\task120-audit07\\audit07-main\\data\\originals\\aeb4083663f61e5748ba39284541caf69968e164771081e0724821bbda18b46c",
+        "volume": 1031070048549017791,
+        "file_id": 562949953884001,
+        "bytes": 212,
+        "sha256": "aeb4083663f61e5748ba39284541caf69968e164771081e0724821bbda18b46c",
+        "purpose": "normal memory revoke/purge or normal sourceN deletion and exact Q dependency closure",
+        "synthetic_frozen_input_only": true,
+        "personal_content": false
+      }
+    ]
+  },
+  "final_financial": {
+    "new_instances": {
+      "audit07-r02": {
+        "identity": {
+          "database": "retrolume_task120_audit07_r02",
+          "database_oid": 24351,
+          "dataset_id": "fa5e9279-86e6-471d-b3ca-1ecec108eff9",
+          "instance_id": "b29838b5-3186-4a49-9c82-ed1fe03403a0"
+        },
+        "financials": {
+          "activities": [],
+          "operations": [],
+          "requests": 0,
+          "cost": 0
+        }
+      },
+      "audit07-main": {
+        "identity": {
+          "database": "retrolume_task120_audit07_main",
+          "database_oid": 25874,
+          "dataset_id": "07365653-5caf-45dc-97ec-20a23ee09181",
+          "instance_id": "0ea2b6f3-f578-4e6d-a672-9a055f545598"
+        },
+        "financials": {
+          "activities": [
+            {
+              "id": "01800000-0000-4000-8000-000000000001",
+              "requests_reserved": 1,
+              "cost_reserved_microunits": 250000,
+              "running_reserved_seconds": 0,
+              "running_settled_seconds": 4,
+              "tools_reserved": 0
+            },
+            {
+              "id": "01800000-0000-4000-8000-000000000002",
+              "requests_reserved": 2,
+              "cost_reserved_microunits": 500000,
+              "running_reserved_seconds": 0,
+              "running_settled_seconds": 8,
+              "tools_reserved": 0
+            },
+            {
+              "id": "01800000-0000-4000-8000-000000000003",
+              "requests_reserved": 2,
+              "cost_reserved_microunits": 500000,
+              "running_reserved_seconds": 0,
+              "running_settled_seconds": 8,
+              "tools_reserved": 0
+            }
+          ],
+          "operations": [
+            {
+              "activity_id": "01800000-0000-4000-8000-000000000001",
+              "operation_id": "learn-first-v1.b6cccac886892c07f76511ced5a96a930609cbf6928bba6bcf5e9cdc0cac8344",
+              "admission_id": "3ac7e43a-d715-496c-b78f-77ec0ee6c6ad",
+              "state": "received"
+            },
+            {
+              "activity_id": "01800000-0000-4000-8000-000000000002",
+              "operation_id": "emb18i.ec9cc428-f735-41dd-aafb-6ce9aa9ef3e1.0",
+              "admission_id": "c76f107e-0940-44f7-940e-81312623ce7f",
+              "state": "received"
+            },
+            {
+              "activity_id": "01800000-0000-4000-8000-000000000002",
+              "operation_id": "emb18q.399d59ac-31f9-4d04-ad3e-aa7afc553492.0",
+              "admission_id": "ea788d06-49fd-46e6-9b6e-5b0acddeb257",
+              "state": "received"
+            },
+            {
+              "activity_id": "01800000-0000-4000-8000-000000000003",
+              "operation_id": "emb18i.bdb721f0-a0be-49b8-9ba3-6dc7feaf318d.0",
+              "admission_id": "19c7d59a-569a-4534-96c4-ab3b256508f7",
+              "state": "received"
+            },
+            {
+              "activity_id": "01800000-0000-4000-8000-000000000003",
+              "operation_id": "emb18q.cbab636d-98ab-426a-b063-3750bf128de0.0",
+              "admission_id": "09a3db85-8470-4cd2-8600-ecf54f327ef0",
+              "state": "received"
+            }
+          ],
+          "requests": 5,
+          "cost": 1250000
+        }
+      }
+    },
+    "new_actual_admissions": 5,
+    "launch_reservations": 5,
+    "new_budget_cap": 16,
+    "sum_of_instances_is_not_balance_or_new_credit": true,
+    "old_instances": "Historical per-instance06 readbacks retained unchanged; no old DB business query or mutation07.",
+    "old_financial_evidence": [
+      "DocuN/evidence/TASK-120/execution/continuation-06/financial-summary.json",
+      "DocuN/evidence/TASK-120/execution/continuation-06/final-fresh-financials-separated.json",
+      "DocuN/evidence/TASK-120/execution/continuation-06/restore-target-final-after-readonly-UI.json"
+    ],
+    "old_UNKNOWN_and_reservations": "Original entire event prefix and old roots/failures unchanged; no reissue or refund.",
+    "all_eight_new_approvals_retired": true,
+    "exact_synthetic_delete_paths_absent": 6,
+    "actual_provider_calls": 0,
+    "actual_fee_microunits": 0
+  },
+  "limitations": [
+    "All are saved original observations; auditor executed no PG/API/worker/filesystem deletion.",
+    "F02 composite ADMIN-to-SET and F03 memory-failure GET are static residual findings; not covered by these passing records."
+  ]
+}

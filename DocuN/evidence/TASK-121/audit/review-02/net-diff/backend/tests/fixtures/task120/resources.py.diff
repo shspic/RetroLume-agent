@@ -1,0 +1,46 @@
+--- before/backend/tests/fixtures/task120/resources.py
++++ after/backend/tests/fixtures/task120/resources.py
+@@ -23,11 +23,11 @@
+ EXECUTION=EVIDENCE
+ PRIVATE=ROOT/'.runtime/TASK-120'
+ if os.environ.get('RETROLUME_TASK120_CONTINUATION')=='TASK-120-Q-PREP-CONTINUATION-06-20261020':
+     PRIVATE=PRIVATE/'continuation-06'
+-if os.environ.get('RETROLUME_TASK120_CONTINUATION')=='TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021':
++if os.environ.get('RETROLUME_TASK120_CONTINUATION') in ('TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021','TASK-120-Q-PREP-TARGETED-REPAIR-08-20261021'):
+     PRIVATE=ROOT/'.runtime/task120-audit07'
+-    EVIDENCE=EXECUTION/'audit-repair-07'
++    EVIDENCE=EXECUTION/('audit-repair-08' if os.environ.get('RETROLUME_TASK120_CONTINUATION')=='TASK-120-Q-PREP-TARGETED-REPAIR-08-20261021' else 'audit-repair-07')
+ BUDGET=EXECUTION/'budget.json'
+ NAME='retrolume-task120-qprep-pg1'
+ VOLUME='retrolume-task120-qprep-data'
+ IMAGE='pgvector/pgvector@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f'
+@@ -65,9 +65,9 @@
+ 
+ def count(name):
+     def reserve(value):
+         if value['counts'][name]>=value['caps'][name]:raise RuntimeError('task120_count_exhausted_'+name)
+-        if name=='native_business_sessions' and value.get('current_permit_id')=='TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021':
++        if name=='native_business_sessions' and value.get('current_permit_id') in ('TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021','TASK-120-Q-PREP-TARGETED-REPAIR-08-20261021'):
+             attempts=value.get('audit_repair07_synthetic_admission_launch_reservations',0)
+             if attempts>=16:raise RuntimeError('audit07_synthetic_admission_attempt_cap')
+             value['audit_repair07_synthetic_admission_launch_reservations']=attempts+1
+         value['counts'][name]+=1
+@@ -91,16 +91,16 @@
+ 
+ 
+ def memory_gate(kind):
+     amount=available_memory()
+-    prospective=state().get('current_permit_id') in ('TASK-120-Q-PREP-VALIDATION-04-20261019','TASK-120-Q-PREP-FINALIZATION-05-20261019','TASK-120-Q-PREP-CONTINUATION-06-20261020','TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021')
++    prospective=state().get('current_permit_id') in ('TASK-120-Q-PREP-VALIDATION-04-20261019','TASK-120-Q-PREP-FINALIZATION-05-20261019','TASK-120-Q-PREP-CONTINUATION-06-20261020','TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021','TASK-120-Q-PREP-TARGETED-REPAIR-08-20261021')
+     minimum=(512 if prospective or kind!='browser' else 768)*1024**2
+     event('memory_gate',stage=kind,available_bytes=amount,minimum_bytes=minimum)
+     if amount<minimum:raise RuntimeError('task120_low_memory_'+kind)
+ 
+ 
+ def settled_memory_gate(kind,seconds=12):
+-    if state().get('current_permit_id') in ('TASK-120-Q-PREP-VALIDATION-04-20261019','TASK-120-Q-PREP-FINALIZATION-05-20261019','TASK-120-Q-PREP-CONTINUATION-06-20261020','TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021'):return memory_gate(kind)
++    if state().get('current_permit_id') in ('TASK-120-Q-PREP-VALIDATION-04-20261019','TASK-120-Q-PREP-FINALIZATION-05-20261019','TASK-120-Q-PREP-CONTINUATION-06-20261020','TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021','TASK-120-Q-PREP-TARGETED-REPAIR-08-20261021'):return memory_gate(kind)
+     # Docker warmup can briefly reclaim pages. This finite internal stage does
+     # not start the next layer until its unchanged real threshold is met.
+     until=time.monotonic()+seconds
+     while True:

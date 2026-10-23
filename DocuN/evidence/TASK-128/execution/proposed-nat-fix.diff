@@ -1,0 +1,8 @@
+Proposal only; NOT applied. Requires expanded identity-guard repair scope and
+enough cumulative source starts for installation plus post-interrupted verify.
+--- deploy/initialize_normal.py
++++ deploy/initialize_normal.py
+@@
+-        ipaddress.ip_address(row["server_address"])
++        address = ipaddress.ip_interface(row["server_address"])
++        require(address.network.prefixlen == address.max_prefixlen, "target_identity_mismatch")

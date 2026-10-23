@@ -1,0 +1,37 @@
+{
+  "blocking": [
+    {
+      "task": "TASK-124",
+      "id": "F124-01",
+      "severity": "P1",
+      "evidence_level": "B static source and new delivered mapping; product not run",
+      "new_delivery_locations": [
+        "DocuN/evidence/TASK-123/execution/finite-inputs.json:84-89",
+        "DocuN/evidence/TASK-123/execution/deployment-handoff.md:25"
+      ],
+      "source_locations": [
+        "backend/app/activities/teaching_repository.py:830-879",
+        "backend/app/activities/teaching_repository.py:429-461",
+        "backend/app/learning/teaching_progress.py:21-22,45-50,64-70"
+      ],
+      "trigger": "L05 has exactly two independent eligible answers including a retest; save neutral continuation text by correct against either current contributing feedback or its progress, with empty disputed_dimensions",
+      "effect": "correction marks feedback disputed regardless of disputed_dimensions; corresponding answer is excluded; evidence_sufficient becomes needs_repair and may reset selected node pointers",
+      "minimal_route": "withdraw wrong mapping and handoff claim under original TASK123; explicitly retain unresolved neutral persistence capability for controller-scoped correction; preserve real correction semantics",
+      "runtime_reproduction": false,
+      "test_suite_repeat_required_by_this_audit": false
+    }
+  ],
+  "conditional_observations": [
+    {
+      "id": "OBS124-01",
+      "kind": "conditional configuration content risk; not observed credential leak",
+      "statement": "The new chat returned_models projection accepts identity-shaped arbitrary strings; regular expression is not a confidentiality classifier. Never claim arbitrary configuration contents are secret-free."
+    }
+  ],
+  "code_axis": "PASS_SCOPED",
+  "raw_test_evidence_axis": "PASS_13_OFFLINE",
+  "complete_delivery_applicability_axis": "FAIL_F124-01",
+  "execution_control_axis": "PASS_WITH_UNKNOWN_ACTUAL_WALL_PRESERVED",
+  "finite_engineering": "NOT_READY_FOR_FULL_CLOSE",
+  "Q": "FROZEN_NOT_QUALIFIED"
+}

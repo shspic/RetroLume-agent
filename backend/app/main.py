@@ -89,6 +89,10 @@ def create_app(materials=None) -> FastAPI:
     )
     app.state.activity_config = load_activity_config(Path(config_path))
     app.state.integration_config=load_integration_config(os.environ.get('RETROLUME_INTEGRATION_CONFIG'))
+    # 保留本次已装载候选；只读诊断不重新读取配置或扫描环境。
+    candidate_activity_config=app.state.activity_config
+    candidate_integration_config=app.state.integration_config
+    embedding_key_present=bool(os.environ.get('RETROLUME_EMBEDDING_API_KEY','').strip())
     from dataclasses import replace
     from app.service_config import LayerState
     from app.capabilities.transport import HttpxModelTransport
@@ -134,6 +138,11 @@ def create_app(materials=None) -> FastAPI:
             app.state.integration_config=replace(app.state.integration_config,reason='q_readiness_unknown')
             app.state.q_readiness={'available':False,'reason':'q_readiness_unknown','real_outbound_authorized':False}
 
+    from app.q_readiness import build_readiness
+    app.state.q_diagnostics=build_readiness(candidate_activity_config,candidate_integration_config,
+        effective_model=app.state.activity_config,effective_embedding=app.state.integration_config,
+        embedding_key_present=embedding_key_present,q_approval=app.state.q_readiness)
+
     async def data_error(request,error):
         from fastapi.responses import JSONResponse
         messages={'data_readonly':'当前数据仅供只读查看，不能继续调用或修改',
@@ -164,8 +173,15 @@ def create_app(materials=None) -> FastAPI:
                     expected=canonical(original_context.public())
                     if request.headers.get('x-retrolume-data-context')!=expected:
                         raise DataError('selection_changed')
-                    with data.gate.acquire(expected=original_context):
+                    if 'q' in data.hub.state():
+                        # Q takes policy at domain/PG boundaries; an HTTP permit
+                        # carried across SUP would block its own lease and result.
+                        with data.gate.acquire(expected=original_context):pass
                         response=await call_next(request)
+                        if data.context()!=original_context:raise DataError('selection_changed')
+                    else:
+                        with data.gate.acquire(expected=original_context):
+                            response=await call_next(request)
                 else:response=await call_next(request)
             elif app.state.data_exit_error and request.url.path.startswith('/api/') and not request.url.path.startswith('/api/data/') and request.url.path!='/api/session':
                 raise DataError('mode_unknown',503)

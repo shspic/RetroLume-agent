@@ -1,0 +1,154 @@
+--- initial/backend/app/capabilities/embedding.py
++++ final/backend/app/capabilities/embedding.py
+@@ -164,11 +164,15 @@
+     @property
+     def sha256(self):
+         # 空新增字段保留原Embedding清单身份；模型没有完整批准仍失败关闭。
+         return digest(self.model_dump(mode='json',exclude={'model_requests'} if not self.model_requests else set()))
+     @classmethod
+-    def from_wire(cls,value):return cls.model_validate_json(json.dumps(value,ensure_ascii=False,separators=(',',':')))
++    def from_wire(cls,value):
++        if isinstance(value,dict) and value.get('schema')=='retrolume.outbound-sources.v2':
++            from .q_protocol import SourceManifestV2
++            return SourceManifestV2.model_validate_json(json.dumps(value,ensure_ascii=False,separators=(',',':')))
++        return cls.model_validate_json(json.dumps(value,ensure_ascii=False,separators=(',',':')))
+ 
+     def check_sources(self,rows):
+         allowed={(r['source_id'],r['source_version_id'],r['source_revision'],r['original_sha256']) for r in self.sources}
+         if not rows or any((str(r['source_id']),str(r.get('source_version_id',r.get('version_id'))),r['source_revision'],r.get('original_sha256',r.get('sha256'))) not in allowed for r in rows):raise AdmissionDenied('outbound_source_not_approved')
+ 
+@@ -224,11 +228,12 @@
+     def bounds(self):
+         start,end=datetime.fromisoformat(self.valid_from_utc),datetime.fromisoformat(self.valid_until_utc)
+         if start.tzinfo is None or end.tzinfo is None or not 0<(end-start).total_seconds()<=72*3600:raise ValueError('outbound_grant_time_invalid')
+         roster={'01800000-0000-4000-8000-000000000001','01800000-0000-4000-8000-000000000002','01800000-0000-4000-8000-000000000003'}
+         if len(set(self.allowed_activity_ids))!=len(self.allowed_activity_ids) or not set(self.allowed_activity_ids)<=roster:raise ValueError('outbound_grant_roster_invalid')
+-        if not set(self.provider_capabilities)<={'deepseek_chat_completions/deepseek-chat','zhipu_embeddings/embedding-3'}:raise ValueError('outbound_grant_capability_invalid')
++        chat='deepseek-flash' if self.schema=='retrolume.outbound-grant.v2' else 'deepseek-chat'
++        if not set(self.provider_capabilities)<={f'deepseek_chat_completions/{chat}','zhipu_embeddings/embedding-3'}:raise ValueError('outbound_grant_capability_invalid')
+         for value in (self.input_rate_cny_per_million,self.output_rate_cny_per_million):
+             number=Decimal(value)
+             if not number.is_finite() or number<0:raise ValueError('outbound_price_invalid')
+         return self
+ 
+@@ -236,10 +241,12 @@
+     def sha256(self):return digest(self.model_dump(mode='json'))
+ 
+     @classmethod
+     def from_wire(cls,value):
+         # JSON数组经严格JSON校验成为冻结tuple，其他标量仍保持strict边界。
++        if isinstance(value,dict) and value.get('schema')=='retrolume.outbound-grant.v2':
++            return OutboundGrantV2.model_validate_json(json.dumps(value,ensure_ascii=False,separators=(',',':')))
+         return cls.model_validate_json(json.dumps(value,ensure_ascii=False,separators=(',',':')))
+ 
+     def check(self,activity_id,provider,model,request_bytes,output_tokens):
+         now=datetime.now(timezone.utc)
+         if not self.capabilities_verified or not self.account_terms_verified or not self.token_upper_bound_verified:
+@@ -252,10 +259,17 @@
+         microunits=int(worst.to_integral_value(rounding=ROUND_CEILING))
+         if microunits>250000:raise AdmissionDenied('outbound_price_limit')
+         return microunits
+ 
+ 
++class OutboundGrantV2(OutboundGrant):
++    schema:Literal['retrolume.outbound-grant.v2']='retrolume.outbound-grant.v2'
++    global_max_requests:Literal[100]=100
++    global_max_cost_microunits:Literal[25000000]=25000000
++    instance_binding_sha256:str=Field(pattern=HEX)
++
++
+ class EmbeddingServiceConfig(BaseModel):
+     model_config=ConfigDict(extra='forbid',frozen=True,strict=True)
+     provider:Literal['zhipu_embeddings']='zhipu_embeddings'
+     base_url:Literal['https://open.bigmodel.cn/api/paas/v4']='https://open.bigmodel.cn/api/paas/v4'
+     model:Literal['embedding-3']='embedding-3'
+@@ -265,10 +279,11 @@
+     timeout_seconds:float=Field(default=10.0,gt=0,le=10)
+     max_request_bytes:int=Field(default=65536,ge=1024,le=65536)
+     max_response_bytes:int=Field(default=65536,ge=1024,le=65536)
+     outbound_grant:dict|None=Field(default=None,repr=False)
+     outbound_source_manifest:dict|None=Field(default=None,repr=False)
++    outbound_authorization:dict|None=Field(default=None,repr=False)
+ 
+     @field_validator('api_key')
+     @classmethod
+     def key(cls,value):
+         if not value.get_secret_value().strip() or len(value.get_secret_value().encode('utf-8'))>4096:raise ValueError('invalid_credential')
+@@ -291,10 +306,11 @@
+     outbound_grant:dict|None=field(default=None,repr=False)
+     outbound_source_manifest:dict|None=field(default=None,repr=False)
+     provider:str='zhipu_embeddings'
+     max_output_tokens:int=0
+     tool_names:tuple[str,...]=()
++    outbound_authorization:dict|None=field(default=None,repr=False)
+ 
+ 
+ @dataclass(frozen=True)
+ class EmbeddingAdmissionPermit:
+     admission_id:str
+@@ -337,20 +353,28 @@
+ 
+     def _result(self,context,status,error=None,**facts):
+         return EmbeddingCallResult(status,context.operation_id,self._config.provider,self._config.model,error_code=error,**facts)
+ 
+     async def _finish(self,permit,context,outcome,status):
++        from .q_gateway import release_dispatch
++        await release_dispatch()
+         try:
+             confirmation=await self._ledger.record_embedding_outcome(permit,outcome)
+             if confirmation not in (RecordOutcome.RECORDED,RecordOutcome.ALREADY_PRESENT):raise AdmissionUnavailable('record_unconfirmed')
+         except AdmissionDenied:return self._result(context,CallStatus.UNKNOWN,'record_denied')
+         except Exception:return self._result(context,CallStatus.UNKNOWN,'record_unconfirmed')
+         usage=Usage(outcome.prompt_tokens,0,outcome.prompt_tokens) if outcome.prompt_tokens is not None else None
+         return self._result(context,status,outcome.error_code,returned_model=outcome.returned_model,usage=usage,
+                             remote_request_id=outcome.remote_request_id,payload_sha256=outcome.payload_sha256 if status==CallStatus.SUCCEEDED else None)
+ 
+     async def call(self,context,request):
++        from .q_gateway import call_with_policy, is_v2
++        if is_v2(self._config):
++            return await call_with_policy(self,context,request,self._call_original)
++        return await self._call_original(context,request)
++
++    async def _call_original(self,context,request):
+         if type(request) is not EmbeddingRequest:return self._result(context,CallStatus.REJECTED,'embedding_profile_required')
+         try:
+             request=EmbeddingRequest.model_validate_json(request.model_dump_json())
+             if context.activity_id!=request.activity_id or context.scope_revision!=request.binding.scope_revision:raise ValueError('embedding_binding_invalid')
+             expected=('emb18i.' if request.binding.purpose=='source_index' else 'emb18q.')+request.binding.business_key+'.'+str(request.binding.batch_ordinal)
+@@ -366,20 +390,33 @@
+                 source_manifest=OutboundSourceManifest.from_wire(self._config.outbound_source_manifest)
+                 if source_manifest.sha256!=parsed.source_manifest_sha256:raise AdmissionDenied('outbound_manifest_mismatch')
+                 source_manifest.check_embedding(request)
+                 grant=parsed.model_dump(mode='json')
+             intent=EmbeddingAdmissionIntent(context,self._config.model,size,request.binding,request,grant,source_manifest.model_dump(mode='json') if source_manifest else None)
++            if self._config.outbound_authorization:
++                from dataclasses import replace
++                intent=replace(intent,outbound_authorization=self._config.outbound_authorization)
++            from .q_gateway import admission_intent,admission_observed
++            admission_intent(intent)
+             permit=await self._ledger.admit_embedding(intent)
++            admission_observed(permit)
+             if type(permit) is not EmbeddingAdmissionPermit or permit.operation_id!=context.operation_id or permit.executor_id!=context.executor_id:
+                 raise AdmissionDenied('embedding_permit_invalid')
+             if grant is not None:parsed.check(context.activity_id,self._config.provider,self._config.model,size,0)
+             await self._ledger.mark_embedding_dispatch_started(permit)
+-        except (ValueError,AdmissionDenied) as exc:return self._result(context,CallStatus.REJECTED,str(exc) if re.fullmatch(NAME,str(exc)) else 'embedding_admission_denied')
+-        except Exception:return self._result(context,CallStatus.REJECTED,'embedding_admission_unavailable')
++        except (ValueError,AdmissionDenied) as exc:
++            from .q_gateway import admission_failed
++            admission_failed(definitely_denied=True)
++            return self._result(context,CallStatus.REJECTED,str(exc) if re.fullmatch(NAME,str(exc)) else 'embedding_admission_denied')
++        except Exception:
++            from .q_gateway import admission_failed
++            admission_failed(definitely_denied=False)
++            return self._result(context,CallStatus.REJECTED,'embedding_admission_unavailable')
+         try:
+             async with asyncio.timeout(self._config.timeout_seconds):
+-                response=await self._transport.send(endpoint=self._config.base_url+'/embeddings',api_key=self._config.api_key.get_secret_value(),
++                from .q_gateway import dispatch_transport
++                response=await dispatch_transport(self._transport,endpoint=self._config.base_url+'/embeddings',api_key=self._config.api_key.get_secret_value(),
+                     payload=payload,timeout_seconds=self._config.timeout_seconds,max_response_bytes=self._config.max_response_bytes)
+         except RequestNotSent:return await self._finish(permit,context,EmbeddingLedgerOutcome(LedgerDisposition.NOT_SENT,'request_not_sent'),CallStatus.NOT_SENT)
+         except asyncio.CancelledError:
+             await self._finish(permit,context,EmbeddingLedgerOutcome(LedgerDisposition.UNKNOWN,'cancelled'),CallStatus.UNKNOWN);raise
+         except (TimeoutError,DeliveryUnknown):return await self._finish(permit,context,EmbeddingLedgerOutcome(LedgerDisposition.UNKNOWN,'delivery_unknown'),CallStatus.UNKNOWN)

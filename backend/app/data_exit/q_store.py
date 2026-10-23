@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from .contracts import DataError
 from .files import RootLease, regular
+from . import q_clock
 from app.capabilities.q_protocol import (AuthorizationRef, DecisionBody, InstanceBinding, PreparedRequest,
     SourceManifestV2, canonical, digest, load_json, raw_digest, utcnow)
 
@@ -37,6 +38,13 @@ def replay_event(state, kind, payload):
         q['requests'][pid]['approval'] = payload['approval']
         q['requests'][pid].pop('revoked', None)
         q['approval_events'] += 1
+        q['requests'][pid].pop('approval_seen',None)
+    elif kind == 'q.approval_seen':
+        row=q['requests'][pid]
+        if row.get('approval',{}).get('approval_id')!=payload['approval_id']:raise DataError('q_approval_identity')
+        row['approval_seen']=payload['sample']
+    elif kind == 'q.approval_invalidated':
+        q['requests'][pid].setdefault('invalid_approvals',{})[payload['approval_id']]=payload['reason']
     elif kind == 'q.revoked':
         q['requests'][pid]['revoked'] = True
     elif kind == 'q.claim':
@@ -45,11 +53,19 @@ def replay_event(state, kind, payload):
         q['requests'][pid]['launch_claimed'] = True
     elif kind == 'q.admission_intent':
         q['requests'][pid]['admission_intent'] = payload['context']
+        q['requests'][pid]['admission_owner'] = payload['owner']
     elif kind == 'q.admission_observed':
         q['requests'][pid]['admission'] = payload['fact']
         q['observed'][payload['fact']['admission_id']] = payload['fact']
     elif kind == 'q.closed':
         q['requests'][pid]['closed'] = payload['reason']
+    elif kind == 'q.cleanup_pending':
+        if q['requests'][pid].get('cleanup'):raise DataError('q_cleanup_conflict')
+        q['requests'][pid]['cleanup']=payload['cleanup']
+    elif kind == 'q.cleanup_done':
+        row=q['requests'][pid]
+        if not row.get('cleanup'):raise DataError('q_cleanup_missing')
+        row['cleanup']['state']='done';row['cleanup']['outcome']=payload['outcome']
 
 
 def authority_for(ledger):
@@ -71,7 +87,17 @@ def method_name(operation):
 
 def is_read_method(name):
     return name.startswith(('read_', 'list_', 'inspect_', 'find_', 'q_snapshot')) or name in (
-        'retrieval_context','retrieval_cached','retrieval_vector_ranks','probe_storage')
+        'snapshot','retrieval_context','retrieval_cached','retrieval_vector_ranks','probe_storage',
+        '_teaching_read_snapshot','validate_interview_request','verify_html_request')
+
+
+def owned_closing(hub,state):
+    from .maintenance import CLOSE_LANE
+    owner=state['owned'].get(CLOSE_LANE.get(),{})
+    source=state.get('source') or {};origin=owner.get('origin',{})
+    return (state.get('selection') is None and (state.get('fence') or {}).get('state')=='draining'
+        and owner.get('state')=='registered' and origin.get('control_id')==hub.control_id
+        and all(origin.get(k)==source.get(k) for k in ('dataset_id','instance_id')))
 
 
 class QAuthority:
@@ -79,7 +105,7 @@ class QAuthority:
         self.hub = hub
         state = hub.assert_writable()
         q = state.get('q')
-        if q is None or state['selection'] is not None or state['fence'] is not None:
+        if q is None or state['selection'] is not None or (state['fence'] is not None and not owned_closing(hub,state)):
             raise DataError('q_normal_root_required')
         bundle = load_json(hub.read_artifact('q-root', q['root_id'], q['artifact_sha256'], 262144))
         if set(bundle) != {'schema','execution_class','grant','manifest','binding','templates','template_atoms','operator_principals'}:
@@ -109,7 +135,7 @@ class QAuthority:
     def check_root(self):
         state=self.hub.assert_writable()
         q=state.get('q',{})
-        if (state['selection'] is not None or state['fence'] is not None
+        if (state['selection'] is not None or (state['fence'] is not None and not owned_closing(self.hub,state))
             or q.get('grant_sha256')!=self.grant.sha256
             or digest(state['source'])!=self.binding.source_registration_sha256):
             raise DataError('q_root_changed')
@@ -207,6 +233,8 @@ class QAuthority:
                      if r['prepared']['activity_id']==aid and r['prepared']['operation_id']==oid), None)
 
     def artifact(self, row):
+        current=self.request(row['prepared_id'])
+        if current.get('cleanup'):raise DataError('q_body_cleanup_closed',409)
         raw = self.hub.read_artifact('q-prepared',row['prepared_id'],row['artifact_sha256'],262144)
         value = load_json(raw)
         if set(value) != {'prepared','request','payload','provenance','intent'} or digest(value['prepared']) != row['prepared_sha256']:
@@ -218,7 +246,7 @@ class QAuthority:
             raise DataError('q_artifact_identity')
         return value
 
-    def prepare(self, prepared, request, payload, provenance, intent=None):
+    def prepare(self, prepared, request, payload, provenance, intent=None,*,dependencies=None):
         if prepared.domain=='learning':
             candidates=[r for r in self.hub.state()['q']['requests'].values() if r['prepared']['activity_id']==prepared.activity_id
                 and r['prepared']['domain']=='learning' and (r['prepared']['business_key']==prepared.business_key
@@ -244,35 +272,51 @@ class QAuthority:
             if any(r['prepared']['activity_id']==prepared.activity_id and r['prepared']['operation_id']==prepared.operation_id for r in q['requests'].values()):
                 raise DataError('q_original_key_conflict',409)
             return {'prepared_id':prepared.prepared_id,'prepared':prepared.model_dump(mode='json'),
-                    'prepared_sha256':prepared.sha256,'artifact_sha256':artifact_sha}
+                    'prepared_sha256':prepared.sha256,'artifact_sha256':artifact_sha,
+                    'dependencies':dependencies or {'sources':[x['source_id'] for x in prepared.snapshot.get('sources',[])],
+                        'memories':[x['memory_id'] for x in prepared.snapshot.get('memory',{}).get('refs',[])]}}
         self.hub.q_decide('q.prepared',decide)
         return self.request(prepared.prepared_id)
 
-    def projection(self, row, *, current=True):
-        self.artifact(row)
+    def approval_valid(self,row):
+        """Every authorizing projection/reference/consumer uses this same CAS.
+
+        A negative observation is durable before it is returned. A later UTC
+        rollback or another process cannot resurrect that exact decision.
+        """
+        if not row.get('approval'):return False
+        result={}
+        # Kind must be chosen from the same current state while holding the
+        # journal lock, so use a tiny closed hub clock-observation operation.
+        self.hub.q_observe_approval(row['prepared_id'],result)
+        return result.get('valid',False)
+
+    def projection(self, row, *, current=True, pg_consumed=False):
+        if not row.get('cleanup'):self.artifact(row)
         now=utcnow(); approval=row.get('approval')
-        state='invalidated' if not current or row.get('closed') else 'consumed' if row.get('claim') or row.get('launch_claimed') else 'revoked' if row.get('revoked') else 'pending'
+        state='invalidated' if not current or row.get('closed') or row.get('cleanup') else 'consumed' if pg_consumed or row.get('claim') or row.get('launch_claimed') else 'revoked' if row.get('revoked') else 'pending'
         if state=='pending' and approval:
-            state='approved' if datetime.fromisoformat(approval['body']['expires_at'])>now else 'expired'
+            state='approved' if self.approval_valid(row) else 'expired'
         p=row['prepared']
         return {'state':state,'prepared_id':row['prepared_id'],'purpose':p['action'],'provider':p['provider'],
                 'model':p['configured_model'],'request_count':1,'reserve_microunits':250000,
                 'expires_at':approval['body']['expires_at'] if approval else None,'can_continue':state=='approved','reason':None if state=='approved' else 'q_'+state}
 
-    def approve(self, pid, principal, *, current):
+    def approve(self, pid, principal, *, current, pg_consumed=False):
         if principal not in self.bundle['operator_principals'] or not current:
             raise DataError('q_operator_or_currentness_denied')
         with self.policy():
             row=self.request(pid); self.artifact(row)
-            if row.get('claim') or row.get('launch_claimed') or row.get('closed'):
+            if pg_consumed or row.get('claim') or row.get('launch_claimed') or row.get('closed') or row.get('cleanup'):
                 raise DataError('q_approval_consumed')
-            result={}
+            valid=self.approval_valid(row) if row.get('approval') and not row.get('revoked') else False
+            sample=q_clock.sample();result={}
             def decide(state, seq):
                 q=state['q']; r=q['requests'][pid]
                 if r.get('claim') or r.get('launch_claimed') or r.get('closed'):
                     raise DataError('q_approval_consumed')
-                old=r.get('approval'); now=utcnow()
-                if old and not r.get('revoked') and datetime.fromisoformat(old['body']['expires_at'])>now:
+                old=r.get('approval'); now=datetime.fromisoformat(sample['utc'])
+                if old and valid and not r.get('revoked'):
                     result.update(old); return None
                 if q['approval_events']>=256:
                     raise DataError('q_approval_limit')
@@ -280,7 +324,8 @@ class QAuthority:
                 if end<=now:
                     raise DataError('q_prepared_expired')
                 body=DecisionBody(prepared_sha256=r['prepared_sha256'],root_sha256=self.manifest.sha256,
-                    operator_principal_id=principal,issued_at=now.isoformat(),expires_at=end.isoformat(),event_seq=seq)
+                    operator_principal_id=principal,issued_at=now.isoformat(),expires_at=end.isoformat(),event_seq=seq,
+                    clock=q_clock.certificate(sample,end))
                 approval={'body':body.model_dump(mode='json'),'approval_id':body.approval_id}
                 result.update(approval)
                 return {'prepared_id':pid,'approval':approval}
@@ -310,7 +355,7 @@ class QAuthority:
             raise DataError('q_testonly_external_forbidden')
         if (ref.root_sha256!=self.manifest.sha256 or ref.prepared_sha256!=row['prepared_sha256'] or not approval
             or ref.approval_id!=approval['approval_id'] or ref.approval_event_seq!=approval['body']['event_seq']
-            or row.get('revoked') or row.get('closed') or datetime.fromisoformat(approval['body']['expires_at'])<=utcnow()
+            or row.get('revoked') or row.get('closed') or row.get('cleanup') or not self.approval_valid(row)
             or DecisionBody.model_validate_json(canonical(approval['body'])).approval_id!=approval['approval_id']):
             raise DataError('q_approval_invalid')
         if context is not None:
@@ -332,12 +377,29 @@ class QAuthority:
     def admission_intent(self,ref,context):
         row=self.check_reference(ref,context=context,claimed=True)
         value=context.model_dump(mode='json')
+        from app.preview.process import birth
+        from .q_kernel import AdmissionSignal
+        signal=AdmissionSignal()
+        owner={'pid':os.getpid(),**birth(os.getpid())}
+        if owner.get('state')!='running' or not owner.get('birth'):raise DataError('q_admission_owner_unknown')
+        owner['signal']=signal.name
         def decide(state,seq):
             current=state['q']['requests'][row['prepared_id']]
             if current.get('admission') or current.get('admission_intent'):
                 raise DataError('q_admission_already_attempted')
-            return {'prepared_id':row['prepared_id'],'context':value}
-        self.hub.q_decide('q.admission_intent',decide)
+            return {'prepared_id':row['prepared_id'],'context':value,'owner':owner}
+        try:self.hub.q_decide('q.admission_intent',decide)
+        except BaseException:
+            signal.close();raise
+        return signal
+
+    def admission_failed(self,ref,*,definitely_denied):
+        pid=ref['prepared_id']
+        def decide(state,seq):
+            row=state['q']['requests'][pid]
+            if not row.get('admission_intent') or row.get('admission'):return None
+            return {'prepared_id':pid,'reason':'admission_denied' if definitely_denied else 'admission_unconfirmed'}
+        self.hub.q_decide('q.closed',decide)
 
     def admission_observed(self,ref,permit,context):
         row=self.check_reference(ref,context=context,claimed=True)

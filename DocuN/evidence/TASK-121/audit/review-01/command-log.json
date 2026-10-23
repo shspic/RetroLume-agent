@@ -1,0 +1,569 @@
+{
+  "task": "TASK-121",
+  "R": "R-115",
+  "review": "review-01",
+  "state": "已完成，最终保存复读回执已追加",
+  "first_observed_utc": "2026-10-21 08:54:33 UTC",
+  "commands": [
+    {
+      "ordinal": 1,
+      "command": "Get-Content -LiteralPath 'AGENTS.md' -Encoding UTF8; Get-Content -LiteralPath 'DocuN/tasks/TASK-121.md' -Encoding UTF8",
+      "exit_code": 0,
+      "wall_seconds": 1.1694437,
+      "chunk_id": "4a1548",
+      "original_output_tokens": 10171
+    },
+    {
+      "ordinal": 2,
+      "command": "rg -n -C 2 'RetroLume|overvalidation|independent audit|User preferences' 'C:\\Users\\28432\\.codex\\memories\\MEMORY.md'",
+      "exit_code": 0,
+      "wall_seconds": 0.9861866,
+      "chunk_id": "6a3ee1",
+      "original_output_tokens": 484
+    },
+    {
+      "ordinal": 3,
+      "command": "$cardLines = Get-Content -LiteralPath 'DocuN/tasks/TASK-121.md' -Encoding UTF8; for ($auditLine = 1; $auditLine -le [Math]::Min(152, $cardLines.Count); $auditLine++) { '{0}: {1}' -f $auditLine, $cardLines[$auditLine-1] }",
+      "exit_code": 0,
+      "wall_seconds": 1.0610355,
+      "chunk_id": "41a402",
+      "original_output_tokens": 6212
+    },
+    {
+      "ordinal": 4,
+      "command": "Get-Content -LiteralPath 'DocuN/evidence/TASK-121/orchestration-review01-20261021/audit-permit.json' -Encoding UTF8",
+      "exit_code": 0,
+      "wall_seconds": 0.9591548,
+      "chunk_id": "4473b2",
+      "original_output_tokens": 642
+    },
+    {
+      "ordinal": 5,
+      "command": "@'\nimport json\nfrom pathlib import Path\np=Path('DocuN/evidence/TASK-121/orchestration-review01-20261021')\nfor n in ['audit-inputs.json','scope-index.json']:\n d=json.loads((p/n).read_text(encoding='utf-8-sig'))\n print(n)\n for k,v in d.items():\n  print(k, 'len='+str(len(v)) if isinstance(v,(list,dict)) else str(v)[:1000])\n  if isinstance(v,list) and v:print('FIRST',json.dumps(v[0],ensure_ascii=False)[:1700])\n  if isinstance(v,dict):print('KEYS',list(v)[:30])\n'@ | python -X utf8 -",
+      "exit_code": 0,
+      "wall_seconds": 1.0907817,
+      "chunk_id": "a8276e",
+      "original_output_tokens": 791
+    },
+    {
+      "ordinal": 6,
+      "command": "Get-Content -LiteralPath 'DocuN/evidence/TASK-120/orchestration-adopted07-20261021/contract.md' -Encoding UTF8; Get-Content -LiteralPath 'DocuN/evidence/TASK-120/orchestration-adopted07-20261021/permit.json' -Encoding UTF8; Get-Content -LiteralPath 'DocuN/evidence/TASK-120/orchestration-adopted07-20261021/adoption-receipt.json' -Encoding UTF8",
+      "exit_code": 0,
+      "wall_seconds": 1.0977606,
+      "chunk_id": "2127b1",
+      "original_output_tokens": 6926
+    },
+    {
+      "ordinal": 7,
+      "command": "Get-Content -LiteralPath 'DocuN/evidence/TASK-121/orchestration-review01-20261021/scope-index.json' -Encoding UTF8",
+      "exit_code": 0,
+      "wall_seconds": 1.1083287,
+      "chunk_id": "a7ccfa",
+      "original_output_tokens": 3560
+    },
+    {
+      "ordinal": 8,
+      "command": "Get-Content -LiteralPath 'DocuN/evidence/TASK-120/execution/audit-repair-07/as-run-final-mapping.json' -Encoding UTF8",
+      "exit_code": 0,
+      "wall_seconds": 1.1113795,
+      "chunk_id": "a87892",
+      "original_output_tokens": 2995
+    },
+    {
+      "ordinal": 9,
+      "command": "python -X utf8 'DocuN/evidence/TASK-121/audit/review-01/review_meta.py' identities --label opening",
+      "exit_code": 0,
+      "wall_seconds": 1.3939735,
+      "chunk_id": "c80090",
+      "original_output_tokens": 14
+    },
+    {
+      "ordinal": 10,
+      "command": "python -X utf8 'DocuN/evidence/TASK-121/audit/review-01/review_meta.py' diffs",
+      "exit_code": 0,
+      "wall_seconds": 1.3170014,
+      "chunk_id": "8694cc",
+      "original_output_tokens": 2195
+    },
+    {
+      "ordinal": 11,
+      "command": "python -X utf8 'DocuN/evidence/TASK-121/audit/review-01/review_meta.py' read 'DocuN/evidence/TASK-121/audit/review-01/net-diff/backend/migrations/015_activity_scope_delete_permission.sql.diff' 'DocuN/evidence/TASK-121/audit/review-01/net-diff/backend/app/data_exit/schema_profiles.py.diff' 'DocuN/evidence/TASK-121/audit/review-01/net-diff/backend/app/data_exit/packages.py.diff' 'DocuN/evidence/TASK-121/audit/review-01/net-diff/backend/app/data_exit/schema_checks.py.diff' 'backend/app/data_exit/q_roles.py'",
+      "exit_code": 0,
+      "wall_seconds": 1.078264,
+      "chunk_id": "466e45",
+      "original_output_tokens": 3602
+    },
+    {
+      "ordinal": 12,
+      "command": "python -X utf8 'DocuN/evidence/TASK-121/audit/review-01/review_meta.py' read 'backend/app/data_exit/q_clock.py' 'DocuN/evidence/TASK-121/audit/review-01/net-diff/backend/app/capabilities/q_protocol.py.diff' 'DocuN/evidence/TASK-121/audit/review-01/net-diff/backend/app/data_exit/q_store.py.diff'",
+      "exit_code": 0,
+      "wall_seconds": 1.1119592,
+      "chunk_id": "18f3d7",
+      "original_output_tokens": 4079
+    },
+    {
+      "ordinal": 13,
+      "command": "python -X utf8 'DocuN/evidence/TASK-121/audit/review-01/review_meta.py' read 'backend/tests/fixtures/task120/audit07_permissions.py' 'backend/tests/fixtures/task120/audit07_setup.py'",
+      "exit_code": 0,
+      "wall_seconds": 1.0440647,
+      "chunk_id": "eb6abd",
+      "original_output_tokens": 3602
+    },
+    {
+      "ordinal": 14,
+      "command": "python -X utf8 'DocuN/evidence/TASK-121/audit/review-01/review_meta.py' read 'backend/app/data_exit/q_cleanup.py' 'DocuN/evidence/TASK-121/audit/review-01/net-diff/backend/app/data_exit/control.py.diff' 'backend/app/data_exit/deletions.py'",
+      "exit_code": 0,
+      "wall_seconds": 1.0704128,
+      "chunk_id": "bfef1f",
+      "original_output_tokens": 7568
+    },
+    {
+      "ordinal": 15,
+      "command": "python -X utf8 'DocuN/evidence/TASK-121/audit/review-01/review_meta.py' read 'DocuN/evidence/TASK-121/audit/review-01/net-diff/backend/app/capabilities/q_context.py.diff' 'DocuN/evidence/TASK-121/audit/review-01/net-diff/backend/app/operator/q_request.py.diff' 'DocuN/evidence/TASK-121/audit/review-01/net-diff/backend/app/memory/service.py.diff' 'DocuN/evidence/TASK-121/audit/review-01/net-diff/backend/app/memory/repository.py.diff'",
+      "exit_code": 0,
+      "wall_seconds": 1.1737087,
+      "chunk_id": "811196",
+      "original_output_tokens": 3667
+    },
+    {
+      "ordinal": 16,
+      "command": "python -X utf8 'DocuN/evidence/TASK-121/audit/review-01/review_meta.py' read 'backend/tests/test_q_audit07.py' 'backend/tests/test_source_cleanup_recovery07.py' 'backend/tests/fixtures/task120/audit07_clock_hook.py'",
+      "exit_code": 0,
+      "wall_seconds": 1.0925432,
+      "chunk_id": "e9a3c7",
+      "original_output_tokens": 2473
+    },
+    {
+      "ordinal": 17,
+      "command": "rg -n 'Python|3\\.12|clock|implementation' 'DocuN/evidence/TASK-120/execution/audit-repair-07/F04-API-worker-clock-samples.jsonl' 'DocuN/evidence/TASK-120/execution/audit-repair-07/F04-real-API-operator-worker-normal-combination-PASS.json'; Get-Content -LiteralPath 'backend/tests/test_q_audit07.py' -Encoding UTF8; Get-Content -LiteralPath 'backend/tests/test_source_cleanup_recovery07.py' -Encoding UTF8",
+      "exit_code": 0,
+      "wall_seconds": 0.8947875,
+      "chunk_id": "32447f",
+      "original_output_tokens": 2079
+    },
+    {
+      "ordinal": 18,
+      "command": "python -X utf8 'DocuN/evidence/TASK-121/audit/review-01/review_meta.py' read 'backend/app/data_exit/operations.py' --start 1 --end 245",
+      "exit_code": 0,
+      "wall_seconds": 1.0598046,
+      "chunk_id": "3e21ae",
+      "original_output_tokens": 3521
+    },
+    {
+      "ordinal": 19,
+      "command": "python -X utf8 'DocuN/evidence/TASK-121/audit/review-01/review_meta.py' read 'backend/tests/fixtures/task120/audit07_cleanup.py' 'backend/tests/fixtures/task120/audit07_time_claim.py'",
+      "exit_code": 0,
+      "wall_seconds": 1.1465734,
+      "chunk_id": "afafea",
+      "original_output_tokens": 6881
+    },
+    {
+      "ordinal": 20,
+      "command": "python -X utf8 'DocuN/evidence/TASK-121/audit/review-01/review_meta.py' read 'backend/app/operator/q_request.py' --start 40 --end 78",
+      "exit_code": 0,
+      "wall_seconds": 1.1543752,
+      "chunk_id": "0f5060",
+      "original_output_tokens": 612
+    },
+    {
+      "ordinal": 21,
+      "command": "rg -n 'async def launch_scope|async_policy|class MutationGate|def acquire|def context|def create_or_get_job|execution_job|q_snapshot' backend/app/capabilities/q_context.py backend/app/data_exit/gates.py backend/app/data_exit/control.py backend/app/activities/repository.py; Get-ChildItem -LiteralPath 'DocuN/evidence/TASK-120/execution/audit-repair-07' -File | Select-Object Name,Length | Format-Table -AutoSize",
+      "exit_code": 0,
+      "wall_seconds": 1.2577194999999999,
+      "chunk_id": "d4876b",
+      "original_output_tokens": 5069
+    },
+    {
+      "ordinal": 22,
+      "command": "rg -l 'class MutationGate' backend/app/data_exit; rg -n 'async def .*launch|async with authority.async_policy' backend/app/capabilities/q_context.py; Get-Content -LiteralPath 'DocuN/evidence/TASK-120/orchestration-audit07-20261021/adoption-proposal.md' -Encoding UTF8",
+      "exit_code": 0,
+      "wall_seconds": 0.8694861,
+      "chunk_id": "7a95c1",
+      "original_output_tokens": 1065
+    },
+    {
+      "ordinal": 23,
+      "command": "python -X utf8 'DocuN/evidence/TASK-121/audit/review-01/review_meta.py' read 'backend/app/data_exit/maintenance.py' --start 1 --end 150",
+      "exit_code": 0,
+      "wall_seconds": 1.1557925,
+      "chunk_id": "c66da5",
+      "original_output_tokens": 2059
+    },
+    {
+      "ordinal": 24,
+      "command": "python -X utf8 'DocuN/evidence/TASK-121/audit/review-01/review_meta.py' read 'backend/app/data_exit/control.py' --start 108 --end 166",
+      "exit_code": 0,
+      "wall_seconds": 1.1736657,
+      "chunk_id": "b49889",
+      "original_output_tokens": 845
+    },
+    {
+      "ordinal": 25,
+      "command": "python -X utf8 'DocuN/evidence/TASK-121/audit/review-01/review_meta.py' read 'backend/app/data_exit/control.py' --start 225 --end 307",
+      "exit_code": 0,
+      "wall_seconds": 1.2128092,
+      "chunk_id": "5c373b",
+      "original_output_tokens": 1319
+    },
+    {
+      "ordinal": 26,
+      "command": "python -X utf8 'DocuN/evidence/TASK-121/audit/review-01/review_meta.py' read 'backend/app/capabilities/q_context.py' --start 452 --end 480",
+      "exit_code": 0,
+      "wall_seconds": 1.2293486,
+      "chunk_id": "a074c2",
+      "original_output_tokens": 458
+    },
+    {
+      "ordinal": 27,
+      "command": "@'\nimport json\nfrom pathlib import Path\np=Path('DocuN/evidence/TASK-120/execution/audit-repair-07')\nfor n in ['F01-normal-R03-install-FAIL-root-52.json','F01-exact-codec-compatibility-PASS.json','F04-clock-authorization-PASS.json','F04-real-API-operator-worker-normal-combination-PASS.json','F05-PG-claimed-before-Q-claim-PASS.json']:\n d=json.loads((p/n).read_text(encoding='utf-8-sig'));print(n);print(json.dumps(d,ensure_ascii=False))\n'@ | python -X utf8 -",
+      "exit_code": 0,
+      "wall_seconds": 1.2778464,
+      "chunk_id": "8cfef5",
+      "original_output_tokens": 2145
+    },
+    {
+      "ordinal": 28,
+      "command": "python -X utf8 'DocuN/evidence/TASK-121/audit/review-01/review_meta.py' read 'backend/app/capabilities/q_context.py' --start 80 --end 165",
+      "exit_code": 0,
+      "wall_seconds": 1.0254945,
+      "chunk_id": "1593c2",
+      "original_output_tokens": 2161
+    },
+    {
+      "ordinal": 29,
+      "command": "python -X utf8 'DocuN/evidence/TASK-121/audit/review-01/review_meta.py' read 'backend/app/data_exit/q_store.py' --start 210 --end 282",
+      "exit_code": 0,
+      "wall_seconds": 1.005115,
+      "chunk_id": "edcf33",
+      "original_output_tokens": 1198
+    },
+    {
+      "ordinal": 30,
+      "command": "python -X utf8 'DocuN/evidence/TASK-121/audit/review-01/review_meta.py' read 'DocuN/evidence/TASK-120/execution/audit-repair-07/compatibility-before-PG.py' --start 1 --end 120",
+      "exit_code": 0,
+      "wall_seconds": 1.0456638,
+      "chunk_id": "1ec498",
+      "original_output_tokens": 1333
+    },
+    {
+      "ordinal": 31,
+      "command": "@'\nimport json\nfrom pathlib import Path\np=Path('DocuN/evidence/TASK-120/execution/audit-repair-07')\nfor f in p.glob('F03-*.json'):\n d=json.loads(f.read_text(encoding='utf-8-sig'));print(f.name, list(d))\n if isinstance(d.get('facts'),dict):print('FACT_KEYS',list(d['facts']))\nfor n in ['root-52-batch-01-as-run.json','root-54-batch-01-as-run.json','root-55-batch-01-as-run.json','root-57-batch-02-as-run.json','root-59-batch-01-as-run.json','root-60-batch-01-as-run.json']:\n d=json.loads((p/n).read_text(encoding='utf-8-sig'));print(n,type(d).__name__,list(d)[:12])\n'@ | python -X utf8 -",
+      "exit_code": 0,
+      "wall_seconds": 1.1284099,
+      "chunk_id": "cc12ba",
+      "original_output_tokens": 537
+    },
+    {
+      "ordinal": 32,
+      "command": "@'\nimport json\nfrom pathlib import Path\np=Path('DocuN/evidence/TASK-120/execution/audit-repair-07')\nd=json.loads((p/'F02-set-only-indirect-snapshot-PASS.json').read_text(encoding='utf-8-sig'))['facts']\nprint('ROLE FACT KEYS',list(d))\nroles={x['oid']:x['rolname'] for x in d['uncommitted_graph']['roles']}\nfor x in d['uncommitted_graph']['roles']:\n if 'audit07_bridge' in x['rolname'] or x['rolname']=='retrolume_data_snapshot' or x['rolname']==d.get('actual_snapshot_login'):print('ROLE',json.dumps(x,ensure_ascii=False))\nfor x in d['uncommitted_graph']['members']:\n if 'audit07_bridge' in roles[x['roleid']] or 'audit07_bridge'in roles[x['member']] or x['member']==next((k for k,v in roles.items() if v==d.get('actual_snapshot_login')),None):print('EDGE',roles[x['member']],roles[x['roleid']],json.dumps(x))\nfor n in ['root-55-batch-01-as-run.json','root-54-batch-01-as-run.json']:\n a=json.loads((p/n).read_text(encoding='utf-8-sig'));print(n,type(a['files']).__name__,json.dumps(a['files'][:2]if isinstance(a['files'],list)else list(a['files'].items())[:2]))\n'@ | python -X utf8 -",
+      "exit_code": 0,
+      "wall_seconds": 0.9454949,
+      "chunk_id": "9e219c",
+      "original_output_tokens": 657
+    },
+    {
+      "ordinal": 33,
+      "command": "rg --files 'DocuN/evidence/TASK-120/execution/audit-repair-07/asrun-root054' 'DocuN/evidence/TASK-120/execution/audit-repair-07/asrun-root059'; rg -n 'validate_source|gate\\.validate' backend/app/data_exit backend/app/main.py; Get-Content -LiteralPath 'DocuN/evidence/TASK-120/execution/audit-repair-07/command-075.log' -Encoding UTF8; Get-Content -LiteralPath 'DocuN/evidence/TASK-120/execution/audit-repair-07/command-078.log' -Encoding UTF8",
+      "exit_code": 0,
+      "wall_seconds": 0.9653284,
+      "chunk_id": "ee5309",
+      "original_output_tokens": 1060
+    },
+    {
+      "ordinal": 34,
+      "command": "@'\nimport json,hashlib,difflib\nfrom pathlib import Path\nr=Path('.');e=r/'DocuN/evidence/TASK-120/execution/audit-repair-07';o=r/'DocuN/evidence/TASK-121/audit/review-01'\nrows=[]\nfor f in sorted(e.glob('root-*-batch-*-as-run.json')):\n d=json.loads(f.read_text(encoding='utf-8-sig'));changed=[];missing=[]\n for x in d['files']:\n  p=r/x['path'];current=hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else None\n  if current!=x['sha256']:\n   exact=[]\n   for directory in [e/'asrun-root054',e/'asrun-root059',e/'preimage']:\n    q=directory/x['path']\n    if q.is_file() and hashlib.sha256(q.read_bytes()).hexdigest()==x['sha256']:exact.append(str(q))\n   if x['path']=='backend/migrations/015_activity_scope_delete_permission.sql':\n    q=e/'migration015-first-revised-failed.sql'\n    if q.is_file() and hashlib.sha256(q.read_bytes()).hexdigest()==x['sha256']:exact.append(str(q))\n   changed.append({'path':x['path'],'as_run':x['sha256'],'current':current,'exact_saved_sources':exact})\n rows.append({'record':str(f),'utc':d.get('utc'),'checked':len(d['files']),'differences':changed})\n(o/'as-run-comparison.json').write_text(json.dumps(rows,ensure_ascii=False,indent=2)+'\\n',encoding='utf-8')\nfor x in rows:print(x['record'],x['utc'],'changed_product',[(v['path'],v['exact_saved_sources']) for v in x['differences'] if v['path'].startswith('backend/app/') or v['path'].startswith('backend/migrations/')], 'changed_fixture_count',sum(v['path'].startswith('backend/tests/') for v in x['differences']))\nfor source,final,label in [(e/'asrun-root054/backend/app/data_exit/q_roles.py',r/'backend/app/data_exit/q_roles.py','q_roles-root54-to-final'),(e/'asrun-root059/backend/app/data_exit/control.py',r/'backend/app/data_exit/control.py','control-root59-to-final'),(e/'asrun-root059/backend/app/data_exit/deletions.py',r/'backend/app/data_exit/deletions.py','deletions-root59-to-final')]:\n delta=''.join(difflib.unified_diff(source.read_text(encoding='utf-8-sig').splitlines(keepends=True),final.read_text(encoding='utf-8-sig').splitlines(keepends=True),fromfile=str(source),tofile=str(final)))\n (o/(label+'.diff')).write_text(delta,encoding='utf-8');print(label,delta if 'q_roles'in label else 'diff_lines='+str(len(delta.splitlines())))\n'@ | python -X utf8 -",
+      "exit_code": 0,
+      "wall_seconds": 1.5573259,
+      "chunk_id": "66e26b",
+      "original_output_tokens": 2498
+    },
+    {
+      "ordinal": 35,
+      "command": "python -X utf8 'DocuN/evidence/TASK-121/audit/review-01/review_meta.py' read 'backend/app/data_exit/config.py' --start 150 --end 181; Get-Content -LiteralPath 'DocuN/evidence/TASK-120/execution/audit-repair-07/root-54-batch-01-child.log' -Encoding UTF8; Get-Content -LiteralPath 'DocuN/evidence/TASK-120/execution/audit-repair-07/root-57-batch-01-child.log' -Encoding UTF8",
+      "exit_code": 0,
+      "wall_seconds": 0.9627883,
+      "chunk_id": "ba40fd",
+      "original_output_tokens": 964
+    },
+    {
+      "ordinal": 36,
+      "command": "python -X utf8 'DocuN/evidence/TASK-121/audit/review-01/review_meta.py' read 'backend/app/capabilities/q_context.py' --start 1 --end 82; Get-Content -LiteralPath 'backend/migrations/015_activity_scope_delete_permission.sql' -Encoding UTF8",
+      "exit_code": 0,
+      "wall_seconds": 0.9858172,
+      "chunk_id": "cc5c15",
+      "original_output_tokens": 1674
+    },
+    {
+      "ordinal": 37,
+      "command": "@'\nimport json,hashlib\nfrom pathlib import Path\nr=Path('.');e=r/'DocuN/evidence/TASK-120/execution/audit-repair-07';o=r/'DocuN/evidence/TASK-121/audit/review-01'\nfirst=(e/'migration015-first-revised-failed.sql').read_bytes();final=(r/'backend/migrations/015_activity_scope_delete_permission.sql').read_bytes()\nh=hashlib.sha256(first).hexdigest();print('first_revised',h)\nhead=lambda b:b.split(b'GRANT DELETE ON public.activity_scope_sources TO retrolume_data_app;')[0]\nprint('preGRANT_exact_bytes_equal',head(first)==head(final))\nprofile=(r/'backend/app/data_exit/schema_profiles.py').read_bytes().replace(b'874d2a173f401ce923680d184eb5687c121fd70831d8b86cd9b6740a7c330915',h.encode())\nrecord=json.loads((e/'root-52-batch-01-as-run.json').read_text(encoding='utf-8-sig'))\nexpected=next(x['sha256'] for x in record['files'] if x['path']=='backend/app/data_exit/schema_profiles.py')\nactual=hashlib.sha256(profile).hexdigest();print('root52_schema_reconstruction',expected,actual,expected==actual)\nif actual==expected:(o/'schema_profiles-root52.py').write_bytes(profile)\nresult={'first_revised_sha256':h,'final_sha256':hashlib.sha256(final).hexdigest(),'preGRANT_exact_bytes_equal':head(first)==head(final),'schema_root52':{'expected':expected,'reconstructed':actual,'match':expected==actual},'negative_cases_run_first_SQL_only':True,'final_normal_applied_root':54,'executed_by_auditor':False}\n(o/'migration-as-run-reconciliation.json').write_text(json.dumps(result,indent=2)+'\\n',encoding='utf-8')\n'@ | python -X utf8 -",
+      "exit_code": 0,
+      "wall_seconds": 0.8949767,
+      "chunk_id": "c68fd0",
+      "original_output_tokens": 70
+    },
+    {
+      "ordinal": 38,
+      "command": "rg -n 'migration_chain|codec_migrations|migration_sha256|schema_migrations|migrations|schema_profile' backend/app/data_exit/snapshot.py backend/app/data_exit/schema.py backend/app/data_exit/source.py backend/app/data_exit/packages.py backend/app/data_exit/schema_profiles.py backend/app/db.py backend/app/data_exit/restore.py",
+      "exit_code": 1,
+      "wall_seconds": 0.6086064,
+      "chunk_id": "987ff1",
+      "original_output_tokens": 2263
+    },
+    {
+      "ordinal": 39,
+      "command": "@'\nimport json\nfrom pathlib import Path\np=Path('DocuN/evidence/TASK-120/execution/audit-repair-07')\nfor n in ['adoption.json','budget-summary.json','final-save-boundary.json','new-only-approvals-explicitly-retired.json','post-save-budget-reconciliation.json','save-consistency.json']:\n f=p/n\n if f.is_file():print(n);print(f.read_text(encoding='utf-8-sig'))\n else:print(n,'not present; no assumption')\nb=json.loads((p.parent/'budget.json').read_text(encoding='utf-8-sig'))\nprint('BUDGET_KEYS',list(b))\nfor k in ['counts','caps','limits','command_wall_seconds','command_wall_components','holding_seconds','runtime_holding_seconds','active_root','active_command','failures','permit_history']:\n if k in b:print(k,json.dumps(b[k],ensure_ascii=False)[:7000])\nfor x in b['roots'][-9:]:print('ROOT_KEYS',x['id'],list(x),json.dumps(x,ensure_ascii=False)[:900])\n'@ | python -X utf8 -",
+      "exit_code": 0,
+      "wall_seconds": 0.928335,
+      "chunk_id": "dee86c",
+      "original_output_tokens": 8592
+    },
+    {
+      "ordinal": 40,
+      "command": "Get-Content -LiteralPath 'DocuN/evidence/TASK-120/execution/audit-repair-07/root-58-batch-01-child.log' -Encoding UTF8; Get-Content -LiteralPath 'DocuN/evidence/TASK-120/execution/audit-repair-07/root-59-batch-01-child.log' -Encoding UTF8; Get-Content -LiteralPath 'DocuN/evidence/TASK-120/execution/audit-repair-07/root-60-batch-01-child.log' -Encoding UTF8",
+      "exit_code": 0,
+      "wall_seconds": 0.8405224,
+      "chunk_id": "7e2bae",
+      "original_output_tokens": 1622
+    },
+    {
+      "ordinal": 41,
+      "command": "@'\nimport json,collections\nfrom pathlib import Path\np=Path('DocuN/evidence/TASK-120/execution/audit-repair-07');b=json.loads((p.parent/'budget.json').read_text(encoding='utf-8-sig'))\nfor k,v in b.items():\n if (('wall' in k or 'timing' in k) and isinstance(v,(float,int,str,dict))) or k in ['runtime_holding_union_seconds','audit_repair07_logical_databases','audit_repair07_synthetic_admissions']:\n  print(k,json.dumps(v,ensure_ascii=False)[:1600])\nprint('NEW_FAILURES',json.dumps(b['failures'][125:],ensure_ascii=False))\nprint('ROOT_RESULTS',json.dumps([{k:v for k,v in x.items() if k in ('id','start_utc','permit_id','result')} for x in b['roots'][-9:]],ensure_ascii=False)[:6500])\nevents=[json.loads(x)for x in (p.parent/'events.jsonl').read_text(encoding='utf-8-sig').splitlines()]\nprint('EVENT_COUNT',len(events),'KINDS',dict(collections.Counter(x.get('kind') for x in events)))\nprint('STOP_FILES',[x.name for x in p.glob('*stop*proof*.json')]);print('FINANCIAL_FILES',[x.name for x in p.glob('*financial*.json')]);print('RESOURCE_FILES',[x.name for x in p.glob('*resource*.json')])\nfor n in ['final-stop-proof.json','command-079.receipt.json','command-080.receipt.json','command-999.receipt.json']:\n d=json.loads((p/n).read_text(encoding='utf-8-sig'));print(n,'keys',list(d));\n if n!='final-stop-proof.json':print(json.dumps(d))\n'@ | python -X utf8 -",
+      "exit_code": 0,
+      "wall_seconds": 0.9944638,
+      "chunk_id": "e0ac46",
+      "original_output_tokens": 4057
+    },
+    {
+      "ordinal": 42,
+      "command": "@'\nimport json\nfrom pathlib import Path\np=Path('DocuN/evidence/TASK-120/execution/audit-repair-07')\nfor n in ['F01-missing-insert-PASS.json','F01-missing-update-PASS.json','F01-select-only-PASS.json','F01-normal-R03-install-PASS.json']:\n d=json.loads((p/n).read_text(encoding='utf-8-sig'));f=d['facts'];print(n,'root',d.get('root'),'keys',list(f));print('core',json.dumps({k:v for k,v in f.items()if k not in ('before','after')},ensure_ascii=False))\n print('before_control',f['before']['control'],'after_control',f['after']['control'],'equal',f['before']==f['after'])\nfor n in ['F02-application-inherit-write-all-data-PASS.json','F02-snapshot-SET-only-server-program-PASS.json','F02-legal-harmless-membership-current-management-PASS.json','F02-normal-snapshot-read-and-write-denial-current-management-PASS.json']:\n d=json.loads((p/n).read_text(encoding='utf-8-sig'));f=d.get('facts',{});print(n,'root',d.get('root'),json.dumps({k:v for k,v in f.items() if not k.endswith('_graph')},ensure_ascii=False))\n'@ | python -X utf8 -",
+      "exit_code": 0,
+      "wall_seconds": 0.9708748,
+      "chunk_id": "8d9a7b",
+      "original_output_tokens": 1641
+    },
+    {
+      "ordinal": 43,
+      "command": "@'\nimport json\nfrom pathlib import Path\np=Path('DocuN/evidence/TASK-120/execution/audit-repair-07')\nfor n in ['financial-summary.json','final-stop-proof.json','resource-readonly-probe-PASS.json']:\n d=json.loads((p/n).read_text(encoding='utf-8-sig'));print(n,'keys',list(d))\n if n=='financial-summary.json':print(json.dumps(d,ensure_ascii=False))\n if n=='final-stop-proof.json':\n  print(json.dumps({k:v for k,v in d.items()if k not in ('registered_processes','registered_jobs')},ensure_ascii=False))\n  for k in ['registered_processes','registered_jobs']:print(k,type(d[k]).__name__,len(d[k]),str(d[k])[:1100])\nfor n in ['F03-normal-memory-revoke-purge-PASS.json','F03-source-cleanup-failure-closed-PASS.json','F03-exact-cleanup-replay-and-retry-PASS.json']:\n d=json.loads((p/n).read_text(encoding='utf-8-sig'));f=d['facts'];before=f['before'];after=f['after'];print(n,'root',d.get('root'),'core',json.dumps({k:v for k,v in f.items()if k not in ('before','after','unrelated_artifacts_unchanged')},ensure_ascii=False));print('witness_keys',list(before),'equal_operations',before.get('operations')==after.get('operations'),'equal_financials',before.get('financials')==after.get('financials'),'equal_007',before.get('007_hashes')==after.get('007_hashes'),'equal_prepared_digests',before.get('prepared_hashes')==after.get('prepared_hashes'))\n'@ | python -X utf8 -",
+      "exit_code": 0,
+      "wall_seconds": 1.1523749,
+      "chunk_id": "540995",
+      "original_output_tokens": 3436
+    },
+    {
+      "ordinal": 44,
+      "command": "rg -n 'read_memory_command|memory.*commands|purge_state_now|cleanup_status_unconfirmed' backend/app/memory backend/app/activities/api.py backend/app/main.py; rg -l 'hardlink|junction|replacement|recreated|remove_registered' 'DocuN/evidence/TASK-120/execution/audit-repair-07' --glob '*.py'",
+      "exit_code": 0,
+      "wall_seconds": 2.1515286,
+      "chunk_id": "8d7240",
+      "original_output_tokens": 829
+    },
+    {
+      "ordinal": 45,
+      "command": "python -X utf8 'DocuN/evidence/TASK-121/audit/review-01/review_meta.py' read 'backend/app/memory/service.py' --start 1 --end 80; python -X utf8 'DocuN/evidence/TASK-121/audit/review-01/review_meta.py' read 'backend/app/memory/repository.py' --start 565 --end 645",
+      "exit_code": 0,
+      "wall_seconds": 3.0239238,
+      "chunk_id": "6a1677",
+      "original_output_tokens": 2884
+    },
+    {
+      "ordinal": 46,
+      "command": "python -X utf8 'DocuN/evidence/TASK-121/audit/review-01/review_meta.py' read 'backend/app/memory/api.py' --start 25 --end 58",
+      "exit_code": 0,
+      "wall_seconds": 2.5101594,
+      "chunk_id": "9e7242",
+      "original_output_tokens": 388
+    },
+    {
+      "ordinal": 47,
+      "command": "python -X utf8 'DocuN/evidence/TASK-121/audit/review-01/review_meta.py' read 'backend/app/memory/repository.py' --start 298 --end 333",
+      "exit_code": 0,
+      "wall_seconds": 2.5101017,
+      "chunk_id": "c40f40",
+      "original_output_tokens": 677
+    },
+    {
+      "ordinal": 48,
+      "command": "rg -n 'purge_state_now|cleanup_status_unconfirmed|清理|清除' frontend/src --glob '*Memory*' --glob '*memory*'; rg -n 'def .*cleanup|hardlink|junction|replacement|recreated|remove_registered' 'DocuN/evidence/TASK-120/execution/audit-repair-07/prepare-final.py'",
+      "exit_code": 0,
+      "wall_seconds": 2.2903656,
+      "chunk_id": "fdb74a",
+      "original_output_tokens": 400
+    },
+    {
+      "ordinal": 49,
+      "command": "python -X utf8 'DocuN/evidence/TASK-121/audit/review-01/review_records.py'",
+      "exit_code": 0,
+      "wall_seconds": 1.8231469,
+      "chunk_id": "7f6308",
+      "original_output_tokens": 130
+    },
+    {
+      "ordinal": 50,
+      "command": "@'\nimport json\nfrom pathlib import Path\np=Path('DocuN/evidence/TASK-120/execution/audit-repair-07')\nd=json.loads((p/'final-stop-proof.json').read_text(encoding='utf-8-sig'))\nfor x in d['registered_processes']:\n if x.get('observation',{}).get('state')=='unknown':print(json.dumps(x,ensure_ascii=False))\nfor n in ['command-079.json','command-080.json','command-999.json']:\n print(n,(p/n).read_text(encoding='utf-8-sig'))\nprint('PY_FILES',[x.name for x in p.glob('*.py')])\n'@ | python -X utf8 -",
+      "exit_code": 0,
+      "wall_seconds": 1.7965309999999999,
+      "chunk_id": "7e75fa",
+      "original_output_tokens": 1270
+    },
+    {
+      "ordinal": 51,
+      "command": "@'\nimport json\nfrom pathlib import Path\nroot=Path('.');p=root/'DocuN/evidence/TASK-120/execution/audit-repair-07'\nnew=json.loads((p/'final-stop-proof.json').read_text(encoding='utf-8-sig'))\nprior=root/'DocuN/evidence/TASK-120/execution/continuation-06/final-stop-proof-after-readonly.json'\nprint('PRIOR_FILE_EXISTS',prior.is_file())\nif prior.is_file():\n d=json.loads(prior.read_text(encoding='utf-8-sig'));print('PRIOR_KEYS',list(d))\n if 'registered_processes'in d:\n  old={(x['pid'],x['registered_birth']):x for x in d['registered_processes']}\n  rows=[]\n  for x in new['registered_processes']:\n   if x.get('observation',{}).get('state')=='unknown':\n    y=old.get((x['pid'],x['registered_birth']))\n    rows.append({'pid':x['pid'],'birth':x['registered_birth'],'current_observation':x['observation'],'prior_exact_pair':y})\n  print(json.dumps(rows,ensure_ascii=False))\n  out=root/'DocuN/evidence/TASK-121/audit/review-01/stop-unknown-reconciliation.json'\n  out.write_text(json.dumps({'new_observed_at':new['utc'],'prior_file':str(prior),'prior_observed_at':d.get('utc'),'rows':rows,'no_fresh_probe_by_auditor':True},ensure_ascii=False,indent=2)+'\\n',encoding='utf-8')\n'@ | python -X utf8 -",
+      "exit_code": 0,
+      "wall_seconds": 0.9608417,
+      "chunk_id": "9a65f6",
+      "original_output_tokens": 1652
+    },
+    {
+      "ordinal": 52,
+      "command": "python -X utf8 'DocuN/evidence/TASK-121/audit/review-01/review_meta.py' read 'DocuN/evidence/TASK-120/execution/audit-repair-07/final-stop-check.py' --start 1 --end 210",
+      "exit_code": 0,
+      "wall_seconds": 1.1790199000000001,
+      "chunk_id": "6159c5",
+      "original_output_tokens": 1844
+    },
+    {
+      "ordinal": 53,
+      "command": "@'\nimport json\nfrom pathlib import Path\nr=Path('DocuN/evidence/TASK-120/execution')\nfor name in ['root-22-memory-samples.jsonl','root-24-memory-samples.jsonl','root-32-memory-samples.jsonl','repair-03/command-049.receipt.json']:\n p=r/name;d=json.loads(p.read_text(encoding='utf-8-sig').splitlines()[0]) if p.suffix=='.jsonl' else json.loads(p.read_text(encoding='utf-8-sig'))\n print(name,list(d));print(json.dumps(d,ensure_ascii=False)[:1600])\n'@ | python -X utf8 -",
+      "exit_code": 1,
+      "wall_seconds": 1.2072168,
+      "chunk_id": "e2050b",
+      "original_output_tokens": 170
+    },
+    {
+      "ordinal": 54,
+      "command": "@'\nimport json\nfrom pathlib import Path\nr=Path('DocuN/evidence/TASK-120/execution')\nfor name in ['validation-04/root-22-memory-samples.jsonl','validation-04/root-24-memory-samples.jsonl','finalization-05/root-32-memory-samples.jsonl','repair-03/command-049.receipt.json']:\n p=r/name\n if not p.is_file():print(name,'ABSENT');continue\n d=json.loads(p.read_text(encoding='utf-8-sig').splitlines()[0]) if p.suffix=='.jsonl' else json.loads(p.read_text(encoding='utf-8-sig'))\n print(name,list(d));print(json.dumps(d,ensure_ascii=False)[:1800])\nold=json.loads((r/'continuation-06/final-stop-proof-after-readonly.json').read_text(encoding='utf-8-sig'))\nprint('old unknowns',sum(x.get('observation',{}).get('state')=='unknown'for x in old['registered_processes']))\n'@ | python -X utf8 -",
+      "exit_code": 0,
+      "wall_seconds": 1.0551137,
+      "chunk_id": "9b2607",
+      "original_output_tokens": 360
+    },
+    {
+      "ordinal": 55,
+      "command": "@'\nimport json\nfrom pathlib import Path\nr=Path('DocuN/evidence/TASK-120/execution')\nfor name in ['validation-04/root-22-memory-samples.jsonl','validation-04/root-24-memory-samples.jsonl','finalization-05/root-32-memory-samples.jsonl']:\n for line in (r/name).read_text(encoding='utf-8-sig').splitlines():\n  d=json.loads(line)\n  if any('pid' in x or 'members'in x for x in d.get('owned_processes',[])):\n   print(name,json.dumps(d['owned_processes'],ensure_ascii=False)[:2600]);break\n'@ | python -X utf8 -",
+      "exit_code": 0,
+      "wall_seconds": 0.9486157,
+      "chunk_id": "68457d",
+      "original_output_tokens": 205
+    },
+    {
+      "ordinal": 56,
+      "command": "Get-Content -LiteralPath 'backend/tests/fixtures/task120/validation_memory.py' -Encoding UTF8; rg -l '24944|39160|41728|18416' 'DocuN/evidence/TASK-120/execution' --glob '*.json' --glob '*.jsonl' --glob '*.log' --glob '!budget.json' --glob '!events.jsonl' --glob '!source.diff' --glob '!fixture.diff'",
+      "exit_code": 0,
+      "wall_seconds": 1.5179238000000002,
+      "chunk_id": "5876e1",
+      "original_output_tokens": 1014
+    },
+    {
+      "ordinal": 57,
+      "command": "@'\nimport json\nfrom pathlib import Path\nr=Path('DocuN/evidence/TASK-120/execution');new=json.loads((r/'audit-repair-07/final-stop-proof.json').read_text(encoding='utf-8-sig'))\nunknown=[x for x in new['registered_processes']if x.get('observation',{}).get('state')=='unknown'];known={ (x['pid'],x['registered_birth']):[] for x in unknown}\nfor p in r.rglob('*stop*proof*.json'):\n if 'audit-repair-07'in p.parts:continue\n d=json.loads(p.read_text(encoding='utf-8-sig'))\n for x in d.get('registered_processes',[]):\n  key=(x.get('pid'),x.get('registered_birth'));ob=x.get('observation',{})\n  if key in known and (ob.get('state')=='exited' or (ob.get('state')=='running' and ob.get('birth')is not None and int(ob['birth'])!=key[1])):\n   known[key].append({'file':str(p),'utc':d.get('utc'),'observation':ob})\nrows=[]\nfor x in unknown:\n v=known[(x['pid'],x['registered_birth'])];rows.append({'pid':x['pid'],'birth':x['registered_birth'],'source':x['source'],'prior_conclusive_exact_pair':v})\n print(x['pid'],x['registered_birth'],x['source'],'conclusive_earlier',len(v),v[:1])\np=Path('DocuN/evidence/TASK-121/audit/review-01/stop-history-resolution.json');p.write_text(json.dumps({'rows':rows,'unresolved_pairs':[x for x in rows if not x['prior_conclusive_exact_pair']],'fresh_probe_executed':False},ensure_ascii=False,indent=2)+'\\n',encoding='utf-8')\n'@ | python -X utf8 -",
+      "exit_code": 0,
+      "wall_seconds": 2.1216227,
+      "chunk_id": "8205fc",
+      "original_output_tokens": 1303
+    },
+    {
+      "ordinal": 58,
+      "command": "@'\nimport json,hashlib\nfrom pathlib import Path\nr=Path('DocuN/evidence/TASK-120/execution');b=json.loads((r/'budget.json').read_text(encoding='utf-8-sig'))\np=r/'validation-04/root-22-memory-samples.jsonl';matches=[]\nfor line in p.read_text(encoding='utf-8-sig').splitlines():\n d=json.loads(line)\n for x in d.get('owned_processes',[]):\n  if (x.get('pid'),x.get('birth'))==(18452,134368818656922573):matches.append({'utc':d['utc'],'member':x})\nroot=b['roots'][21];resources=root['result']['cleanup']['resources']\nprint('MEMBER_OBSERVATIONS',len(matches),matches[:1],matches[-1:]);print('ROOT22_IDENTITY',root['identity'],'CLEANUP',json.dumps(resources,ensure_ascii=False)[:1800])\nnew=json.loads((r/'audit-repair-07/final-stop-proof.json').read_text(encoding='utf-8-sig'))\njob_names=[x['proof']['job'] for x in resources if x.get('proof',{}).get('tree_empty') and 'job'in x['proof']]\ncurrent=[x for x in new['registered_jobs']if x['job']in job_names];print('CURRENT_EXACT_JOB',json.dumps(current))\no=Path('DocuN/evidence/TASK-121/audit/review-01');resolution={'pid':18452,'birth':134368818656922573,'sample_file':str(p),'sample_sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'member_observation_count':len(matches),'first':matches[:1],'last':matches[-1:],'root22_identity':root['identity'],'root22_cleanup':resources,'fresh_exact_job_observation':current,'reason':'Exact PID/birth was observed inside root22 named Job; its independent tree_empty proof and fresh same-name Job absence are used, not error5 treated as exited.','fresh_process_probe_by_auditor':False}\n(o/'stop-root22-job-resolution.json').write_text(json.dumps(resolution,ensure_ascii=False,indent=2)+'\\n',encoding='utf-8')\n'@ | python -X utf8 -",
+      "exit_code": 0,
+      "wall_seconds": 2.7882725,
+      "chunk_id": "7e2586",
+      "original_output_tokens": 396
+    },
+    {
+      "ordinal": 59,
+      "command": "rg -n -A 13 '^def members' backend/tests/fixtures/task120/merged.py",
+      "exit_code": 0,
+      "wall_seconds": 1.9398317999999999,
+      "chunk_id": "8a2db8",
+      "original_output_tokens": 196
+    },
+    {
+      "ordinal": 60,
+      "command": "rg -n '^    def (projection|approve|check_reference|approval_valid)|^def (check_role_capabilities|validate|domain)|^async def (q_snapshot_command_fact|approve_request)|cleanup_status_unconfirmed|purge_state_now' backend/app/data_exit/q_store.py backend/app/data_exit/q_clock.py backend/app/data_exit/q_roles.py backend/app/capabilities/q_context.py backend/app/operator/q_request.py backend/app/memory/service.py; Get-Content -LiteralPath 'frontend/src/activities/MemoryWorkspace.tsx' -Encoding UTF8 | Select-Object -Skip 266 -First 14; python -X utf8 -c \"import json; from pathlib import Path; p=Path('DocuN/evidence/TASK-121/audit/review-01/control-reconstruction.json'); d=json.loads(p.read_text(encoding='utf-8')); print('reserves_retained',d['old_unknowns_retained']); print('root_entry_caps',all(all(v<=d['caps'][k] for k,v in r['entry_counts'].items()) for r in d['roots'])); print('roots_elapsed_max',max(x['elapsed'] for x in d['roots'])); print('root_cleanup_all',all(x['cleanup_all_confirmed'] for x in d['roots'])); print('command_limits',[(r['manifest'],r['wall_seconds'],r['limit_seconds'],r['exit_code']) for r in d['commands']])\"",
+      "exit_code": 0,
+      "wall_seconds": 1.7056360000000002,
+      "chunk_id": "355054",
+      "original_output_tokens": 1029
+    },
+    {
+      "ordinal": 61,
+      "command": "python -X utf8 'DocuN/evidence/TASK-121/audit/review-01/review_meta.py' read 'DocuN/evidence/TASK-121/audit/review-01/net-diff/backend/tests/fixtures/task120/resources.py.diff' 'DocuN/evidence/TASK-121/audit/review-01/net-diff/backend/tests/fixtures/task120/setup.py.diff' 'DocuN/evidence/TASK-121/audit/review-01/net-diff/backend/tests/fixtures/task120/queued.py.diff' 'DocuN/evidence/TASK-121/audit/review-01/net-diff/backend/tests/fixtures/task120/run.py.diff' 'DocuN/evidence/TASK-121/audit/review-01/net-diff/backend/tests/fixtures/task120/api_runtime.py.diff' 'DocuN/evidence/TASK-121/audit/review-01/net-diff/backend/tests/fixtures/task120/offline.py.diff' 'backend/tests/fixtures/task120/audit07.py'",
+      "exit_code": 0,
+      "wall_seconds": 0.9884328,
+      "chunk_id": "b60258",
+      "original_output_tokens": 6069
+    },
+    {
+      "ordinal": 62,
+      "command": "rg -n -C 3 'validation_memory|working_set|owned_memory' backend/tests/fixtures/task120/resources.py 'DocuN/evidence/TASK-120/execution/audit-repair-07/runtime_control.py'; python -X utf8 -c \"import json; from pathlib import Path; d=json.loads(Path('DocuN/evidence/TASK-121/orchestration-review01-20261021/audit-inputs.json').read_text(encoding='utf-8')); print('opaque engineering report identity',d['opaque_engineering_result']); print('prior identity',d['prior_audit_result'])\"",
+      "exit_code": 0,
+      "wall_seconds": 0.9291108,
+      "chunk_id": "6f42a1",
+      "original_output_tokens": 330
+    },
+    {
+      "ordinal": 63,
+      "command": "@'\nimport hashlib,json\nfrom pathlib import Path\nroot=Path(r'D:\\shspic\\project_NO3_RetroLume-agent');out=root/'DocuN/evidence/TASK-121/audit/review-01'\nprior=(out/'prior-result-original.md').read_bytes();result=root/'DocuN/results/TASK-121-result.md'\nassert len(prior)==33054 and hashlib.sha256(prior).hexdigest()=='c4c30439cd6a2d7b63b12254a76550013ae8da93b50c9cf2d6836451588314d8'\nassert result.read_bytes()==prior,'Result changed outside this review; preserve and inspect'\nprefix=(out/'review-01-prefix.md').read_bytes();text=prefix.decode('utf-8-sig');assert '*' not in text and '\\ufffd' not in text\nresult.write_bytes(prefix+b'\\n'+prior)\nreadback=result.read_bytes();assert readback.endswith(prior) and readback[:-len(prior)]==prefix+b'\\n'\nprint(json.dumps({'path':str(result),'bytes':len(readback),'sha256':hashlib.sha256(readback).hexdigest(),'prior_suffix_bytes':len(prior),'prior_suffix_sha256':hashlib.sha256(readback[-len(prior):]).hexdigest(),'saved_and_readable':True},ensure_ascii=False))\n'@ | python -X utf8 -",
+      "exit_code": 0,
+      "wall_seconds": 0.9848348,
+      "chunk_id": "aea3c9",
+      "original_output_tokens": 83
+    },
+    {
+      "ordinal": 64,
+      "command": "python -X utf8 'DocuN/evidence/TASK-121/audit/review-01/review_meta.py' identities --label closing",
+      "exit_code": 0,
+      "wall_seconds": 7.5037436,
+      "chunk_id": "6b660f",
+      "original_output_tokens": 14
+    },
+    {
+      "ordinal": 65,
+      "command": "@'\nimport datetime,hashlib,json,re\nfrom pathlib import Path\nr=Path(r'D:\\shspic\\project_NO3_RetroLume-agent');o=r/'DocuN/evidence/TASK-121/audit/review-01'\nload=lambda p:json.loads(p.read_text(encoding='utf-8-sig'))\nopening=load(o/'identity-opening.json');closing=load(o/'identity-closing.json')\nassert not opening['mismatches'] and not closing['mismatches'] and closing['checked']==606\nopenrows={(x['group'],x['path']):x for x in opening['rows']}\nfor x in closing['rows']:\n if x['path']==str(r/'DocuN/results/TASK-121-result.md'):assert x['own_result_exact_suffix_preserved']\n else:assert openrows[(x['group'],x['path'])]['actual_sha256']==x['actual_sha256'],x['path']\nreport=r/'DocuN/results/TASK-121-result.md';raw=report.read_bytes();text=raw.decode('utf-8-sig');prior=(o/'prior-result-original.md').read_bytes();prefix=(o/'review-01-prefix.md').read_bytes()\nassert raw==prefix+b'\\n'+prior and len(prior)==33054 and hashlib.sha256(prior).hexdigest()=='c4c30439cd6a2d7b63b12254a76550013ae8da93b50c9cf2d6836451588314d8'\nassert '*'not in prefix.decode('utf-8-sig') and '\\ufffd'not in text\nlinks=[]\nfor v in re.findall(r'\\]\\((D:/[^)]+)\\)',text):\n p=Path(re.sub(r':\\d+$','',v));ok=p.is_file();assert ok,v\n links.append({'target':v,'exists':ok})\nfor name in ['receipt.json','command-log.json','session-receipt.json','findings.json','scope-coverage.json','evidence-comparison.json','control-reconstruction.json']:\n load(o/name)\nf=load(o/'findings.json');assert [x['id']for x in f['decisions']if x['state']=='关闭']==['F01','F04','F05']\nassert [x['id']for x in f['decisions']if x['state']=='不关闭']==['F02','F03']\nhistory=load(o/'stop-history-resolution.json');job=load(o/'stop-root22-job-resolution.json')\nknown=[x for x in history['rows']if x['prior_conclusive_exact_pair']]\nmissing=[x for x in history['rows']if not x['prior_conclusive_exact_pair']]\nassert len(known)==19 and len(missing)==1 and (missing[0]['pid'],missing[0]['birth'])==(job['pid'],job['birth'])\nassert job['member_observation_count']==27 and job['fresh_exact_job_observation'][0]['absent']\nstop={'raw_unknown_error5_count':20,'earlier_exact_exit_proofs':19,'exact_job_membership_and_empty_proof':1,'remaining_unresolved_registered_pairs':0,'current_PID_unknown_not_reclassified_as_exited':True,'all_dimensions_fresh_individually_confirmed':False,'combined_registered_object_stop_evidence_sufficient':True,'references':['stop-history-resolution.json','stop-root22-job-resolution.json'],'auditor_live_probe':False}\n(o/'stop-resolution-final.json').write_text(json.dumps(stop,ensure_ascii=False,indent=2)+'\\n',encoding='utf-8')\nproof={'verified_at':datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).isoformat(),'result':str(report),'bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest(),'UTF8_readback':True,'lines':len(text.splitlines()),'prefix_bytes':len(prefix),'prior_exact_suffix_bytes':len(prior),'prior_suffix_sha256':hashlib.sha256(prior).hexdigest(),'file_links_checked':links,'current_input_checks':606,'current_input_mismatches':0,'all_other_inputs_same_as_opening':True,'product_changes_reviewed':15,'actual_diffs':30,'closed':['F01','F04','F05'],'not_closed':['F02','F03'],'stop_resolution':stop,'business_runtime_executed':False,'command_log_note':'This final readback command is appended to the log after its actual exit, without changing result bytes.'}\n(o/'result-save-proof.json').write_text(json.dumps(proof,ensure_ascii=False,indent=2)+'\\n',encoding='utf-8')\nprint(text.splitlines()[0]);print(text.splitlines()[2]);print(json.dumps({'bytes':len(raw),'sha256':proof['sha256'],'prior_suffix_preserved':True,'local_links':len(links),'inputs_matched':606,'saved_and_readable':True,'stop_unknowns_resolved_by_saved_records_only':20},ensure_ascii=False))\n'@ | python -X utf8 -",
+      "exit_code": 0,
+      "wall_seconds": 1.0718497,
+      "chunk_id": "b75ed5",
+      "original_output_tokens": 126
+    }
+  ],
+  "all_commands_completed": true,
+  "failure_notes": [
+    {
+      "kind": "absent_path_search",
+      "detail": "定向rg含少数不存在的猜测路径，后按rg真实路径读；日志记录各退出码，部分PowerShell复合读取最后一命令成功并不掩盖前面的路径错误。",
+      "business_execution": false
+    },
+    {
+      "kind": "FileNotFoundError",
+      "detail": "首次读取历史root22记忆采样用了旧根前缀；原回执exit1保留，随后按validation-04/finalization-05准确路径读取。",
+      "business_execution": false
+    },
+    {
+      "kind": "output_truncation",
+      "detail": "少数大批输出被截断。所需部分从已返回完整内容或有界元数据重读恢复；没有据截断输出预填结论。",
+      "business_execution": false
+    }
+  ],
+  "network": "仅官方资料元数据读取；累计6页（含同一CPython文件的两种表示分别计数），无业务网络或下载依赖。",
+  "new_official_pages": [
+    {
+      "url": "https://www.postgresql.org/docs/17/sql-grant.html",
+      "purpose": "PG17 ADMIN option and role membership option escalation semantics"
+    },
+    {
+      "url": "https://docs.python.org/3.12/library/time.html",
+      "purpose": "Windows Python3.12 monotonic implementation and cross-process clock semantics"
+    },
+    {
+      "url": "https://github.com/python/cpython/blob/v3.12.10/Python/pytime.c",
+      "purpose": "Exact CPython3.12 Windows monotonic backend source, compare GetTickCount64 and QPC"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/python/cpython/v3.12.10/Python/pytime.c",
+      "purpose": "Raw form of the same official CPython3.12.10 source; count separately conservatively"
+    }
+  ],
+  "engineering_report_decoded": false,
+  "product_or_test_modules_imported": false,
+  "completed_at_utc": "2026-10-21 09:57:23 UTC"
+}

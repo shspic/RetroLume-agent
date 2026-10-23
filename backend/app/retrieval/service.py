@@ -42,7 +42,8 @@ class IntegrationConfig:
     def public(self):return {'available':self.available,'reason':self.reason,'method':'hybrid.cosine-terms.rrf60.v1',
       'purpose':'当前已确认资料片段与本轮必要问题','provider':self.service.provider if self.service else None,'model':self.service.model if self.service else None,'dimensions':512,
       'batch_size':4,'max_index_fragments':self.max_index_fragments,'query_limit_chars':1024,'query_limit_bytes':4096,
-      'real_outbound_authorized':bool(self.service and self.service.outbound_grant),'reserve_cost_microunits':250000}
+      'real_outbound_authorized':bool(self.service and self.service.outbound_grant and
+          (self.service.outbound_grant.get('schema')!='retrolume.outbound-grant.v2' or __import__('app.capabilities.transport',fromlist=['HttpxModelTransport']).HttpxModelTransport.is_external)),'reserve_cost_microunits':250000}
 
 
 def load_integration_config(path):

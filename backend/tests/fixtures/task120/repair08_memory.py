@@ -1,0 +1,160 @@
+"""Proposed08 cleanup-only sample method; explicit user adoption required to run.
+
+The inherited three activity selections cannot normally select a new memory.
+This never pretends the dependency fixture is a normal model-chain proof.
+"""
+import gc,json,os,subprocess,time
+from pathlib import Path
+from uuid import uuid4
+from copy import deepcopy
+from unittest.mock import patch
+import psycopg
+from psycopg.rows import dict_row
+from . import resources as r,setup
+from .api_runtime import application,run,financials
+from .audit07 import case
+from .audit07_cleanup import witness,bodies_closed
+from app.data_exit.q_store import authority_for
+from app.data_exit import q_cleanup
+from app.capabilities.q_protocol import PreparedRequest,raw_digest,canonical
+from app.operator.q_request import principal_id
+from app.data_exit.files import regular,safe_root
+
+HERE=r.EVIDENCE;SLOT='audit07-main'
+
+
+def wait_file(path,process=None,seconds=60):
+    until=time.monotonic()+seconds
+    while not path.exists():
+        if process is not None and process.poll() is not None:raise RuntimeError('repair08_browser_early_exit')
+        if time.monotonic()>=until:raise RuntimeError('repair08_handshake_timeout_'+path.name)
+        time.sleep(.05)
+
+
+def views(c,mid,key,expected):
+    from app.data_exit.q_store import QAuthority
+    # Real API and real PG. Assert these three readonly projections never
+    # initialize normal writable QAuthority, even on a newly reopened app.
+    with patch.object(QAuthority,'__init__',side_effect=AssertionError('GET constructed writable QAuthority')):
+        receipt=c.request('GET','/api/memories/commands/'+key)
+        detail=c.request('GET','/api/memories/'+mid)
+        listing=c.request('GET','/api/memories')
+    item=next(x for x in listing['items'] if x['memory_id']==mid)
+    assert receipt['purge_state_now']==detail['purge_state']==item['purge_state']==expected
+    assert detail['body'] is None
+    if expected=='pending':assert all(x['cleanup_status_unconfirmed'] for x in (receipt,detail,item))
+    with psycopg.connect(setup.dsn(SLOT),row_factory=dict_row) as db:
+        db.execute('SET TRANSACTION READ ONLY')
+        fact=db.execute('''SELECT state,revision,purge_state,(SELECT count(*) FROM learning_memory_bodies b
+            WHERE b.memory_id=h.memory_id) AS body_rows FROM learning_memories h WHERE memory_id=%s''',(mid,)).fetchone()
+    assert fact['state']=='revoked' and fact['purge_state']=='done' and fact['body_rows']==0
+    return {'receipt':receipt,'detail_without_body':{k:detail[k] for k in ('memory_id','revision','state','purge_state')},
+        'listed_item':item,'actual_DB_fact':fact,'QAuthority_initializations_during_three_GETs':0}
+
+
+def exercise():
+    approval=HERE/'sample-method-user-adoption.json'
+    if not approval.is_file() or not json.loads(approval.read_text(encoding='utf-8')).get('explicitly_approved'):
+        raise RuntimeError('repair08_cleanup_sample_method_needs_explicit_user_adoption')
+    progress=r.PRIVATE/SLOT/'repair08-memory-progress.json'
+    state=json.loads(progress.read_text(encoding='utf-8')) if progress.exists() else {}
+    def retain(key,value):
+        if key not in state:state[key]=value;r.write(progress,state,private=True)
+        return state[key]
+    if not state.get('pending_committed'):
+        with application(SLOT) as c:
+            authority=authority_for(c.app.state.activities_ledger)
+            command=retain('save',{'business_key':str(uuid4()),'memory_id':str(uuid4()),'expected_revision':0,'action':'save',
+                'body':{'kind':'preference','title':next(x['filename'] for x in setup.SAMPLES['sources'] if x['alias']=='R'),
+                        'text':setup.SAMPLES['inputs']['memory_body']}})
+            mid=command['memory_id']
+            known=c.request('GET','/api/memories/commands/'+command['business_key'],expect=(200,404))
+            if known.get('status')!='committed':known=c.request('POST','/api/memories/commands',command)
+            assert known['status']=='committed'
+            if 'prepared_id' not in state:
+                # Copy a still-present synthetic artifact, through the actual
+                # artifact reader, without changing its model bytes. The new
+                # metadata row has no accepted business command or approval.
+                candidates=[x for x in authority.hub.state()['q']['requests'].values()
+                    if x['prepared']['domain']!='learning' and not x.get('cleanup')]
+                assert candidates
+                original=authority.artifact(candidates[0]);prepared=deepcopy(original['prepared'])
+                prepared.update(prepared_id=str(uuid4()),business_key=str(uuid4()),operation_id='repair08-no-execution.'+str(uuid4()))
+                with authority.policy():
+                    row=authority.prepare(PreparedRequest.model_validate(prepared),original['request'],original['payload'],
+                        original['provenance'],original['intent'],dependencies={'sources':[], 'memories':[mid]})
+                    authority.revoke(row['prepared_id'],principal_id())
+                retain('prepared_id',row['prepared_id'])
+            row=authority.request(state['prepared_id']);path=authority.hub.artifact_path('q-prepared',row['prepared_id'])
+            info=regular(path);safe_root(path.parent);assert path.resolve().is_relative_to(r.PRIVATE.resolve()) and info.st_nlink==1
+            old=json.loads((HERE.parent/'audit-repair-07/F03-exact-new-deletion-manifest.json').read_text(encoding='utf-8'))
+            assert len(old['files'])==6 and str(path) not in {x['path'] for x in old['files']}
+            entry={'path':str(path),'volume':info.st_dev,'file_id':info.st_ino,'bytes':info.st_size,'sha256':raw_digest(path.read_bytes()),
+                'memory_id':mid,'prepared_id':row['prepared_id'],'purpose':'explicitly approved non-authorizing cleanup projection fixture'}
+            r.write(HERE/'F03-new-exact-delete-manifest.json',{'root':str(r.PRIVATE),'prior_deleted_count':6,'new_files':[entry],
+                'cumulative_delete_files':7,'maximum':16,'no_normal_model_chain_claim':True})
+            untouched={pid:raw_digest(authority.hub.artifact_path('q-prepared',pid).read_bytes())
+                for pid,x in authority.hub.state()['q']['requests'].items() if pid!=row['prepared_id'] and not x.get('cleanup')}
+            retain('unrelated_hashes',untouched);retain('before',witness(authority))
+            preview=run(c.app.state.activities_ledger.preview_memory_change(mid,1,'revoke'))
+            revoke=retain('revoke',{'business_key':str(uuid4()),'memory_id':mid,'expected_revision':1,'action':'revoke',
+                'body':{'impact_token':preview['impact_token'],'confirm_revoke':True,'purge_memory_content':True}})
+            actual=q_cleanup.remove_registered;faults=[]
+            def fault(hub,pid,identity):
+                if pid==row['prepared_id']:faults.append(pid);raise PermissionError('exact synthetic08 file removal boundary')
+                return actual(hub,pid,identity)
+            with patch.object(q_cleanup,'remove_registered',side_effect=fault):
+                receipt=c.request('POST','/api/memories/commands',revoke)
+            assert faults==[row['prepared_id']] and receipt['cleanup_status_unconfirmed'] and receipt['purge_state_now']=='pending'
+            retain('pending_committed',receipt)
+            projected=views(c,mid,revoke['business_key'],'pending');closed=bodies_closed(c,authority,[row])
+            assert regular(path).st_ino==entry['file_id'] and raw_digest(path.read_bytes())==entry['sha256']
+            assert witness(authority)==state['before']
+            case('F03-memory-failure-POST-and-three-GETs',lambda:{'POST':receipt,'views':projected,'closed':closed,
+                'exact_faults':1,'file_still_same_identity_hash':True,'financial_operations_007_unchanged':True,
+                'sample_method':'explicitly adopted non-authorizing dependency fixture; not normal model chain'})
+        # Do not retain a closed FastAPI app/ledger cycle across API lifetimes.
+        del c,authority
+        gc.collect()
+    mid=state['save']['memory_id'];key=state['revoke']['business_key'];pid=state['prepared_id']
+    folder=r.PRIVATE/SLOT/('repair08-browser-'+str(r.state()['active_root']));folder.mkdir(exist_ok=True)
+    handshake=folder/'handshake';handshake.mkdir(exist_ok=True)
+    proof=HERE/f'F03-memory-browser-root-{r.state()["active_root"]}.json'
+    process=None
+    try:
+        with application(SLOT) as c:
+            authority=authority_for(c.app.state.activities_ledger);row=authority.request(pid)
+            projected=views(c,mid,key,'pending');assert os.path.lexists(authority.hub.artifact_path('q-prepared',pid))
+            case('F03-memory-API-reopen-pending',lambda:{'same_memory':mid,'same_revoke_key':key,'same_control':authority.hub.control_id,
+                'views':projected,'file_still_present':True,'closed':bodies_closed(c,authority,[row]),'zero_new_action':witness(authority)==state['before']})
+            spec={'origin':c.base,'project':str(r.ROOT),'memory_id':mid,'profile':str(folder/'profile'),
+                'handshake':str(handshake),'proof':str(proof),'screenshots':str(HERE)}
+            r.write(folder/'spec.json',spec,private=True);env=r.public_environment();env['RETROLUME_TASK120_UI_SPEC']=str(folder/'spec.json')
+            r.memory_gate('browser');r.count('browser_starts')
+            log=(HERE/f'root-{r.state()["active_root"]}-memory-browser.log').open('w',encoding='utf-8')
+            process=subprocess.Popen(['node',str(r.ROOT/'frontend/tests/task120-repair08-memory.mjs')],cwd=r.ROOT/'frontend',env=env,stdout=log,stderr=subprocess.STDOUT)
+            wait_file(handshake/'pending.json',process)
+            wait_file(handshake/'done.json',process)
+            done=views(c,mid,key,'done');assert not os.path.lexists(authority.hub.artifact_path('q-prepared',pid))
+            case('F03-memory-explicit-UI-retry-done',lambda:{'views':done,'file_absent':True,'closed':bodies_closed(c,authority,[row]),
+                'financial_operations_007_unchanged':witness(authority)==state['before']})
+            # Root63 already stopped the original API. This API is the actual
+            # same-DB/control reopen; after retry, reload the same browser page.
+            # A third concurrent app allocation is outside the needed proof.
+            r.write(handshake/'verify-page-reopen.json',{'ready':True})
+            process.wait(timeout=60);log.close();assert process.returncode==0
+            ui=json.loads(proof.read_text(encoding='utf-8'));assert ui['status']=='PASS'
+            from app.data_exit.control import ControlHub
+            replayed=ControlHub(authority.hub.root)
+            assert replayed.control_id==authority.hub.control_id
+            assert replayed.state()['q']['requests'][pid]['cleanup']['state']=='done'
+            for identity,expected in state['unrelated_hashes'].items():assert raw_digest(authority.hub.artifact_path('q-prepared',identity).read_bytes())==expected
+            assert witness(authority)==state['before']
+            case('F03-memory-final-reopen-confirmed',lambda:{'views':done,'same_control':authority.hub.control_id,
+                'original_DB_purge_not_rolled_back':True,'target_file_absent':True,'unrelated_files_unchanged':True,
+                'before':state['before'],'after':witness(authority),'UI_proof':proof.name,
+                'fresh_control_journal_replay_done':True,'API_reopen_pending_and_page_reopen_done':True,
+                'no_new_model_or_embedding_admission':True,'no_new_approval_or_claim':True})
+    finally:
+        if process is not None and process.poll() is None:process.terminate();process.wait(timeout=5)
+    return {'F03':'PASS_TARGETED_ADOPTED_FIXTURE','browser_proof':proof.name,'no_normal_model_chain_claim':True}

@@ -1,0 +1,28 @@
+--- initial/backend/app/preview/generation.py
++++ final/backend/app/preview/generation.py
+@@ -34,14 +34,23 @@
+             raise HtmlRefusal("html_context_limit",status=413)
+         OneCallInput(row["operation_id"],request,config.model_service).to_wire()
+         session = SessionConfig()
+         if config.model_service.timeout_seconds>session.request_timeout_seconds:
+             raise HtmlRefusal("html_config_incompatible",status=503)
+-        if not await self.ledger.claim_html_command(aid,command.business_key):
++        service=config.model_service
++        from app.capabilities.q_gateway import is_v2
++        if is_v2(service):
++            from app.capabilities.q_context import prepare
++            projection,service=await prepare(self.ledger,aid,command.business_key,row['operation_id'],request,service,
++                ControlledModelGateway(service)._build_payload(request),domain='html',action='generate')
++            if not projection['can_continue']:
++                return {**(await self.ledger.read_html_command(aid,command.business_key)),'outbound_approval':projection,'model_called':False}
++        from app.capabilities.q_context import claim_approved
++        if not await claim_approved(self.ledger,service,lambda:self.ledger.claim_html_command(aid,command.business_key)):
+             return await self.ledger.read_html_command(aid,command.business_key)
+         task = asyncio.create_task(asyncio.to_thread(run_one_call,self.ledger,session,aid,"local-ui",row["operation_id"],request,
+-                                                  config.model_service,run_tag=run_tag))
++                                                  service,run_tag=run_tag))
+         supervision=None;cancelled=False
+         while True:
+             try:
+                 supervision=await asyncio.shield(task);break
+             except asyncio.CancelledError:

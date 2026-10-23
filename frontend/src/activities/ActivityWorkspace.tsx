@@ -1,4 +1,4 @@
-import {dataFetch} from "../data/context";
+import {canonical,dataFetch,dataNamespace,getDataContext} from "../data/context";
 import {qApprovalText,type QApproval} from './retrieval-api';
 import { useCallback, useEffect, useRef, useState } from "react";
 import "./activity-workspace.css";
@@ -529,8 +529,8 @@ export function ActivityWorkspace({ token, variant = "learning",scopeDraft=[] }:
   async function continueFromOperation() {
     if (!detail || !continueFor || busy) return;
     if (!intentsOk) { setError("恢复记录不可用：为避免出现无法核对的重复动作，继续已暂停；请优先清除本机恢复记录。"); return; }
-    const text = followup.trim();
-    if (!text) { setError("请输入要继续的内容"); return; }
+    const text = followup;
+    if (!text.trim()) { setError("请输入要继续的内容"); return; }
     if (isLearningDocument(openOperation?.payload?.value, openOperation?.operation_id)) {
       if (!caps?.learning?.available) { setError(`学习续问未开放：${reasonText(caps?.learning?.reason)}`); return; }
       await createLearningIntent("learning_followup", text, continueFor);
@@ -599,6 +599,10 @@ export function ActivityWorkspace({ token, variant = "learning",scopeDraft=[] }:
 
   async function submitLearning(intent: PendingIntent) {
     if (learningWriteRef.current) return;
+    const origin={activity:selectedRef.current,view:detailSeq.current,namespace:dataNamespace(),dataContext:canonical(getDataContext())};
+    const current=()=>mountedRef.current&&selectedRef.current===intent.activity_id&&selectedRef.current===origin.activity
+      &&detailSeq.current===origin.view&&dataNamespace()===origin.namespace&&canonical(getDataContext())===origin.dataContext;
+    if(!current())return;
     learningWriteRef.current = true;
     setBusy(`learning-${intent.intent_id}`);
     if (!updateIntent(intent.intent_id, { state: "submitted" })) {
@@ -611,14 +615,16 @@ export function ActivityWorkspace({ token, variant = "learning",scopeDraft=[] }:
       if(intent.last_code?.startsWith('q_')){
         const known=await api(`/api/activities/${intent.activity_id}/learning/intents/${intent.business_key}?action=${first?'first':'followup'}`);
         const approval=known.outbound_approval as QApproval|undefined;
-        if(!mountedRef.current||selectedRef.current!==intent.activity_id)return;
+        if(!current())return;
         if(!approval?.can_continue){setNotice(approval?qApprovalText(approval):'原操作尚未确认，请只读核对');return;}
       }
+      if(!current())return;
       const data = await api(`/api/activities/${intent.activity_id}/learning/${first ? "first" : "followups"}`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(first ? { business_key: intent.business_key, goal: intent.goal, confirmed: true }
           : { business_key: intent.business_key, parent_operation_id: intent.parent_operation_id, question: intent.followup, confirmed: true }),
       });
+      if(!current())return;
       if (data.status === "precheck") {
         removeIntent(intent.intent_id); reloadIntents();
         if (selectedRef.current === intent.activity_id) setNotice(`未调用模型：${String((data.precheck as {message: string}).message)}`);
@@ -660,8 +666,7 @@ export function ActivityWorkspace({ token, variant = "learning",scopeDraft=[] }:
 
   async function createLearningIntent(kind: "learning_first" | "learning_followup", text: string, parent?: string) {
     if (!detail || busy || learningWriteRef.current || !intentsOk || !caps?.learning?.available) return;
-    text = text.trim();
-    if (!text || text.length > 1024 || new TextEncoder().encode(text).length > 4096) {
+    if (!text.trim() || text.length > 1024 || new TextEncoder().encode(text).length > 4096) {
       setError("请填写具体目标或问题，最多1024字和4096 UTF-8字节。"); return;
     }
     const intent: PendingIntent = { intent_id: crypto.randomUUID(), kind, state: "pending",

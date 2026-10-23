@@ -1,0 +1,24 @@
+--- before/backend/app/data_exit/schema_checks.py
++++ after/backend/app/data_exit/schema_checks.py
+@@ -53,8 +53,10 @@
+ def assert_data_schema_sync(connection,profile=None):
+     from .schema import DATA_FUNCTIONS
+     from .schema_profiles import observed_profile,get_profile,R02,R03,extra_shape_queries,check_extra_shape,SCOPE_ACL_QUERY,check_scope_permissions
+     profile=get_profile(profile) if profile is not None else observed_profile(connection)
++    from .q_roles import assert_roles_sync
++    assert_roles_sync(connection,profile.name)
+     rows=connection.execute(FUNCTION_QUERY,(list(DATA_FUNCTIONS),)).fetchall()
+     roles=connection.execute(ROLE_QUERY,(DATA_ROLES,)).fetchall()
+     triggers=connection.execute(TRIGGER_QUERY).fetchall()
+     check_data_shape(rows,roles,triggers,connection.execute(CONSTRAINT_QUERY).fetchall(),profile.name)
+@@ -67,8 +69,10 @@
+ async def assert_data_schema(connection):
+     from .schema import DATA_FUNCTIONS
+     from .schema_profiles import observed_profile_async,R02,R03,extra_shape_queries,check_extra_shape,SCOPE_ACL_QUERY,check_scope_permissions
+     profile=await observed_profile_async(connection)
++    from .q_roles import assert_roles
++    await assert_roles(connection,profile.name)
+     cursor=await connection.execute(FUNCTION_QUERY,(list(DATA_FUNCTIONS),))
+     rows=await cursor.fetchall()
+     cursor=await connection.execute(ROLE_QUERY,(DATA_ROLES,))
+     roles=await cursor.fetchall()

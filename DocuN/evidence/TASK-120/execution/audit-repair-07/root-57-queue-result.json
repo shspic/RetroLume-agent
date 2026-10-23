@@ -1,0 +1,55 @@
+{
+  "outcomes": {
+    "management_delta": "PASS",
+    "clock_claim": "PASS",
+    "cleanup": "FAIL",
+    "financial_final": "SKIPPED_DEPENDENCY"
+  },
+  "receipts": [
+    {
+      "stage": {
+        "id": "management_delta",
+        "phase": "a07_permissions",
+        "seconds": 300,
+        "depends_on": []
+      },
+      "exit_code": 0,
+      "previous_actual_exit": null,
+      "wall_seconds": 2.8910000000032596,
+      "descendants_stopped": true,
+      "utc": "2026-10-21T06:42:24.295266+00:00"
+    },
+    {
+      "stage": {
+        "id": "clock_claim",
+        "phase": "a07_claim_clock",
+        "seconds": 300,
+        "depends_on": [
+          "management_delta"
+        ]
+      },
+      "exit_code": 0,
+      "previous_actual_exit": 0,
+      "wall_seconds": 75.57799999997951,
+      "descendants_stopped": true,
+      "utc": "2026-10-21T06:43:39.990135+00:00"
+    },
+    {
+      "stage": {
+        "id": "cleanup",
+        "phase": "a07_cleanup",
+        "seconds": 300,
+        "depends_on": [
+          "clock_claim"
+        ]
+      },
+      "exit_code": 1,
+      "previous_actual_exit": 0,
+      "wall_seconds": 2.4679999999934807,
+      "descendants_stopped": true,
+      "utc": "2026-10-21T06:43:42.566569+00:00"
+    }
+  ],
+  "automatic_finite_serial_plan": true,
+  "external_request_wait": false
+}

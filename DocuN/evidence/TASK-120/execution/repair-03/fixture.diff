@@ -1,0 +1,711 @@
+--- before/backend/tests/fixtures/task120/api_runtime.py
++++ after/backend/tests/fixtures/task120/api_runtime.py
+@@ -27,13 +27,18 @@
+         result=self.client.request(method,path,json=body,headers=self.headers)
+         try:response=result.json()
+         except ValueError:response={}
++        detail=response;safe_code=None
++        for depth in range(4):
++            if not isinstance(detail,dict):break
++            safe_code=detail.get('code')
++            if safe_code is not None:break
++            detail=detail.get('detail',detail.get('error'))
++        if not isinstance(safe_code,str) or not __import__('re').fullmatch(r'[a-zA-Z0-9_.-]{1,96}',safe_code):safe_code=None
+         self.timeline.append({'at_ns':start,'method':method,'path':path,'status':result.status_code,
+-            'receipt':{key:response.get(key) for key in ('status','error_code','terminal_disposition','operation_id','retry_policy','model_called')},
++            'receipt':{key:response.get(key) for key in ('status','error_code','terminal_disposition','operation_id','retry_policy','model_called')},'rejection_code':safe_code,
+             'body_sha256':__import__('app.capabilities.q_protocol',fromlist=['digest']).digest(body) if body is not None else None})
+         if result.status_code not in expect:
+-            try:value=result.json();detail=value.get('detail',value.get('error',value));code=detail.get('code') if isinstance(detail,dict) else 'http_rejected'
+-            except ValueError:code='non_json'
+-            raise RuntimeError('task120_http_'+str(result.status_code)+'_'+str(code))
++            raise RuntimeError('task120_http_'+str(result.status_code)+'_'+str(safe_code or 'http_rejected'))
+         return result.json()
+ 
+     def approve(self,aid,key):
+--- before/backend/tests/fixtures/task120/pg_boundaries.py
++++ after/backend/tests/fixtures/task120/pg_boundaries.py
+@@ -148,7 +148,7 @@
+         finally:ledger.claim_interview_launch=original
+         native=r.state()['counts']['native_business_sessions']
+         one=client.request('GET',path+'/'+body['business_key']);two=client.request('GET',path+'/'+body['business_key'])
+-        assert one['launch_claimed'] and two['launch_claimed'] and one['status']=='accepted'
++        assert one['launch_claimed'] and two['launch_claimed'] and one['status']=='started' and two['status']=='started'
+         if financials('flow')!=before or r.state()['counts']['native_business_sessions']!=native:raise RuntimeError('claimed_ACK_GET_changed_finances_or_launched')
+         persist('ACK.done',{'business_key':body['business_key'],'accept_COMMIT_real':True,'claim_COMMIT_real':True,'prepared_ACK_readonly_recovered':True,'claim_ACK_readonly_only':True,'never_resent_after_claim':True,'financials_unchanged':True})
+     if 'gap.done' not in state:
+--- before/backend/tests/fixtures/task120/queued.py
++++ after/backend/tests/fixtures/task120/queued.py
+@@ -8,11 +8,16 @@
+ PHASES=frozenset(('observe','diagnose','html_eol','integrated_core','integrated_ui','teaching','interview','interview_repaired','legacy_html','gap','budget','budget_a2','budget_a3','budget_race','boundaries','ui','reopen'))
+ PERMIT='TASK-120-Q-PREP-CONTINUATION-01-20261019'
+ PHASES=PHASES|frozenset(('c02_observe','c02_bootstrap_memory','c02_core','c02_memory','c02_ui','c02_races'))
++REPAIR_PERMIT='TASK-120-Q-PREP-REPAIR-03-20261019'
++PHASES=PHASES|frozenset(('r03_diagnose','r03_core','r03_memory','r03_boundaries','r03_ui','r03_races'))
++PHASES=PHASES|frozenset(('r03_ui_teaching','r03_ui_interview','r03_ui_legacy_html'))
++PHASES=PHASES|frozenset(('r03_fences',))
+ 
+ def read_plan(path):
+     value=json.loads(Path(path).read_text(encoding='utf-8'))
+-    if set(value)!={'schema','permit_id','root_id','stages'} or value['schema']!='task120.finite-plan.v1' or value['permit_id']!=PERMIT:raise ValueError('closed_plan')
+-    if type(value['root_id']) is not int or not 9<=value['root_id']<=16 or not isinstance(value['stages'],list) or not 1<=len(value['stages'])<=12:raise ValueError('plan_limit')
++    if set(value)!={'schema','permit_id','root_id','stages'} or value['schema']!='task120.finite-plan.v1' or value['permit_id'] not in (PERMIT,REPAIR_PERMIT):raise ValueError('closed_plan')
++    low,high=(17,20) if value['permit_id']==REPAIR_PERMIT else (9,16)
++    if type(value['root_id']) is not int or not low<=value['root_id']<=high or not isinstance(value['stages'],list) or not 1<=len(value['stages'])<=12:raise ValueError('plan_limit')
+     seen=set()
+     for stage in value['stages']:
+         if (set(stage)!={'id','phase','seconds','depends_on'} or stage['phase'] not in PHASES or type(stage['seconds']) is not int or not 1<=stage['seconds']<=300
+@@ -20,6 +25,7 @@
+             or any(x not in seen for x in stage['depends_on']) or len(set(stage['depends_on']))!=len(stage['depends_on'])):raise ValueError('invalid_stage')
+         seen.add(stage['id'])
+     if sum(s['seconds'] for s in value['stages'])>1680:raise ValueError('plan_root_deadline')
++    if any(s['phase']=='r03_diagnose' for s in value['stages']) and (len(value['stages'])!=1 or value['stages'][0]['seconds']>300):raise ValueError('readonly_diagnostic_closed_plan')
+     return value
+ 
+ def runnable(stage,outcomes):return all(outcomes.get(x)=='PASS' for x in stage['depends_on'])
+@@ -27,7 +33,7 @@
+ def run_plan():
+     path=Path(os.environ['RETROLUME_TASK120_PLAN']);plan=read_plan(path)
+     root=r.state()['active_root'];slot=next(x for x in r.state()['roots'] if x['id']==root)
+-    if plan['root_id']!=root or slot['permit_id']!=PERMIT or hashlib.sha256(path.read_bytes()).hexdigest()!=slot['plan_sha256']:raise RuntimeError('plan_identity')
++    if plan['root_id']!=root or slot['permit_id']!=plan['permit_id'] or hashlib.sha256(path.read_bytes()).hexdigest()!=slot['plan_sha256']:raise RuntimeError('plan_identity')
+     job=NamedJob.open_existing(slot['identity'],1)
+     try:baseline=members(job)
+     finally:job.close()
+--- before/backend/tests/fixtures/task120/recovery_races.py
++++ after/backend/tests/fixtures/task120/recovery_races.py
+@@ -32,6 +32,10 @@
+             body=retain(name,{'business_key':str(uuid4()),'action':action,'expected_scope_revision':1,'expected_domain_revision':current['domain_revision'],'confirmed':True,**({'query':setup.SAMPLES['inputs']['interview_goal']} if action=='query' else {})})
+             url=f'/api/activities/{aid}/retrieval/commands';pending=c.request('POST',url,body)
+             if pending['terminal_disposition']=='received':return remember(name+'.done',pending)
++            if action=='source_index' and pending['terminal_disposition']=='cache_ready':
++                status=c.request('GET',f'/api/activities/{aid}/retrieval/status')
++                if not status['ready'] or status['cached_fragments']!=status['fragments'] or not status['fragments']:raise RuntimeError('race_cache_not_complete')
++                return remember(name+'.done',pending)
+             rows=c.approve(aid,body['business_key'])
+             for row in rows:r.count('native_business_sessions')
+             value=c.request('POST',url,body)
+--- before/backend/tests/fixtures/task120/run.py
++++ after/backend/tests/fixtures/task120/run.py
+@@ -41,6 +41,9 @@
+             from .merged import run_batches
+             return run_batches()
+         if phase=='bootstrap':bootstrap()
++        elif phase.startswith('r03_'):
++            from . import repair03
++            repair03.execute(phase.removeprefix('r03_'))
+         elif phase in ('flow','teaching','interview','interview_repaired','legacy_html','gap'):
+             from .flow import run_flow
+             run_flow(None if phase=='flow' else phase)
+--- before/backend/tests/fixtures/task120/ui.py
++++ after/backend/tests/fixtures/task120/ui.py
+@@ -12,10 +12,13 @@
+     folder=r.PRIVATE/stem;folder.mkdir(exist_ok=False)
+     with (application('flow') if client is None else nullcontext(client)) as client:
+         progress=json.loads((r.PRIVATE/'flow/flow-progress.json').read_text(encoding='utf-8'))
++        repair=r.PRIVATE/'flow/r03-progress.json'
++        repair_progress=json.loads(repair.read_text(encoding='utf-8')) if repair.exists() else {}
+         spec={'permit':'TASK-120-Q-PREP-IMPLEMENTATION-20261018','project':str(r.ROOT),'origin':client.base,
+             'activities':list(ROSTER),'interview_goal':setup.SAMPLES['inputs']['interview_goal'],
+             'mode':mode,'numeric_goal':setup.SAMPLES['inputs']['numeric_goal'],'concept_goal':setup.SAMPLES['inputs']['concept_goal'],'numeric_question':setup.SAMPLES['inputs']['numeric_initial_question'],
+-            'legacy_operation':progress.get('legacy-first.done',{}).get('operation_id'),
++            'scope_remove_title':next(s['filename'] for s in setup.SAMPLES['sources'] if s['alias']=='M'),
++            'legacy_operation':repair_progress.get('legacy-followup.done',progress.get('legacy-first.done',{})).get('operation_id'),
+             'profile':str(folder/'browser'),'handshake':str(folder),'proof':str(r.EVIDENCE/(stem+'-proof.json')),
+             'screenshotTeaching':str(r.EVIDENCE/(stem+'-teaching.png')),'screenshotInterview':str(r.EVIDENCE/(stem+'-interview.png'))}
+         r.write(folder/'spec.json',spec,private=True)
+--- before/frontend/tests/task120-ui-continuation.mjs
++++ after/frontend/tests/task120-ui-continuation.mjs
+@@ -8,7 +8,7 @@
+ assert(process.env.RETROLUME_TASK120_UI_SPEC,'owned finite TASK120 root required');
+ const spec=JSON.parse(fs.readFileSync(process.env.RETROLUME_TASK120_UI_SPEC,'utf8'));
+ assert.equal(spec.permit,'TASK-120-Q-PREP-IMPLEMENTATION-20261018');
+-assert(['teaching','interview','legacy_html'].includes(spec.mode));
++assert(['teaching','interview','legacy_html','fences'].includes(spec.mode));
+ const sha=x=>createHash('sha256').update(x).digest('hex');
+ const proof={execution_class:'TESTONLY',mode:spec.mode,status:'RUNNING',real_PG:true,real_Windows_SUP:true,
+  fixture_sha256:sha(fs.readFileSync(fileURLToPath(import.meta.url))),assets:[],requests:[],actions:[],cases:[],external_attempts:[],errors:[]};
+@@ -119,6 +119,44 @@
+   assert.equal(result.body.business_key,model.body.business_key);assert.equal(result.receipt.status,'committed');
+   proof.cases.push({name:'interview-query-and-model-wait-GET-reopen-owner-view-late-explicit-original-commit',status:'PASS',query_key:query.body.business_key,model_key:model.body.business_key});
+   await page.screenshot({path:spec.screenshotInterview,fullPage:true});
++ }else if(spec.mode==='fences'){
++  const domain=`/api/activities/${a2}/interview/commands`,retrieval=`/api/activities/${a2}/retrieval/commands`;
++  for(const fence of ['head','scope']){
++   await page.reload({waitUntil:'networkidle'});let area=await select(page,a2,true);
++   await area.getByLabel('面试目标',{exact:true}).fill(spec.interview_goal);
++   await action(page,domain,`fence_${fence}_new_goal`,()=>area.getByRole('button',{name:'保存修正目标（另存版本）',exact:true}).click());
++   const query=await action(page,retrieval,`fence_${fence}_query_prepare`,()=>area.getByRole('button',{name:'开始提问',exact:true}).click());
++   assert(query.receipt.outbound_approval);await operator(a2,query.body.business_key);
++   let panel=area.locator('section[aria-label="资料检索与恢复"]');
++   await panel.getByRole('button',{name:'按原键只读核对',exact:true}).last().click();
++   await action(page,retrieval,`fence_${fence}_query_continue`,()=>panel.getByRole('button',{name:'明确继续已批准的原检索请求',exact:true}).last().click());
++   const model=await action(page,domain,`fence_${fence}_model_prepare`,()=>panel.getByRole('button',{name:'明确继续尚未发送的原动作',exact:true}).last().click());
++   await operator(a2,model.body.business_key);
++   const intent=area.locator(`[data-interview-intent-key="${model.body.business_key}"]`);
++   await intent.getByRole('button',{name:'只读核对原提交',exact:true}).click();
++   const other=await context.newPage();other.setDefaultTimeout(13000);await other.goto(spec.origin,{waitUntil:'networkidle'});
++   const second=await select(other,a2,true);let hit=false,release;const barrier=new Promise(resolve=>release=resolve);
++   const pattern=`**${domain}/${model.body.business_key}`;
++   await page.route(pattern,async route=>{const response=await route.fetch();hit=true;await barrier;await route.fulfill({response});});
++   const oldKeyPosts=()=>posts(domain).filter(x=>x.body?.business_key===model.body.business_key).length;
++   const before=oldKeyPosts();
++   try{
++    await intent.getByRole('button',{name:'在安全条件下显式重交原意图',exact:true}).click();await until(()=>hit);
++    if(fence==='head'){
++     await second.getByLabel('面试目标',{exact:true}).fill(spec.interview_goal);
++     await action(other,domain,'concurrent_actual_local_goal',()=>second.getByRole('button',{name:'保存修正目标（另存版本）',exact:true}).click());
++    }else{
++     await second.getByRole('button',{name:'读取当前资料，明确更新范围',exact:true}).click();
++     await second.locator('label').filter({hasText:spec.scope_remove_title}).filter({has:other.locator('input[type="checkbox"]')}).getByRole('checkbox').uncheck();
++     await action(other,domain,'concurrent_actual_scope_binding',()=>second.getByRole('button',{name:'确认新的资料范围',exact:true}).click());
++    }
++    const refresh=page.waitForResponse(r=>r.request().method()==='GET'&&new URL(r.url()).pathname===`/api/activities/${a2}/interview/workspace`);
++    await area.getByRole('button',{name:'只读刷新／恢复场次',exact:true}).click();await refresh;await sleep(300);release();await sleep(350);
++    assert.equal(oldKeyPosts(),before,'late original model GET must not POST after observed head/scope change');
++    proof.cases.push({name:`actual-${fence}-mutation-during-approved-GET-no-original-model-POST`,status:'PASS',business_key:model.body.business_key});
++   }finally{release();await page.unroute(pattern);await other.close();}
++  }
++  proof.not_run=['namespace-switch','DataContext-switch'];
+  }else{
+   assert(spec.legacy_operation,'actual committed legacy parent');
+   let learning=await reopenLegacy(page);const follow=`/api/activities/${a3}/learning/followups`,html=`/api/activities/${a3}/html/commands`;
+--- /dev/null
++++ after/backend/tests/fixtures/task120/repair03.py
+@@ -0,0 +1,346 @@
++"""Repair03 finite checks and normal chains; original resources only."""
++import json,sys,time,re
++from pathlib import Path
++from types import SimpleNamespace
++from unittest.mock import patch
++from . import resources as r,setup
++from .api_runtime import run,financials,application
++from app.capabilities.q_protocol import ROSTER,canonical,digest
++HERE=r.EVIDENCE/'repair-03'
++OLD_I='430a4e36-08e1-411f-a73e-097506a6278b'
++OLD_T='3b561488-07b7-4d6d-8b98-05e793c96749'
++
++def write(name,value):
++    target=HERE/name
++    if target.exists():
++        old=target.read_bytes();new=json.dumps(value,ensure_ascii=False,indent=2).encode()
++        if old!=new:
++            folder=HERE/'history';folder.mkdir(exist_ok=True)
++            (folder/(target.stem+'-before-root-'+str(r.state()['active_root'])+'-'+str(time.monotonic_ns())+target.suffix)).write_bytes(old)
++    r.write(target,value)
++
++def terminal_retrieval(action,receipt,status=None):
++    if receipt.get('status')!='terminal':return False
++    if receipt.get('terminal_disposition')=='received':return True
++    return bool(action=='source_index' and receipt.get('terminal_disposition')=='cache_ready' and status
++        and status.get('ready') and status.get('fragments',0)>0 and status.get('cached_fragments')==status['fragments'])
++def safe_error(exc):
++    code=getattr(exc,'code',None)
++    return {'type':type(exc).__name__,'code':code if isinstance(code,str) and re.fullmatch(r'[a-zA-Z0-9_.-]{1,96}',code) else None,'sqlstate':getattr(exc,'sqlstate',None)}
++
++def diagnose():
++    from .transport import install
++    from app.main import create_app
++    from app.data_exit.q_store import authority_for
++    from app.capabilities.contracts import ModelCallRequest
++    from app.learning.teaching_adapter import validate_teaching_request
++    from app.learning.contracts import read_document,normalize_input
++    import psycopg
++    from psycopg.rows import dict_row
++    install();setup.environment('flow',include_admin=False)
++    until=time.monotonic()+15
++    while True:
++        try:
++            with psycopg.connect(setup.dsn('flow'),connect_timeout=2) as c:c.execute('SELECT 1').fetchone()
++            break
++        except psycopg.Error:
++            if time.monotonic()>until:raise RuntimeError('repair03_PG_readiness_timeout') from None
++            time.sleep(.2)
++    app=create_app()
++    ledger=app.state.activities_ledger;authority=authority_for(ledger)
++    if not app.state.q_readiness['available']:raise RuntimeError('repair03_original_assembly_unavailable')
++    before=financials('flow');journal_before=__import__('hashlib').sha256((r.PRIVATE/'flow/control/journal.bin').read_bytes()).hexdigest()
++    result={'readonly':True,'new_business_POST':0,'SUP':0,'admit_mark_record_claim':0,'checks':{},'exceptions':[]}
++    def trace(frame,event,arg):
++        if event=='exception':
++            filename=Path(frame.f_code.co_filename)
++            if filename.is_relative_to(r.ROOT/'backend/app'):
++                exc=arg[1];record={**safe_error(exc),'file':filename.relative_to(r.ROOT).as_posix(),'function':frame.f_code.co_name,'line':frame.f_lineno}
++                if record not in result['exceptions']:result['exceptions'].append(record)
++        return trace
++    async def validate():
++        row=next(x for x in authority.hub.state()['q']['requests'].values() if x['prepared']['business_key']==OLD_T)
++        request=ModelCallRequest.model_validate(authority.artifact(row)['request'])
++        p=row['prepared'];context=SimpleNamespace(activity_id=p['activity_id'],scope_revision=request.teaching_profile.scope_revision,operation_id=p['operation_id'])
++        from app.data_exit.q_store import is_read_method
++        for old in (True,False):
++            with patch('app.data_exit.q_store.is_read_method',side_effect=lambda name:False if old and name=='_teaching_read_snapshot' else is_read_method(name)):
++                previous=sys.gettrace();sys.settrace(trace)
++                try:
++                    async with authority.async_policy(shared=True):code=await validate_teaching_request(context,request,ledger)
++                finally:sys.settrace(previous)
++            result['checks']['teaching_before' if old else 'teaching_after']={'returned_code':code,'request_sha256':digest(request.model_dump(mode='json')),'business_key':OLD_T}
++        result['checks']['teaching_read_fix_verified']=result['checks']['teaching_before']['returned_code']=='teaching_validation_unavailable' and result['checks']['teaching_after']['returned_code'] is None
++    until=time.monotonic()+15
++    while True:
++        try:
++            with psycopg.connect(setup.dsn('flow'),connect_timeout=2) as c:c.execute('SELECT 1').fetchone()
++            break
++        except psycopg.Error:
++            if time.monotonic()>until:raise RuntimeError('repair03_PG_readiness_timeout') from None
++            time.sleep(.2)
++    run(validate())
++    progress=json.loads((r.PRIVATE/'flow/flow-progress.json').read_text(encoding='utf-8'))
++    parent_op=progress['legacy-first.done']['operation_id']
++    parent=run(ledger.read_committed_result(ROSTER[2],parent_op))
++    document=json.loads(parent.payload)['value'];profile,output=read_document(document,activity_id=ROSTER[2],operation_id=parent_op)
++    result['checks']['legacy_parent']={'operation_id':parent_op,'kind':parent.kind,'read_status':parent.read_status.value,'output_kind':output.kind,'payload_sha256':parent.payload_sha256,'segment_count':len(output.segments),'profile':profile.profile}
++    for name,text in [('followup',setup.SAMPLES['inputs']['numeric_initial_question']),('focus',setup.SAMPLES['inputs']['numeric_goal'])]:
++        result['checks'][name+'_input_canonical']=normalize_input(text)==text
++    async def guards():
++        async with await psycopg.AsyncConnection.connect(setup.dsn('flow'),row_factory=dict_row) as c:
++            await c.execute('BEGIN READ ONLY');await c.execute("SET LOCAL statement_timeout='5s'")
++            a=await (await c.execute('SELECT * FROM activities WHERE id=%s',(ROSTER[2],))).fetchone()
++            for name,fn in [('legacy_domain',lambda:ledger._interview_require_non_domain(c,ROSTER[2])),
++                ('html_schema',lambda:ledger._html_assert_schema(c)),
++                ('html_parent',lambda:ledger._html_parent_locked(c,a,{'kind':'learning','operation_id':parent_op,'payload_sha256':parent.payload_sha256,'segment_index':0}))]:
++                try:
++                    async with c.transaction():value=await fn()
++                except Exception as exc:result['checks'][name]={'status':'REFUSED',**safe_error(exc)}
++                else:result['checks'][name]={'status':'PASS','context_sha256':digest(value) if value else None}
++            for table,fields in [('teaching_heads','revision,goal_version,goal_record_id::text,pending_business_key::text'),('interview_heads','revision,goal_version,goal_record_id::text,pending_key::text')]:
++                result[table]=await (await c.execute(f'SELECT activity_id::text,{fields} FROM {table} ORDER BY activity_id')).fetchall()
++            for table in ('teaching_commands','interview_commands'):
++                result[table]=await (await c.execute(f'SELECT activity_id::text,business_key::text,action,status,operation_id FROM {table} ORDER BY created_at')).fetchall()
++    run(guards())
++    result['financials_unchanged']=financials('flow')==before
++    result['journal_unchanged']=__import__('hashlib').sha256((r.PRIVATE/'flow/control/journal.bin').read_bytes()).hexdigest()==journal_before
++    write('readonly-diagnosis.json',__import__('app.data_exit.codec',fromlist=['plain']).plain(result))
++    if not result['financials_unchanged'] or not result['journal_unchanged']:raise RuntimeError('readonly_diagnostic_changed_authority')
++
++def execute(mode):
++    if mode=='diagnose':return diagnose()
++    if mode=='core':return core()
++    if mode=='memory':return memory()
++    if mode=='ui':return flow_tail()
++    if mode=='fences':
++        tail=json.loads((HERE/'flow-tail-result.json').read_text(encoding='utf-8'))
++        if not tail['outcomes'].get('interview',{}).get('status','').startswith('PASS'):raise RuntimeError('repair03_UI_interview_positive_required_before_head_scope_fences')
++        from .ui import run_ui
++        return run_ui(mode='fences')
++    if mode=='races':
++        if not (HERE/'selected-memory-positive.json').exists():raise RuntimeError('repair03_memory_positive_required_before_races')
++        from .recovery_races import run_races
++        return run_races()
++    raise ValueError('repair03_closed_mode')
++
++class Flow:
++    def __init__(self,c,slot):
++        self.c=c;self.slot=slot;self.path=r.PRIVATE/slot/'r03-progress.json'
++        self.state=json.loads(self.path.read_text(encoding='utf-8')) if self.path.exists() else {}
++    def save(self,name,value):self.state[name]=value;r.write(self.path,self.state,private=True);return value
++    def retain(self,name,value):return self.state[name] if name in self.state else self.save(name,value)
++    def body(self,name,value):
++        from uuid import uuid4
++        return self.retain(name,dict(business_key=str(uuid4()),**value))
++    def head(self,aid,domain):return self.c.request('GET',f'/api/activities/{aid}/{domain}/workspace')['head']
++    def local(self,aid,domain,action,body,name):
++        if name+'.done' in self.state:return self.state[name+'.done']
++        h=self.head(aid,domain) or {};interview=domain=='interview'
++        value={'action':action,'expected_goal_version':h.get('goal_version',0),'expected_scope_revision':1,'body':body}
++        value['expected_head_revision' if interview else 'expected_revision']=h.get('revision',0)
++        if interview:value['schema']='interview.command.v2'
++        command=self.body(name,value);receipt=self.c.request('POST',f'/api/activities/{aid}/{domain}/commands',command)
++        if receipt['status']!='committed':raise RuntimeError('repair03_local_not_committed_'+name)
++        return self.save(name+'.done',receipt)
++    def goal(self,aid,domain,text,name):
++        if name+'.parent-proof' in self.state:return self.state[name+'.parent-proof']
++        before=self.head(aid,domain)
++        self.local(aid,domain,'start' if domain=='interview' and not before else 'goal',
++            {'goal':{'target':text,'material_roles':[]}} if domain=='interview' else {'goal':text},name)
++        after=self.head(aid,domain)
++        if after['revision']!=(before or {}).get('revision',0)+1 or after['goal_version']!=(before or {}).get('goal_version',0)+1 or after['goal_record_id']==(before or {}).get('goal_record_id'):raise RuntimeError('repair03_goal_no_new_parent_'+name)
++        return self.save(name+'.parent-proof',{'before':before,'after':after})
++    def retrieve(self,aid,action,name,query=None):
++        path=f'/api/activities/{aid}/retrieval/commands'
++        if name not in self.state:
++            status=self.c.request('GET',f'/api/activities/{aid}/retrieval/status')
++            self.body(name,{'action':action,'expected_scope_revision':1,'expected_domain_revision':status['domain_revision'],'confirmed':True,**({'query':query} if query else {})})
++        command=self.state[name];receipt=self.c.request('GET',path+'/'+command['business_key'],expect=(200,202,404))
++        if not receipt.get('status'):receipt=self.c.request('POST',path,command)
++        if receipt.get('status')=='terminal':
++            status=self.c.request('GET',f'/api/activities/{aid}/retrieval/status') if receipt.get('terminal_disposition')=='cache_ready' else None
++            if not terminal_retrieval(action,receipt,status):raise RuntimeError('repair03_retained_retrieval_not_qualified')
++            return self.save(name+'.done',receipt)
++        if receipt.get('launch_claimed') or receipt.get('launch_claimed_at') or receipt.get('status') in ('unknown','launch_claimed'):raise RuntimeError('repair03_retained_claim_not_resent')
++        approval=receipt.get('outbound_approval')
++        if not approval:
++            receipt=self.c.request('POST',path,command);approval=receipt.get('outbound_approval')
++        if not approval:raise RuntimeError('repair03_retrieval_approval_absent')
++        before=financials(self.slot);native=r.state()['counts']['native_business_sessions']
++        self.c.request('GET',path+'/'+command['business_key'])
++        if financials(self.slot)!=before or r.state()['counts']['native_business_sessions']!=native:raise RuntimeError('repair03_GET_side_effect')
++        if not approval['can_continue']:self.c.approve(aid,command['business_key'])
++        if financials(self.slot)!=before:raise RuntimeError('repair03_approval_financial_side_effect')
++        r.count('native_business_sessions');receipt=self.c.request('POST',path,command)
++        if receipt.get('terminal_disposition')!='received':raise RuntimeError('repair03_query_not_received_'+str(receipt.get('error_code')))
++        return self.save(name+'.done',receipt)
++    def model(self,aid,domain,action,body,name,ref=None):
++        path=f'/api/activities/{aid}/{domain}/commands'
++        if name not in self.state:
++            h=self.head(aid,domain);value={'action':action,'expected_goal_version':h['goal_version'],'expected_scope_revision':1,'body':body}
++            value['expected_head_revision' if domain=='interview' else 'expected_revision']=h['revision']
++            if domain=='interview':value['schema']='interview.command.v2'
++            if ref:value['retrieval_ref']=ref
++            self.body(name,value)
++        command=self.state[name]
++        if name+'.done' in self.state:
++            receipt=self.c.request('GET',path+'/'+command['business_key'])
++            if receipt['status']!='committed':raise RuntimeError('repair03_saved_COMMIT_not_reconciled')
++            return receipt
++        receipt=self.c.request('GET',path+'/'+command['business_key'],expect=(200,202,404))
++        if receipt.get('launch_claimed') or receipt.get('launch_claimed_at') or receipt.get('status') in ('unknown','started'):raise RuntimeError('repair03_old_model_never_resent')
++        receipt=self.c.request('POST',path,command)
++        if receipt['status']!='accepted' or not receipt.get('outbound_approval'):raise RuntimeError('repair03_model_prepare_not_pending')
++        before=financials(self.slot);self.c.request('GET',path+'/'+command['business_key']);self.c.approve(aid,command['business_key'])
++        if financials(self.slot)!=before:raise RuntimeError('repair03_model_GET_approval_financial_side_effect')
++        r.count('native_business_sessions');receipt=self.c.request('POST',path,command)
++        fact=run(self.c.app.state.activities_ledger.read_committed_result(aid,receipt['operation_id']))
++        if receipt['status']!='committed' or fact.read_status.value!='committed_current' or not fact.payload:raise RuntimeError('repair03_model_missing_domain_007_'+domain+'_'+str(receipt.get('error_code')))
++        self.save(name+'.007',{'operation_id':receipt['operation_id'],'payload_sha256':fact.payload_sha256,'read_status':fact.read_status.value})
++        return self.save(name+'.done',receipt)
++
++def abandon_originals(f):
++    from app.data_exit.q_store import authority_for
++    ledger=f.c.app.state.activities_ledger;authority=authority_for(ledger)
++    for domain,aid,key in [('interview',ROSTER[1],OLD_I),('teaching',ROSTER[2],OLD_T)]:
++        name='abandon-'+domain
++        if name+'.done' in f.state:
++            if domain=='teaching' and not (HERE/(name+'-witness.json')).exists():
++                view=run(ledger.read_teaching_command(aid,key));row=view['command']
++                if row['abandoned_at'] is None or (view['head'] or {}).get('pending_business_key') is not None:raise RuntimeError('repair03_teaching_abandon_not_effective')
++                qrow=next(x for x in authority.hub.state()['q']['requests'].values() if x['prepared']['business_key']==key)
++                write(name+'-witness.json',{'old_business_key':key,'original_UNKNOWN_status_retained':row['status'],'abandoned_at':str(row['abandoned_at']),'pending_cleared':True,'Q_claim_retained':qrow.get('claim'),'Q_admission_retained':qrow.get('admission'),'financials_after':financials(f.slot),'resend_count':0,'initial_assertion_failed_before_this_readonly_reconciliation':True})
++            continue
++        money=financials(f.slot);q=authority.hub.state()['q'];before=f.head(aid,domain)
++        path=f'/api/activities/{aid}/{domain}/commands/'+key;old=f.c.request('GET',path)
++        if old['status']!='unknown':raise RuntimeError('repair03_original_unknown_state_changed')
++        f.local(aid,domain,'abandon',{'pending_key' if domain=='interview' else 'target_business_key':key},name)
++        after=f.c.request('GET',path)
++        ended=after['status']=='abandoned' if domain=='interview' else run(ledger.read_teaching_command(aid,key))['command']['abandoned_at'] is not None
++        if not ended or financials(f.slot)!=money or authority.hub.state()['q']!=q:raise RuntimeError('repair03_abandon_changed_Q_or_finances')
++        write(name+'-witness.json',{'old_business_key':key,'before_command':old,'after_command':after,'before_head':before,'after_head':f.head(aid,domain),'Q_claim_operation_finances_unchanged':True,'resend_count':0,'old_semantic_slot_retained':True})
++
++def legacy_and_html(f):
++    from app.learning.contracts import read_document
++    aid=ROSTER[2];ledger=f.c.app.state.activities_ledger
++    old=json.loads((r.PRIVATE/'flow/flow-progress.json').read_text(encoding='utf-8'))
++    parent_op=old['legacy-first.done']['operation_id'];parent=run(ledger.read_committed_result(aid,parent_op))
++    _,output=read_document(json.loads(parent.payload)['value'],activity_id=aid,operation_id=parent_op)
++    if parent.read_status.value!='committed_current' or output.kind!='answer' or not output.segments:raise RuntimeError('repair03_legacy_parent_ineligible')
++    name='legacy-followup';body=f.body(name,{'parent_operation_id':parent_op,'question':setup.SAMPLES['inputs']['numeric_initial_question'],'confirmed':True})
++    if name+'.done' not in f.state:
++        url=f'/api/activities/{aid}/learning/followups';value=f.c.request('POST',url,body)
++        if value['status']!='awaiting_approval' or not value.get('outbound_approval'):raise RuntimeError('repair03_legacy_not_pending')
++        before=financials('flow');f.c.request('GET',f'/api/activities/{aid}/learning/intents/{body["business_key"]}?action=followup');f.c.approve(aid,body['business_key'])
++        if financials('flow')!=before:raise RuntimeError('repair03_legacy_approval_reserved')
++        r.count('native_business_sessions');value=f.c.request('POST',url,body)
++        if value['status']!='committed_current':raise RuntimeError('repair03_legacy_not_COMMIT_'+value['status'])
++        f.save(name+'.done',value)
++    if 'html.done' not in f.state:
++        caps=f.c.request('GET',f'/api/activities/{aid}/html/capabilities')
++        if not caps['available']:raise RuntimeError('repair03_original_html_host_unavailable')
++        body=f.body('html',{'parent':{'kind':'learning','operation_id':parent_op,'payload_sha256':parent.payload_sha256,'segment_index':0},'focus':setup.SAMPLES['inputs']['numeric_goal'],'expected_config_sha256':caps['config_sha256'],'confirmed':True})
++        url=f'/api/activities/{aid}/html/commands';value=f.c.request('POST',url,body)
++        if value.get('status')!='accepted' or not value.get('outbound_approval'):raise RuntimeError('repair03_html_not_pending')
++        before=financials('flow');f.c.request('GET',url+'/'+body['business_key']);f.c.approve(aid,body['business_key'])
++        if financials('flow')!=before:raise RuntimeError('repair03_HTML_approval_reserved')
++        r.count('native_business_sessions');value=f.c.request('POST',url,body)
++        if value['status']!='terminal' or value['terminal_disposition']!='succeeded' or value['read_status']!='current':raise RuntimeError('repair03_HTML_not_COMMIT_'+str(value.get('error_code')))
++        f.save('html.done',value)
++    write('legacy-html-positive.json',{'status':'PASS','original_first_inherited':parent_op,'first_answer_parent_verified':True,'followup':f.state['legacy-followup.done'],'html':f.state['html.done'],'preview_creates_starts':[0,0]})
++
++def core():
++    gate=json.loads((HERE/'readonly-diagnosis.json').read_text(encoding='utf-8'))
++    if not gate['checks']['teaching_read_fix_verified'] or any(gate['checks'][x]['status']!='PASS' for x in ('legacy_domain','html_schema','html_parent')):raise RuntimeError('repair03_cause_gate_not_closed')
++    with application('flow') as c:
++        f=Flow(c,'flow');abandon_originals(f)
++        outcomes={}
++        for name,action in [('teaching',lambda:teaching(f)),('interview',lambda:interview(f)),('legacy_html',lambda:legacy_and_html(f))]:
++            try:action()
++            except Exception as exc:
++                outcomes[name]={'status':'FAIL',**safe_error(exc),'safe_code':str(exc) if type(exc) is RuntimeError else None}
++                r.update(lambda b:b['failures'].append({'root':r.state()['active_root'],'case':'repair03-'+name,'receipt':'repair-03/core-result.json'}))
++            else:outcomes[name]={'status':'PASS'}
++            write('core-result.json',{'outcomes':outcomes,'actual_PG_HTTP_SUP':True,'provider_fee_preview_Git':0})
++    if any(x['status']!='PASS' for x in outcomes.values()):raise RuntimeError('repair03_core_partial')
++
++def teaching(f):
++    aid=ROSTER[2]
++    f.goal(aid,'teaching',setup.SAMPLES['inputs']['concept_goal'],'t-concept-goal')
++    f.goal(aid,'teaching',setup.SAMPLES['inputs']['numeric_goal'],'t-numeric-goal')
++    f.retrieve(aid,'source_index','t-index')
++    ref=f.retrieve(aid,'query','t-query',setup.SAMPLES['inputs']['numeric_goal'])['retrieval_ref']
++    plan=f.model(aid,'teaching','plan',{'confirmed':True},'t-plan',ref)
++    proposal=next(x['record_id'] for x in plan['record_ids'] if x['kind']=='path_proposal')
++    f.local(aid,'teaching','accept_path',{'proposal_record_id':proposal},'t-path')
++    head=f.head(aid,'teaching')
++    exercise_ref=f.retrieve(aid,'query','t-exercise-query',setup.SAMPLES['inputs']['numeric_goal'])['retrieval_ref']
++    f.model(aid,'teaching','exercise',{'confirmed':True,'path_record_id':head['path_record_id'],'node_id':head['node_id'],'purpose':'initial'},'t-exercise',exercise_ref)
++    write('teaching-positive.json',{'status':'PASS','activity_id':aid,'plan':f.state['t-plan.007'],'exercise':f.state['t-exercise.007'],'query_business_key':f.state['t-query']['business_key'],'query_result_sha256':f.state['t-query.done']['retrieval_ref']['result_sha256']})
++
++def interview(f,prefix='i'):
++    aid=ROSTER[1];f.goal(aid,'interview',setup.SAMPLES['inputs']['interview_goal'],prefix+'-new-goal')
++    f.retrieve(aid,'source_index',prefix+'-index')
++    ref=f.retrieve(aid,'query',prefix+'-query',setup.SAMPLES['inputs']['interview_goal'])['retrieval_ref']
++    f.model(aid,'interview','ask',{'mode':'first'},prefix+'-ask',ref)
++    write(f.slot+'-interview-positive.json',{'status':'PASS','activity_id':aid,'model':f.state[prefix+'-ask.007'],'query_business_key':f.state[prefix+'-query']['business_key'],'query_result_sha256':f.state[prefix+'-query.done']['retrieval_ref']['result_sha256']})
++
++def memory():
++    from .recovery import bootstrap_memory
++    if not (r.EVIDENCE/'budget-02-selected-memory-binding.json').exists():bootstrap_memory()
++    with application('budget-02') as c:
++        f=Flow(c,'budget-02')
++        # Original root18 stopped its worker. Its claimed key is GET-only;
++        # explicitly end this local pending, then create a new real goal parent.
++        if 'i-ask' in f.state and 'i-ask.done' not in f.state and 'memory-abandon-root18.done' not in f.state:
++            old=f.state['i-ask']['business_key'];url=f'/api/activities/{ROSTER[1]}/interview/commands/'+old
++            before=c.request('GET',url);money=financials('budget-02')
++            if before['status']=='unknown':f.local(ROSTER[1],'interview','abandon',{'pending_key':old},'memory-abandon-root18')
++            after=c.request('GET',url)
++            if after['status']!='abandoned' or financials('budget-02')!=money:raise RuntimeError('repair03_memory_unknown_not_locally_closed')
++            write('memory-unknown-root18-retained.json',{'before':before,'after':after,'never_resent':True,'finances_unchanged':True})
++        interview(f,'i2')
++        from app.data_exit.q_store import authority_for
++        authority=authority_for(c.app.state.activities_ledger);command=f.state['i2-ask'];aid=ROSTER[1]
++        row=next(x for x in authority.hub.state()['q']['requests'].values() if x['prepared']['business_key']==command['business_key'])
++        request=authority.artifact(row)['request'];value=json.loads(request['messages'][1]['content'])
++        background=value['learning_background'];selection=run(c.app.state.activities_ledger.read_memory_selection(aid,include_bodies=True))
++        if len(background)!=1 or background[0]['text']!=setup.SAMPLES['inputs']['memory_body'] or background[0]['memory_id']!=selection['entries'][0]['memory_id']:raise RuntimeError('repair03_selected_memory_not_in_actual_request')
++        write('selected-memory-positive.json',{'status':'PASS','prepared_id':row['prepared_id'],'007':f.state['i2-ask.007'],'full_request_sha256':digest(request),'memory_id':background[0]['memory_id'],'frozen_text_sha256':__import__('hashlib').sha256(background[0]['text'].encode()).hexdigest(),'real_PG_SUP':True})
++
++def boundaries(c):
++    if not (HERE/'flow-interview-positive.json').exists():raise RuntimeError('repair03_interview_positive_required_before_boundaries')
++    import psycopg
++    with psycopg.connect(setup.dsn('flow')) as db:
++        unknown=db.execute("SELECT count(*) FROM interview_commands WHERE activity_id=%s AND status='unknown' AND execution_kind='model'",(ROSTER[1],)).fetchone()[0]
++    if unknown:raise RuntimeError('repair03_new_UI_UNKNOWN_must_not_be_reissued')
++    from .pg_boundaries import probe_approved,run_ack_and_gap
++    f=Flow(c,'flow');aid=ROSTER[1]
++    f.goal(aid,'interview',setup.SAMPLES['inputs']['interview_goal'],'b-new-goal')
++    ref=f.retrieve(aid,'query','b-query',setup.SAMPLES['inputs']['interview_goal'])['retrieval_ref']
++    c.after_approval=lambda rows:probe_approved(c,rows)
++    try:f.model(aid,'interview','ask',{'mode':'first'},'b-result-ACK-model',ref)
++    finally:c.after_approval=None
++    write('result-ACK-positive.json',{'status':'PASS','007':f.state['b-result-ACK-model.007'],'real_COMMIT_ACK_loss':True,'GET_recovered':True})
++    run_ack_and_gap(c)
++
++def flow_tail():
++    from .ui import run_ui
++    outcomes={};gates={'teaching':'teaching-positive.json','interview':'flow-interview-positive.json','legacy_html':'legacy-html-positive.json'}
++    with application('flow') as c:
++        for mode,gate in gates.items():
++            if not (HERE/gate).exists():outcomes[mode]={'status':'SKIPPED_NO_BACKEND_POSITIVE'};continue
++            try:run_ui(c,mode)
++            except Exception as exc:
++                outcomes[mode]={'status':'FAIL',**safe_error(exc),'safe_code':str(exc) if type(exc) is RuntimeError else None}
++                r.update(lambda b:b['failures'].append({'root':b['active_root'],'case':'repair03-UI-'+mode,'receipt':'repair-03/flow-tail-result.json'}))
++            else:outcomes[mode]={'status':'PASS_FOR_LISTED_FLOW'}
++            write('flow-tail-result.json',{'outcomes':outcomes,'remaining_late_fences_not_inherited_as_pass':['head','scope','namespace','DataContext']})
++        try:boundaries(c)
++        except Exception as exc:
++            outcomes['boundaries']={'status':'FAIL',**safe_error(exc),'safe_code':str(exc) if type(exc) is RuntimeError else None}
++            r.update(lambda b:b['failures'].append({'root':b['active_root'],'case':'repair03-boundaries','receipt':'repair-03/flow-tail-result.json'}))
++        else:outcomes['boundaries']={'status':'PASS_FOR_LISTED_GATES_AND_ACK_K2'}
++        write('flow-tail-result.json',{'outcomes':outcomes,'remaining_late_fences_not_inherited_as_pass':['head','scope','namespace','DataContext']})
++    if any(not x['status'].startswith('PASS') for x in outcomes.values()):raise RuntimeError('repair03_flow_tail_partial')
+--- /dev/null
++++ after/backend/tests/test_task120_repair03.py
+@@ -0,0 +1,187 @@
++"""Control-flow checks only; connection replacement is not PostgreSQL evidence."""
++import unittest
++from unittest.mock import patch, AsyncMock
++from types import SimpleNamespace as NS
++from contextlib import asynccontextmanager
++from datetime import datetime, timezone
++from app.activities.repository import PostgresAdmissionLedger
++from app.data_exit.q_store import QAuthority, POLICY, method_name, is_read_method
++from app.data_exit.contracts import DataError
++
++class Connection:
++    def __init__(self):self.sql=[]
++    async def __aenter__(self):return self
++    async def __aexit__(self,*args):pass
++    @asynccontextmanager
++    async def transaction(self):yield
++    async def execute(self,sql,*args):self.sql.append(sql);return self
++    async def fetchone(self):
++        return dict(activity={},head=None,sources=[],record_sources=[],pending=[],history=[],bodies=[],exposures=[],
++                    command={'context_body':'{}'},memory_qualified=True,memory_selected=False,read_at=datetime.now(timezone.utc))
++
++class Repair03(unittest.IsolatedAsyncioTestCase):
++    def setUp(self):
++        self.ledger=PostgresAdmissionLedger('CONTROL_FLOW_ONLY');self.ledger.data_enabled=False
++        self.authority=object.__new__(QAuthority);self.authority.hub=NS(control_id='control-flow')
++        self.connection=Connection();self.connect=AsyncMock(return_value=self.connection)
++        self.aid='01800000-0000-4000-8000-000000000003';self.key='00000000-0000-4000-8000-000000000001'
++
++    async def test_actual_read_closure_inside_inherited_shared_policy(self):
++        observed=[];transaction=self.ledger._transaction
++        async def record(operation,**kw):
++            observed.append(method_name(operation));return await transaction(operation,**kw)
++        token=POLICY.set(('control-flow',True))
++        try:
++            with patch('app.data_exit.q_store.authority_for',return_value=self.authority),patch('psycopg.AsyncConnection.connect',self.connect),\
++                 patch.object(self.ledger,'_transaction',record),patch.object(self.ledger,'_memory_teaching_sql',AsyncMock(side_effect=lambda c,s:s)):
++                value=await self.ledger.read_teaching_command(self.aid,self.key)
++            self.assertEqual(observed,['_teaching_read_snapshot']);self.assertTrue(is_read_method(observed[0]))
++            self.assertIsNotNone(value);self.connect.assert_awaited_once();self.assertTrue(self.connection.sql)
++            self.assertEqual(POLICY.get(),('control-flow',True))
++        finally:POLICY.reset(token)
++
++    async def test_actual_write_closure_denied_before_connection_or_SQL(self):
++        captured=[]
++        async def capture(operation,**kw):captured.append(operation);raise StopAsyncIteration
++        with patch.object(self.ledger,'_transaction',capture):
++            with self.assertRaises(StopAsyncIteration):await self.ledger.cancel_activity(self.aid)
++        self.assertEqual(method_name(captured[0]),'cancel_activity');self.assertFalse(is_read_method(method_name(captured[0])))
++        token=POLICY.set(('control-flow',True))
++        try:
++            with patch('app.data_exit.q_store.authority_for',return_value=self.authority),patch('psycopg.AsyncConnection.connect',self.connect):
++                with self.assertRaises(DataError) as error:await self.ledger._transaction(captured[0])
++            self.assertEqual(error.exception.code,'q_policy_upgrade_forbidden');self.connect.assert_not_called();self.assertEqual(self.connection.sql,[])
++        finally:POLICY.reset(token)
++
++    async def test_actual_interview_and_HTML_read_validators_do_not_upgrade_shared(self):
++        class ReachedReadValidator(Exception):pass
++        for name,helper in [('validate_interview_request','_interview_lock'),('verify_html_request','_memory_lock_prefix')]:
++            with self.subTest(name=name):
++                token=POLICY.set(('control-flow',True));self.connect.reset_mock()
++                try:
++                    with patch('app.data_exit.q_store.authority_for',return_value=self.authority),patch('psycopg.AsyncConnection.connect',self.connect),\
++                         patch.object(self.ledger,helper,AsyncMock(side_effect=ReachedReadValidator)):
++                        with self.assertRaises(ReachedReadValidator):
++                            if name=='validate_interview_request':await self.ledger.validate_interview_request(NS(activity_id=self.aid),NS(business_key=self.key),None)
++                            else:await self.ledger.verify_html_request(NS(activity_id=self.aid))
++                    self.connect.assert_awaited_once();self.assertTrue(is_read_method(name))
++                finally:POLICY.reset(token)
++
++    async def test_v2_v3_read_branches_with_and_without_selected_memory(self):
++        from app.learning.teaching_adapter import validate_teaching_request
++        from app.learning.teaching_contracts import TeachingMemoryProfile,TeachingHybridProfile,TeachingMemoryFrozenContext,TeachingHybridFrozenContext
++        from app.capabilities.contracts import Message
++        from app.learning.contracts import sha,canonical
++        messages=[Message(role='user',content='CONTROL_FLOW_ONLY')];dumped=[m.model_dump(mode='json',exclude_none=True) for m in messages]
++        for version,selected in [('teaching.v3',False),('teaching.v2',True),('teaching.v3',True)]:
++            with self.subTest(version=version,selected=selected):
++                refs=[];profile=NS(profile=version,activity_id=self.aid,scope_revision=1,max_output_tokens=64,command_key=self.key,request_sha256='a'*64,
++                    context_sha256='b'*64,memory_selection_sha256='c'*64,memory_refs=refs,retrieval_ref=None,memory_dependency_sha256='d'*64,
++                    messages_sha256=sha(canonical(dumped)),catalog=[])
++                profile.model_dump=lambda:{}
++                cls=TeachingHybridFrozenContext if version=='teaching.v3' else TeachingMemoryFrozenContext
++                frozen=cls.model_construct(context_sha256=profile.context_sha256,memory_refs=refs,retrieval_ref=None,memory_dependency_sha256='d'*64,
++                    recipe={} if selected else None,messages=None if selected else dumped,assembled_messages_sha256=profile.messages_sha256,catalog=[])
++                request=NS(teaching_profile=profile,learning_profile=None,allowed_tools=[],max_output_tokens=64,messages=messages,retrieval_ref=None)
++                context=NS(activity_id=self.aid,scope_revision=1,operation_id='teach8m.'+self.key+'.'+'a'*64)
++                token=POLICY.set(('control-flow',True))
++                try:
++                    with patch('app.data_exit.q_store.authority_for',return_value=self.authority),patch('psycopg.AsyncConnection.connect',self.connect),\
++                         patch.object(self.ledger,'_memory_teaching_sql',AsyncMock(side_effect=lambda c,s:s)),\
++                         patch.object(TeachingMemoryProfile,'model_validate',return_value=profile),patch.object(TeachingHybridProfile,'model_validate',return_value=profile),\
++                         patch('app.learning.teaching_contracts.parse_frozen_context',return_value=frozen),\
++                         patch('app.memory.context.materialize_recipe',AsyncMock(return_value=dumped)),\
++                         patch.object(self.ledger,'read_memory_selection',AsyncMock(return_value={'selection_sha256':'c'*64,'selected':selected})),\
++                         patch.object(self.ledger,'read_learning_snapshot',AsyncMock(return_value={'sources':[]})):
++                        self.assertIsNone(await validate_teaching_request(context,request,self.ledger))
++                finally:POLICY.reset(token)
++
++class ProvenanceRepair03(unittest.TestCase):
++    def setUp(self):
++        self.authority=NS(bundle={'templates':[],'template_atoms':['messages','role','user','content','html_profile','context_json']},
++            manifest=NS(fixed_inputs=[],fragments=[],model_dump=lambda **kw:{}))
++        self.state={'activity':{'id':'a'},'sources':[],'commands':[],'parents':[]}
++
++    def test_only_exact_qualified_parent_history_is_derived(self):
++        from app.capabilities.q_context import validate_provenance
++        from app.capabilities.q_protocol import canonical
++        from app.capabilities.contracts import AdmissionDenied
++        history=canonical({'kind':'answer','segments':[{'text':'parent-body','citations':['lc_parent']}],'questions':[],'message':'parent-message'})
++        request={'messages':[{'role':'user','content':history}]}
++        validate_provenance(self.authority,request,{},self.state,[],[history],'followup')
++        for derived,text in [([],history),([history],history.replace('parent-body','foreign-body')),([history],history+' ')]:
++            with self.assertRaises(AdmissionDenied):validate_provenance(self.authority,{'messages':[{'role':'user','content':text}]},{},self.state,[],derived,'followup')
++
++    def test_HTML_config_hash_requires_server_command_metadata(self):
++        from app.capabilities.q_context import validate_provenance
++        from app.capabilities.q_protocol import canonical
++        from app.capabilities.contracts import AdmissionDenied
++        request={'html_profile':{'context_json':canonical({'config_sha256':'a'*64})}}
++        self.state['commands']=[{'metadata':['a'*64]}]
++        validate_provenance(self.authority,request,{},self.state,[],[],'generate')
++        self.state['commands']=[]
++        with self.assertRaises(AdmissionDenied):validate_provenance(self.authority,request,{},self.state,[],[],'generate')
++        self.state['commands']=[{'metadata':['b'*64]}]
++        with self.assertRaises(AdmissionDenied):validate_provenance(self.authority,request,{},self.state,[],[],'generate')
++
++    def test_teaching_node_id_requires_frozen_server_command_identity(self):
++        from app.capabilities.q_context import validate_provenance
++        from app.capabilities.contracts import AdmissionDenied
++        self.state['commands']=[{'metadata':['n1']}]
++        validate_provenance(self.authority,{'node_id':'n1'},{},self.state,[],[],'exercise')
++        with self.assertRaises(AdmissionDenied):validate_provenance(self.authority,{'node_id':'n2'},{},self.state,[],[],'exercise')
++        self.state['commands']=[]
++        with self.assertRaises(AdmissionDenied):validate_provenance(self.authority,{'node_id':'n1'},{},self.state,[],[],'exercise')
++
++class HistoricalAbandonRepair03(unittest.TestCase):
++    def test_only_exact_obsolete_unknown_without_other_pending_can_be_abandoned(self):
++        from app.interview.policy import transition
++        from app.interview.contracts import InterviewRefusal
++        head={'phase':'ready','pending_key':None};body={'pending_key':'old-key'}
++        target={'business_key':'old-key','status':'unknown','obsolete':True}
++        transition('abandon',head,body,abandon_target=target)
++        for changed in [None,dict(target,obsolete=False),dict(target,status='committed'),dict(target,business_key='foreign')]:
++            with self.assertRaises(InterviewRefusal):transition('abandon',head,body,abandon_target=changed)
++        with self.assertRaises(InterviewRefusal):transition('abandon',dict(head,pending_key='different'),body,abandon_target=target)
++        transition('abandon',dict(head,pending_key='old-key'),body)
++
++class TeachingNodeFieldsRepair03(unittest.TestCase):
++    def test_only_typed_path_node_location_admits_parent_rationale(self):
++        from app.capabilities.q_context import validate_provenance
++        from app.capabilities.q_protocol import canonical
++        from app.capabilities.contracts import AdmissionDenied
++        authority=NS(bundle={'templates':[],'template_atoms':['messages','role','user','content','teaching_profile','task','path_nodes']},
++            manifest=NS(fixed_inputs=[],fragments=[],model_dump=lambda **kw:{}))
++        state={'activity':{'id':'a'},'sources':[],'commands':[],'parents':[]}
++        def request(document):return {'teaching_profile':{},'messages':[{'role':'user','content':canonical(document)}]}
++        body={'task':{'path_nodes':[{'rationale':'verified-parent-rationale'}]}}
++        validate_provenance(authority,request(body),{},state,[],['verified-parent-rationale'],'exercise')
++        for document,derived in [(body,[]),({'task':{'rationale':'verified-parent-rationale'}},['verified-parent-rationale']),({'task':{'path_nodes':[{'invented_field':'verified-parent-rationale'}]}},['verified-parent-rationale'])]:
++            with self.assertRaises(AdmissionDenied):validate_provenance(authority,request(document),{},state,[],derived,'exercise')
++
++class RetrievalReceiptsRepair03(unittest.TestCase):
++    def test_cache_ready_requires_index_and_current_complete_cache(self):
++        from tests.fixtures.task120.repair03 import terminal_retrieval
++        receipt={'status':'terminal','terminal_disposition':'cache_ready'}
++        ready={'ready':True,'fragments':4,'cached_fragments':4}
++        self.assertTrue(terminal_retrieval('source_index',receipt,ready))
++        self.assertFalse(terminal_retrieval('query',receipt,ready))
++        self.assertFalse(terminal_retrieval('source_index',receipt,dict(ready,cached_fragments=3)))
++        self.assertFalse(terminal_retrieval('source_index',receipt,dict(ready,ready=False)))
++        self.assertFalse(terminal_retrieval('source_index',receipt,None))
++        self.assertTrue(terminal_retrieval('query',dict(receipt,terminal_disposition='received')))
++        self.assertFalse(terminal_retrieval('query',dict(receipt,terminal_disposition='unknown')))
++
++class HttpRejectionRepair03(unittest.TestCase):
++    def test_bounded_nested_codes_saved_without_error_bodies(self):
++        from tests.fixtures.task120.api_runtime import Client
++        for response in [{'code':'q_denied'},{'detail':{'code':'q_denied'}},{'detail':{'error':{'code':'q_denied'}}}]:
++            client=object.__new__(Client);client.headers={};client.timeline=[]
++            client.client=NS(request=lambda *args,**kw:NS(status_code=409,json=lambda:response))
++            with self.assertRaisesRegex(RuntimeError,'task120_http_409_q_denied'):client.request('POST','/TESTONLY',{})
++            self.assertEqual(client.timeline[0]['rejection_code'],'q_denied');self.assertNotIn('detail',client.timeline[0])
++        client.client=NS(request=lambda *args,**kw:NS(status_code=409,json=lambda:{'code':'untrusted arbitrary error body'}))
++        with self.assertRaisesRegex(RuntimeError,'task120_http_409_http_rejected'):client.request('POST','/TESTONLY',{})
++        self.assertIsNone(client.timeline[-1]['rejection_code'])
++
++if __name__=='__main__':unittest.main()

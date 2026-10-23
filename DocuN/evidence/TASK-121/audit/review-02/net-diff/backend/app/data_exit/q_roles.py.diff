@@ -1,0 +1,57 @@
+--- before/backend/app/data_exit/q_roles.py
++++ after/backend/app/data_exit/q_roles.py
+@@ -32,32 +32,42 @@
+     if len(roles)>1024 or len(members)>4096:raise DataError('data_role_capability_mismatch',503)
+     by_id={r['oid']:r for r in roles};by_name={r['rolname']:r for r in roles};edges={}
+     if not set(GROUPS)<=set(by_name):raise DataError('data_role_capability_mismatch',503)
+     for m in members:edges.setdefault(m['member'],[]).append(m)
+-    def closure(start,option):
+-        result={start};pending=[start]
+-        while pending:
+-            for edge in edges.get(pending.pop(),[]):
+-                if edge[option] and edge['roleid'] not in result:
+-                    result.add(edge['roleid']);pending.append(edge['roleid'])
+-        return result
+-    def accessible(oid):
++    def accessible(oid,*,admin=False):
+         # SET uses the session-user chain. It is never made transitively
+         # available through an INHERIT-only hop.
+-        selected=closure(oid,'set_option')
+-        effective=set().union(*(closure(x,'inherit_option') for x in selected))
++        selected=set();effective=set();pending=[(oid,True)]
++        # ADMIN can grant its target to a controlled/SET-accessible role,
++        # enabling SET/INHERIT regardless of the original edge's options.
++        # Newly reachable roles can themselves hold ADMIN. Saturate that
++        # capability, not just the target's current inherited table rights.
++        # Sets grow monotonically within the bounded input role set; cycles
++        # cannot recurse indefinitely or manufacture new role identities.
++        # Each role is processed at most once in each mode, with at most
++        # two scans of each edge per subject, including cyclic inputs.
++        while pending:
++            current,select=pending.pop();seen=selected if select else effective
++            if current in seen:continue
++            seen.add(current)
++            if select:pending.append((current,False))
++            for edge in edges.get(current,[]):
++                if select and edge['set_option']:pending.append((edge['roleid'],True))
++                if not select and edge['inherit_option']:pending.append((edge['roleid'],False))
++                if not select and admin and edge['admin_option']:pending.append((edge['roleid'],True))
+         return selected,effective
+     def management(role):
+         return any(role[k] for k in ('rolsuper','rolcreatedb','rolcreaterole','rolreplication','rolbypassrls'))
+     def extra_management(role):
+         return bool(role['control_privileges'] or role['schema_create'] or role['database_create']
+                     or role['rolname'] in DANGEROUS_PREDEFINED)
+     audited=[]
+     for subject in roles:
+-        name=subject['rolname'];selected,effective=accessible(subject['oid'])
+-        group_names={by_id[x]['rolname'] for x in effective}&set(GROUPS)
++        name=subject['rolname'];_,current_effective=accessible(subject['oid'])
++        group_names={by_id[x]['rolname'] for x in current_effective}&set(GROUPS)
+         owner=name in OWNERS
+         if name not in GROUPS and not owner and not (subject['rolcanlogin'] and group_names):continue
++        selected,effective=accessible(subject['oid'],admin=True)
+         # A trusted function/table owner may manage its own declared objects,
+         # never via membership in another owner or normal application group.
+         if owner:allowed={'SELECT'}
+         elif name=='retrolume_data_snapshot' or 'retrolume_data_snapshot' in group_names:allowed={'SELECT'}

@@ -57,10 +57,10 @@ class SnapshotCoordinator:
         rows={table:[] for table in TABLES}
         graph=('material_sources','material_versions','activities','activity_scope_sources','activity_memory_choices','learning_memory_dependencies')
         with self.repository.connection(readonly=True,repeatable=True) as connection:
-            from .schema_profiles import observed_profile,R02
+            from .schema_profiles import observed_profile,R02,R03
             profile=observed_profile(connection);COLUMNS=profile.columns
             rows={table:[] for table in profile.tables}
-            if profile.name==R02:graph+=('retrieval_spaces','retrieval_commands','retrieval_chunks')
+            if profile.name in (R02,R03):graph+=('retrieval_spaces','retrieval_commands','retrieval_chunks')
             for table in graph:
                 columns=','.join(COLUMNS[table])
                 rows[table]=[encode_row(table,row,profile.name) for row in connection.execute('SELECT '+columns+' FROM public.'+table+' ORDER BY '+','.join(list(COLUMNS[table])[:2])).fetchall()]

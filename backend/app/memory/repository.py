@@ -469,6 +469,15 @@ class MemoryLedgerMethods:
          (command.business_key,command.action,command.memory_id,command.request_sha(),command.slot(),effect,
           command.expected_revision,after_revision,after_version,canonical(meta),manifest,sha(manifest) if manifest else None))
 
+    async def q_snapshot_memory_cleanup_ids(self,memory_id):
+        async def q_snapshot_memory_dependencies(connection):
+            cursor=await connection.execute("""WITH RECURSIVE affected(memory_id) AS(
+              SELECT %s::uuid UNION SELECT d.memory_id FROM public.learning_memory_dependencies d
+              JOIN affected a ON d.upstream_memory_id=a.memory_id
+            ) SELECT memory_id::text FROM affected ORDER BY memory_id""",(memory_id,))
+            return [row['memory_id'] for row in await cursor.fetchall()]
+        return await self._transaction(q_snapshot_memory_dependencies)
+
     async def apply_memory_command(self,command:MemoryCommandInput):
         async def operation(connection):
             await self._memory_assert_schema(connection)

@@ -1,0 +1,26 @@
+--- initial/backend/app/service_config.py
++++ final/backend/app/service_config.py
+@@ -106,10 +106,11 @@
+     thinking: str
+     timeout_seconds: float = Field(gt=0, le=120)
+     max_output_tokens_limit: int = Field(ge=1, le=32_768)
+     max_request_bytes: int = Field(ge=1024, le=2_097_152)
+     max_response_bytes: int = Field(ge=1024, le=4_194_304)
++    returned_models: list[str] = Field(default_factory=list,max_length=16)
+ 
+     @field_validator("timeout_seconds", mode="before")
+     @classmethod
+     def _plain_number(cls, value):
+         if type(value) is bool or type(value) not in (int, float):
+@@ -258,10 +259,11 @@
+             thinking=ThinkingMode(service.thinking),
+             timeout_seconds=service.timeout_seconds,
+             max_output_tokens_limit=service.max_output_tokens_limit,
+             max_request_bytes=service.max_request_bytes,
+             max_response_bytes=service.max_response_bytes,
++            returned_models=tuple(service.returned_models),
+         )
+     except (ValidationError, ValueError):
+         return LayerState(False, "config_invalid"), None
+     # 可确定的序列化前置校验：完整构造并走一次 OneCallInput 线格式检查。
+     try:

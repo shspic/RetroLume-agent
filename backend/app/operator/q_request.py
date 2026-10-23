@@ -38,11 +38,13 @@ def principal_id():
 
 
 async def inspect_request(ledger,pid):
-    from app.capabilities.q_context import snapshot,check_instance,check_snapshot_sql
+    from app.capabilities.q_context import snapshot,check_instance,check_snapshot_sql,command_fact
     authority=authority_for(ledger)
     if authority is None:raise DataError('q_control_missing')
     async with authority.async_policy(shared=True):
         row=authority.request(pid)
+        if row.get('cleanup'):
+            return {'prepared_id':pid,'state':'invalidated','request_available':False,'cleanup':row['cleanup']['state']}
         state,_,_=await snapshot(ledger,row['prepared']['activity_id'])
         check_instance(authority,ledger,state)
         current=state==row['prepared']['snapshot']
@@ -52,8 +54,9 @@ async def inspect_request(ledger,pid):
             await check_snapshot_sql(connection,state,authority)
         await ledger._transaction(q_snapshot)
         artifact=authority.artifact(row)
+        fact=await command_fact(ledger,row)
         return {'prepared_id':pid,'prepared_sha256':row['prepared_sha256'],
-            'projection':authority.projection(row),'prepared':row['prepared'],
+            'projection':authority.projection(row,pg_consumed=fact['consumed']),'prepared':row['prepared'],'pg_command_fact':fact,
             'request':artifact['request'],'provider_object':artifact['payload'],
             'provider_bytes_utf8':canonical(artifact['payload']),'provenance':artifact['provenance'],
             'request_available':True,'execution_class':authority.bundle['execution_class']}
@@ -66,7 +69,7 @@ async def approve_request(ledger,pid,expected_sha256):
         inspection=await inspect_request(ledger,pid)
         if not inspection['request_available'] or inspection.get('prepared_sha256')!=expected_sha256:
             raise DataError('q_inspection_changed')
-        return authority.approve(pid,principal_id(),current=True)
+        return authority.approve(pid,principal_id(),current=True,pg_consumed=inspection['pg_command_fact']['consumed'])
 
 
 def read_config(path):
@@ -78,7 +81,8 @@ def read_config(path):
     if set(value)!=required or value['schema']!='retrolume.q-approval-config.v2':raise DataError('q_config_shape')
     if type(value['enabled']) is not bool:raise DataError('q_config_shape')
     if not value['enabled']:return value
-    if (not Path(value['control_root']).is_absolute() or not Path(value['root_file']).is_absolute()
+    if (not isinstance(value['control_root'],str) or not isinstance(value['root_file'],str)
+        or not Path(value['control_root']).is_absolute() or not Path(value['root_file']).is_absolute()
         or not isinstance(value['database_url_env'],str) or not value['database_url_env'].startswith('RETROLUME_')):
         raise DataError('q_config_shape')
     return value
@@ -94,6 +98,8 @@ def configure_application(app,path):
     regular(value['root_file']);raw=Path(value['root_file']).read_bytes()
     if len(raw)>262144:raise DataError('q_root_limit')
     bundle=load_json(raw)
+    if (not isinstance(bundle,dict) or set(bundle)!={'schema','execution_class','grant','manifest','binding','templates','template_atoms','operator_principals'}
+        or bundle['execution_class'] not in ('Q','TESTONLY')):raise DataError('q_root_shape')
     from app.capabilities.transport import HttpxModelTransport
     if bundle.get('execution_class')=='TESTONLY' and HttpxModelTransport.is_external:
         raise DataError('q_testonly_external_forbidden')

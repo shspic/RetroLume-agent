@@ -1,0 +1,70 @@
+{
+  "outcomes": {
+    "observe": "PASS",
+    "html_eol": "PASS",
+    "interview": "FAIL",
+    "html": "FAIL"
+  },
+  "receipts": [
+    {
+      "stage": {
+        "id": "observe",
+        "phase": "observe",
+        "seconds": 40,
+        "depends_on": []
+      },
+      "exit_code": 0,
+      "previous_actual_exit": null,
+      "wall_seconds": 5.717999999993481,
+      "descendants_stopped": true,
+      "utc": "2026-10-19T01:47:01.836327+00:00"
+    },
+    {
+      "stage": {
+        "id": "html_eol",
+        "phase": "html_eol",
+        "seconds": 45,
+        "depends_on": [
+          "observe"
+        ]
+      },
+      "exit_code": 0,
+      "previous_actual_exit": 0,
+      "wall_seconds": 1.687999999994645,
+      "descendants_stopped": true,
+      "utc": "2026-10-19T01:47:03.767179+00:00"
+    },
+    {
+      "stage": {
+        "id": "interview",
+        "phase": "interview_repaired",
+        "seconds": 180,
+        "depends_on": [
+          "observe"
+        ]
+      },
+      "exit_code": 1,
+      "previous_actual_exit": 0,
+      "wall_seconds": 1.5310000000172295,
+      "descendants_stopped": true,
+      "utc": "2026-10-19T01:47:05.468927+00:00"
+    },
+    {
+      "stage": {
+        "id": "html",
+        "phase": "legacy_html",
+        "seconds": 180,
+        "depends_on": [
+          "html_eol"
+        ]
+      },
+      "exit_code": 1,
+      "previous_actual_exit": 1,
+      "wall_seconds": 1.3599999999860302,
+      "descendants_stopped": true,
+      "utc": "2026-10-19T01:47:07.029585+00:00"
+    }
+  ],
+  "automatic_finite_serial_plan": true,
+  "external_request_wait": false
+}

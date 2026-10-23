@@ -1,0 +1,92 @@
+--- initial/backend/app/retrieval/service.py
++++ final/backend/app/retrieval/service.py
+@@ -40,11 +40,12 @@
+         from app.capabilities.transport import HttpxModelTransport
+         return self.service is not None and self.reason is None and (self.service.outbound_grant is not None or not HttpxModelTransport.is_external)
+     def public(self):return {'available':self.available,'reason':self.reason,'method':'hybrid.cosine-terms.rrf60.v1',
+       'purpose':'当前已确认资料片段与本轮必要问题','provider':self.service.provider if self.service else None,'model':self.service.model if self.service else None,'dimensions':512,
+       'batch_size':4,'max_index_fragments':self.max_index_fragments,'query_limit_chars':1024,'query_limit_bytes':4096,
+-      'real_outbound_authorized':bool(self.service and self.service.outbound_grant),'reserve_cost_microunits':250000}
++      'real_outbound_authorized':bool(self.service and self.service.outbound_grant and
++          (self.service.outbound_grant.get('schema')!='retrolume.outbound-grant.v2' or __import__('app.capabilities.transport',fromlist=['HttpxModelTransport']).HttpxModelTransport.is_external)),'reserve_cost_microunits':250000}
+ 
+ 
+ def load_integration_config(path):
+     """正常server env loader；文件不携口令，启用Q要求受信激活和价格原件hash。"""
+     if path is None:return IntegrationConfig()
+@@ -60,21 +61,24 @@
+         body['api_key']=key
+         if section.outbound_grant_file:
+             if not section.q_activation_receipt_file or not section.price_snapshot_file or not section.source_manifest_file:raise ValueError('activation_missing')
+             grant_raw=Path(section.outbound_grant_file).read_bytes()
+             if len(grant_raw)>65536:raise ValueError('grant_size')
+-            grant=OutboundGrant.model_validate_json(grant_raw)
++            from app.capabilities.q_protocol import load_json
++            grant=OutboundGrant.from_wire(load_json(grant_raw))
+             manifest_raw=Path(section.source_manifest_file).read_bytes()
+             if len(manifest_raw)>65536:raise ValueError('manifest_size')
+-            manifest=OutboundSourceManifest.model_validate_json(manifest_raw)
++            manifest=OutboundSourceManifest.from_wire(load_json(manifest_raw))
+             if manifest.sha256!=grant.source_manifest_sha256:raise ValueError('manifest_hash')
+             from hashlib import sha256
+             receipt_raw=Path(section.q_activation_receipt_file).read_bytes();price_raw=Path(section.price_snapshot_file).read_bytes()
+             if len(receipt_raw)>65536 or len(price_raw)>65536:raise ValueError('receipt_size')
+-            receipt=json.loads(receipt_raw)
++            receipt=load_json(receipt_raw)
++            from app.capabilities.transport import HttpxModelTransport
++            testonly=grant.schema=='retrolume.outbound-grant.v2' and receipt.get('stage')=='TESTONLY' and receipt.get('TASK')=='TASK-120' and not HttpxModelTransport.is_external
+             if (sha256(receipt_raw).hexdigest()!=grant.q_activation_receipt_sha256 or sha256(price_raw).hexdigest()!=grant.price_snapshot_sha256
+-                or receipt.get('stage')!='Q' or receipt.get('status')!='enabled' or receipt.get('TASK')!='TASK-117'
++                or (not testonly and (receipt.get('stage')!='Q' or receipt.get('TASK') not in ('TASK-117','TASK-120'))) or receipt.get('status')!='enabled'
+                 or receipt.get('approved_receipt_sha256')!=grant.approved_receipt_sha256 or receipt.get('source_manifest_sha256')!=manifest.sha256 or not receipt.get('independent_audit_result_sha256')):raise ValueError('activation_invalid')
+             body['outbound_grant']=grant.model_dump(mode='json')
+             body['outbound_source_manifest']=manifest.model_dump(mode='json')
+         # JSON模式接受数组tuple；受信配置从本地env注入，不向客户端返回秘密。
+         service=EmbeddingServiceConfig.model_validate_json(json.dumps(body))
+@@ -159,13 +163,14 @@
+             row,_=await self.ledger.retrieval_freeze(activity_id,command,body,{'space_id':space,'provider':config.service.provider,'configured_model':config.service.model},manifest,batches,source_refs,
+                     digest(command.query.strip()) if command.action=='query' else None)
+         if row['status']=='terminal':return self._public(row)
+         # 旧接受体必须能从当前原件逐项复建，不重新检索或替换其manifest。
+         if body['coverage_sha256']!=digest([fragment_manifest(*fragments[k]) for k in sorted(fragments)]):raise RetrievalRefusal('retrieval_source_invalid')
+-        if not await self.ledger.retrieval_claim(activity_id,command.business_key,row['request_sha256']):
+-            return self._public(await self.ledger.read_retrieval_command(activity_id,command.business_key))
+-        windows=[];definitely_unadmitted=False
++        prepared_calls=[];approvals=[]
++        from app.capabilities.q_gateway import is_v2
++        if is_v2(config.service) and command.action=='query' and command.query!=command.query.strip():
++            raise RetrievalRefusal('q_exact_query_required')
+         for ordinal,oid in enumerate(operation_ids(row)):
+             part=body['manifest'][ordinal*4:ordinal*4+4] if command.action=='source_index' else body['manifest']
+             inputs=[]
+             for index,meta in enumerate(part):
+                 text=fragments[meta['evidence_id']][0].text if command.action=='source_index' else command.query.strip()
+@@ -173,11 +178,27 @@
+                 inputs.append(EmbeddingInput(ordinal=index,identity_sha256=meta['identity_sha256'],text=text))
+             binding=EmbeddingBinding(business_key=command.business_key,purpose=command.action,request_sha256=row['request_sha256'],
+                 manifest_sha256=row['manifest_sha256'],batch_ordinal=ordinal,scope_revision=command.expected_scope_revision,domain=body['domain'],
+                 domain_revision=command.expected_domain_revision,memory_selection_sha256=body['memory_selection_sha256'],memory_dependency_sha256=body['memory_dependency_sha256'])
+             request=EmbeddingRequest(activity_id=activity_id,space_id=row['space_id'],binding=binding,inputs=tuple(inputs))
+-            task=asyncio.create_task(asyncio.to_thread(run_one_embedding,self.ledger,SessionConfig(),activity_id,'local-ui',oid,request,config.service,
++            service=config.service
++            if is_v2(service):
++                from app.capabilities.q_context import prepare
++                payload={'model':service.model,'input':[x.text for x in request.inputs],'dimensions':512}
++                projection,service=await prepare(self.ledger,activity_id,command.business_key,oid,request,service,payload,
++                    domain='retrieval',action=command.action)
++                approvals.append(projection)
++            prepared_calls.append((ordinal,oid,request,service))
++        if approvals and not all(x['can_continue'] for x in approvals):
++            from app.capabilities.q_context import public_projection
++            return {**self._public(row),'outbound_approval':await public_projection(self.ledger,activity_id,command.business_key)}
++        from app.capabilities.q_context import claim_approved
++        if not await claim_approved(self.ledger,[item[3] for item in prepared_calls],lambda:self.ledger.retrieval_claim(activity_id,command.business_key,row['request_sha256'])):
++            return self._public(await self.ledger.read_retrieval_command(activity_id,command.business_key))
++        windows=[];definitely_unadmitted=False
++        for ordinal,oid,request,service in prepared_calls:
++            task=asyncio.create_task(asyncio.to_thread(run_one_embedding,self.ledger,SessionConfig(),activity_id,'local-ui',oid,request,service,
+                   run_tag=(run_tag or 'retrieval-'+secrets.token_hex(12))+'-'+str(ordinal)))
+             cancelled=False
+             while True:
+                 try:supervision=await asyncio.shield(task);break
+                 except asyncio.CancelledError:

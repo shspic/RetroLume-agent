@@ -1,0 +1,69 @@
+--- before/backend/tests/test_q_audit07.py
++++ after/backend/tests/test_q_audit07.py
+@@ -0,0 +1,66 @@
++"""Targeted F04 actual authorization checks; only the clock dependency is injected."""
++from datetime import datetime,timedelta,timezone
++import json
++from pathlib import Path
++import unittest
++from unittest.mock import patch
++
++from app.capabilities.q_protocol import canonical,digest
++from app.capabilities.contracts import CallContext
++from app.data_exit.contracts import DataError
++from app.data_exit.q_store import QAuthority
++from app.data_exit import q_clock
++from app.operator.q_request import principal_id
++from tests.fixtures.task120.offline import store,prepared,AID
++
++
++class ApprovalClockTests(unittest.TestCase):
++    def test_clock_history_cross_authority_and_claim(self):
++        authority=store();row=prepared(authority);pid=row['prepared_id'];principal=principal_id()
++        origin=datetime.now(timezone.utc);epoch=q_clock.sample();clock=dict(epoch);cases=[]
++        def at(seconds,monoseconds,domain=None):
++            clock.update(utc=(origin+timedelta(seconds=seconds)).isoformat(),mono_ns=epoch['mono_ns']+int(monoseconds*1e9),
++                         upper_ns=epoch['mono_ns']+int(monoseconds*1e9),domain=domain or epoch['domain'])
++        def sign():
++            authority.revoke(pid,principal)
++            return authority.approve(pid,principal,current=True)
++        def ref():return authority.reference(authority.request(pid))
++        def denied(reference):
++            with self.assertRaises(DataError) as error:authority.check_reference(reference)
++            self.assertEqual(error.exception.code,'q_approval_invalid')
++        with patch('app.data_exit.q_clock.sample',side_effect=lambda:dict(clock)):
++            at(0,0);first=sign();reference=ref();self.assertIsNotNone(reference)
++            at(5,5);self.assertEqual(authority.approve(pid,principal,current=True),first)
++            self.assertEqual(authority.hub.state()['q']['approval_events'],1)
++            self.assertEqual(first['approval_id'],digest(first['body']));cases.append('legal_same_domain_and_decision_idempotence')
++            at(901,901);self.assertEqual(authority.projection(authority.request(pid))['state'],'expired');denied(reference)
++            at(10,902);self.assertIsNone(ref());denied(reference);cases.append('seen_expiry_then_UTC_rollback_irreversible')
++            at(20,910);sign();reference=ref()
++            # No intermediate projection: monotonic alone has passed 15min,
++            # while a backwards UTC step leaves wall time inside the old end.
++            at(919,1811);denied(reference);cases.append('unobserved_monotonic_expiry_with_UTC_rollback')
++            at(30,1820);sign();reference=ref();at(31,1821,'f'*64);denied(reference)
++            at(32,1822);denied(reference);cases.append('unknown_domain_cannot_recover')
++            at(40,1830);sign();reference=ref();at(80,1870);self.assertIsNotNone(ref())
++            at(79,1871);denied(reference);at(81,1872);denied(reference);cases.append('observed_UTC_regression_irreversible')
++            at(100,1900);sign();reference=ref()
++            reopened=QAuthority(authority.hub);self.assertIsNotNone(reopened.reference(reopened.request(pid)))
++            at(101,1901,'e'*64)
++            with self.assertRaises(DataError):reopened.check_reference(reference)
++            cases.append('reopen_same_boot_comparable_and_changed_boot_denied')
++            at(110,1910);sign();reference=ref()
++            context=CallContext(activity_id=AID,operation_id='offline.request',executor_id='fixture',execution_generation=1,scope_revision=1)
++            authority.check_reference(reference,context=context)
++            with self.assertRaises(DataError):authority.check_reference(reference,context=context)
++            at(111,1911)
++            with self.assertRaises(DataError) as error:authority.approve(pid,principal,current=True)
++            self.assertEqual(error.exception.code,'q_approval_consumed');cases.append('claim_irreversible_zero_resend')
++        self.assertEqual(q_clock.validate({'issued_at':origin.isoformat(),'expires_at':(origin+timedelta(minutes=15)).isoformat()},None,epoch),'q_clock_domain_unknown')
++        out=Path(__file__).resolve().parents[2]/'DocuN/evidence/TASK-120/execution/audit-repair-07'
++        (out/'F04-clock-authorization-PASS.json').write_text(json.dumps({'status':'PASS','cases':cases,
++            'method':'only q_clock.sample injected; actual QAuthority approve/projection/reference/check_reference, ControlHub/RootLease and real private files',
++            'legacy_approval_without_clock':'fail_closed','same_boot_native_sample':{k:epoch[k] for k in ('domain','mono_ns','upper_ns')},
++            'prepared_files_created':1,'real_provider_calls':0},indent=2)+'\n',encoding='utf-8')
++
++
++if __name__=='__main__':unittest.main(verbosity=2)

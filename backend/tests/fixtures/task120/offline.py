@@ -12,8 +12,10 @@ AID='01800000-0000-4000-8000-000000000001'
 TEXT='根据速度.md学习单位换算。'
 
 
-def store():
-    root=ROOT/'.runtime/TASK-120/offline'/str(uuid4())
+def store(*,template_atoms_extra=()):
+    import os
+    private=ROOT/'.runtime/task120-audit07/offline' if os.environ.get('RETROLUME_TASK120_CONTINUATION')=='TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021' else ROOT/'.runtime/TASK-120/offline'
+    root=private/str(uuid4())
     root.mkdir(parents=True)
     private_file(root,directory=True)
     hub=ControlHub(root)
@@ -25,6 +27,7 @@ def store():
     literal={'alias':'L01.goal','purpose':'goal','raw_text_sha256':raw_digest(TEXT),'json_string_sha256':digest(TEXT),'max_utf8_bytes':4096,'allowed_activity_ids':[AID],'allowed_actions':['first','plan']}
     source_id=str(uuid4());version_id=str(uuid4())
     templates=['fixed test system'];atoms=['messages','role','system','user','content','model','max_tokens','stream','thinking','type','disabled','goal']
+    atoms.extend(template_atoms_extra)
     manifest={'schema':'retrolume.outbound-sources.v2','frozen_samples_sha256':'304a4b131d04cd4132334bebd091f94ff62bec5660698457487e14136023c113',
         'acceptance_contract_sha256':digest('offline-contract'),'sources':[{'source_id':source_id,'source_version_id':version_id,'source_revision':1,'original_sha256':raw_digest('synthetic original')}],
         'fragments':[{'identity_sha256':digest('offline-fragment'),'input_sha256':digest('synthetic original')}],'fixed_inputs':[literal],

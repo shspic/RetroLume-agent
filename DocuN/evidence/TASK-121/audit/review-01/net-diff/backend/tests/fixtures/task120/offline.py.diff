@@ -1,0 +1,15 @@
+--- before/backend/tests/fixtures/task120/offline.py
++++ after/backend/tests/fixtures/task120/offline.py
+@@ -12,9 +12,11 @@
+ TEXT='根据速度.md学习单位换算。'
+ 
+ 
+ def store(*,template_atoms_extra=()):
+-    root=ROOT/'.runtime/TASK-120/offline'/str(uuid4())
++    import os
++    private=ROOT/'.runtime/task120-audit07/offline' if os.environ.get('RETROLUME_TASK120_CONTINUATION')=='TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021' else ROOT/'.runtime/TASK-120/offline'
++    root=private/str(uuid4())
+     root.mkdir(parents=True)
+     private_file(root,directory=True)
+     hub=ControlHub(root)
+     source={'dataset_id':str(uuid4()),'instance_id':str(uuid4()),'originals_root_id':str(uuid4()),'schema_profile':'data_exit.v1.r02','mode':'normal','reference_epoch':0}

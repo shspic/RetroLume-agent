@@ -1,0 +1,2360 @@
+{
+  "status": "PASS",
+  "facts": {
+    "endpoint": {
+      "backend_pid": 37,
+      "database": "retrolume_task120_audit07_main",
+      "cluster_system_identifier": "7697981369175429158"
+    },
+    "before": {
+      "control": [
+        {
+          "dataset_id": "07365653-5caf-45dc-97ec-20a23ee09181",
+          "instance_id": "0ea2b6f3-f578-4e6d-a672-9a055f545598",
+          "schema_profile": "data_exit.v1.r02",
+          "mode": "normal"
+        }
+      ],
+      "constraints": [
+        {
+          "conname": "data_control_check",
+          "definition": "CHECK (((mode <> 'loading'::text) OR ((loader_session_user IS NOT NULL) AND (source_snapshot_id IS NOT NULL))))"
+        },
+        {
+          "conname": "data_control_instance_id_key",
+          "definition": "UNIQUE (instance_id)"
+        },
+        {
+          "conname": "data_control_maintenance_key_sha256_check",
+          "definition": "CHECK ((maintenance_key_sha256 ~ '^[0-9a-f]{64}$'::text))"
+        },
+        {
+          "conname": "data_control_mode_check",
+          "definition": "CHECK ((mode = ANY (ARRAY['normal'::text, 'loading'::text, 'frozen'::text, 'restored_readonly'::text])))"
+        },
+        {
+          "conname": "data_control_pkey",
+          "definition": "PRIMARY KEY (singleton)"
+        },
+        {
+          "conname": "data_control_reference_epoch_check",
+          "definition": "CHECK ((reference_epoch >= 0))"
+        },
+        {
+          "conname": "data_control_schema_profile_check",
+          "definition": "CHECK ((schema_profile = ANY (ARRAY['data_exit.v1.r01'::text, 'data_exit.v1.r02'::text])))"
+        },
+        {
+          "conname": "data_control_singleton_check",
+          "definition": "CHECK (singleton)"
+        }
+      ],
+      "scope_ACL": [
+        {
+          "attname": null,
+          "grantee": "<owner>",
+          "privilege_type": "DELETE",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": null,
+          "grantee": "<owner>",
+          "privilege_type": "INSERT",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": null,
+          "grantee": "<owner>",
+          "privilege_type": "MAINTAIN",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": null,
+          "grantee": "<owner>",
+          "privilege_type": "REFERENCES",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": null,
+          "grantee": "<owner>",
+          "privilege_type": "SELECT",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": null,
+          "grantee": "<owner>",
+          "privilege_type": "TRIGGER",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": null,
+          "grantee": "<owner>",
+          "privilege_type": "TRUNCATE",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": null,
+          "grantee": "<owner>",
+          "privilege_type": "UPDATE",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": null,
+          "grantee": "retrolume_data_app",
+          "privilege_type": "INSERT",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": null,
+          "grantee": "retrolume_data_app",
+          "privilege_type": "SELECT",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": null,
+          "grantee": "retrolume_data_app",
+          "privilege_type": "UPDATE",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": null,
+          "grantee": "retrolume_data_owner",
+          "privilege_type": "SELECT",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": null,
+          "grantee": "retrolume_data_restore_loader",
+          "privilege_type": "INSERT",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": null,
+          "grantee": "retrolume_data_restore_loader",
+          "privilege_type": "SELECT",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": null,
+          "grantee": "retrolume_html_owner",
+          "privilege_type": "SELECT",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": null,
+          "grantee": "retrolume_interview_owner",
+          "privilege_type": "SELECT",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": null,
+          "grantee": "retrolume_retrieval_owner",
+          "privilege_type": "SELECT",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": "activity_id",
+          "grantee": "retrolume_data_snapshot",
+          "privilege_type": "SELECT",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": "source_id",
+          "grantee": "retrolume_data_snapshot",
+          "privilege_type": "SELECT",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": "source_revision",
+          "grantee": "retrolume_data_snapshot",
+          "privilege_type": "SELECT",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": "version_id",
+          "grantee": "retrolume_data_snapshot",
+          "privilege_type": "SELECT",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        }
+      ],
+      "objects": [
+        {
+          "relname": "activities",
+          "relkind": "r",
+          "owner": "postgres",
+          "relacl": "{postgres=arwdDxtm/postgres,retrolume_interview_owner=r/postgres,retrolume_html_owner=r/postgres,retrolume_data_app=arw/postgres,retrolume_data_restore_loader=ar/postgres,retrolume_data_owner=r/postgres,retrolume_retrieval_owner=r/postgres}"
+        },
+        {
+          "relname": "activities_pkey",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "activity_allowed_models",
+          "relkind": "r",
+          "owner": "postgres",
+          "relacl": "{postgres=arwdDxtm/postgres,retrolume_data_app=arw/postgres,retrolume_data_restore_loader=ar/postgres,retrolume_data_owner=r/postgres}"
+        },
+        {
+          "relname": "activity_allowed_models_pkey",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "activity_memory_bindings",
+          "relkind": "r",
+          "owner": "retrolume_memory_owner",
+          "relacl": "{retrolume_memory_owner=arwdDxtm/retrolume_memory_owner,retrolume_memory_app=ar/retrolume_memory_owner,retrolume_interview_owner=r/retrolume_memory_owner,retrolume_html_owner=r/retrolume_memory_owner,retrolume_data_restore_loader=ar/retrolume_memory_owner,retrolume_data_owner=r/retrolume_memory_owner}"
+        },
+        {
+          "relname": "activity_memory_bindings_pkey",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "activity_memory_choices",
+          "relkind": "r",
+          "owner": "retrolume_memory_owner",
+          "relacl": "{retrolume_memory_owner=arwdDxtm/retrolume_memory_owner,retrolume_memory_app=ar/retrolume_memory_owner,retrolume_html_owner=r/retrolume_memory_owner,retrolume_data_restore_loader=ar/retrolume_memory_owner,retrolume_data_owner=r/retrolume_memory_owner,retrolume_interview_owner=r/retrolume_memory_owner}"
+        },
+        {
+          "relname": "activity_memory_choices_activity_id_ordinal_key",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "activity_memory_choices_pkey",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "activity_operation_results",
+          "relkind": "r",
+          "owner": "postgres",
+          "relacl": "{postgres=arwdDxtm/postgres,retrolume_interview_owner=r/postgres,retrolume_html_owner=r/postgres,retrolume_data_app=arw/postgres,retrolume_data_restore_loader=ar/postgres,retrolume_data_owner=r/postgres,retrolume_retrieval_owner=rd/postgres}"
+        },
+        {
+          "relname": "activity_operation_results_pkey",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "activity_operations",
+          "relkind": "r",
+          "owner": "postgres",
+          "relacl": "{postgres=arwdDxtm/postgres,retrolume_interview_owner=r/postgres,retrolume_html_owner=r/postgres,retrolume_data_app=arw/postgres,retrolume_data_restore_loader=ar/postgres,retrolume_data_owner=r/postgres,retrolume_retrieval_owner=r/postgres}"
+        },
+        {
+          "relname": "activity_operations_admission_id_key",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "activity_operations_pkey",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "activity_operations_recovery",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "activity_scope_sources",
+          "relkind": "r",
+          "owner": "postgres",
+          "relacl": "{postgres=arwdDxtm/postgres,retrolume_interview_owner=r/postgres,retrolume_html_owner=r/postgres,retrolume_data_app=arw/postgres,retrolume_data_restore_loader=ar/postgres,retrolume_data_owner=r/postgres,retrolume_retrieval_owner=r/postgres}"
+        },
+        {
+          "relname": "activity_scope_sources_pkey",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "activity_scope_sources_source",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "data_control",
+          "relkind": "r",
+          "owner": "retrolume_data_owner",
+          "relacl": "{retrolume_data_owner=arwdDxtm/retrolume_data_owner}"
+        },
+        {
+          "relname": "data_control_instance_id_key",
+          "relkind": "i",
+          "owner": "retrolume_data_owner",
+          "relacl": null
+        },
+        {
+          "relname": "data_control_pkey",
+          "relkind": "i",
+          "owner": "retrolume_data_owner",
+          "relacl": null
+        },
+        {
+          "relname": "data_export_control_v1",
+          "relkind": "v",
+          "owner": "retrolume_data_owner",
+          "relacl": "{retrolume_data_owner=arwdDxtm/retrolume_data_owner,retrolume_data_snapshot=r/retrolume_data_owner,retrolume_data_app=r/retrolume_data_owner,retrolume_data_restore_loader=r/retrolume_data_owner}"
+        },
+        {
+          "relname": "data_export_job_history_v1",
+          "relkind": "v",
+          "owner": "retrolume_data_owner",
+          "relacl": "{retrolume_data_owner=arwdDxtm/retrolume_data_owner,retrolume_data_snapshot=r/retrolume_data_owner,retrolume_data_app=r/retrolume_data_owner,retrolume_data_restore_loader=r/retrolume_data_owner}"
+        },
+        {
+          "relname": "data_export_tombstones_v1",
+          "relkind": "v",
+          "owner": "retrolume_data_owner",
+          "relacl": "{retrolume_data_owner=arwdDxtm/retrolume_data_owner,retrolume_data_snapshot=r/retrolume_data_owner,retrolume_data_app=r/retrolume_data_owner,retrolume_data_restore_loader=r/retrolume_data_owner}"
+        },
+        {
+          "relname": "data_operation_jobs",
+          "relkind": "r",
+          "owner": "retrolume_data_owner",
+          "relacl": "{retrolume_data_owner=arwdDxtm/retrolume_data_owner}"
+        },
+        {
+          "relname": "data_operation_jobs_pkey",
+          "relkind": "i",
+          "owner": "retrolume_data_owner",
+          "relacl": null
+        },
+        {
+          "relname": "data_reference_prepared",
+          "relkind": "i",
+          "owner": "retrolume_data_owner",
+          "relacl": null
+        },
+        {
+          "relname": "data_tombstones",
+          "relkind": "r",
+          "owner": "retrolume_data_owner",
+          "relacl": "{retrolume_data_owner=arwdDxtm/retrolume_data_owner,retrolume_data_snapshot=r/retrolume_data_owner,retrolume_data_app=r/retrolume_data_owner,retrolume_data_restore_loader=r/retrolume_data_owner,retrolume_retrieval_owner=r/retrolume_data_owner}"
+        },
+        {
+          "relname": "data_tombstones_entity_kind_entity_id_effective_revision_key",
+          "relkind": "i",
+          "owner": "retrolume_data_owner",
+          "relacl": null
+        },
+        {
+          "relname": "data_tombstones_pkey",
+          "relkind": "i",
+          "owner": "retrolume_data_owner",
+          "relacl": null
+        },
+        {
+          "relname": "html_artifacts",
+          "relkind": "r",
+          "owner": "retrolume_html_owner",
+          "relacl": "{retrolume_html_owner=arwdDxtm/retrolume_html_owner,retrolume_html_app=r/retrolume_html_owner,retrolume_data_restore_loader=ar/retrolume_html_owner,retrolume_data_owner=r/retrolume_html_owner}"
+        },
+        {
+          "relname": "html_artifacts_activity_id_artifact_id_key",
+          "relkind": "i",
+          "owner": "retrolume_html_owner",
+          "relacl": null
+        },
+        {
+          "relname": "html_artifacts_activity_id_business_key_key",
+          "relkind": "i",
+          "owner": "retrolume_html_owner",
+          "relacl": null
+        },
+        {
+          "relname": "html_artifacts_activity_id_operation_id_key",
+          "relkind": "i",
+          "owner": "retrolume_html_owner",
+          "relacl": null
+        },
+        {
+          "relname": "html_artifacts_pkey",
+          "relkind": "i",
+          "owner": "retrolume_html_owner",
+          "relacl": null
+        },
+        {
+          "relname": "html_commands",
+          "relkind": "r",
+          "owner": "retrolume_html_owner",
+          "relacl": "{retrolume_html_owner=arwdDxtm/retrolume_html_owner,retrolume_html_app=r/retrolume_html_owner,retrolume_data_restore_loader=ar/retrolume_html_owner,retrolume_data_owner=r/retrolume_html_owner}"
+        },
+        {
+          "relname": "html_commands_activity_id_operation_id_key",
+          "relkind": "i",
+          "owner": "retrolume_html_owner",
+          "relacl": null
+        },
+        {
+          "relname": "html_commands_pkey",
+          "relkind": "i",
+          "owner": "retrolume_html_owner",
+          "relacl": null
+        },
+        {
+          "relname": "html_one_unconfirmed_activity",
+          "relkind": "i",
+          "owner": "retrolume_html_owner",
+          "relacl": null
+        },
+        {
+          "relname": "html_preview_budgets",
+          "relkind": "r",
+          "owner": "retrolume_html_owner",
+          "relacl": "{retrolume_html_owner=arwdDxtm/retrolume_html_owner,retrolume_html_app=r/retrolume_html_owner,retrolume_data_restore_loader=ar/retrolume_html_owner,retrolume_data_owner=r/retrolume_html_owner}"
+        },
+        {
+          "relname": "html_preview_budgets_pkey",
+          "relkind": "i",
+          "owner": "retrolume_html_owner",
+          "relacl": null
+        },
+        {
+          "relname": "html_preview_sessions",
+          "relkind": "r",
+          "owner": "retrolume_html_owner",
+          "relacl": "{retrolume_html_owner=arwdDxtm/retrolume_html_owner,retrolume_html_app=r/retrolume_html_owner,retrolume_data_restore_loader=ar/retrolume_html_owner,retrolume_data_owner=r/retrolume_html_owner}"
+        },
+        {
+          "relname": "html_preview_sessions_activity_id_generation_key",
+          "relkind": "i",
+          "owner": "retrolume_html_owner",
+          "relacl": null
+        },
+        {
+          "relname": "html_preview_sessions_activity_id_start_key_key",
+          "relkind": "i",
+          "owner": "retrolume_html_owner",
+          "relacl": null
+        },
+        {
+          "relname": "html_preview_sessions_pkey",
+          "relkind": "i",
+          "owner": "retrolume_html_owner",
+          "relacl": null
+        },
+        {
+          "relname": "interview_command_status",
+          "relkind": "i",
+          "owner": "retrolume_interview_owner",
+          "relacl": null
+        },
+        {
+          "relname": "interview_commands",
+          "relkind": "r",
+          "owner": "retrolume_interview_owner",
+          "relacl": "{retrolume_interview_owner=arwdDxtm/retrolume_interview_owner,retrolume_interview_app=ar/retrolume_interview_owner,retrolume_data_restore_loader=ar/retrolume_interview_owner,retrolume_data_owner=r/retrolume_interview_owner}"
+        },
+        {
+          "relname": "interview_commands_activity_id_operation_id_key",
+          "relkind": "i",
+          "owner": "retrolume_interview_owner",
+          "relacl": null
+        },
+        {
+          "relname": "interview_commands_pkey",
+          "relkind": "i",
+          "owner": "retrolume_interview_owner",
+          "relacl": null
+        },
+        {
+          "relname": "interview_heads",
+          "relkind": "r",
+          "owner": "retrolume_interview_owner",
+          "relacl": "{retrolume_interview_owner=arwdDxtm/retrolume_interview_owner,retrolume_interview_app=ar/retrolume_interview_owner,retrolume_data_restore_loader=ar/retrolume_interview_owner,retrolume_data_owner=r/retrolume_interview_owner}"
+        },
+        {
+          "relname": "interview_heads_pkey",
+          "relkind": "i",
+          "owner": "retrolume_interview_owner",
+          "relacl": null
+        },
+        {
+          "relname": "interview_live_slot",
+          "relkind": "i",
+          "owner": "retrolume_interview_owner",
+          "relacl": null
+        },
+        {
+          "relname": "interview_record_parents",
+          "relkind": "i",
+          "owner": "retrolume_interview_owner",
+          "relacl": null
+        },
+        {
+          "relname": "interview_records",
+          "relkind": "r",
+          "owner": "retrolume_interview_owner",
+          "relacl": "{retrolume_interview_owner=arwdDxtm/retrolume_interview_owner,retrolume_interview_app=ar/retrolume_interview_owner,retrolume_data_restore_loader=ar/retrolume_interview_owner,retrolume_data_owner=r/retrolume_interview_owner}"
+        },
+        {
+          "relname": "interview_records_activity_id_business_key_ordinal_key",
+          "relkind": "i",
+          "owner": "retrolume_interview_owner",
+          "relacl": null
+        },
+        {
+          "relname": "interview_records_activity_id_question_record_id_answer_ver_key",
+          "relkind": "i",
+          "owner": "retrolume_interview_owner",
+          "relacl": null
+        },
+        {
+          "relname": "interview_records_activity_id_seq_key",
+          "relkind": "i",
+          "owner": "retrolume_interview_owner",
+          "relacl": null
+        },
+        {
+          "relname": "interview_records_pkey",
+          "relkind": "i",
+          "owner": "retrolume_interview_owner",
+          "relacl": null
+        },
+        {
+          "relname": "learning_memories",
+          "relkind": "r",
+          "owner": "retrolume_memory_owner",
+          "relacl": "{retrolume_memory_owner=arwdDxtm/retrolume_memory_owner,retrolume_memory_app=ar/retrolume_memory_owner,retrolume_memory_purger=r/retrolume_memory_owner,retrolume_html_owner=r/retrolume_memory_owner,retrolume_data_restore_loader=ar/retrolume_memory_owner,retrolume_data_owner=r/retrolume_memory_owner,retrolume_interview_owner=r/retrolume_memory_owner}"
+        },
+        {
+          "relname": "learning_memories_pkey",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "learning_memory_bodies",
+          "relkind": "r",
+          "owner": "retrolume_memory_owner",
+          "relacl": "{retrolume_memory_owner=arwdDxtm/retrolume_memory_owner,retrolume_memory_app=ar/retrolume_memory_owner,retrolume_memory_purger=rd/retrolume_memory_owner,retrolume_html_owner=r/retrolume_memory_owner,retrolume_data_restore_loader=ar/retrolume_memory_owner,retrolume_data_owner=r/retrolume_memory_owner,retrolume_interview_owner=r/retrolume_memory_owner}"
+        },
+        {
+          "relname": "learning_memory_bodies_pkey",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "learning_memory_commands",
+          "relkind": "r",
+          "owner": "retrolume_memory_owner",
+          "relacl": "{retrolume_memory_owner=arwdDxtm/retrolume_memory_owner,retrolume_memory_app=ar/retrolume_memory_owner,retrolume_memory_purger=ar/retrolume_memory_owner,retrolume_data_restore_loader=ar/retrolume_memory_owner,retrolume_data_owner=r/retrolume_memory_owner,retrolume_interview_owner=r/retrolume_memory_owner}"
+        },
+        {
+          "relname": "learning_memory_commands_memory_id_business_key_key",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "learning_memory_commands_pkey",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "learning_memory_dependencies",
+          "relkind": "r",
+          "owner": "retrolume_memory_owner",
+          "relacl": "{retrolume_memory_owner=arwdDxtm/retrolume_memory_owner,retrolume_memory_app=ar/retrolume_memory_owner,retrolume_html_owner=r/retrolume_memory_owner,retrolume_data_restore_loader=ar/retrolume_memory_owner,retrolume_data_owner=r/retrolume_memory_owner,retrolume_interview_owner=r/retrolume_memory_owner}"
+        },
+        {
+          "relname": "learning_memory_dependencies_pkey",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "learning_memory_revisions",
+          "relkind": "r",
+          "owner": "retrolume_memory_owner",
+          "relacl": "{retrolume_memory_owner=arwdDxtm/retrolume_memory_owner,retrolume_memory_app=ar/retrolume_memory_owner,retrolume_memory_purger=r/retrolume_memory_owner,retrolume_html_owner=r/retrolume_memory_owner,retrolume_data_restore_loader=ar/retrolume_memory_owner,retrolume_data_owner=r/retrolume_memory_owner,retrolume_interview_owner=r/retrolume_memory_owner}"
+        },
+        {
+          "relname": "learning_memory_revisions_created_by_key_key",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "learning_memory_revisions_pkey",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "material_sources",
+          "relkind": "r",
+          "owner": "postgres",
+          "relacl": "{postgres=arwdDxtm/postgres,retrolume_interview_owner=r/postgres,retrolume_html_owner=r/postgres,retrolume_data_app=arw/postgres,retrolume_data_restore_loader=ar/postgres,retrolume_data_owner=r/postgres,retrolume_retrieval_owner=r/postgres}"
+        },
+        {
+          "relname": "material_sources_pkey",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "material_versions",
+          "relkind": "r",
+          "owner": "postgres",
+          "relacl": "{postgres=arwdDxtm/postgres,retrolume_html_owner=r/postgres,retrolume_data_app=arw/postgres,retrolume_data_restore_loader=ar/postgres,retrolume_data_owner=r/postgres,retrolume_retrieval_owner=r/postgres,retrolume_interview_owner=r/postgres}"
+        },
+        {
+          "relname": "material_versions_pkey",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "material_versions_source",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "material_versions_source_id_id_key",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "memory_choice_dependents",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "memory_effect_slot",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "memory_event_dependencies",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "memory_event_once",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "memory_heads_recent",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "memory_source_dependencies",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "memory_source_once",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "memory_upstream_dependencies",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "memory_upstream_once",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "pdf_extracted_pages",
+          "relkind": "r",
+          "owner": "postgres",
+          "relacl": "{postgres=arwdDxtm/postgres,retrolume_data_app=arw/postgres,retrolume_data_restore_loader=ar/postgres,retrolume_data_owner=r/postgres,retrolume_interview_owner=r/postgres}"
+        },
+        {
+          "relname": "pdf_extracted_pages_pkey",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "pdf_review_candidates",
+          "relkind": "r",
+          "owner": "postgres",
+          "relacl": "{postgres=arwdDxtm/postgres,retrolume_data_app=arw/postgres,retrolume_data_restore_loader=ar/postgres,retrolume_data_owner=r/postgres,retrolume_interview_owner=r/postgres}"
+        },
+        {
+          "relname": "pdf_review_candidates_id_version_id_key",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "pdf_review_candidates_pending",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "pdf_review_candidates_pkey",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "pdf_review_candidates_version_id_key",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "pdf_review_pages",
+          "relkind": "r",
+          "owner": "postgres",
+          "relacl": "{postgres=arwdDxtm/postgres,retrolume_data_app=arw/postgres,retrolume_data_restore_loader=ar/postgres,retrolume_data_owner=r/postgres,retrolume_interview_owner=r/postgres}"
+        },
+        {
+          "relname": "pdf_review_pages_pkey",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "pdf_user_supplements",
+          "relkind": "r",
+          "owner": "postgres",
+          "relacl": "{postgres=arwdDxtm/postgres,retrolume_data_app=arw/postgres,retrolume_data_restore_loader=ar/postgres,retrolume_data_owner=r/postgres}"
+        },
+        {
+          "relname": "pdf_user_supplements_pkey",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "pdf_user_supplements_version_page",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "retrieval_chunks",
+          "relkind": "r",
+          "owner": "retrolume_retrieval_owner",
+          "relacl": "{retrolume_retrieval_owner=arwdDxtm/retrolume_retrieval_owner,retrolume_retrieval_app=ar/retrolume_retrieval_owner,retrolume_data_snapshot=r/retrolume_retrieval_owner,retrolume_data_restore_loader=ar/retrolume_retrieval_owner,retrolume_data_owner=r/retrolume_retrieval_owner}"
+        },
+        {
+          "relname": "retrieval_chunks_pkey",
+          "relkind": "i",
+          "owner": "retrolume_retrieval_owner",
+          "relacl": null
+        },
+        {
+          "relname": "retrieval_commands",
+          "relkind": "r",
+          "owner": "retrolume_retrieval_owner",
+          "relacl": "{retrolume_retrieval_owner=arwdDxtm/retrolume_retrieval_owner,retrolume_retrieval_app=ar/retrolume_retrieval_owner,retrolume_data_snapshot=r/retrolume_retrieval_owner,retrolume_data_restore_loader=ar/retrolume_retrieval_owner,retrolume_data_owner=r/retrolume_retrieval_owner}"
+        },
+        {
+          "relname": "retrieval_commands_pkey",
+          "relkind": "i",
+          "owner": "retrolume_retrieval_owner",
+          "relacl": null
+        },
+        {
+          "relname": "retrieval_spaces",
+          "relkind": "r",
+          "owner": "retrolume_retrieval_owner",
+          "relacl": "{retrolume_retrieval_owner=arwdDxtm/retrolume_retrieval_owner,retrolume_retrieval_app=ar/retrolume_retrieval_owner,retrolume_data_snapshot=r/retrolume_retrieval_owner,retrolume_data_restore_loader=ar/retrolume_retrieval_owner,retrolume_data_owner=r/retrolume_retrieval_owner}"
+        },
+        {
+          "relname": "retrieval_spaces_pkey",
+          "relkind": "i",
+          "owner": "retrolume_retrieval_owner",
+          "relacl": null
+        },
+        {
+          "relname": "retrieval_spaces_provider_configured_model_dimensions_norma_key",
+          "relkind": "i",
+          "owner": "retrolume_retrieval_owner",
+          "relacl": null
+        },
+        {
+          "relname": "teaching_answer_observations",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "teaching_answer_successor",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "teaching_command_live_slot",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "teaching_commands",
+          "relkind": "r",
+          "owner": "postgres",
+          "relacl": "{postgres=arwdDxtm/postgres,retrolume_html_owner=r/postgres,retrolume_data_app=arw/postgres,retrolume_data_restore_loader=ar/postgres,retrolume_data_owner=r/postgres,retrolume_interview_owner=r/postgres}"
+        },
+        {
+          "relname": "teaching_commands_activity_id_operation_id_key",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "teaching_commands_pkey",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "teaching_commands_recent",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "teaching_effect_revision",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "teaching_feedback_effect",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "teaching_goal_version",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "teaching_heads",
+          "relkind": "r",
+          "owner": "postgres",
+          "relacl": "{postgres=arwdDxtm/postgres,retrolume_interview_owner=r/postgres,retrolume_html_owner=r/postgres,retrolume_data_app=arw/postgres,retrolume_data_restore_loader=ar/postgres,retrolume_data_owner=r/postgres}"
+        },
+        {
+          "relname": "teaching_heads_pkey",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "teaching_history",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "teaching_initial_answer",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "teaching_operation_fact",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "teaching_records",
+          "relkind": "r",
+          "owner": "postgres",
+          "relacl": "{postgres=arwdDxtm/postgres,retrolume_html_owner=r/postgres,retrolume_data_app=arw/postgres,retrolume_data_restore_loader=ar/postgres,retrolume_data_owner=r/postgres,retrolume_interview_owner=r/postgres}"
+        },
+        {
+          "relname": "teaching_records_activity_id_business_key_ordinal_key",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "teaching_records_activity_id_seq_key",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "teaching_records_pkey",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        }
+      ]
+    },
+    "after": {
+      "control": [
+        {
+          "dataset_id": "07365653-5caf-45dc-97ec-20a23ee09181",
+          "instance_id": "0ea2b6f3-f578-4e6d-a672-9a055f545598",
+          "schema_profile": "data_exit.v1.r03",
+          "mode": "normal"
+        }
+      ],
+      "constraints": [
+        {
+          "conname": "data_control_check",
+          "definition": "CHECK (((mode <> 'loading'::text) OR ((loader_session_user IS NOT NULL) AND (source_snapshot_id IS NOT NULL))))"
+        },
+        {
+          "conname": "data_control_instance_id_key",
+          "definition": "UNIQUE (instance_id)"
+        },
+        {
+          "conname": "data_control_maintenance_key_sha256_check",
+          "definition": "CHECK ((maintenance_key_sha256 ~ '^[0-9a-f]{64}$'::text))"
+        },
+        {
+          "conname": "data_control_mode_check",
+          "definition": "CHECK ((mode = ANY (ARRAY['normal'::text, 'loading'::text, 'frozen'::text, 'restored_readonly'::text])))"
+        },
+        {
+          "conname": "data_control_pkey",
+          "definition": "PRIMARY KEY (singleton)"
+        },
+        {
+          "conname": "data_control_reference_epoch_check",
+          "definition": "CHECK ((reference_epoch >= 0))"
+        },
+        {
+          "conname": "data_control_schema_profile_check",
+          "definition": "CHECK ((schema_profile = 'data_exit.v1.r03'::text))"
+        },
+        {
+          "conname": "data_control_singleton_check",
+          "definition": "CHECK (singleton)"
+        }
+      ],
+      "scope_ACL": [
+        {
+          "attname": null,
+          "grantee": "<owner>",
+          "privilege_type": "DELETE",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": null,
+          "grantee": "<owner>",
+          "privilege_type": "INSERT",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": null,
+          "grantee": "<owner>",
+          "privilege_type": "MAINTAIN",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": null,
+          "grantee": "<owner>",
+          "privilege_type": "REFERENCES",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": null,
+          "grantee": "<owner>",
+          "privilege_type": "SELECT",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": null,
+          "grantee": "<owner>",
+          "privilege_type": "TRIGGER",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": null,
+          "grantee": "<owner>",
+          "privilege_type": "TRUNCATE",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": null,
+          "grantee": "<owner>",
+          "privilege_type": "UPDATE",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": null,
+          "grantee": "retrolume_data_app",
+          "privilege_type": "DELETE",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": null,
+          "grantee": "retrolume_data_app",
+          "privilege_type": "INSERT",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": null,
+          "grantee": "retrolume_data_app",
+          "privilege_type": "SELECT",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": null,
+          "grantee": "retrolume_data_app",
+          "privilege_type": "UPDATE",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": null,
+          "grantee": "retrolume_data_owner",
+          "privilege_type": "SELECT",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": null,
+          "grantee": "retrolume_data_restore_loader",
+          "privilege_type": "INSERT",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": null,
+          "grantee": "retrolume_data_restore_loader",
+          "privilege_type": "SELECT",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": null,
+          "grantee": "retrolume_html_owner",
+          "privilege_type": "SELECT",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": null,
+          "grantee": "retrolume_interview_owner",
+          "privilege_type": "SELECT",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": null,
+          "grantee": "retrolume_retrieval_owner",
+          "privilege_type": "SELECT",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": "activity_id",
+          "grantee": "retrolume_data_snapshot",
+          "privilege_type": "SELECT",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": "source_id",
+          "grantee": "retrolume_data_snapshot",
+          "privilege_type": "SELECT",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": "source_revision",
+          "grantee": "retrolume_data_snapshot",
+          "privilege_type": "SELECT",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        },
+        {
+          "attname": "version_id",
+          "grantee": "retrolume_data_snapshot",
+          "privilege_type": "SELECT",
+          "is_grantable": false,
+          "trusted_grantor": true,
+          "mode_observed": "normal",
+          "owner_privileges": [
+            "DELETE",
+            "INSERT",
+            "MAINTAIN",
+            "REFERENCES",
+            "SELECT",
+            "TRIGGER",
+            "TRUNCATE",
+            "UPDATE"
+          ]
+        }
+      ],
+      "objects": [
+        {
+          "relname": "activities",
+          "relkind": "r",
+          "owner": "postgres",
+          "relacl": "{postgres=arwdDxtm/postgres,retrolume_interview_owner=r/postgres,retrolume_html_owner=r/postgres,retrolume_data_app=arw/postgres,retrolume_data_restore_loader=ar/postgres,retrolume_data_owner=r/postgres,retrolume_retrieval_owner=r/postgres}"
+        },
+        {
+          "relname": "activities_pkey",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "activity_allowed_models",
+          "relkind": "r",
+          "owner": "postgres",
+          "relacl": "{postgres=arwdDxtm/postgres,retrolume_data_app=arw/postgres,retrolume_data_restore_loader=ar/postgres,retrolume_data_owner=r/postgres}"
+        },
+        {
+          "relname": "activity_allowed_models_pkey",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "activity_memory_bindings",
+          "relkind": "r",
+          "owner": "retrolume_memory_owner",
+          "relacl": "{retrolume_memory_owner=arwdDxtm/retrolume_memory_owner,retrolume_memory_app=ar/retrolume_memory_owner,retrolume_interview_owner=r/retrolume_memory_owner,retrolume_html_owner=r/retrolume_memory_owner,retrolume_data_restore_loader=ar/retrolume_memory_owner,retrolume_data_owner=r/retrolume_memory_owner}"
+        },
+        {
+          "relname": "activity_memory_bindings_pkey",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "activity_memory_choices",
+          "relkind": "r",
+          "owner": "retrolume_memory_owner",
+          "relacl": "{retrolume_memory_owner=arwdDxtm/retrolume_memory_owner,retrolume_memory_app=ar/retrolume_memory_owner,retrolume_html_owner=r/retrolume_memory_owner,retrolume_data_restore_loader=ar/retrolume_memory_owner,retrolume_data_owner=r/retrolume_memory_owner,retrolume_interview_owner=r/retrolume_memory_owner}"
+        },
+        {
+          "relname": "activity_memory_choices_activity_id_ordinal_key",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "activity_memory_choices_pkey",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "activity_operation_results",
+          "relkind": "r",
+          "owner": "postgres",
+          "relacl": "{postgres=arwdDxtm/postgres,retrolume_interview_owner=r/postgres,retrolume_html_owner=r/postgres,retrolume_data_app=arw/postgres,retrolume_data_restore_loader=ar/postgres,retrolume_data_owner=r/postgres,retrolume_retrieval_owner=rd/postgres}"
+        },
+        {
+          "relname": "activity_operation_results_pkey",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "activity_operations",
+          "relkind": "r",
+          "owner": "postgres",
+          "relacl": "{postgres=arwdDxtm/postgres,retrolume_interview_owner=r/postgres,retrolume_html_owner=r/postgres,retrolume_data_app=arw/postgres,retrolume_data_restore_loader=ar/postgres,retrolume_data_owner=r/postgres,retrolume_retrieval_owner=r/postgres}"
+        },
+        {
+          "relname": "activity_operations_admission_id_key",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "activity_operations_pkey",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "activity_operations_recovery",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "activity_scope_sources",
+          "relkind": "r",
+          "owner": "postgres",
+          "relacl": "{postgres=arwdDxtm/postgres,retrolume_interview_owner=r/postgres,retrolume_html_owner=r/postgres,retrolume_data_app=arwd/postgres,retrolume_data_restore_loader=ar/postgres,retrolume_data_owner=r/postgres,retrolume_retrieval_owner=r/postgres}"
+        },
+        {
+          "relname": "activity_scope_sources_pkey",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "activity_scope_sources_source",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "data_control",
+          "relkind": "r",
+          "owner": "retrolume_data_owner",
+          "relacl": "{retrolume_data_owner=arwdDxtm/retrolume_data_owner}"
+        },
+        {
+          "relname": "data_control_instance_id_key",
+          "relkind": "i",
+          "owner": "retrolume_data_owner",
+          "relacl": null
+        },
+        {
+          "relname": "data_control_pkey",
+          "relkind": "i",
+          "owner": "retrolume_data_owner",
+          "relacl": null
+        },
+        {
+          "relname": "data_export_control_v1",
+          "relkind": "v",
+          "owner": "retrolume_data_owner",
+          "relacl": "{retrolume_data_owner=arwdDxtm/retrolume_data_owner,retrolume_data_snapshot=r/retrolume_data_owner,retrolume_data_app=r/retrolume_data_owner,retrolume_data_restore_loader=r/retrolume_data_owner}"
+        },
+        {
+          "relname": "data_export_job_history_v1",
+          "relkind": "v",
+          "owner": "retrolume_data_owner",
+          "relacl": "{retrolume_data_owner=arwdDxtm/retrolume_data_owner,retrolume_data_snapshot=r/retrolume_data_owner,retrolume_data_app=r/retrolume_data_owner,retrolume_data_restore_loader=r/retrolume_data_owner}"
+        },
+        {
+          "relname": "data_export_tombstones_v1",
+          "relkind": "v",
+          "owner": "retrolume_data_owner",
+          "relacl": "{retrolume_data_owner=arwdDxtm/retrolume_data_owner,retrolume_data_snapshot=r/retrolume_data_owner,retrolume_data_app=r/retrolume_data_owner,retrolume_data_restore_loader=r/retrolume_data_owner}"
+        },
+        {
+          "relname": "data_operation_jobs",
+          "relkind": "r",
+          "owner": "retrolume_data_owner",
+          "relacl": "{retrolume_data_owner=arwdDxtm/retrolume_data_owner}"
+        },
+        {
+          "relname": "data_operation_jobs_pkey",
+          "relkind": "i",
+          "owner": "retrolume_data_owner",
+          "relacl": null
+        },
+        {
+          "relname": "data_reference_prepared",
+          "relkind": "i",
+          "owner": "retrolume_data_owner",
+          "relacl": null
+        },
+        {
+          "relname": "data_tombstones",
+          "relkind": "r",
+          "owner": "retrolume_data_owner",
+          "relacl": "{retrolume_data_owner=arwdDxtm/retrolume_data_owner,retrolume_data_snapshot=r/retrolume_data_owner,retrolume_data_app=r/retrolume_data_owner,retrolume_data_restore_loader=r/retrolume_data_owner,retrolume_retrieval_owner=r/retrolume_data_owner}"
+        },
+        {
+          "relname": "data_tombstones_entity_kind_entity_id_effective_revision_key",
+          "relkind": "i",
+          "owner": "retrolume_data_owner",
+          "relacl": null
+        },
+        {
+          "relname": "data_tombstones_pkey",
+          "relkind": "i",
+          "owner": "retrolume_data_owner",
+          "relacl": null
+        },
+        {
+          "relname": "html_artifacts",
+          "relkind": "r",
+          "owner": "retrolume_html_owner",
+          "relacl": "{retrolume_html_owner=arwdDxtm/retrolume_html_owner,retrolume_html_app=r/retrolume_html_owner,retrolume_data_restore_loader=ar/retrolume_html_owner,retrolume_data_owner=r/retrolume_html_owner}"
+        },
+        {
+          "relname": "html_artifacts_activity_id_artifact_id_key",
+          "relkind": "i",
+          "owner": "retrolume_html_owner",
+          "relacl": null
+        },
+        {
+          "relname": "html_artifacts_activity_id_business_key_key",
+          "relkind": "i",
+          "owner": "retrolume_html_owner",
+          "relacl": null
+        },
+        {
+          "relname": "html_artifacts_activity_id_operation_id_key",
+          "relkind": "i",
+          "owner": "retrolume_html_owner",
+          "relacl": null
+        },
+        {
+          "relname": "html_artifacts_pkey",
+          "relkind": "i",
+          "owner": "retrolume_html_owner",
+          "relacl": null
+        },
+        {
+          "relname": "html_commands",
+          "relkind": "r",
+          "owner": "retrolume_html_owner",
+          "relacl": "{retrolume_html_owner=arwdDxtm/retrolume_html_owner,retrolume_html_app=r/retrolume_html_owner,retrolume_data_restore_loader=ar/retrolume_html_owner,retrolume_data_owner=r/retrolume_html_owner}"
+        },
+        {
+          "relname": "html_commands_activity_id_operation_id_key",
+          "relkind": "i",
+          "owner": "retrolume_html_owner",
+          "relacl": null
+        },
+        {
+          "relname": "html_commands_pkey",
+          "relkind": "i",
+          "owner": "retrolume_html_owner",
+          "relacl": null
+        },
+        {
+          "relname": "html_one_unconfirmed_activity",
+          "relkind": "i",
+          "owner": "retrolume_html_owner",
+          "relacl": null
+        },
+        {
+          "relname": "html_preview_budgets",
+          "relkind": "r",
+          "owner": "retrolume_html_owner",
+          "relacl": "{retrolume_html_owner=arwdDxtm/retrolume_html_owner,retrolume_html_app=r/retrolume_html_owner,retrolume_data_restore_loader=ar/retrolume_html_owner,retrolume_data_owner=r/retrolume_html_owner}"
+        },
+        {
+          "relname": "html_preview_budgets_pkey",
+          "relkind": "i",
+          "owner": "retrolume_html_owner",
+          "relacl": null
+        },
+        {
+          "relname": "html_preview_sessions",
+          "relkind": "r",
+          "owner": "retrolume_html_owner",
+          "relacl": "{retrolume_html_owner=arwdDxtm/retrolume_html_owner,retrolume_html_app=r/retrolume_html_owner,retrolume_data_restore_loader=ar/retrolume_html_owner,retrolume_data_owner=r/retrolume_html_owner}"
+        },
+        {
+          "relname": "html_preview_sessions_activity_id_generation_key",
+          "relkind": "i",
+          "owner": "retrolume_html_owner",
+          "relacl": null
+        },
+        {
+          "relname": "html_preview_sessions_activity_id_start_key_key",
+          "relkind": "i",
+          "owner": "retrolume_html_owner",
+          "relacl": null
+        },
+        {
+          "relname": "html_preview_sessions_pkey",
+          "relkind": "i",
+          "owner": "retrolume_html_owner",
+          "relacl": null
+        },
+        {
+          "relname": "interview_command_status",
+          "relkind": "i",
+          "owner": "retrolume_interview_owner",
+          "relacl": null
+        },
+        {
+          "relname": "interview_commands",
+          "relkind": "r",
+          "owner": "retrolume_interview_owner",
+          "relacl": "{retrolume_interview_owner=arwdDxtm/retrolume_interview_owner,retrolume_interview_app=ar/retrolume_interview_owner,retrolume_data_restore_loader=ar/retrolume_interview_owner,retrolume_data_owner=r/retrolume_interview_owner}"
+        },
+        {
+          "relname": "interview_commands_activity_id_operation_id_key",
+          "relkind": "i",
+          "owner": "retrolume_interview_owner",
+          "relacl": null
+        },
+        {
+          "relname": "interview_commands_pkey",
+          "relkind": "i",
+          "owner": "retrolume_interview_owner",
+          "relacl": null
+        },
+        {
+          "relname": "interview_heads",
+          "relkind": "r",
+          "owner": "retrolume_interview_owner",
+          "relacl": "{retrolume_interview_owner=arwdDxtm/retrolume_interview_owner,retrolume_interview_app=ar/retrolume_interview_owner,retrolume_data_restore_loader=ar/retrolume_interview_owner,retrolume_data_owner=r/retrolume_interview_owner}"
+        },
+        {
+          "relname": "interview_heads_pkey",
+          "relkind": "i",
+          "owner": "retrolume_interview_owner",
+          "relacl": null
+        },
+        {
+          "relname": "interview_live_slot",
+          "relkind": "i",
+          "owner": "retrolume_interview_owner",
+          "relacl": null
+        },
+        {
+          "relname": "interview_record_parents",
+          "relkind": "i",
+          "owner": "retrolume_interview_owner",
+          "relacl": null
+        },
+        {
+          "relname": "interview_records",
+          "relkind": "r",
+          "owner": "retrolume_interview_owner",
+          "relacl": "{retrolume_interview_owner=arwdDxtm/retrolume_interview_owner,retrolume_interview_app=ar/retrolume_interview_owner,retrolume_data_restore_loader=ar/retrolume_interview_owner,retrolume_data_owner=r/retrolume_interview_owner}"
+        },
+        {
+          "relname": "interview_records_activity_id_business_key_ordinal_key",
+          "relkind": "i",
+          "owner": "retrolume_interview_owner",
+          "relacl": null
+        },
+        {
+          "relname": "interview_records_activity_id_question_record_id_answer_ver_key",
+          "relkind": "i",
+          "owner": "retrolume_interview_owner",
+          "relacl": null
+        },
+        {
+          "relname": "interview_records_activity_id_seq_key",
+          "relkind": "i",
+          "owner": "retrolume_interview_owner",
+          "relacl": null
+        },
+        {
+          "relname": "interview_records_pkey",
+          "relkind": "i",
+          "owner": "retrolume_interview_owner",
+          "relacl": null
+        },
+        {
+          "relname": "learning_memories",
+          "relkind": "r",
+          "owner": "retrolume_memory_owner",
+          "relacl": "{retrolume_memory_owner=arwdDxtm/retrolume_memory_owner,retrolume_memory_app=ar/retrolume_memory_owner,retrolume_memory_purger=r/retrolume_memory_owner,retrolume_html_owner=r/retrolume_memory_owner,retrolume_data_restore_loader=ar/retrolume_memory_owner,retrolume_data_owner=r/retrolume_memory_owner,retrolume_interview_owner=r/retrolume_memory_owner}"
+        },
+        {
+          "relname": "learning_memories_pkey",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "learning_memory_bodies",
+          "relkind": "r",
+          "owner": "retrolume_memory_owner",
+          "relacl": "{retrolume_memory_owner=arwdDxtm/retrolume_memory_owner,retrolume_memory_app=ar/retrolume_memory_owner,retrolume_memory_purger=rd/retrolume_memory_owner,retrolume_html_owner=r/retrolume_memory_owner,retrolume_data_restore_loader=ar/retrolume_memory_owner,retrolume_data_owner=r/retrolume_memory_owner,retrolume_interview_owner=r/retrolume_memory_owner}"
+        },
+        {
+          "relname": "learning_memory_bodies_pkey",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "learning_memory_commands",
+          "relkind": "r",
+          "owner": "retrolume_memory_owner",
+          "relacl": "{retrolume_memory_owner=arwdDxtm/retrolume_memory_owner,retrolume_memory_app=ar/retrolume_memory_owner,retrolume_memory_purger=ar/retrolume_memory_owner,retrolume_data_restore_loader=ar/retrolume_memory_owner,retrolume_data_owner=r/retrolume_memory_owner,retrolume_interview_owner=r/retrolume_memory_owner}"
+        },
+        {
+          "relname": "learning_memory_commands_memory_id_business_key_key",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "learning_memory_commands_pkey",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "learning_memory_dependencies",
+          "relkind": "r",
+          "owner": "retrolume_memory_owner",
+          "relacl": "{retrolume_memory_owner=arwdDxtm/retrolume_memory_owner,retrolume_memory_app=ar/retrolume_memory_owner,retrolume_html_owner=r/retrolume_memory_owner,retrolume_data_restore_loader=ar/retrolume_memory_owner,retrolume_data_owner=r/retrolume_memory_owner,retrolume_interview_owner=r/retrolume_memory_owner}"
+        },
+        {
+          "relname": "learning_memory_dependencies_pkey",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "learning_memory_revisions",
+          "relkind": "r",
+          "owner": "retrolume_memory_owner",
+          "relacl": "{retrolume_memory_owner=arwdDxtm/retrolume_memory_owner,retrolume_memory_app=ar/retrolume_memory_owner,retrolume_memory_purger=r/retrolume_memory_owner,retrolume_html_owner=r/retrolume_memory_owner,retrolume_data_restore_loader=ar/retrolume_memory_owner,retrolume_data_owner=r/retrolume_memory_owner,retrolume_interview_owner=r/retrolume_memory_owner}"
+        },
+        {
+          "relname": "learning_memory_revisions_created_by_key_key",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "learning_memory_revisions_pkey",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "material_sources",
+          "relkind": "r",
+          "owner": "postgres",
+          "relacl": "{postgres=arwdDxtm/postgres,retrolume_interview_owner=r/postgres,retrolume_html_owner=r/postgres,retrolume_data_app=arw/postgres,retrolume_data_restore_loader=ar/postgres,retrolume_data_owner=r/postgres,retrolume_retrieval_owner=r/postgres}"
+        },
+        {
+          "relname": "material_sources_pkey",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "material_versions",
+          "relkind": "r",
+          "owner": "postgres",
+          "relacl": "{postgres=arwdDxtm/postgres,retrolume_html_owner=r/postgres,retrolume_data_app=arw/postgres,retrolume_data_restore_loader=ar/postgres,retrolume_data_owner=r/postgres,retrolume_retrieval_owner=r/postgres,retrolume_interview_owner=r/postgres}"
+        },
+        {
+          "relname": "material_versions_pkey",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "material_versions_source",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "material_versions_source_id_id_key",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "memory_choice_dependents",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "memory_effect_slot",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "memory_event_dependencies",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "memory_event_once",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "memory_heads_recent",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "memory_source_dependencies",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "memory_source_once",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "memory_upstream_dependencies",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "memory_upstream_once",
+          "relkind": "i",
+          "owner": "retrolume_memory_owner",
+          "relacl": null
+        },
+        {
+          "relname": "pdf_extracted_pages",
+          "relkind": "r",
+          "owner": "postgres",
+          "relacl": "{postgres=arwdDxtm/postgres,retrolume_data_app=arw/postgres,retrolume_data_restore_loader=ar/postgres,retrolume_data_owner=r/postgres,retrolume_interview_owner=r/postgres}"
+        },
+        {
+          "relname": "pdf_extracted_pages_pkey",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "pdf_review_candidates",
+          "relkind": "r",
+          "owner": "postgres",
+          "relacl": "{postgres=arwdDxtm/postgres,retrolume_data_app=arw/postgres,retrolume_data_restore_loader=ar/postgres,retrolume_data_owner=r/postgres,retrolume_interview_owner=r/postgres}"
+        },
+        {
+          "relname": "pdf_review_candidates_id_version_id_key",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "pdf_review_candidates_pending",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "pdf_review_candidates_pkey",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "pdf_review_candidates_version_id_key",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "pdf_review_pages",
+          "relkind": "r",
+          "owner": "postgres",
+          "relacl": "{postgres=arwdDxtm/postgres,retrolume_data_app=arw/postgres,retrolume_data_restore_loader=ar/postgres,retrolume_data_owner=r/postgres,retrolume_interview_owner=r/postgres}"
+        },
+        {
+          "relname": "pdf_review_pages_pkey",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "pdf_user_supplements",
+          "relkind": "r",
+          "owner": "postgres",
+          "relacl": "{postgres=arwdDxtm/postgres,retrolume_data_app=arw/postgres,retrolume_data_restore_loader=ar/postgres,retrolume_data_owner=r/postgres}"
+        },
+        {
+          "relname": "pdf_user_supplements_pkey",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "pdf_user_supplements_version_page",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "retrieval_chunks",
+          "relkind": "r",
+          "owner": "retrolume_retrieval_owner",
+          "relacl": "{retrolume_retrieval_owner=arwdDxtm/retrolume_retrieval_owner,retrolume_retrieval_app=ar/retrolume_retrieval_owner,retrolume_data_snapshot=r/retrolume_retrieval_owner,retrolume_data_restore_loader=ar/retrolume_retrieval_owner,retrolume_data_owner=r/retrolume_retrieval_owner}"
+        },
+        {
+          "relname": "retrieval_chunks_pkey",
+          "relkind": "i",
+          "owner": "retrolume_retrieval_owner",
+          "relacl": null
+        },
+        {
+          "relname": "retrieval_commands",
+          "relkind": "r",
+          "owner": "retrolume_retrieval_owner",
+          "relacl": "{retrolume_retrieval_owner=arwdDxtm/retrolume_retrieval_owner,retrolume_retrieval_app=ar/retrolume_retrieval_owner,retrolume_data_snapshot=r/retrolume_retrieval_owner,retrolume_data_restore_loader=ar/retrolume_retrieval_owner,retrolume_data_owner=r/retrolume_retrieval_owner}"
+        },
+        {
+          "relname": "retrieval_commands_pkey",
+          "relkind": "i",
+          "owner": "retrolume_retrieval_owner",
+          "relacl": null
+        },
+        {
+          "relname": "retrieval_spaces",
+          "relkind": "r",
+          "owner": "retrolume_retrieval_owner",
+          "relacl": "{retrolume_retrieval_owner=arwdDxtm/retrolume_retrieval_owner,retrolume_retrieval_app=ar/retrolume_retrieval_owner,retrolume_data_snapshot=r/retrolume_retrieval_owner,retrolume_data_restore_loader=ar/retrolume_retrieval_owner,retrolume_data_owner=r/retrolume_retrieval_owner}"
+        },
+        {
+          "relname": "retrieval_spaces_pkey",
+          "relkind": "i",
+          "owner": "retrolume_retrieval_owner",
+          "relacl": null
+        },
+        {
+          "relname": "retrieval_spaces_provider_configured_model_dimensions_norma_key",
+          "relkind": "i",
+          "owner": "retrolume_retrieval_owner",
+          "relacl": null
+        },
+        {
+          "relname": "teaching_answer_observations",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "teaching_answer_successor",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "teaching_command_live_slot",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "teaching_commands",
+          "relkind": "r",
+          "owner": "postgres",
+          "relacl": "{postgres=arwdDxtm/postgres,retrolume_html_owner=r/postgres,retrolume_data_app=arw/postgres,retrolume_data_restore_loader=ar/postgres,retrolume_data_owner=r/postgres,retrolume_interview_owner=r/postgres}"
+        },
+        {
+          "relname": "teaching_commands_activity_id_operation_id_key",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "teaching_commands_pkey",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "teaching_commands_recent",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "teaching_effect_revision",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "teaching_feedback_effect",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "teaching_goal_version",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "teaching_heads",
+          "relkind": "r",
+          "owner": "postgres",
+          "relacl": "{postgres=arwdDxtm/postgres,retrolume_interview_owner=r/postgres,retrolume_html_owner=r/postgres,retrolume_data_app=arw/postgres,retrolume_data_restore_loader=ar/postgres,retrolume_data_owner=r/postgres}"
+        },
+        {
+          "relname": "teaching_heads_pkey",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "teaching_history",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "teaching_initial_answer",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "teaching_operation_fact",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "teaching_records",
+          "relkind": "r",
+          "owner": "postgres",
+          "relacl": "{postgres=arwdDxtm/postgres,retrolume_html_owner=r/postgres,retrolume_data_app=arw/postgres,retrolume_data_restore_loader=ar/postgres,retrolume_data_owner=r/postgres,retrolume_interview_owner=r/postgres}"
+        },
+        {
+          "relname": "teaching_records_activity_id_business_key_ordinal_key",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "teaching_records_activity_id_seq_key",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        },
+        {
+          "relname": "teaching_records_pkey",
+          "relkind": "i",
+          "owner": "postgres",
+          "relacl": null
+        }
+      ]
+    },
+    "revised015_sha256": "874d2a173f401ce923680d184eb5687c121fd70831d8b86cd9b6740a7c330915",
+    "normal_R02_row_present_before_apply": true,
+    "actual_COMMIT": true
+  },
+  "root": 54
+}

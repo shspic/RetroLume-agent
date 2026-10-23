@@ -1,0 +1,75 @@
+{
+  "case": "real-profile-ACL-and-guard",
+  "status": "PASS",
+  "started": "2026-10-20T14:05:19.420000+00:00",
+  "ended": "2026-10-20T14:05:19.710259+00:00",
+  "facts": {
+    "exact_actual_ACL": "scope-exact-actual-ACL.json",
+    "negative_catalog_and_guard_cases": [
+      {
+        "case": "missing-delete",
+        "code": "data_schema_not_ready",
+        "actual_catalog_transaction": true
+      },
+      {
+        "case": "extra-truncate",
+        "code": "data_schema_not_ready",
+        "actual_catalog_transaction": true
+      },
+      {
+        "case": "readonly-delete",
+        "code": "data_schema_not_ready",
+        "actual_catalog_transaction": true
+      },
+      {
+        "case": "wrong-profile",
+        "code": "data_schema_not_ready",
+        "actual_catalog_transaction": true
+      },
+      {
+        "case": "guard-frozen",
+        "SQLSTATE": "42501",
+        "guard": "data_runtime_readonly",
+        "transaction_rolled_back": true
+      },
+      {
+        "case": "guard-restored_readonly",
+        "SQLSTATE": "42501",
+        "guard": "data_runtime_readonly",
+        "transaction_rolled_back": true
+      }
+    ],
+    "normal_source_restored_by_transaction_rollback": true,
+    "financials": {
+      "activities": [
+        {
+          "id": "01800000-0000-4000-8000-000000000001",
+          "requests_reserved": 0,
+          "cost_reserved_microunits": 0,
+          "running_reserved_seconds": 0,
+          "running_settled_seconds": 0,
+          "tools_reserved": 0
+        },
+        {
+          "id": "01800000-0000-4000-8000-000000000002",
+          "requests_reserved": 0,
+          "cost_reserved_microunits": 0,
+          "running_reserved_seconds": 0,
+          "running_settled_seconds": 0,
+          "tools_reserved": 0
+        },
+        {
+          "id": "01800000-0000-4000-8000-000000000003",
+          "requests_reserved": 0,
+          "cost_reserved_microunits": 0,
+          "running_reserved_seconds": 0,
+          "running_settled_seconds": 0,
+          "tools_reserved": 0
+        }
+      ],
+      "operations": [],
+      "requests": 0,
+      "cost": 0
+    }
+  }
+}

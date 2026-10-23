@@ -353,6 +353,12 @@ def run_supervised_window(
                     process.resume()
                     if data_admission is not None:
                         data_admission.close();data_admission=None
+                    if data_permit is not None and 'q' in data_gate.hub.state():
+                        # The actual suspended manager and its birth are now
+                        # registered. Q policy/MutationGate must end before the
+                        # child acquires its PG lease or dispatches. Original
+                        # owned-work/fence/Job cleanup remains the authority.
+                        data_permit.__exit__(None,None,None);data_permit=None
                     state = "supervisor_lost_unconfirmed"
                     exited = process.wait(_remaining(run_deadline_ns))
                     if not exited:
@@ -436,7 +442,8 @@ def run_supervised_window(
             from app.data_exit.contracts import canonical,digest
             data_gate.end_owned(owned_id,confirmed=exited and not outcome.cleanup_incomplete,
                                 proof_sha256=digest(canonical(asdict(outcome))))
-        finally:data_permit.__exit__(None,None,None)
+        finally:
+            if data_permit is not None:data_permit.__exit__(None,None,None)
     if isinstance(failure, (KeyboardInterrupt, SystemExit, asyncio.CancelledError)):
         failure.session_outcome = outcome
         raise failure

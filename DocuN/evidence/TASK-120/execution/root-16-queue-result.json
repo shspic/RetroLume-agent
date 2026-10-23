@@ -1,0 +1,72 @@
+{
+  "outcomes": {
+    "observe": "PASS",
+    "memory_bootstrap": "FAIL",
+    "normal_core": "FAIL",
+    "selected_memory": "SKIPPED_DEPENDENCY",
+    "source_scope_memory_races": "SKIPPED_DEPENDENCY",
+    "five_entry_UI": "FAIL"
+  },
+  "receipts": [
+    {
+      "stage": {
+        "id": "observe",
+        "phase": "c02_observe",
+        "seconds": 40,
+        "depends_on": []
+      },
+      "exit_code": 0,
+      "previous_actual_exit": null,
+      "wall_seconds": 2.125,
+      "descendants_stopped": true,
+      "utc": "2026-10-19T05:46:34.488897+00:00"
+    },
+    {
+      "stage": {
+        "id": "memory_bootstrap",
+        "phase": "c02_bootstrap_memory",
+        "seconds": 120,
+        "depends_on": [
+          "observe"
+        ]
+      },
+      "exit_code": 1,
+      "previous_actual_exit": 0,
+      "wall_seconds": 6.967999999993481,
+      "descendants_stopped": true,
+      "utc": "2026-10-19T05:46:41.506658+00:00"
+    },
+    {
+      "stage": {
+        "id": "normal_core",
+        "phase": "c02_core",
+        "seconds": 300,
+        "depends_on": [
+          "observe"
+        ]
+      },
+      "exit_code": 1,
+      "previous_actual_exit": 1,
+      "wall_seconds": 18.29700000002049,
+      "descendants_stopped": true,
+      "utc": "2026-10-19T05:46:59.913553+00:00"
+    },
+    {
+      "stage": {
+        "id": "five_entry_UI",
+        "phase": "c02_ui",
+        "seconds": 300,
+        "depends_on": [
+          "observe"
+        ]
+      },
+      "exit_code": 1,
+      "previous_actual_exit": 1,
+      "wall_seconds": 67.85999999998603,
+      "descendants_stopped": true,
+      "utc": "2026-10-19T05:48:07.868035+00:00"
+    }
+  ],
+  "automatic_finite_serial_plan": true,
+  "external_request_wait": false
+}

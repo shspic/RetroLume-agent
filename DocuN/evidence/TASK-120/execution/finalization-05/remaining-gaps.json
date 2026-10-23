@@ -1,0 +1,32 @@
+{
+  "engineering_complete": false,
+  "stable_for_independent_audit": false,
+  "gaps": [
+    {
+      "id": "scope-removal",
+      "status": "BLOCKED_REQUIRES_ADOPTION",
+      "requirement": "Normal scope removal must work with the locked application profile",
+      "actual": "SQLSTATE42501; app role has no DELETE on activity_scope_sources; command absent, head/scope/fees unchanged",
+      "evidence": [
+        "DocuN/evidence/TASK-120/execution/finalization-05/scope-removal-blocker.json"
+      ],
+      "boundary": "Current card forbids migrations001-014, schema/profile and permission changes."
+    },
+    {
+      "id": "late-namespace-DataContext",
+      "status": "NOT_PASSED",
+      "requirement": "Actual delayed approved response across namespace and full DataContext switch must not affect current UI/eligibility/ledger",
+      "actual": "Head and scope have separate PASS. Root36 freeze COMMIT succeeded but cached Q snapshot failed at q_root_changed before client switch; UI remains FAIL. Matrix is permanently frozen and the one extra database allowance is consumed.",
+      "evidence": [
+        "DocuN/evidence/TASK-120/execution/finalization-05/UI-head-scope-root-33.json",
+        "DocuN/evidence/TASK-120/execution/finalization-05/UI-head-scope-root-34.json",
+        "DocuN/evidence/TASK-120/execution/finalization-05/UI-readonly-root-36.json",
+        "DocuN/evidence/TASK-120/execution/finalization-05/readonly-actual-PG-body-closed-reconciled.json"
+      ],
+      "boundary": "No thaw, old grant renewal, replacement identity or fifth database is authorized."
+    }
+  ],
+  "memory_evidence_limit": "Root35 did not immediately persist its pre-financial snapshot; original worker/actor/COMMIT/007 trace plus current PG reconciliation proves the listed invariants. Original FAIL and UNKNOWN remain.",
+  "not_a_runtime_cap_exhaustion": true,
+  "no_user_key_SQL_or_memory_action_requested": true
+}

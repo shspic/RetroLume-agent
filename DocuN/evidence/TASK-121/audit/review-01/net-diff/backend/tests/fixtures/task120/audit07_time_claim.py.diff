@@ -1,0 +1,133 @@
+--- before/backend/tests/fixtures/task120/audit07_time_claim.py
++++ after/backend/tests/fixtures/task120/audit07_time_claim.py
+@@ -0,0 +1,130 @@
++"""F04 legal API/operator/real worker and F05 committed-PG/unclaimed-Q window."""
++from datetime import datetime,timedelta
++import json,os
++from uuid import uuid4
++from unittest.mock import patch
++import psycopg
++from psycopg.rows import dict_row
++from . import resources as r,setup,final05
++from .api_runtime import application,run,financials
++from .audit07 import HERE,SLOT,case
++from app.capabilities.q_protocol import ROSTER,digest
++from app.data_exit.contracts import DataError
++
++
++def sources(aliases):
++    mapping=json.loads((r.PRIVATE/SLOT/'sources.json').read_text(encoding='utf-8'))
++    return [{'source_id':str(mapping[a]['id']),'version_id':str(mapping[a]['version_id']),'source_revision':mapping[a]['revision'],
++             'original_sha256':mapping[a]['sha256']} for a in aliases]
++
++
++def persistent(aid,key):
++    from app.data_exit.codec import plain
++    with psycopg.connect(setup.dsn(SLOT),row_factory=dict_row) as db:
++        db.execute('SET TRANSACTION READ ONLY')
++        command=db.execute('SELECT business_key,status,launch_claimed,operation_id,request_sha256,effect_applied FROM interview_commands WHERE activity_id=%s AND business_key=%s',(aid,key)).fetchone()
++        op=db.execute('SELECT operation_id,admission_id,state,reserved_cost_microunits FROM activity_operations WHERE activity_id=%s AND operation_id=%s',(aid,command['operation_id'])).fetchone()
++        result=db.execute('SELECT payload_sha256 FROM activity_operation_results WHERE activity_id=%s AND operation_id=%s',(aid,command['operation_id'])).fetchone()
++        return plain({'command':command,'operation':op,'007':result})
++
++
++def exercise():
++    # This hook file is used by existing native subprocess startup, without
++    # changing transport, admission, launch or the worker's outcome.
++    hook=r.PRIVATE/'python-hook/sitecustomize.py'
++    hook.write_text('from tests.fixtures.task120.transport import install\ninstall()\nfrom tests.fixtures.task120.audit07_clock_hook import install as clock_install\nclock_install()\n',encoding='utf-8')
++    from app.data_exit.files import private_file
++    private_file(hook)
++    r.write(r.PRIVATE/'clock-mode.json',{'offset_seconds':2},private=True)
++    from .audit07_clock_hook import install
++    install()
++    final05.SLOT=SLOT
++    with application(SLOT) as c:
++        f=final05.Matrix(c)
++        from app.data_exit.q_store import authority_for
++        from app.operator.q_request import inspect_request,approve_request
++        from app.capabilities.q_context import snapshot,command_fact
++        from app.capabilities.contracts import AdmissionUnavailable
++        from app.data_exit import q_clock
++        authority=authority_for(f.ledger)
++        def legal():
++            aid=ROSTER[0];before=financials(SLOT)
++            cmd=f.retain('audit07-legacy-first',{'business_key':str(uuid4()),'goal':setup.SAMPLES['inputs']['numeric_goal'],'confirmed':True})
++            url=f'/api/activities/{aid}/learning/first'
++            waiting=c.request('POST',url,cmd);assert waiting['status']=='awaiting_approval'
++            row=c.approve(aid,cmd['business_key'])[0]
++            assert run(command_fact(f.ledger,row))['consumed'] is False
++            r.count('native_business_sessions');got=c.request('POST',url,cmd)
++            assert got['status']=='committed_current',got
++            f.save('audit07-legacy-first.done',got)
++            after=financials(SLOT);assert after['requests']==before['requests']+1 and after['cost']==before['cost']+250000
++            records=[json.loads(line) for line in (HERE/'F04-API-worker-clock-samples.jsonl').read_text(encoding='utf-8').splitlines()]
++            pids={x['pid'] for x in records};assert os.getpid() in pids and len(pids)>=2
++            assert len({x['domain'] for x in records})==1 and all(x['offset_seconds']==2 for x in records)
++            state=authority.request(row['prepared_id']);assert state.get('claim') and state.get('admission')
++            return {'API_pid':os.getpid(),'actual_clock_process_ids':sorted(pids),'same_boot_domain':records[0]['domain'],
++                'clock_dependency_only_offset_seconds':2,'normal_unclaimed_positive':True,'original_business_key':cmd['business_key'],
++                'prepared_id':row['prepared_id'],'result':{k:got.get(k) for k in ('status','operation_id','payload_sha256')},
++                'financials_before':before,'financials_after':after,'real_provider_calls':0,'one_production_admission':True,'real_SUP_worker_and_result_commit':True}
++        case('F04-real-API-operator-worker-normal-combination',legal)
++        # Prepare a second legitimate, still unclaimed request for F03. It uses
++        # the immutable result that just committed, without sending it now.
++        aid=ROSTER[0];parent=f.state['audit07-legacy-first.done']
++        cmd=f.retain('audit07-legacy-followup',{'business_key':str(uuid4()),'parent_operation_id':parent['operation_id'],
++            'question':setup.SAMPLES['inputs']['numeric_initial_question'],'confirmed':True})
++        waiting=c.request('POST',f'/api/activities/{aid}/learning/followups',cmd);assert waiting['status']=='awaiting_approval'
++        c.approve(aid,cmd['business_key'])
++        # Independent source R for the retained PG-claimed/unrelated artifact.
++        aid=ROSTER[2];f.goal(aid,'audit07-independent-goal')
++        bad=f.state.get('audit07-independent-source-R')
++        if bad and 'audit07-independent-source-R.done' not in f.state and 'original_sha256' not in bad['body']['sources'][0]:
++            absent=c.request('GET',f.url(aid)+'/'+bad['business_key'],expect=(404,))
++            r.write(HERE/'root55-invalid-source-binding-fixture-reconciliation.json',{'original_unaccepted_command':bad,
++                'original_HTTP':422,'actual_missing_field':'sources/0/original_sha256','new_connection_GET_HTTP':404,
++                'same_business_key_corrected_only_before_accept':True,'product_validator_unchanged':True})
++            fixed=json.loads(json.dumps(bad));fixed['body']['sources']=sources(('R',))
++            f.save('audit07-independent-source-R',fixed)
++        f.local(aid,'bind_scope',{'sources':sources(('R',)),'material_roles':[]},'audit07-independent-source-R')
++        def pg_claim():
++            cmd,row=f.prepare(aid,'audit07-PG-claimed-window');key=cmd['business_key'];before=financials(SLOT)
++            before_approvals=authority.hub.state()['q']['approval_events'];lost=[];original=f.ledger.claim_interview_launch
++            async def after_commit(*args,**kwargs):
++                result=await original(*args,**kwargs)
++                if result.get('launch_allowed') and not lost:
++                    lost.append(True);r.event('audit07_actual_PG_launch_claim_COMMIT',business_key=key,operation_id=row['prepared']['operation_id'])
++                    raise AdmissionUnavailable('TESTONLY_actual_claim_COMMIT_ACK_lost')
++                return result
++            f.ledger.claim_interview_launch=after_commit
++            try:c.request('POST',f.url(aid),cmd,expect=(503,))
++            finally:f.ledger.claim_interview_launch=original
++            facts=persistent(aid,key);qrow=authority.request(row['prepared_id'])
++            assert lost==[True] and facts['command']['status']=='started' and facts['command']['launch_claimed']
++            assert facts['operation'] is None and facts['007'] is None and not qrow.get('claim') and not qrow.get('launch_claimed')
++            frozen,_,_=run(snapshot(f.ledger,aid));assert frozen==qrow['prepared']['snapshot']
++            first=c.request('GET',f.url(aid)+'/'+key);second=c.request('GET',f.url(aid)+'/'+key)
++            assert first['outbound_approval']['can_continue'] is False and second['outbound_approval']['can_continue'] is False
++            assert first['outbound_approval']['state']==second['outbound_approval']['state']=='consumed'
++            inspection=run(inspect_request(f.ledger,row['prepared_id']));assert inspection['pg_command_fact']['consumed']
++            sample=q_clock.sample();later={**sample,'utc':(datetime.fromisoformat(sample['utc'])+timedelta(seconds=901)).isoformat(),
++                'mono_ns':sample['mono_ns']+901_000_000_000,'upper_ns':sample['upper_ns']+901_000_000_000}
++            codes=[]
++            for clock in (sample,later):
++                with patch('app.data_exit.q_clock.sample',return_value=clock):
++                    try:run(approve_request(f.ledger,row['prepared_id'],row['prepared_sha256']))
++                    except DataError as exc:codes.append(exc.code)
++                    else:raise AssertionError('PG claimed command renewed')
++            assert codes==['q_approval_consumed','q_approval_consumed']
++            for unused in range(2):c.request('POST',f.url(aid),cmd,expect=(200,202,409))
++            assert financials(SLOT)==before and authority.hub.state()['q']['approval_events']==before_approvals
++            f.save('audit07-PG-claimed-window.prepared_id',row['prepared_id'])
++            return {'actual_PG_COMMIT':facts,'Q_claim_absent':True,'frozen_snapshot_unchanged':True,
++                'immediate_GET_projection':first['outbound_approval'],'repeated_GET_projection':second['outbound_approval'],
++                'operator_immediate_and_after_15min_errors':codes,'repeated_continue_POSTs':2,'financials_before':before,'financials_after':financials(SLOT),
++                'new_approval_events':0,'worker_dispatches_for_claimed_operation':0,'original_unclaimed_positive':'F04-real-API-operator-worker-normal-combination-PASS.json'}
++        case('F05-PG-claimed-before-Q-claim',pg_claim)
++        # The selected-memory request stays unclaimed for the normal revoke+
++        # purge path in F03. Its necessary retrieval operations count normally.
++        f.goal(ROSTER[1],'audit07-memory-goal')
++        cmd,row=f.prepare(ROSTER[1],'audit07-memory-prepared')
++        f.save('audit07-memory-prepared.prepared_id',row['prepared_id'])
++    return {'F04':'PASS','F05':'PASS','F03_inputs':'original normal qualified prepareds retained, not sent'}

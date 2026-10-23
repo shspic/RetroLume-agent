@@ -104,15 +104,15 @@ def execute(phase,seconds):
             monitor.check();r.choose_ports();monitor.check();r.start_pg();monitor.check()
             job=r.root_job(identity)
             child_env=r.public_environment()
-            child_env.update(PYTHONPATH=str(ROOT/'backend'),PYTHONIOENCODING='utf-8',
+            child_env.update(PYTHONPATH=str(ROOT/'backend')+os.pathsep+str(ROOT/'backend/.venv/Lib/site-packages'),PYTHONIOENCODING='utf-8',
                 RETROLUME_TASK120_ROOT_ID=str(root_id),RETROLUME_TASK120_TESTONLY='TASK-120-Q-PREP-IMPLEMENTATION-20261018')
             # CreateProcess inherits this process environment. Replace only the
             # controller's own mapping; never enumerate or print user env.
             os.environ.clear();os.environ.update(child_env)
-            job.spawn_suspended([sys.executable,'-m','tests.fixtures.task120.run',phase],cwd=str(ROOT/'backend'))
+            job.spawn_suspended([sys._base_executable,'-m','tests.fixtures.task120.run',phase],cwd=str(ROOT/'backend'))
             r.event('root_child_started',root=root_id,pid=job.pid,birth_100ns=job.process_creation_time_100ns(),job=job.name)
             job.resume()
-            subdeadline=min(business_deadline,time.monotonic_ns()+int(seconds*1e9))
+            subdeadline=business_deadline if phase=='merged' else min(business_deadline,time.monotonic_ns()+int(seconds*1e9))
             while job.active_processes() and time.monotonic_ns()<subdeadline and not monitor.closing:time.sleep(.1)
             if job.active_processes():
                 r.event('root_subbatch_timeout_or_pressure',root=root_id)
@@ -154,7 +154,7 @@ def execute(phase,seconds):
 
 
 if __name__=='__main__':
-    parser=argparse.ArgumentParser();parser.add_argument('phase',nargs='?',choices=('bootstrap','flow','ui','budget','reopen'))
+    parser=argparse.ArgumentParser();parser.add_argument('phase',nargs='?',choices=('bootstrap','flow','ui','budget','reopen','merged'))
     parser.add_argument('--seconds',type=int,default=280);parser.add_argument('--watchdog')
     args=parser.parse_args()
     if args.watchdog:raise SystemExit(watchdog(args.watchdog))

@@ -246,23 +246,25 @@ def owned_service(function):
         if ledger is None and hasattr(subject,'app'):ledger=getattr(subject.app.state,'activities_ledger',None)
         gate=getattr(ledger,'mutation_gate',None)
         if gate is None:return await function(*args,**kwargs)
-        import os
-        from app.preview.process import birth
-        with gate.acquire(outgoing=True):
-            parent=birth(os.getpid())
-            if parent['state']!='running':raise DataError('owned_work_unknown',503)
-            identity={'parent':{'pid':os.getpid(),'birth':parent['birth']},'service':function.__qualname__}
-            command=args[1] if len(args)>1 else kwargs.get('command')
-            if command is not None and hasattr(command,'memory_id'):
-                identity.update(memory_id=command.memory_id,business_key=command.business_key,action=command.action)
-            owned=gate.register_owned('domain_service',identity)
-        # Registration is short. No MutationGate is carried across model dispatch
-        # or the later exclusive Q result transaction.
-        try:
-            with gate.close_lane(owned):return await function(*args,**kwargs)
-        finally:
-            children=[v for v in gate.hub.state()['owned'].values() if v.get('parent_owned_id')==owned]
-            gate.end_owned(owned,confirmed=all(v.get('state')=='ended' for v in children))
+        async def execute_owned():
+            import os
+            from app.preview.process import birth
+            with gate.acquire(outgoing=True):
+                parent=birth(os.getpid())
+                if parent['state']!='running':raise DataError('owned_work_unknown',503)
+                identity={'parent':{'pid':os.getpid(),'birth':parent['birth']},'service':function.__qualname__}
+                command=args[1] if len(args)>1 else kwargs.get('command')
+                if command is not None and hasattr(command,'memory_id'):
+                    identity.update(memory_id=command.memory_id,business_key=command.business_key,action=command.action)
+                owned=gate.register_owned('domain_service',identity)
+            try:
+                with gate.close_lane(owned):return await function(*args,**kwargs)
+            finally:
+                children=[v for v in gate.hub.state()['owned'].values() if v.get('parent_owned_id')==owned]
+                gate.end_owned(owned,confirmed=all(v.get('state')=='ended' for v in children))
+        if 'q' in gate.hub.state():return await execute_owned()
+        # Keep the original non-Q lifetime and inherited permit unchanged.
+        with gate.acquire(outgoing=True):return await execute_owned()
     import inspect
     wrapped.__signature__=inspect.signature(function,eval_str=True)
     return wrapped

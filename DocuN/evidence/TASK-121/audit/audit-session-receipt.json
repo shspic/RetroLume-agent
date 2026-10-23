@@ -1,0 +1,116 @@
+{
+  "task": "TASK-121",
+  "round": "R-115",
+  "state": "已结束，按覆盖完成停止",
+  "first_precise_observation_utc": "2026-10-20T23:44:23Z",
+  "actual_received_time": "unknown",
+  "earliest_conservative_bound": "2026-10-21T07:41:23.826587+08:00",
+  "calendar_deadline_from_conservative_bound": "2026-10-21T15:41:23.826587+08:00",
+  "observed_at_utc": "2026-10-21 00:37:48 UTC",
+  "known_exec_command_wall_seconds": 109.90259009999995,
+  "missing_early_command_wall_reserve_seconds": 60,
+  "unmetered_non_shell_metadata_tool_reserve_seconds": 600,
+  "conservative_charged_tool_seconds": 769.9025901,
+  "tool_limit_seconds": 1800,
+  "single_metadata_limit_seconds": 60,
+  "known_max_exec_command_seconds": 4.2484926,
+  "reserve_explanation": "600秒为未独立计量的官方文档、文件patch及采钟等留取的审计保守计费预留，不称实测wall或CPU；包装器与内嵌exec回执不重复收费。所有unknown保留。",
+  "exact_total_actual_tool_wall_seconds": "unknown",
+  "human_reading_thinking_seconds": "unknown",
+  "model_token_usage": "unknown",
+  "official_pages_used": [
+    {
+      "url": "https://www.postgresql.org/docs/17/functions-info.html",
+      "purpose": "has_table_privilege comma separated privilege semantics",
+      "version": "17"
+    },
+    {
+      "url": "https://www.postgresql.org/docs/17/role-membership.html",
+      "purpose": "Effective inherited privileges and SET ROLE capability for exact ACL review",
+      "version": "17"
+    }
+  ],
+  "official_page_limit": 6,
+  "business_runtime_counts": {
+    "compile": 0,
+    "unittest": 0,
+    "product_or_test_import": 0,
+    "postgresql": 0,
+    "docker": 0,
+    "api": 0,
+    "windows_job": 0,
+    "browser": 0,
+    "build": 0,
+    "model": 0,
+    "business_network": 0,
+    "git_write": 0
+  },
+  "runtime_or_credentials_or_vault_read": false,
+  "engineering_originals_modified": false,
+  "write_scope": [
+    "D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-121/audit/",
+    "D:/shspic/project_NO3_RetroLume-agent/DocuN/results/TASK-121-result.md"
+  ],
+  "completed_at_utc": "2026-10-21 00:37:48 UTC",
+  "calendar_elapsed_from_earliest_bound_seconds": 3384.174,
+  "calendar_within_conservative_eight_hours": true,
+  "known_file_commands": 82,
+  "early_file_commands": 8,
+  "known_command_nonzero_exits": [
+    {
+      "chunk_id": "c96f55",
+      "exit_code": 1,
+      "command": "@'\nimport json,collections\nfrom pathlib import Path\nr=Path('DocuN/evidence/TASK-120/execution')\ne=[json.loads(x) for x in (r/'events.jsonl').read_text(encoding='utf-8-sig').splitlines()]\nprint('TOTAL',len(e));print('KINDS',dict(collections.Counter(x.get('kind',x.get('event')) for x in e)))\nfor x in e[:4]+e[-6:]:print(json.dumps(x,ensure_ascii=False)[:1600])\nb=json.loads((r/'budget.json').read_text(encoding='utf-8-sig'))\nprint('PERMIT_HISTORY',[(x['id'],x.get('received_and_adopted_utc')) for x in b['permit_history']])\nfor root in b['roots']:print('ROOT',root['id'],root['phase'],root['start_utc'],root.get('result',{}).get('root_elapsed_seconds'),root.get('result',{}).get('exit_code'),root.get('result',{}).get('cleanup',{}).get('all_confirmed'))\n'@ | python -X utf8 -"
+    },
+    {
+      "chunk_id": "737194",
+      "exit_code": 1,
+      "command": "rg -n 'monotonic|perf_counter|time_ns|stop_ns|expires_at|deadline|utcnow|clock|clock_domain' backend/app/data_exit/q_store.py backend/app/data_exit/q_kernel.py backend/app/capabilities/q_protocol.py backend/app/capabilities/grants.py backend/app/capabilities/control.py"
+    }
+  ],
+  "final_input_checks": 322,
+  "final_input_mismatches": 0,
+  "opening_closing_input_hashes_identical": true,
+  "result": {
+    "result_path": "D:\\shspic\\project_NO3_RetroLume-agent\\DocuN\\results\\TASK-121-result.md",
+    "bytes": 33054,
+    "sha256": "c4c30439cd6a2d7b63b12254a76550013ae8da93b50c9cf2d6836451588314d8",
+    "C_cases": 15,
+    "findings": [
+      [
+        "F01",
+        "P1"
+      ],
+      [
+        "F02",
+        "P1"
+      ],
+      [
+        "F03",
+        "P1"
+      ],
+      [
+        "F04",
+        "P1"
+      ],
+      [
+        "F05",
+        "P2"
+      ]
+    ],
+    "local_links_checked": 20,
+    "opening_closing_mismatches": 0,
+    "saved_readable": true
+  },
+  "code_axis": "不通过",
+  "evidence_axis": "证据不足",
+  "execution_control_axis": "不通过",
+  "finding_counts": {
+    "P1": 4,
+    "P2": 1
+  },
+  "q_status": "继续冻结，未执行启用",
+  "remaining_task_work": "本卡无未完成交付；修正与最小动态补证须由主控另行交原TASK-120工程窗口，本窗仅按后续合同增量复核。",
+  "metadata_logging_limitations": "启动期8条没有另存完整命令串或独立退出码；其中7条wall可得，1条按60秒预留。非shell工具wall未独立精确计量，保留600秒计费，未把unknown冒充实测0。"
+}
+

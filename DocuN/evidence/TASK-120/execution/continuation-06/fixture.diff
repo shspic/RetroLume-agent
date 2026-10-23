@@ -1,0 +1,771 @@
+--- before/backend/tests/fixtures/task120/api_runtime.py
++++ after/backend/tests/fixtures/task120/api_runtime.py
+@@ -89,7 +89,7 @@
+     async def observed_transaction(operation,*args,**kwargs):
+         observed_operation=operation
+         transaction_identity={}
+-        if r.state().get('current_permit_id')=='TASK-120-Q-PREP-FINALIZATION-05-20261019':
++        if r.state().get('current_permit_id') in ('TASK-120-Q-PREP-FINALIZATION-05-20261019','TASK-120-Q-PREP-CONTINUATION-06-20261020'):
+             import functools
+             class ObservedConnection:
+                 def __init__(self,connection):self.connection=connection
+--- /dev/null
++++ after/backend/tests/fixtures/task120/continuation06.py
+@@ -0,0 +1,337 @@
++"""AP-120-06 finite targeted implementation checks; real PG/SUP and HTTP."""
++import copy,hashlib,json,os,threading,time,traceback
++from pathlib import Path
++from uuid import uuid4
++import psycopg
++from psycopg.rows import dict_row
++from . import resources as r,setup,final05 as previous
++from .api_runtime import application,run,financials
++from app.capabilities.q_protocol import ROSTER,digest,raw_digest,canonical
++HERE=r.EVIDENCE/'continuation-06';SLOT='scope-ui-final'
++previous.HERE=HERE;previous.SLOT=SLOT
++Matrix=previous.Matrix
++write=lambda name,value:r.write(HERE/name,value)
++
++def checkpoint(name,action):
++    p=HERE/(name+'-PASS.json')
++    if p.exists():return json.loads(p.read_text(encoding='utf-8'))['facts']
++    return previous.case(name,action)
++
++def sources(aliases):
++    mapping=json.loads((r.PRIVATE/SLOT/'sources.json').read_text(encoding='utf-8'))
++    return [{'source_id':str(mapping[a]['id']),'version_id':str(mapping[a]['version_id']),'source_revision':mapping[a]['revision'],'original_sha256':mapping[a]['sha256']} for a in aliases]
++
++def rows():
++    with psycopg.connect(setup.dsn(SLOT),row_factory=dict_row) as c:
++        return {'scope':c.execute('SELECT activity_id::text,source_id::text,version_id::text,source_revision FROM activity_scope_sources ORDER BY activity_id,source_id').fetchall(),
++          'activities':c.execute('SELECT id::text,scope_revision,requests_reserved,cost_reserved_microunits FROM activities ORDER BY id').fetchall(),
++          'heads':c.execute('SELECT activity_id::text,revision,goal_version,scope_revision,current_question_id::text,pending_key::text FROM interview_heads ORDER BY activity_id').fetchall()}
++
++def bootstrap():
++    risk=json.loads((HERE/'permission-risk-check.json').read_text(encoding='utf-8'))
++    assert risk['before_real_GRANT'] and risk['migration015_sha256']==raw_digest((r.ROOT/'backend/migrations/015_activity_scope_delete_permission.sql').read_bytes())
++    setup.initial_files(SLOT);setup.migrate(SLOT);setup.environment(SLOT)
++    from app.data_exit.schema_profiles import SCOPE_ACL_QUERY
++    from app.data_exit.schema_checks import assert_data_schema_sync
++    with psycopg.connect(setup.dsn(SLOT),row_factory=dict_row) as connection:
++        write('bootstrap-actual-scope-ACL-root-'+str(r.state()['active_root'])+'.json',{'rows':connection.execute(SCOPE_ACL_QUERY).fetchall()})
++        assert_data_schema_sync(connection)
++    from .transport import install
++    install()
++    from app.main import create_app
++    app=create_app()
++    if app.state.data_exit is None:raise RuntimeError('new_R03_data_assembly_not_ready')
++    mapping=setup.seed_sources(app,SLOT);run(setup.bind_root(app,SLOT,mapping))
++    with application(SLOT) as c:
++        f=Matrix(c)
++        for aid in ROSTER[1:]:f.goal(aid,'initial-'+aid)
++    identity=setup.info(SLOT)
++    return {'database':identity['database'],'database_oid':identity['database_oid'],'dataset_id':identity['dataset_id'],'instance_id':identity['instance_id'],'schema_profile':'data_exit.v1.r03','role_reuse_no_new_login_or_membership':True,'source_count':len(mapping),'fixed_roster':list(ROSTER),'financials':financials(SLOT),'015_core':risk['grant_objects']}
++
++def profile_checks():
++    from app.data_exit.schema_checks import assert_data_schema_sync
++    from app.data_exit.schema_profiles import SCOPE_ACL_QUERY
++    from app.data_exit.contracts import DataError
++    with psycopg.connect(setup.dsn(SLOT),row_factory=dict_row) as c:
++        assert_data_schema_sync(c);actual=c.execute(SCOPE_ACL_QUERY).fetchall()
++    write('scope-exact-actual-ACL.json',{'profile':'data_exit.v1.r03','rows':actual})
++    tests=[('missing-delete','REVOKE DELETE ON public.activity_scope_sources FROM retrolume_data_app'),('extra-truncate','GRANT TRUNCATE ON public.activity_scope_sources TO retrolume_data_app'),('readonly-delete','GRANT DELETE ON public.activity_scope_sources TO retrolume_data_snapshot'),('wrong-profile',"ALTER TABLE public.data_control DROP CONSTRAINT data_control_schema_profile_check; ALTER TABLE public.data_control ADD CONSTRAINT data_control_schema_profile_check CHECK(schema_profile IN('data_exit.v1.r02','data_exit.v1.r03'))")]
++    result=[]
++    for name,mutation in tests:
++        with psycopg.connect(setup.dsn(SLOT,True),autocommit=True,row_factory=dict_row) as c:
++            c.execute('BEGIN')
++            try:
++                c.execute(mutation,prepare=False)
++                try:assert_data_schema_sync(c)
++                except DataError as exc:assert exc.code=='data_schema_not_ready';result.append({'case':name,'code':exc.code,'actual_catalog_transaction':True})
++                else:raise AssertionError('inexact_profile_accepted_'+name)
++            finally:c.execute('ROLLBACK')
++    for mode in ('frozen','restored_readonly'):
++        with psycopg.connect(setup.dsn(SLOT,True),autocommit=True,row_factory=dict_row) as c:
++            c.execute('BEGIN')
++            try:
++                c.execute('UPDATE public.data_control SET mode=%s',(mode,))
++                from psycopg import sql
++                c.execute(sql.SQL('SET LOCAL ROLE {}').format(sql.Identifier(setup.info(SLOT)['app_user'])))
++                try:c.execute('DELETE FROM public.activity_scope_sources WHERE activity_id=%s',(ROSTER[2],))
++                except psycopg.Error as exc:
++                    assert exc.sqlstate=='42501' and exc.diag.message_primary=='data_runtime_readonly'
++                    result.append({'case':'guard-'+mode,'SQLSTATE':'42501','guard':'data_runtime_readonly','transaction_rolled_back':True})
++                else:raise AssertionError('nonnormal_DELETE_was_allowed')
++            finally:c.execute('ROLLBACK')
++    with psycopg.connect(setup.dsn(SLOT),row_factory=dict_row) as c:assert_data_schema_sync(c)
++    return {'exact_actual_ACL':'scope-exact-actual-ACL.json','negative_catalog_and_guard_cases':result,'normal_source_restored_by_transaction_rollback':True,'financials':financials(SLOT)}
++
++def positive_shrink():
++    with application(SLOT) as c:
++        f=Matrix(c);aid=ROSTER[2]
++        f.local(aid,'bind_scope',{'sources':sources(('N','R')),'material_roles':[]},'scope-two-source-preparation')
++        before=rows();money=financials(SLOT);h=f.head(aid)
++        receipt=f.local(aid,'bind_scope',{'sources':sources(('N',)),'material_roles':[]},'actual-scope-shrink')
++        after=rows();assert f.head(aid)['scope_revision']==h['scope_revision']+1
++        before_other=[x for x in before['scope'] if x['activity_id']!=aid];after_other=[x for x in after['scope'] if x['activity_id']!=aid]
++        assert before_other==after_other and len([x for x in after['scope'] if x['activity_id']==aid])==1 and financials(SLOT)==money
++        return {'receipt':receipt,'before':before,'after':after,'financials_unchanged':True,'only_removed_requested_binding':True,'scope_revision_exactly_one':True,'legitimate_local_head_update':True}
++
++def scope_negatives():
++    result=[]
++    with application(SLOT) as c:
++        f=Matrix(c);aid=ROSTER[2];h=f.head(aid)
++        base={'schema':'interview.command.v2','business_key':str(uuid4()),'action':'bind_scope','expected_head_revision':h['revision'],'expected_goal_version':h['goal_version'],'expected_scope_revision':h['scope_revision'],'body':{'sources':sources(('N',)),'material_roles':[]}}
++        cases=[]
++        stale=copy.deepcopy(base);stale['expected_head_revision']-=1;cases.append(('stale-CAS',aid,stale,'interview_head_conflict',409))
++        invalid=copy.deepcopy(base);invalid['business_key']=str(uuid4());invalid['body']['sources'][0]['source_revision']+=1;cases.append(('invalid-source',aid,invalid,'source_invalid',409))
++        unknown=copy.deepcopy(base);unknown['business_key']=str(uuid4());cases.append(('unknown-activity','01800000-0000-4000-8000-000000000099',unknown,'not_found',404))
++        for name,target,cmd,expected,status in cases:
++            cmd=f.retain('negative-'+name,cmd)
++            def check():
++                before=rows();money=financials(SLOT);got=c.request('POST',f.url(target),cmd,expect=(status,));code=c.timeline[-1]['rejection_code']
++                after=rows();after_money=financials(SLOT)
++                write('scope-negative-'+name+'-actual-root-'+str(r.state()['active_root'])+'.json',{'request':cmd,'response':got,'before':before,'after':after,'money_before':money,'money_after':after_money,'expected_code':expected,'actual_code':code})
++                assert code==expected,(name,code);assert after==before and after_money==money
++                return {'case':name,'HTTP':status,'code':code,'business_key':cmd['business_key'],'no_partial_scope_or_head_write':True,'no_financial_delta':True}
++            result.append(checkpoint('scope-negative-'+name,check))
++    return {'cases':result,'eleven_unaffected_whole_request_gates':'../finalization-05/permissions-summary.json'}
++
++def shrink_race():
++    from app.data_exit.q_store import authority_for
++    from app.operator.q_request import inspect_request
++    from app.capabilities.contracts import AdmissionDenied
++    from app.data_exit.contracts import DataError
++    with application(SLOT) as c:
++        f=Matrix(c);aid=ROSTER[2]
++        f.local(aid,'bind_scope',{'sources':sources(('N','R')),'material_roles':[]},'K2-two-source-preparation')
++        f.goal(aid,'K2-scope-shrink-goal');cmd,q=f.prepare(aid,'K2-scope-shrink-model');key=cmd['business_key'];op=q['prepared']['operation_id']
++        before=previous.persistent(aid,key);money=financials(SLOT)
++        write('K2-scope-shrink-before.json',{'persistent':before,'financials':money,'business_key':key,'operation_id':op})
++        previous.fault(op,'release_gap');tag=hashlib.sha256(op.encode()).hexdigest();base=r.PRIVATE/SLOT
++        ready=base/('gap-ready-'+tag+'.json');release=base/('gap-release-'+tag);outcome={}
++        def send():
++            try:outcome['receipt']=c.request('POST',f.url(aid),cmd)
++            except BaseException as exc:outcome['failure']=previous.safe(exc)
++        r.count('native_business_sessions');worker=threading.Thread(target=send,name='TASK120-scope-shrink');worker.start()
++        try:
++            end=time.monotonic()+18
++            while not ready.exists():
++                if not worker.is_alive() or time.monotonic()>=end:raise RuntimeError('actual_release_gap_not_reached')
++                time.sleep(.01)
++            barrier=json.loads(ready.read_text(encoding='utf-8'));assert barrier['dispatch_released'] and barrier['worker_pid']!=os.getpid()
++            mutation=f.local(aid,'bind_scope',{'sources':sources(('N',)),'material_roles':[]},'K2-real-scope-shrink')
++            committed=previous.persistent(aid,key)
++            write('K2-scope-shrink-COMMIT.json',{'utc':r.utc(),'worker':barrier,'actor_pid':os.getpid(),'actor_thread':threading.get_ident(),'mutation':mutation,'persistent':committed})
++        finally:
++            release.write_text('release',encoding='utf-8');worker.join(20)
++            write('K2-scope-shrink-final-checkpoint.json',{'utc':r.utc(),'persistent':previous.persistent(aid,key),'financials':financials(SLOT),'worker_stopped':not worker.is_alive(),'outcome':outcome})
++        assert not worker.is_alive() and 'failure' not in outcome
++        final=previous.persistent(aid,key);after=financials(SLOT)
++        assert final['head']==committed['head'] and final['007']['state']=='received' and final['007']['actual_sha256']==final['007']['payload_sha256']
++        assert after['requests']==money['requests']+1 and after['cost']==money['cost']+250000 and previous.dispatch_count(op)==1
++        try:inspection=run(inspect_request(f.ledger,q['prepared_id']))
++        except (DataError,AdmissionDenied) as exc:inspection={'request_available':False,'code':getattr(exc,'code',str(exc))}
++        assert not inspection.get('request_available')
++        native=r.state()['counts']['native_business_sessions'];c.request('GET',f.url(aid)+'/'+key)
++        assert financials(SLOT)==after and r.state()['counts']['native_business_sessions']==native
++        return {'before':before,'after_mutation':committed,'final':final,'financials_before':money,'financials_after':after,'barrier':barrier,'scope_actually_shrank':True,'late_model_did_not_advance_head':True,'immutable007_and_charge_retained':True,'one_dispatch':True,'GET_zero_actions':True,'request_body_closed':inspection}
++
++def ui():
++    import subprocess
++    from . import restore06
++    from app.data_exit.contracts import DataJobCommand
++    from app.data_exit.schema_profiles import R03
++    assert (HERE/'K2-scope-shrink-PASS.json').exists() and (HERE/'UI-order-preflight.md').exists()
++    port=restore06.preflight();base=r.PRIVATE/SLOT
++    config=json.loads((base/'data-exit.json').read_text(encoding='utf-8'))
++    config['factory']={'id':'task120-scopeui-readonly-v1','image_id':restore06.IMAGE,'login_prefix':'task120_scopeui_','pg_major':17,'source_name':r.NAME,
++      'slots':[{'id':'scopeui-ro1','name':restore06.NAME,'volume':restore06.VOLUME,'port':port,'database':'retrolume_task120_scopeui_ro','schema_profile':R03}]}
++    r.write(base/'data-exit.json',config,private=True)
++    with application(SLOT) as c:
++        f=Matrix(c);rt=c.app.state.data_exit;undo=restore06.install(rt.factory)
++        if 'UI-legacy-parent.done' not in f.state:
++            cmd=f.retain('UI-legacy-parent',{'business_key':str(uuid4()),'goal':setup.SAMPLES['inputs']['numeric_goal'],'confirmed':True})
++            intent=f'/api/activities/{ROSTER[0]}/learning/intents/{cmd["business_key"]}?action=first'
++            got=c.request('GET',intent,expect=(200,202,404))
++            if got.get('operation'):
++                operation=got['operation'];assert operation.get('read_status')=='committed_current'
++                f.save('UI-legacy-parent.done',{'operation_id':operation['operation_id']})
++            else:
++                c.request('POST',f'/api/activities/{ROSTER[0]}/learning/first',cmd);c.approve(ROSTER[0],cmd['business_key']);r.count('native_business_sessions')
++                got=c.request('POST',f'/api/activities/{ROSTER[0]}/learning/first',cmd);assert got['status']=='committed_current';f.save('UI-legacy-parent.done',got)
++        money=financials(SLOT);write('pre-irreversible-B-and-financial-checkpoint.json',{'utc':r.utc(),'scope':rows(),'financials':money,'B_proofs':['actual-scope-shrink-PASS.json','scope-targeted-negatives-PASS.json','K2-scope-shrink-PASS.json']})
++        directory=base/('UI-root-'+str(r.state()['active_root']));directory.mkdir(exist_ok=True);handshake=directory/'handshake';handshake.mkdir(exist_ok=True)
++        spec={'origin':c.base,'project':str(r.ROOT),'evidence':str(HERE),'proof':str(HERE/f'UI-context-root-{r.state()["active_root"]}.json'),'profile':str(directory/'browser'),'handshake':str(handshake),'activity_id':ROSTER[0],
++          'parent_operation':f.state['UI-legacy-parent.done']['operation_id'],'questions':[setup.SAMPLES['inputs']['numeric_initial_question'],setup.SAMPLES['inputs']['targeted_question']],'root':r.state()['active_root']}
++        r.write(directory/'spec.json',spec,private=True)
++        gates={'armed':False,'used':False,'ready':threading.Event(),'release':threading.Event()};original_caps=rt.caps
++        def caps():
++            if gates['armed'] and not gates['used']:
++                gates['used']=True;gates['ready'].set()
++                write('namespace-capabilities-authenticated-barrier.json',{'utc':r.utc(),'actor_pid':os.getpid(),'thread':threading.get_ident(),'local_session_already_checked_by_production_runtime':True,'body_not_yet_built':True})
++                if not gates['release'].wait(20):raise RuntimeError('bounded_capabilities_transition_timeout')
++            return original_caps()
++        rt.caps=caps
++        env=r.public_environment();env['RETROLUME_TASK120_UI_SPEC']=str(directory/'spec.json')
++        r.memory_gate('browser');r.count('browser_starts');process=None
++        def reply(request):
++            kind=request['kind']
++            if kind=='approve':
++                result=c.approve(ROSTER[0],request['business_key']);return {'prepared_ids':[v['prepared_id'] for v in result],'claim_absent':all(v.get('claim') is None for v in result)}
++            if kind=='backup':
++                receipt=c.request('POST','/api/data/jobs',{'kind':'restore_checkpoint','business_key':str(uuid4()),'scope':{'mode':'all'},'confirm':True});end=time.monotonic()+45
++                while rt.hub.get(receipt['job_id'])['state'] not in ('published','failed','published_unconfirmed'):
++                    if time.monotonic()>end:raise RuntimeError('backup_not_settled')
++                    time.sleep(.02)
++                actual=rt.hub.get(receipt['job_id']);assert actual['state']=='published'
++                write('normal-backup-checkpoint.json',{'receipt':actual,'context':rt.context().public(),'financials':financials(SLOT)})
++                return {'path':str(rt.packages.path(receipt['job_id'])),'receipt':actual,'context':rt.context().public()}
++            if kind=='freeze':
++                before=rt.context().public();lease=run(rt.maintenance.drain_for_readonly_switch(before['selection_generation'],time.monotonic()+15));lease.close()
++                after=rt.context().public();assert after['read_only'] and after['current_mode']=='frozen';assert financials(SLOT)==money
++                c.headers['x-retrolume-data-context']=canonical(after)
++                value={'before':before,'after':after,'actual_PG':rt.source.state(),'financials_unchanged':True,'Q_state_sha256':digest(rt.hub.state()['q'])}
++                write('actual-frozen-DataContext-COMMIT.json',value);return value
++            if kind=='verified':
++                end=time.monotonic()+70
++                while rt.hub.get(request['job_id'])['state'] not in ('verified','failed','restore_unconfirmed'):
++                    if time.monotonic()>end:raise RuntimeError('restore_not_settled')
++                    time.sleep(.02)
++                receipt=rt.hub.get(request['job_id']);assert receipt['state']=='verified'
++                value={'receipt':receipt,'target':r.state()['continuation06_restore_target'],'target_state':rt.hub.state()['targets'][receipt['target_id']]}
++                write('normal-restore-verified-checkpoint.json',value);return value
++            if kind=='arm_namespace':gates['armed']=True;return {'armed':True}
++            if kind=='activate':
++                if not gates['ready'].wait(12):raise RuntimeError('real_authenticated_capabilities_request_not_paused')
++                before=rt.context().public()
++                try:
++                    got=c.request('POST',f'/api/data/restore-jobs/{request["job_id"]}/activate-readonly',{'expected_plan_sha256':request['plan_sha256'],'business_key':str(uuid4()),'expected_selection_generation':before['selection_generation'],'confirm':True})
++                    after=rt.context().public();assert got['state']=='active_readonly' and after['current_mode']=='restored_readonly' and after['instance_id']!=before['instance_id']
++                    value={'activation':got,'before':before,'after':after,'selector':rt.hub.state()['selection'],'target':r.state()['continuation06_restore_target']}
++                    write('normal-selector-activation-COMMIT.json',value);return value
++                finally:gates['release'].set()
++            raise RuntimeError('closed_UI_driver_action')
++        try:
++            with (HERE/f'UI-root-{r.state()["active_root"]}.log').open('wb') as log:
++                process=subprocess.Popen(['node',str(r.ROOT/'frontend/tests/task120-continuation06-ui.mjs')],cwd=r.ROOT/'frontend',env=env,stdout=log,stderr=subprocess.STDOUT)
++                ordinal=1;end=time.monotonic()+260
++                while process.poll() is None:
++                    if time.monotonic()>end:raise RuntimeError('finite_UI_driver_timeout')
++                    path=handshake/f'request-{ordinal}.json'
++                    if path.exists():
++                        request=json.loads(path.read_text(encoding='utf-8'))
++                        try:value=reply(request)
++                        except BaseException as exc:
++                            write('UI-driver-failure-root-'+str(r.state()['active_root'])+'.json',{'request':request,**previous.safe(exc)})
++                            r.write(handshake/f'reply-{ordinal}.json',{'status':'FAILED','safe_code':getattr(exc,'code',type(exc).__name__)},private=True)
++                        else:r.write(handshake/f'reply-{ordinal}.json',{'status':'COMPLETED','facts':value},private=True)
++                        ordinal+=1
++                    time.sleep(.02)
++                if process.returncode:raise RuntimeError('actual_two_context_UI_failed')
++        finally:
++            gates['release'].set();rt.caps=original_caps
++            if process is not None and process.poll() is None:process.terminate();process.wait(5)
++            undo()
++            write('source-final-financials.json',{'utc':r.utc(),'source':financials(SLOT),'separate_from_restore_target':True})
++            if rt.hub.state()['selection'] is not None:
++                target=rt.factory.target(rt.hub.state()['selection']['target_id']);credentials=rt.factory.readonly_credentials(target.target_id)
++                with psycopg.connect(credentials['readonly_dsn'],row_factory=dict_row) as connection:
++                    from app.data_exit.schema_checks import assert_data_schema_sync
++                    assert_data_schema_sync(connection)
++                    activities=connection.execute('SELECT id::text,requests_reserved,cost_reserved_microunits,running_reserved_seconds,running_settled_seconds FROM activities ORDER BY id').fetchall()
++                    state=connection.execute('SELECT dataset_id::text,source_instance_observed::text,mode_observed,schema_profile FROM public.data_export_control_v1').fetchone()
++                write('restore-target-final-financials.json',{'utc':r.utc(),'state':state,'activities':activities,'requests':sum(x['requests_reserved'] for x in activities),'cost':sum(x['cost_reserved_microunits'] for x in activities),'separate_restored_copy_not_new_budget':True,'strict_R03_schema_check':True})
++        proof=json.loads(Path(spec['proof']).read_text(encoding='utf-8'));assert proof['status']=='PASS' and len(proof['cases'])==2
++        return {'proof':Path(spec['proof']).name,'cases':proof['cases'],'source_financials':financials(SLOT),'target_financials':'restore-target-final-financials.json','target':r.state().get('continuation06_restore_target')}
++
++def old_compatibility():
++    from psycopg.conninfo import make_conninfo
++    from app.data_exit.repository import DataRepository
++    expected=json.loads((r.EVIDENCE/'finalization-05/financial-final-separated.json').read_text(encoding='utf-8'))['instances']
++    instances={};states={}
++    for slot in ('flow','budget-01','budget-02','matrix-final'):
++        credential=json.loads((r.ROOT/'.runtime/TASK-120'/slot/'identity.json').read_text(encoding='utf-8'))
++        dsn=make_conninfo(host='127.0.0.1',port=r.state()['ports']['pg'],dbname=credential['database'],user=credential['app_user'],password=credential['app_password'])
++        with DataRepository(dsn).connection(readonly=True) as c:
++            state=c.execute('SELECT public.data_state() AS state').fetchone()['state'];assert state['schema_profile']=='data_exit.v1.r02';states[slot]=state
++            activities=c.execute('SELECT id::text,requests_reserved,cost_reserved_microunits,running_reserved_seconds,running_settled_seconds,tools_reserved FROM activities ORDER BY id').fetchall()
++            ops=c.execute('SELECT activity_id::text,operation_id,admission_id::text,state FROM activity_operations ORDER BY activity_id,operation_id').fetchall()
++        actual={'activities':activities,'operations':ops,'requests':sum(x['requests_reserved'] for x in activities),'cost':sum(x['cost_reserved_microunits'] for x in activities)}
++        assert actual==expected[slot],slot;instances[slot]=actual
++    source=financials(SLOT);assert source==json.loads((HERE/'source-final-financials.json').read_text(encoding='utf-8'))['source']
++    with DataRepository(setup.dsn(SLOT)).connection(readonly=True) as connection:state=connection.execute('SELECT public.data_state() AS state').fetchone()['state']
++    assert state['mode']=='frozen' and state['schema_profile']=='data_exit.v1.r03';states[SLOT]=state;instances[SLOT]=source
++    write('final-fresh-financials-separated.json',{'utc':r.utc(),'instances':instances,'states':states,'old_four_exactly_unchanged':True,'R02_normal_and_frozen_strict_schema_reads_passed':True,'source_R03_frozen_strict_read_passed':True,'restore_copy':'restore-target-final-financials.json','do_not_sum_source_and_restore_copy':True,'all_connections_read_only':True})
++    from app.data_exit.control import ControlHub
++    hub=ControlHub(r.PRIVATE/SLOT/'control');control=hub.state()
++    records=[]
++    for pid,row in control['q']['requests'].items():
++        records.append({'prepared_id':pid,'business_key':row['prepared']['business_key'],'operation_id':row['prepared']['operation_id'],'state':row.get('state'),'claim':row.get('claim') is not None})
++    write('final-source-Q-metadata.json',{'utc':r.utc(),'source_mode':state['mode'],'fence':control['fence']['state'],'selector':control['selection'],'requests':records,'claimed_keys_never_resent':True,'old_approved_unclaimed_keys_retained':True,'old_three_events':'../finalization-05/retained-original-Q-witness.json'})
++    return {'old_four_unchanged':True,'actual_R02_compatibility':states,'final_R03_source':'frozen','no_business_or_ACL_write':True,'target_snapshot_preserved_from_root46':True}
++
++def readonly_listing_check():
++    with application(SLOT,reconciliation_only=True) as c:
++        result=[]
++        for path in ('/api/data/capabilities','/api/activities/capabilities','/api/activities?limit=20','/api/data/saved-records?category=activities'):
++            response=c.request('GET',path,expect=(200,400,401,403,404,409,500,503))
++            result.append({'path':path,'HTTP':c.timeline[-1]['status'],'code':c.timeline[-1]['rejection_code'],'response':response})
++        write('readonly-listing-actual-diagnostic-root-'+str(r.state()['active_root'])+'.json',{'context':c.app.state.data_exit.context().public(),'Q_readiness':c.app.state.q_readiness,'routes':result,'target_only':True,'no_POST':True})
++        ledger=c.app.state.activities_ledger
++        try:records=run(ledger.list_activities(limit=20))
++        except BaseException as exc:
++            write('readonly-ledger-list-exception-root-'+str(r.state()['active_root'])+'.json',previous.safe(exc));raise
++        assert len(records)==3
++        from app.data_exit.q_store import QAuthority
++        from app.data_exit.contracts import DataError
++        try:QAuthority(c.app.state.data_exit.hub)
++        except DataError as exc:assert exc.code=='q_normal_root_required';denial=exc.code
++        else:raise AssertionError('readonly_target_gained_normal_Q_authority')
++        try:run(ledger.cancel_activity(ROSTER[0]))
++        except BaseException as exc:
++            code=getattr(exc,'code',None)
++            assert code in ('q_normal_root_required','data_readonly'),type(exc).__name__
++            write('readonly-cancel-mutation-denied.json',{'actual_code':code,'normal_Q_denied':denial,'no_new_admission_or_send':True})
++        else:raise AssertionError('readonly_cancel_was_allowed')
++        return {'routes':result,'target_only':True,'listing_records':len(records),'normal_Q_authority_denied':denial,'cancel_mutation_denied':True}
++
++def readonly_ui_check():
++    import subprocess
++    with application(SLOT,reconciliation_only=True) as c:
++        folder=r.PRIVATE/SLOT/('readonly-UI-root-'+str(r.state()['active_root']));folder.mkdir(exist_ok=True)
++        spec={'origin':c.base,'project':str(r.ROOT),'instance_id':r.state()['continuation06_restore_target']['instance_id'],'profile':str(folder/'browser'),'proof':str(HERE/f'readonly-UI-root-{r.state()["active_root"]}.json'),'screenshot':str(HERE/f'readonly-UI-root-{r.state()["active_root"]}.png')}
++        r.write(folder/'spec.json',spec,private=True);env=r.public_environment();env['RETROLUME_TASK120_UI_SPEC']=str(folder/'spec.json')
++        r.memory_gate('browser');r.count('browser_starts')
++        with (HERE/f'readonly-UI-root-{r.state()["active_root"]}.log').open('wb') as log:
++            result=subprocess.run(['node',str(r.ROOT/'frontend/tests/task120-continuation06-readonly-view.mjs')],cwd=r.ROOT/'frontend',env=env,stdout=log,stderr=subprocess.STDOUT,timeout=90)
++        assert result.returncode==0
++        proof=json.loads(Path(spec['proof']).read_text(encoding='utf-8'));assert proof['status']=='PASS'
++        return {'proof':Path(spec['proof']).name,'rows':proof['activity_rows'],'saved_records':proof['saved_record_rows'],'context':proof['context'],'no_automatic_POST':True}
++
++def execute(mode):
++    if mode=='bootstrap':checkpoint('new-R03-bootstrap',bootstrap);checkpoint('real-profile-ACL-and-guard',profile_checks)
++    elif mode=='scope':checkpoint('actual-scope-shrink',positive_shrink);checkpoint('scope-targeted-negatives',scope_negatives)
++    elif mode=='shrink_race':checkpoint('K2-scope-shrink',shrink_race)
++    elif mode=='ui':checkpoint('late-context-UI',ui)
++    elif mode=='compat':checkpoint('old-R02-and-final-readonly-reconciliation',old_compatibility)
++    elif mode=='ro_check':checkpoint('readonly-listing',readonly_listing_check)
++    elif mode=='ro_ui':checkpoint('readonly-listing-UI',readonly_ui_check)
++    elif mode=='financials':write('source-final-financials.json',{'utc':r.utc(),'source':financials(SLOT)})
++    else:raise RuntimeError('closed_continuation06_phase')
+--- before/backend/tests/fixtures/task120/queued.py
++++ after/backend/tests/fixtures/task120/queued.py
+@@ -15,12 +15,16 @@
+ FINAL_PERMIT='TASK-120-Q-PREP-FINALIZATION-05-20261019'
+ PHASES=PHASES|frozenset(('f05_reconcile','f05_bootstrap','f05_permissions','f05_ack','f05_head','f05_revoke','f05_scope','f05_source','f05_memory','f05_memory_reconcile','f05_reconcile_final','f05_ui','f05_delete','f05_readonly','f05_financials','f05_scope_diagnose','f05_scope_removal'))
+ VALIDATION_PERMIT='TASK-120-Q-PREP-VALIDATION-04-20261019'
++SCOPE_PERMIT='TASK-120-Q-PREP-CONTINUATION-06-20261020'
++PHASES=PHASES|frozenset(('c06_bootstrap','c06_scope','c06_shrink_race','c06_ui','c06_financials','c06_compat'))
++PHASES=PHASES|frozenset(('c06_ro_check','c06_ro_ui'))
+ PHASES=PHASES|frozenset(('v04_exercise','v04_ui','v04_boundaries','v04_races','v04_financials','v04_flow_final'))
+ 
+ def read_plan(path):
+     value=json.loads(Path(path).read_text(encoding='utf-8'))
+-    if set(value)!={'schema','permit_id','root_id','stages'} or value['schema']!='task120.finite-plan.v1' or value['permit_id'] not in (PERMIT,REPAIR_PERMIT,VALIDATION_PERMIT,FINAL_PERMIT):raise ValueError('closed_plan')
+-    low,high=(25,64) if value['permit_id']==FINAL_PERMIT else (21,24) if value['permit_id']==VALIDATION_PERMIT else (17,20) if value['permit_id']==REPAIR_PERMIT else (9,16)
++    if set(value)!={'schema','permit_id','root_id','stages'} or value['schema']!='task120.finite-plan.v1' or value['permit_id'] not in (PERMIT,REPAIR_PERMIT,VALIDATION_PERMIT,FINAL_PERMIT,SCOPE_PERMIT):raise ValueError('closed_plan')
++    low,high=(41,64) if value['permit_id']==SCOPE_PERMIT else (25,64) if value['permit_id']==FINAL_PERMIT else (21,24) if value['permit_id']==VALIDATION_PERMIT else (17,20) if value['permit_id']==REPAIR_PERMIT else (9,16)
++    if value['permit_id']==SCOPE_PERMIT and any(not s.get('phase','').startswith('c06_') for s in value['stages']):raise ValueError('continuation06_closed_phase')
+     if value['permit_id']==VALIDATION_PERMIT and any(not s.get('phase','').startswith('v04_') for s in value['stages']):raise ValueError('validation04_closed_phase')
+     if value['permit_id']==FINAL_PERMIT and any(not s.get('phase','').startswith('f05_') for s in value['stages']):raise ValueError('final05_closed_phase')
+     if type(value['root_id']) is not int or not low<=value['root_id']<=high or not isinstance(value['stages'],list) or not 1<=len(value['stages'])<=12:raise ValueError('plan_limit')
+--- before/backend/tests/fixtures/task120/resources.py
++++ after/backend/tests/fixtures/task120/resources.py
+@@ -21,6 +21,8 @@
+ ROOT=Path(__file__).resolve().parents[4]
+ EVIDENCE=ROOT/'DocuN/evidence/TASK-120/execution'
+ PRIVATE=ROOT/'.runtime/TASK-120'
++if os.environ.get('RETROLUME_TASK120_CONTINUATION')=='TASK-120-Q-PREP-CONTINUATION-06-20261020':
++    PRIVATE=PRIVATE/'continuation-06'
+ BUDGET=EVIDENCE/'budget.json'
+ NAME='retrolume-task120-qprep-pg1'
+ VOLUME='retrolume-task120-qprep-data'
+@@ -82,14 +84,14 @@
+ 
+ def memory_gate(kind):
+     amount=available_memory()
+-    prospective=state().get('current_permit_id') in ('TASK-120-Q-PREP-VALIDATION-04-20261019','TASK-120-Q-PREP-FINALIZATION-05-20261019')
++    prospective=state().get('current_permit_id') in ('TASK-120-Q-PREP-VALIDATION-04-20261019','TASK-120-Q-PREP-FINALIZATION-05-20261019','TASK-120-Q-PREP-CONTINUATION-06-20261020')
+     minimum=(512 if prospective or kind!='browser' else 768)*1024**2
+     event('memory_gate',stage=kind,available_bytes=amount,minimum_bytes=minimum)
+     if amount<minimum:raise RuntimeError('task120_low_memory_'+kind)
+ 
+ 
+ def settled_memory_gate(kind,seconds=12):
+-    if state().get('current_permit_id') in ('TASK-120-Q-PREP-VALIDATION-04-20261019','TASK-120-Q-PREP-FINALIZATION-05-20261019'):return memory_gate(kind)
++    if state().get('current_permit_id') in ('TASK-120-Q-PREP-VALIDATION-04-20261019','TASK-120-Q-PREP-FINALIZATION-05-20261019','TASK-120-Q-PREP-CONTINUATION-06-20261020'):return memory_gate(kind)
+     # Docker warmup can briefly reclaim pages. This finite internal stage does
+     # not start the next layer until its unchanged real threshold is met.
+     until=time.monotonic()+seconds
+--- /dev/null
++++ after/backend/tests/fixtures/task120/restore06.py
+@@ -0,0 +1,91 @@
++"""Exact factory observation/cleanup for the single approved06 restore target."""
++import json,re,socket
++from dataclasses import asdict
++from . import resources as r
++NAME='retrolume-task120-scopeui-ro1';VOLUME=NAME+'-data'
++IMAGE='sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f'
++
++def preflight():
++    saved=r.state().get('continuation06_target_port')
++    if saved:return saved
++    assert not r.docker(['ps','-aq','--filter','name=^/'+NAME+'$'])
++    assert VOLUME not in r.docker(['volume','ls','-q']).splitlines()
++    results=[];chosen=None
++    for port in (55481,55482):
++        with socket.socket() as s:
++            try:s.bind(('127.0.0.1',port))
++            except OSError as e:results.append({'port':port,'bindable':False,'Windows_error':getattr(e,'winerror',None)})
++            else:
++                results.append({'port':port,'bindable':True})
++                if chosen is None:chosen=port
++    r.write(r.EVIDENCE/'continuation-06/factory-preflight.json',{'ports':results,'chosen_first_bindable':chosen,'container_and_volume_names_absent':True,'factory_only':True})
++    if chosen is None:raise RuntimeError('both_approved_restore_ports_unavailable')
++    r.update(lambda v:v.update(continuation06_target_port=chosen));return chosen
++
++def identity(value):
++    # Full inspect stays in memory; only whitelisted identity/state is returned.
++    full=json.loads(r.docker(['container','inspect',value['cid']]))[0]
++    host=full['HostConfig'];labels=full['Config'].get('Labels',{});mount=full['Mounts']
++    assert full['Id']==value['cid'] and full['Name']=='/'+NAME and full['Image']==IMAGE
++    assert labels.get('retrolume.data.job')==value['job_id'] and labels.get('retrolume.data.profile')==value['profile_id'] and labels.get('retrolume.data.target')==value['target_id'] and labels.get('retrolume.data.purpose')=='restore-readonly'
++    assert host['Memory']==536870912 and host['NanoCpus']==10**9 and host['PidsLimit']==128 and host['RestartPolicy']['Name']=='no' and not host['Privileged']
++    assert len(mount)==1 and mount[0]['Type']=='volume' and mount[0]['Name']==VOLUME and mount[0]['Destination']=='/var/lib/postgresql/data'
++    assert host['PortBindings']=={'5432/tcp':[{'HostIp':'127.0.0.1','HostPort':str(value['port'])}]}
++    return {'cid':full['Id'],'name':full['Name'],'image_id':full['Image'],'labels':labels,'volume':VOLUME,'port':value['port'],'running':full['State']['Running'],'Pid':full['State']['Pid'],'status':full['State']['Status'],'limits':{'Memory':host['Memory'],'NanoCpus':host['NanoCpus'],'PidsLimit':host['PidsLimit'],'restart':host['RestartPolicy']['Name']}}
++
++def stop_targets():
++    value=r.state().get('continuation06_restore_target')
++    if value is None:return {'created':False}
++    actual=identity(value)
++    if actual['running']:r.docker(['container','stop','--time','5',value['cid']],timeout=15)
++    actual=identity(value);assert not actual['running'] and actual['Pid']==0
++    r.update(lambda v:v.update(continuation06_restore_target_last_stop=actual));return actual
++
++def start_existing_target():
++    from pathlib import Path
++    from app.data_exit.control import ControlHub
++    from app.data_exit.restore import TargetFactory
++    base=r.ROOT/'.runtime/TASK-120/continuation-06/scope-ui-final'
++    profile=json.loads((base/'data-exit.json').read_text(encoding='utf-8'))['factory']
++    hub=ControlHub(base/'control');factory=TargetFactory(hub,base/'restore',profile)
++    undo=install(factory)
++    try:
++        target=factory.target(r.state()['continuation06_restore_target']['target_id'])
++        factory.start(target)
++        factory._wait_pg(factory.readonly_credentials(target.target_id)['readonly_dsn'])
++    finally:undo()
++
++def install(factory):
++    from app.data_exit import restore
++    original=restore.docker_call
++    def observed(arguments,**kwargs):
++        value=original(arguments,**kwargs)
++        if arguments[0]=='create':
++            assert re.fullmatch('[0-9a-f]{64}',value)
++            labels={arguments[n+1].split('=',1)[0]:arguments[n+1].split('=',1)[1] for n,x in enumerate(arguments) if x=='--label'}
++            record={'cid':value,'name':NAME,'volume':VOLUME,'port':r.state()['continuation06_target_port'],'job_id':labels['retrolume.data.job'],'profile_id':labels['retrolume.data.profile'],'target_id':labels['retrolume.data.target'],'actual_CID_registered_before_return_to_factory':True}
++            def registered(v):
++                assert v.get('continuation06_restore_target') is None
++                v['continuation06_restore_target']=record;v['counts']['pg_objects']+=1;v['counts']['volumes']+=1;v['ports']['restore_pg']=record['port']
++            r.update(registered);r.event('continuation06_factory_actual_CID_returned',target=record)
++        return value
++    restore.docker_call=observed
++    class Hooks:
++        def before_create(self,slot):
++            assert slot['name']==NAME and slot['volume']==VOLUME and slot['port']==r.state()['continuation06_target_port']
++            r.memory_gate('pg')
++            def reserve(v):
++                for name in ('pg_create_attempts','volume_create_attempts'):assert v['counts'][name]<v['caps'][name]
++                assert v.get('continuation06_restore_target') is None
++                v['counts']['pg_create_attempts']+=1;v['counts']['volume_create_attempts']+=1
++            r.update(reserve);r.event('continuation06_factory_before_create_counted',slot=slot)
++        def created(self,target,actual):
++            value={k:str(v) if k=='data_root' else v for k,v in asdict(target).items()}
++            assert r.state()['continuation06_restore_target']['cid']==target.cid
++            r.update(lambda v:v.update(continuation06_restore_target=value))
++            r.write(r.EVIDENCE/'continuation-06/actual-restore-target-created.json',{'target':value,'actual':identity(value)})
++        def before_start(self,target):r.memory_gate('pg');r.count('pg_starts');r.event('continuation06_factory_before_start_counted',cid=target.cid)
++        def started(self,target,actual):r.event('continuation06_factory_started',cid=target.cid,actual=actual)
++        def stopped(self,target,actual):r.event('continuation06_factory_stopped',cid=target.cid,actual=actual)
++    factory.hooks=Hooks()
++    return lambda:setattr(restore,'docker_call',original)
+--- before/backend/tests/fixtures/task120/run.py
++++ after/backend/tests/fixtures/task120/run.py
+@@ -41,6 +41,9 @@
+             from .merged import run_batches
+             return run_batches()
+         if phase=='bootstrap':bootstrap()
++        elif phase.startswith('c06_'):
++            from .continuation06 import execute
++            execute(phase.removeprefix('c06_'))
+         elif phase.startswith('f05_'):
+             from .final05 import execute
+             execute(phase.removeprefix('f05_'))
+--- before/backend/tests/fixtures/task120/setup.py
++++ after/backend/tests/fixtures/task120/setup.py
+@@ -24,7 +24,8 @@
+ 
+ def dsn(slot,admin=False,*,snapshot=False):
+     port=r.state()['ports']['pg']
+-    if slot not in ('flow','budget-01','budget-02','matrix-final'):raise RuntimeError('task120_database_not_permitted')
++    if slot not in ('flow','budget-01','budget-02','matrix-final','scope-ui-final'):raise RuntimeError('task120_database_not_permitted')
++    if slot=='scope-ui-final' and (r.state()['current_permit_id']!='TASK-120-Q-PREP-CONTINUATION-06-20261020' or r.PRIVATE.name!='continuation-06'):raise RuntimeError('scope_ui_private_permit_required')
+     value=info(slot)
+     return make_conninfo(host='127.0.0.1',port=port,dbname=value['database'],user='postgres' if admin else value['snapshot_user'] if snapshot else value['app_user'],
+         password=json.loads((r.PRIVATE/'cluster.json').read_text(encoding='utf-8'))['password'] if admin else value['snapshot_password'] if snapshot else value['app_password'],application_name='task120-'+slot)
+@@ -57,6 +58,9 @@
+             'synthetic_model_key':secrets.token_urlsafe(24),'synthetic_embedding_key':secrets.token_urlsafe(24)}
+         if slot=='matrix-final':
+             old=info('flow')
++            value.update(app_user=old['app_user'],app_password=old['app_password'],snapshot_user=old['snapshot_user'],snapshot_password=old['snapshot_password'])
++        if slot=='scope-ui-final':
++            old=json.loads((r.ROOT/'.runtime/TASK-120/flow/identity.json').read_text(encoding='utf-8'))
+             value.update(app_user=old['app_user'],app_password=old['app_password'],snapshot_user=old['snapshot_user'],snapshot_password=old['snapshot_password'])
+         r.write(identity,value,private=True)
+     activity={'model_identity':{'provider':'deepseek_chat_completions','model':'deepseek-flash'},'activity_defaults':{'deadline_hours':24,'max_requests':48,'max_cost_microunits':12000000,
+@@ -121,13 +125,20 @@
+                     if s.get('matrix_database_create_attempts',0)>=1:raise RuntimeError('matrix_create_attempt_cap')
+                     s['matrix_database_create_attempts']=1
+                 r.update(reserve)
++            if slot=='scope-ui-final':
++                def reserve_scope(s):
++                    if s.get('continuation06_database_create_attempts',0)>=1:raise RuntimeError('scope_ui_create_attempt_cap')
++                    s['continuation06_database_create_attempts']=1
++                r.update(reserve_scope)
+             connection.execute(sql.SQL('CREATE DATABASE {}').format(sql.Identifier(value['database'])))
+     migrations=[]
+     with psycopg.connect(dsn(slot,True),autocommit=True) as connection:
+         known={row[0] for row in connection.execute('SELECT rolname FROM pg_roles').fetchall()}
+         for path in sorted((r.ROOT/'backend/migrations').glob('*.sql')):
++            from app.data_exit.schema_profiles import get_profile,R02,R03
++            if path.name not in get_profile(R03 if slot=='scope-ui-final' else R02).migration_chain:continue
+             original=path.read_bytes();body=original.decode('utf-8-sig')
+-            if slot in ('budget-02','matrix-final'):body=body.replace('\r\n','\n')
++            if slot in ('budget-02','matrix-final','scope-ui-final'):body=body.replace('\r\n','\n')
+             identity={'name':path.name,'sha256':raw_digest(original)}
+             if any(row==identity for row in progress['migrations']):migrations.append(identity);continue
+             if progress.get('pending_migration'):
+@@ -141,7 +152,7 @@
+                     raise RuntimeError('migration_commit_ack_requires_specific_reconciliation')
+                 r.write(r.EVIDENCE/'budget01-root02-migration-reconciliation.json',{'pending':identity,'transaction_rolled_back':True,'basis':'retained root02 P0001 plus absent learning_memories; original nine migrations retained'})
+                 progress.pop('pending_migration')
+-            if slot in ('budget-01','budget-02','matrix-final'):
++            if slot in ('budget-01','budget-02','matrix-final','scope-ui-final'):
+                 for group in known:
+                     if group.startswith('retrolume_'):
+                         flags=connection.execute('SELECT rolcanlogin,rolsuper,rolcreatedb,rolcreaterole,rolreplication,rolbypassrls FROM pg_roles WHERE rolname=%s',(group,)).fetchone()
+@@ -171,9 +182,9 @@
+             if actual!=(value['dataset_id'],value['instance_id'],value['originals_root_id']):raise RuntimeError('bootstrap_identity_drift')
+             return
+         connection.execute('BEGIN')
+-        connection.execute("INSERT INTO data_control(dataset_id,instance_id,originals_root_id,schema_profile,mode,maintenance_key_sha256) VALUES(%s,%s,%s,'data_exit.v1.r02','normal',%s)",
+-            (value['dataset_id'],value['instance_id'],value['originals_root_id'],raw_digest(value['maintenance_key'])))
+-        if slot!='matrix-final':
++        connection.execute("INSERT INTO data_control(dataset_id,instance_id,originals_root_id,schema_profile,mode,maintenance_key_sha256) VALUES(%s,%s,%s,%s,'normal',%s)",
++            (value['dataset_id'],value['instance_id'],value['originals_root_id'],'data_exit.v1.r03' if slot=='scope-ui-final' else 'data_exit.v1.r02',raw_digest(value['maintenance_key'])))
++        if slot not in ('matrix-final','scope-ui-final'):
+             connection.execute(sql.SQL('CREATE ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD {}').format(sql.Identifier(value['app_user']),sql.Literal(value['app_password'])))
+             for group in ('retrolume_data_app','retrolume_memory_app','retrolume_interview_app','retrolume_html_app','retrolume_retrieval_app'):
+                 connection.execute(sql.SQL('GRANT {} TO {}').format(sql.Identifier(group),sql.Identifier(value['app_user'])))
+@@ -280,7 +291,7 @@
+         await complete_root(app,slot,mapping,bundle)
+         return
+     binding=InstanceBinding(hub_control_id=hub.control_id,dataset_id=value['dataset_id'],instance_id=value['instance_id'],originals_root_id=value['originals_root_id'],selection_generation=0,
+-        schema_profile='data_exit.v1.r02',source_registration_sha256=digest(source),connection_target_sha256=target_identity(dsn(slot)),cluster_system_identifier=value['cluster_system_identifier'],
++        schema_profile=source['schema_profile'],source_registration_sha256=digest(source),connection_target_sha256=target_identity(dsn(slot)),cluster_system_identifier=value['cluster_system_identifier'],
+         database_oid=value['database_oid'],control_root=str(hub.root),control_volume=stat.st_dev,control_file_id=stat.st_ino)
+     ledger=app.state.activities_ledger
+     # Create the three activities only after root/grant is known, below. A read
+@@ -314,6 +325,10 @@
+     if slot=='matrix-final':
+         expiry=r.state()['finalization05']['finish_deadline_utc']
+         if now>=datetime.fromisoformat(expiry):raise RuntimeError('matrix_new_window_expired')
++        grant['valid_until_utc']=expiry
++    if slot=='scope-ui-final':
++        expiry=r.state()['continuation06']['business_deadline_utc']
++        if now>=datetime.fromisoformat(expiry):raise RuntimeError('scope_ui_business_window_expired')
+         grant['valid_until_utc']=expiry
+     if slot=='budget-02':
+         expiry='2026-10-19T12:19:22.457756+00:00'
+--- before/backend/tests/fixtures/task120/validation_memory.py
++++ after/backend/tests/fixtures/task120/validation_memory.py
+@@ -28,6 +28,7 @@
+                     values.append({**row,'working_set_bytes':counter.WorkingSetSize if ok else None})
+                 finally:kernel.CloseHandle(handle)
+         finally:job.close()
+-    path=r.EVIDENCE/('finalization-05' if r.state().get('current_permit_id')=='TASK-120-Q-PREP-FINALIZATION-05-20261019' else 'validation-04')/f'root-{root:02d}-memory-samples.jsonl'
++    folder='continuation-06' if r.state().get('current_permit_id')=='TASK-120-Q-PREP-CONTINUATION-06-20261020' else 'finalization-05' if r.state().get('current_permit_id')=='TASK-120-Q-PREP-FINALIZATION-05-20261019' else 'validation-04'
++    path=r.EVIDENCE/folder/f'root-{root:02d}-memory-samples.jsonl'
+     with path.open('a',encoding='utf-8') as stream:stream.write(json.dumps({'utc':r.utc(),'mono_ns':time.monotonic_ns(),'available_bytes':available,'owned_processes':values})+'\n')
+     return available
+--- /dev/null
++++ after/backend/tests/test_scope_delete_profile.py
+@@ -0,0 +1,53 @@
++"""Exact forward-profile selection/rejection; PG authorization is tested separately."""
++import copy
++from pathlib import Path
++import unittest
++from app.data_exit.contracts import PROFILE,DataError,digest
++from app.data_exit.schema_profiles import R02,R03,get_profile,check_scope_permissions,MIGRATION_015
++
++
++def permission_rows(profile):
++    grants={'<owner>':{'SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER'},
++      'retrolume_data_app':{'SELECT','INSERT','UPDATE'}|({'DELETE'} if profile==R03 else set()),
++      'retrolume_data_owner':{'SELECT'},'retrolume_data_restore_loader':{'SELECT','INSERT'},
++      'retrolume_interview_owner':{'SELECT'},'retrolume_html_owner':{'SELECT'}}
++    if profile in (R02,R03):grants['retrolume_retrieval_owner']={'SELECT'}
++    result=[dict(attname=None,grantee=role,privilege_type=p,is_grantable=False,trusted_grantor=True,owner_privileges=sorted(grants['<owner>'])) for role,privs in grants.items() for p in privs]
++    result += [dict(attname=c,grantee='retrolume_data_snapshot',privilege_type='SELECT',is_grantable=False,trusted_grantor=True,owner_privileges=sorted(grants['<owner>'])) for c in ('activity_id','source_id','version_id','source_revision')]
++    return [{**row,'mode_observed':'normal'} for row in result]
++
++
++class ScopeDeleteProfile(unittest.TestCase):
++    def test_exact_chain_no_implicit_upgrade(self):
++        r01,r02,r03=map(get_profile,(PROFILE,R02,R03))
++        self.assertNotIn('015_activity_scope_delete_permission.sql',r01.migration_chain)
++        self.assertNotIn('015_activity_scope_delete_permission.sql',r02.migration_chain)
++        self.assertEqual(r03.tables,r02.tables);self.assertEqual(r03.columns,r02.columns)
++        self.assertEqual(r03.migration_chain,{**r02.migration_chain,'015_activity_scope_delete_permission.sql':MIGRATION_015})
++        self.assertEqual(digest((Path(__file__).parents[1]/'migrations/015_activity_scope_delete_permission.sql').read_bytes()),MIGRATION_015)
++        for name in ('data_exit.v1.r04','data_exit.v1.r03x',None):
++            with self.assertRaises(DataError):get_profile(name)
++
++    def test_scope_acl_exact_each_version(self):
++        for p in (PROFILE,R02,R03):check_scope_permissions(permission_rows(p),p)
++        for p,rows in ((R02,permission_rows(R03)),(R03,permission_rows(R02))):
++            with self.assertRaises(DataError):check_scope_permissions(rows,p)
++
++    def test_extra_acl_and_grant_option_rejected(self):
++        rows=permission_rows(R03)
++        for role,privilege in [('retrolume_data_snapshot','DELETE'),('retrolume_data_restore_loader','DELETE'),('retrolume_data_app','TRUNCATE'),('<public>','SELECT'),('foreign_role','SELECT')]:
++            changed=copy.deepcopy(rows);changed.append({**rows[0],'grantee':role,'privilege_type':privilege})
++            with self.assertRaises(DataError):check_scope_permissions(changed,R03)
++        changed=copy.deepcopy(rows);next(r for r in changed if r['grantee']=='retrolume_data_app')['is_grantable']=True
++        with self.assertRaises(DataError):check_scope_permissions(changed,R03)
++
++    def test_existing_sealed_readonly_snapshot_read_is_not_normal_write(self):
++        for profile in (PROFILE,R02,R03):
++            rows=[{**r,'mode_observed':'restored_readonly'} for r in permission_rows(profile)]
++            rows.append({**rows[0],'grantee':'retrolume_data_snapshot','privilege_type':'SELECT'})
++            check_scope_permissions(rows,profile)
++            with self.assertRaises(DataError):check_scope_permissions([{**r,'mode_observed':'normal'} for r in rows],profile)
++            rows.append({**rows[0],'grantee':'retrolume_data_snapshot','privilege_type':'DELETE'})
++            with self.assertRaises(DataError):check_scope_permissions(rows,profile)
++
++if __name__=='__main__':unittest.main(verbosity=2)
+--- /dev/null
++++ after/frontend/tests/task120-continuation06-readonly-view.mjs
+@@ -0,0 +1,23 @@
++import assert from 'node:assert/strict';
++import fs from 'node:fs';
++import path from 'node:path';
++import {createHash} from 'node:crypto';
++import {chromium} from 'playwright';
++const spec=JSON.parse(fs.readFileSync(process.env.RETROLUME_TASK120_UI_SPEC,'utf8'));
++const sha=v=>createHash('sha256').update(v).digest('hex');
++const proof={status:'RUNNING',requests:[],responses:[],assets:[],errors:[]};
++const save=()=>fs.writeFileSync(spec.proof,JSON.stringify(proof,null,2));let context;
++try{
++ context=await chromium.launchPersistentContext(spec.profile,{headless:true,viewport:{width:1440,height:1050},serviceWorkers:'block',args:['--disable-background-networking']});
++ await context.route('**/*',async route=>{assert.equal(new URL(route.request().url()).origin,spec.origin);await route.continue();});
++ context.on('request',r=>proof.requests.push({method:r.method(),path:new URL(r.url()).pathname}));
++ const observations=[];context.on('response',r=>{observations.push((async()=>{const p=new URL(r.url()).pathname;if(p==='/api/session'){const j=await r.json();proof.context=j.data_context;}if(p.startsWith('/assets/')){const h=sha(await r.body());assert.equal(h,sha(fs.readFileSync(path.join(spec.project,'frontend/dist',p.slice(1)))));proof.assets.push({path:p,sha256:h});}if(p==='/api/activities'||p==='/api/data/saved-records')proof.responses.push({path:p,status:r.status(),body:await r.json()});})().catch(e=>proof.errors.push(String(e))));});
++ const page=context.pages()[0]??await context.newPage();page.setDefaultTimeout(16000);await page.goto(spec.origin,{waitUntil:'networkidle'});
++ assert.equal(proof.context.current_mode,'restored_readonly');assert.equal(proof.context.read_only,true);assert.equal(proof.context.instance_id,spec.instance_id);
++ const listing=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/activities'&&r.ok());await page.getByRole('navigation').getByRole('button',{name:/学习活动/}).click();await listing;await page.locator('[data-activity-id]').nth(2).waitFor();assert.equal(await page.locator('[data-activity-id]').count(),3);assert(!(await page.locator('body').innerText()).includes('活动数据暂不可用'));
++ await page.screenshot({path:spec.screenshot});
++ const saved=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/data/saved-records'&&r.ok());await page.getByRole('button',{name:'数据与备份',exact:true}).click();await saved;await page.getByRole('heading',{name:'已保存记录',exact:true}).waitFor();
++ const records=page.locator('section').filter({has:page.getByRole('heading',{name:'已保存记录',exact:true})});await records.locator('article').nth(2).waitFor();assert.equal(await records.locator('article').count(),3);
++ await Promise.all(observations);assert.equal(proof.requests.filter(r=>r.method==='POST').length,0);assert.equal(proof.errors.length,0);proof.status='PASS';proof.activity_rows=3;proof.saved_record_rows=3;proof.no_automatic_POST=true;save();
++}catch(e){proof.status='FAIL';proof.error=String(e);proof.stack=e.stack;save();process.exitCode=1;}
++finally{if(context)await context.close();}
+--- /dev/null
++++ after/frontend/tests/task120-continuation06-ui.mjs
+@@ -0,0 +1,83 @@
++import assert from 'node:assert/strict';
++import fs from 'node:fs';
++import path from 'node:path';
++import {fileURLToPath} from 'node:url';
++import {createHash} from 'node:crypto';
++import {chromium} from 'playwright';
++const spec=JSON.parse(fs.readFileSync(process.env.RETROLUME_TASK120_UI_SPEC,'utf8'));
++const sha=x=>createHash('sha256').update(x).digest('hex');
++const proof={status:'RUNNING',fixture_sha256:sha(fs.readFileSync(fileURLToPath(import.meta.url))),cases:[],captures:[],assets:[],requests:[],native:[],contexts:[],storageAccess:[],errors:[]};
++const save=()=>fs.writeFileSync(spec.proof,JSON.stringify(proof,null,2));
++const sleep=ms=>new Promise(r=>setTimeout(r,ms));
++async function until(fn,seconds=22){const end=Date.now()+seconds*1000;while(!await fn()){assert(Date.now()<end,'bounded condition timeout');await sleep(25);}}
++let context,page,ordinal=0;const held=[],pending=new Map(),work=new Set();
++function observe(fn){const p=Promise.resolve().then(fn).catch(e=>proof.errors.push(String(e))).finally(()=>work.delete(p));work.add(p);}
++async function driver(kind,extra={}){++ordinal;fs.writeFileSync(path.join(spec.handshake,`request-${ordinal}.json`),JSON.stringify({ordinal,kind,...extra}));const target=path.join(spec.handshake,`reply-${ordinal}.json`);await until(()=>fs.existsSync(target),85);const result=JSON.parse(fs.readFileSync(target));assert.equal(result.status,'COMPLETED',JSON.stringify(result));return result.facts;}
++const namespace=c=>`${c.dataset_id}.${c.instance_id}.${c.selection_generation}`;
++const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
++function currentContext(){return proof.contexts.at(-1)?.value;}
++async function settled(){
++ await until(()=>{const ended=new Set(proof.native.filter(e=>e.kind==='fetch-resolved'||e.kind==='fetch-rejected').map(e=>e.id));return proof.native.filter(e=>e.kind==='fetch-start'&&!ended.has(e.id)).every(e=>held.some(h=>e.url.includes(h.key)));});
++ await sleep(150);
++ proof.settlement={actual_native_fetches_settled_except_explicit_held_GETs:true,context_transport_pending:[...pending.values()]};
++}
++async function snapshot(){return {text:await page.locator('.data-workspace').innerText(),input:await page.locator('.data-workspace input').evaluateAll(nodes=>nodes.filter(n=>n.type==='text').map(n=>n.value)),storage:await page.evaluate(()=>Object.fromEntries(Object.entries(localStorage))),databases:await page.evaluate(async()=>(await indexedDB.databases()).map(d=>d.name).sort())};}
++async function goLearning(){await page.getByRole('navigation').getByRole('button',{name:/学习活动/}).click();await page.locator(`[data-activity-id="${spec.activity_id}"]`).click();await page.locator('button.ws-op').filter({hasText:spec.parent_operation}).first().click();await page.locator('section[aria-label="学习成果"]').waitFor();}
++async function capture(index){
++ await goLearning();await page.getByRole('button',{name:'从该学习成果续问…',exact:true}).click();await page.getByLabel('续问内容',{exact:true}).fill(spec.questions[index]);
++ const follow=`/api/activities/${spec.activity_id}/learning/followups`;
++ const [prepared]=await Promise.all([page.waitForResponse(r=>r.request().method()==='POST'&&new URL(r.url()).pathname===follow),page.getByRole('button',{name:'发出并等待',exact:true}).click()]);
++ assert(prepared.ok());const key=prepared.request().postDataJSON().business_key;const initial=await prepared.json();assert(initial.outbound_approval&&!initial.outbound_approval.can_continue);
++ await driver('approve',{business_key:key});
++ const pattern=`**/api/activities/${spec.activity_id}/learning/intents/${key}?*`;let release;const barrier=new Promise(r=>release=r);const h={key,pattern,release,fulfilled:false};held.push(h);
++ await page.route(pattern,async route=>{
++   try{const response=await route.fetch();const body=await response.body();const json=JSON.parse(body);assert.equal(response.status(),200);assert(json.outbound_approval.can_continue);
++     h.capture={index,key,path:new URL(route.request().url()).pathname,request_context:JSON.parse(route.request().headers()['x-retrolume-data-context']),status:response.status(),headers:response.headers(),body:json,body_sha256:sha(body)};
++     proof.captures.push(h.capture);fs.writeFileSync(path.join(spec.evidence,`UI-normal-GET-${index+1}-root-${spec.root}.json`),JSON.stringify(h.capture,null,2));save();
++     await barrier;await route.fulfill({response});h.fulfilled=true;
++   }catch(e){h.transport_error=String(e);proof.errors.push(String(e));}
++ });
++ const intent=page.locator('.ws-intent').filter({hasText:spec.questions[index].slice(0,35)});assert.equal(await intent.count(),1);
++ await intent.getByRole('button',{name:'核对（只读）',exact:true}).click();await until(()=>!!h.capture);return h;
++}
++try{
++ assert(fs.existsSync(chromium.executablePath()));context=await chromium.launchPersistentContext(spec.profile,{headless:true,viewport:{width:1440,height:1050},serviceWorkers:'block',args:['--disable-background-networking']});
++ await context.exposeBinding('__task120Observe',(_source,event)=>{if(event.kind==='storage')proof.storageAccess.push(event);else proof.native.push(event);});
++ await context.addInitScript(()=>{
++  const emit=value=>void window.__task120Observe(value).catch(()=>{});let seq=0;
++  const original=window.fetch.bind(window);window.fetch=(input,init)=>{const url=String(input),id=++seq;emit({kind:'fetch-start',id,url});return original(input,init).then(response=>{emit({kind:'fetch-resolved',id,url,status:response.status});const json=response.json.bind(response);response.json=async()=>{emit({kind:'business-json',id,url});return json();};return response;},error=>{emit({kind:'fetch-rejected',id,url,error:String(error)});throw error;});};
++  const get=Storage.prototype.getItem;Storage.prototype.getItem=function(key){if(String(key).startsWith('retrolume.'))emit({kind:'storage',key:String(key)});return get.call(this,key);};
++ });
++ await context.route('**/*',async route=>{if(new URL(route.request().url()).origin!==spec.origin){proof.errors.push('external request denied');await route.abort();}else await route.continue();});
++ context.on('request',r=>{const p=new URL(r.url()).pathname;pending.set(r,p);const extra={};if(r.method()==='POST'){if((r.headers()['content-type']??'').includes('application/json'))extra.body=r.postDataJSON();else{const raw=r.postDataBuffer()??Buffer.alloc(0);extra.body_sha256=sha(raw);extra.bytes=raw.length;}}proof.requests.push({method:r.method(),path:p,context:r.headers()['x-retrolume-data-context'],...extra});});
++ context.on('requestfinished',r=>pending.delete(r));context.on('requestfailed',r=>{pending.delete(r);proof.native.push({kind:'actual-requestfailed',url:r.url(),failure:r.failure()});});
++ context.on('response',r=>observe(async()=>{const p=new URL(r.url()).pathname;if(p.startsWith('/assets/')){const file=path.join(spec.project,'frontend/dist',p.slice(1)),hash=sha(await r.body());assert.equal(hash,sha(fs.readFileSync(file)));proof.assets.push({path:p,response_sha256:hash,file_sha256:hash});}if(p==='/api/session'&&r.ok()){proof.contexts.push({kind:'session',value:(await r.json()).data_context});save();}if(p==='/api/data/capabilities'&&r.ok()){const value=await r.json();proof.contexts.push({kind:'production-capabilities',value:Object.fromEntries(['control_id','selection_generation','dataset_id','instance_id','current_mode','read_only'].map(k=>[k,value[k]])),response_header:r.headers()['x-retrolume-data-context']});save();}}));
++ page=context.pages()[0]??await context.newPage();page.setDefaultTimeout(16000);page.on('pageerror',e=>proof.errors.push(String(e)));await page.goto(spec.origin,{waitUntil:'networkidle'});
++ const original=currentContext();assert(original&&!original.read_only&&original.current_mode==='normal');proof.original_context=original;save();
++ const first=await capture(0);await page.getByRole('button',{name:'数据与备份',exact:true}).click();await page.getByRole('heading',{name:'数据与备份',exact:true}).waitFor();await settled();
++ const second=await capture(1);assert.equal(first.capture.request_context.current_mode,'normal');assert.equal(second.capture.request_context.current_mode,'normal');
++ const backup=await driver('backup');assert.equal(backup.context.current_mode,'normal');proof.backup={receipt:backup.receipt,context:backup.context};save();
++ proof.freeze=await driver('freeze');await page.getByRole('button',{name:'数据与备份',exact:true}).click();await page.getByRole('heading',{name:'数据与备份',exact:true}).waitFor();
++ await page.getByRole('status').filter({hasText:'当前仅供只读查看'}).waitFor();await settled();
++ const frozen=currentContext();assert.equal(frozen.current_mode,'frozen');assert.equal(frozen.read_only,true);assert.equal(namespace(frozen),namespace(original));assert.equal(frozen.control_id,original.control_id);
++ const before=await snapshot(),postCount=proof.requests.filter(r=>r.method==='POST').length;
++ first.release();await until(()=>first.fulfilled);await until(()=>proof.native.some(e=>e.kind==='fetch-resolved'&&e.url.includes(first.key)));await settled();const after=await snapshot();assert.deepEqual(after,before);
++ assert(!proof.native.some(e=>e.kind==='business-json'&&e.url.includes(first.key)));assert.equal(proof.requests.filter(r=>r.method==='POST').length,postCount);
++ proof.cases.push({name:'actual-complete-DataContext-late-normal-approved-GET',status:'PASS',business_key:first.key,original,frozen,namespace_unchanged:true,mode_and_read_only_changed:true,native_fetch_fulfilled:true,business_body_consumed:false,before,after,zero_automatic_POST:true});save();
++ fs.writeFileSync(path.join(spec.evidence,`UI-complete-DataContext-PASS-root-${spec.root}.json`),JSON.stringify(proof.cases[0],null,2));
++ const planPromise=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/data/restore-plans'&&r.request().method()==='POST');await page.getByLabel('选择备份文件',{exact:false}).setInputFiles(backup.path);const planResponse=await planPromise;assert(planResponse.ok());const plan=await planResponse.json();
++ const restorePromise=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/data/restore-jobs'&&r.request().method()==='POST');await page.getByRole('button',{name:'确认验证这个备份',exact:true}).click();const restoreResponse=await restorePromise;assert(restoreResponse.ok());const job=await restoreResponse.json();proof.verified=await driver('verified',{job_id:job.job_id});
++ await driver('arm_namespace');await page.getByRole('button',{name:'只读刷新进度',exact:true}).click();proof.activation=await driver('activate',{job_id:job.job_id,plan_sha256:plan.plan_sha256});
++ await until(()=>proof.contexts.some(c=>c.value?.current_mode==='restored_readonly'&&c.value.instance_id!==original.instance_id));await settled();const selected=currentContext();
++ assert.equal(selected.current_mode,'restored_readonly');assert.equal(selected.read_only,true);assert.equal(selected.control_id,original.control_id);assert.notEqual(namespace(selected),namespace(original));assert.notEqual(selected.instance_id,original.instance_id);assert.notEqual(selected.dataset_id,original.dataset_id);assert(selected.selection_generation>original.selection_generation);
++ assert(proof.requests.some(r=>r.context&&JSON.parse(r.context).instance_id===selected.instance_id));
++ const before2=await snapshot(),postCount2=proof.requests.filter(r=>r.method==='POST').length;
++ second.release();await until(()=>second.fulfilled);await until(()=>proof.native.some(e=>e.kind==='fetch-resolved'&&e.url.includes(second.key)));await settled();const after2=await snapshot();assert.deepEqual(after2,before2);
++ assert(!proof.native.some(e=>e.kind==='business-json'&&e.url.includes(second.key)));assert.equal(proof.requests.filter(r=>r.method==='POST').length,postCount2);
++ proof.cases.push({name:'actual-verified-restore-namespace-late-normal-approved-GET',status:'PASS',business_key:second.key,original,selected,namespace_before:namespace(original),namespace_after:namespace(selected),native_fetch_fulfilled:true,business_body_consumed:false,before:before2,after:after2,zero_automatic_POST:true,normal_selector_and_verified_target:true});save();
++ fs.writeFileSync(path.join(spec.evidence,`UI-namespace-PASS-root-${spec.root}.json`),JSON.stringify(proof.cases[1],null,2));
++ await page.reload({waitUntil:'networkidle'});await page.getByRole('navigation').getByRole('button',{name:/学习活动/}).click();await settled();proof.final_bootstrap_context=currentContext();assert.equal(proof.final_bootstrap_context.instance_id,selected.instance_id);
++ proof.actual_storage_namespace_reads=proof.storageAccess.filter(e=>e.key.includes(namespace(selected)));assert(proof.actual_storage_namespace_reads.length>0,'new storage namespace was not read by production UI');
++ await page.screenshot({path:path.join(spec.evidence,`UI-context-root-${spec.root}.png`)});await Promise.allSettled([...work]);assert(proof.assets.some(a=>a.path.endsWith('.js'))&&proof.assets.some(a=>a.path.endsWith('.css')));assert.equal(proof.errors.length,0,JSON.stringify(proof.errors));proof.status='PASS';save();
++}catch(e){proof.status='FAIL';proof.error=String(e);proof.stack=e.stack;proof.context_transport_pending=[...pending.values()];save();process.exitCode=1;}
++finally{for(const h of held)h.release();if(context)await context.close();}

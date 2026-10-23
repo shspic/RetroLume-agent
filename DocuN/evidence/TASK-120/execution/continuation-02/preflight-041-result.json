@@ -1,0 +1,205 @@
+{
+  "UTF8_original_memory_input_schema": "PASS_NO_PG_WRITE",
+  "syntax": "PASS",
+  "plan": {
+    "schema": "task120.finite-plan.v1",
+    "permit_id": "TASK-120-Q-PREP-CONTINUATION-01-20261019",
+    "root_id": 16,
+    "stages": [
+      {
+        "id": "observe",
+        "phase": "c02_observe",
+        "seconds": 40,
+        "depends_on": []
+      },
+      {
+        "id": "memory_bootstrap",
+        "phase": "c02_bootstrap_memory",
+        "seconds": 120,
+        "depends_on": [
+          "observe"
+        ]
+      },
+      {
+        "id": "normal_core",
+        "phase": "c02_core",
+        "seconds": 300,
+        "depends_on": [
+          "observe"
+        ]
+      },
+      {
+        "id": "selected_memory",
+        "phase": "c02_memory",
+        "seconds": 240,
+        "depends_on": [
+          "memory_bootstrap"
+        ]
+      },
+      {
+        "id": "source_scope_memory_races",
+        "phase": "c02_races",
+        "seconds": 240,
+        "depends_on": [
+          "selected_memory"
+        ]
+      },
+      {
+        "id": "five_entry_UI",
+        "phase": "c02_ui",
+        "seconds": 300,
+        "depends_on": [
+          "observe"
+        ]
+      }
+    ]
+  },
+  "files": [
+    {
+      "path": "backend/tests/fixtures/task120/__init__.py",
+      "sha256": "b3ca8391fe1941a2c1c174f5025aabcef2fe60861993ac6d566b9dbea324439e"
+    },
+    {
+      "path": "backend/tests/fixtures/task120/api_runtime.py",
+      "sha256": "95ebf3abd0c0ceabe1f7951fe8721f47149aa79ccbc0daeac804c7bc7fc2a5d5"
+    },
+    {
+      "path": "backend/tests/fixtures/task120/budget.py",
+      "sha256": "a64e04bdc03e415dad9d4227cb824cc1c76f09eecae5cee8d1dfa66516ac317f"
+    },
+    {
+      "path": "backend/tests/fixtures/task120/control_job.py",
+      "sha256": "90f62340ab3e2d6d0e21d8bc666223de1de8b67a539a4a69158ea27805ebdfc4"
+    },
+    {
+      "path": "backend/tests/fixtures/task120/diagnose.py",
+      "sha256": "aed23f13c93afbb17c060131db7493baa396b1769174e80313d5ae9961482422"
+    },
+    {
+      "path": "backend/tests/fixtures/task120/flow.py",
+      "sha256": "a5cd0cbe21c662b8fe6eb28f513f0f294063bd6df9b61b74fefacaccfeaabce4"
+    },
+    {
+      "path": "backend/tests/fixtures/task120/html_eol.py",
+      "sha256": "036e01b33707cee347dc36c4603abc556d40f5ee02d368ef242e2356cdce7c9e"
+    },
+    {
+      "path": "backend/tests/fixtures/task120/integrated.py",
+      "sha256": "339f868697847b61ab04166a580f2678349463fd099b86981471c62c83800171"
+    },
+    {
+      "path": "backend/tests/fixtures/task120/lifecycle.py",
+      "sha256": "44de2ec841714253cb2d9cb5047d2467700ded380c001d6698dbcd6b9a14a42c"
+    },
+    {
+      "path": "backend/tests/fixtures/task120/merged.py",
+      "sha256": "20e58c66a1a9832efa0b84bd80b8b131b14a9ccd207541202b1ae776bfc9b43d"
+    },
+    {
+      "path": "backend/tests/fixtures/task120/observe.py",
+      "sha256": "3a7479053f1850778e90eba819a2b0dc5e0557cd420c8b5df42937ea5544b8d5"
+    },
+    {
+      "path": "backend/tests/fixtures/task120/offline.py",
+      "sha256": "9ed60c4557d33e18766835cbc38a06463dd9a5605c87ed028a924e5a686ed8a1"
+    },
+    {
+      "path": "backend/tests/fixtures/task120/pg_boundaries.py",
+      "sha256": "ad1f7eff0d41f1f42ca23e026dd1ced60fa13499dfb3c41ec8efb559393c8f1b"
+    },
+    {
+      "path": "backend/tests/fixtures/task120/queued.py",
+      "sha256": "4a2ac906121978369ebd92d2bb1a5360c9d25f6be1f1d99fca84d7830d8382cb"
+    },
+    {
+      "path": "backend/tests/fixtures/task120/recovery.py",
+      "sha256": "90d7599c1d37a605a1efeb1e87eee6f78c73662f4655258c27e384d1c5d32197"
+    },
+    {
+      "path": "backend/tests/fixtures/task120/recovery_races.py",
+      "sha256": "72a54c4b8c463738458bdba40926979bf1368f707b5d7d6a97ad3e7ae6748536"
+    },
+    {
+      "path": "backend/tests/fixtures/task120/resources.py",
+      "sha256": "02d32f2daaa13f6d83362d4c0058f37457792330dd32307c96cd1dc27aa9ba92"
+    },
+    {
+      "path": "backend/tests/fixtures/task120/run.py",
+      "sha256": "e30f865403af848e0bdf3087765c76644904eebea3a9945eac40a0720231ff9a"
+    },
+    {
+      "path": "backend/tests/fixtures/task120/setup.py",
+      "sha256": "9330d40d7de63fb209338c0224844e8e523c15d22302b0df66004a36e720cad5"
+    },
+    {
+      "path": "backend/tests/fixtures/task120/synthetic_replies.py",
+      "sha256": "569e6574e06ad338b3983ff0c13f003dd721b7346c33b12e692455e0c5bb1ddc"
+    },
+    {
+      "path": "backend/tests/fixtures/task120/transport.py",
+      "sha256": "d77b5142c6f699af9c7bf7694b4ebafe9c025f08eddfbdc499347cd839cd9f58"
+    },
+    {
+      "path": "backend/tests/fixtures/task120/ui.py",
+      "sha256": "4ca385e8b8e41efd7cd4912d5fe605e42877127f515d47041909e690c34cc938"
+    },
+    {
+      "path": "DocuN/evidence/TASK-120/execution/continuation-02/adopt.py",
+      "sha256": "11f3fb9eb28d7f7b9bc0ea9fd9aae08ad0610706c3e4ae76728870b2a633f567"
+    },
+    {
+      "path": "DocuN/evidence/TASK-120/execution/continuation-02/check-stop-16.py",
+      "sha256": "d9dd47b7204a68dd0f74a829dbba0ba37f745c73054aeb9bf09c9bfcd8a6bb36"
+    },
+    {
+      "path": "DocuN/evidence/TASK-120/execution/continuation-02/check-stop.py",
+      "sha256": "cf02aac943543fdddf91903a8293c43cc08ef02fa3af74b70b8382feea707b00"
+    },
+    {
+      "path": "DocuN/evidence/TASK-120/execution/continuation-02/command_control.py",
+      "sha256": "2db4d2299e62884fbd13b05e439cf27fbc1f2accb0bbe152925c629a59f1162b"
+    },
+    {
+      "path": "DocuN/evidence/TASK-120/execution/continuation-02/final-stop-check.py",
+      "sha256": "35954c4fed40c488e737edb075b413e2a4e4d0df3ae0b04f6753fcdcf1af73cf"
+    },
+    {
+      "path": "DocuN/evidence/TASK-120/execution/continuation-02/post-root16-fixes.py",
+      "sha256": "84e75bf9d60a079696e6c73ed3c15ed8018e5543c7ba524e4405da04c339e062"
+    },
+    {
+      "path": "DocuN/evidence/TASK-120/execution/continuation-02/preflight-039.py",
+      "sha256": "91d0aa716c4cc98b125d1f497bb03fe70a97de01a181f0be4647b8fbafdeded1"
+    },
+    {
+      "path": "DocuN/evidence/TASK-120/execution/continuation-02/preflight-040.py",
+      "sha256": "3a349afa98116b5ee8cd3e46276c8e89f16673482f82971b7e7d13a9cd291ea0"
+    },
+    {
+      "path": "DocuN/evidence/TASK-120/execution/continuation-02/preflight-041.py",
+      "sha256": "9acdbffaf6a4d0edf076ebe53fc630f9e8b3f8de83c7cd179ab5ce3c14afb797"
+    },
+    {
+      "path": "DocuN/evidence/TASK-120/execution/continuation-02/prepare-fixtures.py",
+      "sha256": "faec28b6f99943058e6bfa658e92f59853ad199917e408ee862d249bb0926f1d"
+    },
+    {
+      "path": "DocuN/evidence/TASK-120/execution/continuation-02/prepare-root16.py",
+      "sha256": "d037c0f39e50637973c9f3e40f00e7181514221fde6803fd1d621ec9f18f3298"
+    },
+    {
+      "path": "DocuN/evidence/TASK-120/execution/continuation-02/prepare-stop-check.py",
+      "sha256": "327bb47b8bcab3e427f9f0ece256a29c91acbc2b4e24fd69b83e8c25b9649c00"
+    },
+    {
+      "path": "DocuN/evidence/TASK-120/execution/continuation-02/runtime_control.py",
+      "sha256": "0ae90aba60e075d3d36d2051d996db70ff8e151f54922c39cc869eb535e16138"
+    }
+  ],
+  "browser_fixture_sha256": "69f3e42516a2ecf6d449364534da60a365100ceb088251951bf05e11f8f0c5e7",
+  "available_bytes": 2371387392,
+  "PG_started": false,
+  "API_started": false,
+  "Browser_started": false,
+  "old_command038_not_executed": true
+}

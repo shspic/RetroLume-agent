@@ -403,8 +403,14 @@ class ControlledEmbeddingGateway:
                 raise AdmissionDenied('embedding_permit_invalid')
             if grant is not None:parsed.check(context.activity_id,self._config.provider,self._config.model,size,0)
             await self._ledger.mark_embedding_dispatch_started(permit)
-        except (ValueError,AdmissionDenied) as exc:return self._result(context,CallStatus.REJECTED,str(exc) if re.fullmatch(NAME,str(exc)) else 'embedding_admission_denied')
-        except Exception:return self._result(context,CallStatus.REJECTED,'embedding_admission_unavailable')
+        except (ValueError,AdmissionDenied) as exc:
+            from .q_gateway import admission_failed
+            admission_failed(definitely_denied=True)
+            return self._result(context,CallStatus.REJECTED,str(exc) if re.fullmatch(NAME,str(exc)) else 'embedding_admission_denied')
+        except Exception:
+            from .q_gateway import admission_failed
+            admission_failed(definitely_denied=False)
+            return self._result(context,CallStatus.REJECTED,'embedding_admission_unavailable')
         try:
             async with asyncio.timeout(self._config.timeout_seconds):
                 from .q_gateway import dispatch_transport

@@ -1,0 +1,76 @@
+--- initial/backend/app/data_exit/maintenance.py
++++ final/backend/app/data_exit/maintenance.py
+@@ -89,10 +89,20 @@
+         with self.admission_lock.acquire():
+             with self.acquire(outgoing=True) as permit:yield permit
+ 
+     @contextmanager
+     def acquire(self, *, outgoing=False, expected=None, operation=None):
++        from contextlib import nullcontext
++        from .q_store import POLICY,QAuthority
++        # Outer raw writers take policy before MutationGate and before opening PG.
++        policy=QAuthority(self.hub).policy() if 'q' in self.hub.state() and POLICY.get() is None else nullcontext()
++        with policy:
++            with self._acquire(outgoing=outgoing,expected=expected,operation=operation) as permit:
++                yield permit
++
++    @contextmanager
++    def _acquire(self, *, outgoing=False, expected=None, operation=None):
+         if operation is not None:operation.check()
+         inherited = CURRENT_PERMIT.get()
+         if inherited is not None and inherited.gate is self:
+             inherited.check(outgoing=outgoing)
+             if expected is not None and inherited.context != expected: raise DataError("selection_changed")
+@@ -150,10 +160,14 @@
+         self._context = None
+ 
+     def _check(self, sql):
+         if sql_writes(sql):
+             if self.readonly or self.gate is None: raise DataError("data_readonly")
++            from .q_store import POLICY
++            if 'q' in self.gate.hub.state() and POLICY.get() is None:
++                # This is already a PG transaction: never wait for policy here.
++                raise DataError('q_policy_before_transaction_required')
+             if self._context is None:
+                 self._context = self.gate.acquire()
+                 self._permit = self._context.__enter__()
+             self._permit.check()
+ 
+@@ -230,23 +244,27 @@
+         subject=args[0] if args else kwargs.get('request',kwargs.get('self'))
+         ledger=getattr(subject,'ledger',None)
+         if ledger is None and hasattr(subject,'app'):ledger=getattr(subject.app.state,'activities_ledger',None)
+         gate=getattr(ledger,'mutation_gate',None)
+         if gate is None:return await function(*args,**kwargs)
+-        import os
+-        from app.preview.process import birth
+-        with gate.acquire(outgoing=True):
+-            parent=birth(os.getpid())
+-            if parent['state']!='running':raise DataError('owned_work_unknown',503)
+-            identity={'parent':{'pid':os.getpid(),'birth':parent['birth']},'service':function.__qualname__}
+-            command=args[1] if len(args)>1 else kwargs.get('command')
+-            if command is not None and hasattr(command,'memory_id'):
+-                identity.update(memory_id=command.memory_id,business_key=command.business_key,action=command.action)
+-            owned=gate.register_owned('domain_service',identity)
++        async def execute_owned():
++            import os
++            from app.preview.process import birth
++            with gate.acquire(outgoing=True):
++                parent=birth(os.getpid())
++                if parent['state']!='running':raise DataError('owned_work_unknown',503)
++                identity={'parent':{'pid':os.getpid(),'birth':parent['birth']},'service':function.__qualname__}
++                command=args[1] if len(args)>1 else kwargs.get('command')
++                if command is not None and hasattr(command,'memory_id'):
++                    identity.update(memory_id=command.memory_id,business_key=command.business_key,action=command.action)
++                owned=gate.register_owned('domain_service',identity)
+             try:
+                 with gate.close_lane(owned):return await function(*args,**kwargs)
+             finally:
+                 children=[v for v in gate.hub.state()['owned'].values() if v.get('parent_owned_id')==owned]
+                 gate.end_owned(owned,confirmed=all(v.get('state')=='ended' for v in children))
++        if 'q' in gate.hub.state():return await execute_owned()
++        # Keep the original non-Q lifetime and inherited permit unchanged.
++        with gate.acquire(outgoing=True):return await execute_owned()
+     import inspect
+     wrapped.__signature__=inspect.signature(function,eval_str=True)
+     return wrapped

@@ -1,0 +1,2052 @@
+--- before/backend/migrations/015_activity_scope_delete_permission.sql
++++ after/backend/migrations/015_activity_scope_delete_permission.sql
+@@ -14,7 +14,9 @@
+    AND NOT t.tgisinternal AND t.tgenabled='O' AND t.tgtype=31
+    AND p.proname='data_runtime_write_guard' AND p.prosecdef
+    AND encode(sha256(convert_to(regexp_replace(p.prosrc,'\s','','g'),'UTF8')),'hex')='91dac86ea0de0c3f943160430d30777528df2ecdbfe8fa7802a0debd90ca6295')
+- OR NOT has_table_privilege('retrolume_data_app','public.activity_scope_sources','SELECT,INSERT,UPDATE')
++ OR NOT has_table_privilege('retrolume_data_app','public.activity_scope_sources','SELECT')
++ OR NOT has_table_privilege('retrolume_data_app','public.activity_scope_sources','INSERT')
++ OR NOT has_table_privilege('retrolume_data_app','public.activity_scope_sources','UPDATE')
+  OR has_table_privilege('retrolume_data_app','public.activity_scope_sources','DELETE,TRUNCATE')
+  OR has_table_privilege('retrolume_data_snapshot','public.activity_scope_sources','DELETE,TRUNCATE')
+  OR has_table_privilege('retrolume_data_restore_loader','public.activity_scope_sources','DELETE,TRUNCATE')
+@@ -23,6 +25,7 @@
+ END $check$;
+ GRANT DELETE ON public.activity_scope_sources TO retrolume_data_app;
+ ALTER TABLE public.data_control DROP CONSTRAINT data_control_schema_profile_check;
+-ALTER TABLE public.data_control ADD CONSTRAINT data_control_schema_profile_check CHECK(schema_profile='data_exit.v1.r03');
++ALTER TABLE public.data_control ADD CONSTRAINT data_control_schema_profile_check CHECK(schema_profile='data_exit.v1.r03') NOT VALID;
+ UPDATE public.data_control SET schema_profile='data_exit.v1.r03';
++ALTER TABLE public.data_control VALIDATE CONSTRAINT data_control_schema_profile_check;
+ COMMIT;
+--- before/backend/app/data_exit/schema_profiles.py
++++ after/backend/app/data_exit/schema_profiles.py
+@@ -1,190 +1,206 @@
+-"""封闭数据profile；旧常量不改，R03仅增加015单表权限。"""
+-from dataclasses import dataclass
+-from copy import deepcopy
+-from .contracts import PROFILE,TABLES,DataError,canonical,digest
+-from .schema import COLUMNS,MIGRATIONS,MIGRATION_013
+-
+-R02='data_exit.v1.r02'
+-R03='data_exit.v1.r03'
+-MIGRATION_015='59b2e556a81a5383e9144a967fa90b5abedb26284d50cbf150db1dd77f34ef0e'
+-MIGRATION_014='3a919b2562ded5765de132519b841c1d1439c65c001795cfbd608cbc03586e78'
+-VECTOR_EXTENSION_VERSION='0.8.6'
+-R02_EXTRA_SHAPE_SHA='5b7dc68a94101307bcbd63a16607c5b2ee79906b5f32669d764853a55172dc12'
+-FORWARD_FUNCTIONS={'interview_head_guard': '6219aa292d679bff71b2dbdbe54c4757a17bdee5cd3e2a76927d2fa9a7abc134', 'interview_record_insert_guard': 'f7423ecf9109244b5a87db568a552f9a0027b2ad9968281af66af07c56729c90', 'interview_result_eligible': '3a876b12080499d63c36bd7b1fa0d7960dc902f07bcabec99750cdf242342da6'}
+-ORIGINAL_FUNCTIONS_013={'interview_head_guard': "\nDECLARE a public.activities; ptr uuid; p public.interview_records;\nBEGIN\n IF TG_OP='DELETE' THEN RAISE EXCEPTION 'interview heads retained'; END IF;\n SELECT * INTO a FROM public.activities WHERE id=NEW.activity_id;\n IF TG_OP='INSERT' THEN\n  IF NOT public.data_loading_allowed() AND (a.status<>'pending' OR a.execution_generation<>0 OR a.executor_id IS NOT NULL OR a.lease_expires_at IS NOT NULL\n     OR a.requests_reserved<>0 OR a.cost_reserved_microunits<>0 OR a.tools_reserved<>0 OR a.running_reserved_seconds<>0 OR a.running_settled_seconds<>0\n     OR EXISTS(SELECT 1 FROM public.teaching_heads WHERE activity_id=NEW.activity_id)\n     OR EXISTS(SELECT 1 FROM public.activity_operations WHERE activity_id=NEW.activity_id)\n     OR EXISTS(SELECT 1 FROM public.activity_memory_bindings WHERE activity_id=NEW.activity_id)\n     OR NEW.revision<>1) THEN RAISE EXCEPTION 'interview requires fresh unselected activity'; END IF;\n ELSE\n  IF NEW.activity_id<>OLD.activity_id OR NEW.created_at<>OLD.created_at OR NEW.revision NOT BETWEEN OLD.revision AND OLD.revision+1\n    OR NEW.goal_version NOT BETWEEN OLD.goal_version AND OLD.goal_version+1 OR NEW.last_seq<OLD.last_seq\n    OR (NEW.revision=OLD.revision AND (to_jsonb(NEW)-ARRAY['pending_key','updated_at']) IS DISTINCT FROM (to_jsonb(OLD)-ARRAY['pending_key','updated_at']))\n    OR (OLD.phase='ended' AND NEW.phase<>'ended') THEN RAISE EXCEPTION 'interview head revision invalid'; END IF;\n END IF;\n IF NEW.scope_revision<>a.scope_revision OR NEW.last_seq<>(SELECT max(seq) FROM public.interview_records WHERE activity_id=NEW.activity_id)\n    THEN RAISE EXCEPTION 'interview head scope/sequence invalid'; END IF;\n FOREACH ptr IN ARRAY ARRAY[NEW.goal_record_id,NEW.root_question_id,NEW.current_question_id,NEW.current_answer_id,NEW.current_feedback_id] LOOP\n  IF ptr IS NOT NULL THEN\n   SELECT * INTO p FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=ptr;\n   IF p.record_id IS NULL OR p.goal_version<>NEW.goal_version OR p.scope_revision<>NEW.scope_revision THEN RAISE EXCEPTION 'interview head pointer invalid'; END IF;\n  END IF;\n END LOOP;\n IF NEW.goal_record_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=NEW.goal_record_id AND kind='goal') THEN RAISE EXCEPTION 'goal pointer kind'; END IF;\n IF NEW.current_question_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=NEW.current_question_id AND kind IN ('question','probe')) THEN RAISE EXCEPTION 'question pointer kind'; END IF;\n IF NEW.current_answer_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=NEW.current_answer_id AND kind='answer' AND question_record_id=NEW.current_question_id) THEN RAISE EXCEPTION 'answer pointer kind'; END IF;\n IF NEW.current_feedback_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=NEW.current_feedback_id AND kind='feedback') THEN RAISE EXCEPTION 'feedback pointer kind'; END IF;\n RETURN NEW;\nEND;\n", 'interview_record_insert_guard': "\nDECLARE c public.interview_commands; p public.interview_records; r public.activity_operation_results; o public.activity_operations; b jsonb; ref jsonb;\nBEGIN\n SELECT * INTO c FROM public.interview_commands WHERE activity_id=NEW.activity_id AND business_key=NEW.business_key;\n IF c.activity_id IS NULL OR c.duplicate_of IS NOT NULL OR (NOT public.data_loading_allowed() AND (c.effect_applied OR c.status NOT IN ('accepted','started')))\n    OR NEW.seq<>(SELECT COALESCE(max(seq),0)+1 FROM public.interview_records WHERE activity_id=NEW.activity_id)\n    THEN RAISE EXCEPTION 'interview record command/sequence invalid'; END IF;\n IF cardinality(NEW.parent_ids)<>(SELECT count(DISTINCT x) FROM unnest(NEW.parent_ids) x) THEN RAISE EXCEPTION 'duplicate parents'; END IF;\n FOR p IN SELECT * FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=ANY(NEW.parent_ids) LOOP\n  IF p.seq>=NEW.seq OR p.goal_version<>NEW.goal_version OR p.scope_revision<>NEW.scope_revision THEN RAISE EXCEPTION 'interview parent invalid'; END IF;\n END LOOP;\n IF cardinality(NEW.parent_ids)<>(SELECT count(*) FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=ANY(NEW.parent_ids)) THEN RAISE EXCEPTION 'missing parents'; END IF;\n IF NEW.kind='answer' THEN\n  SELECT * INTO p FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=NEW.question_record_id;\n  IF p.kind NOT IN ('question','probe') OR p.goal_version<>NEW.goal_version OR p.scope_revision<>NEW.scope_revision\n     OR NEW.answer_version<>(SELECT COALESCE(max(answer_version),0)+1 FROM public.interview_records WHERE activity_id=NEW.activity_id AND question_record_id=NEW.question_record_id)\n     THEN RAISE EXCEPTION 'answer version invalid'; END IF;\n  IF NEW.answer_version>1 AND NOT EXISTS(SELECT 1 FROM public.interview_records a WHERE a.activity_id=NEW.activity_id AND a.record_id=NEW.supersedes_record_id\n     AND a.question_record_id=NEW.question_record_id AND a.answer_version=NEW.answer_version-1) THEN RAISE EXCEPTION 'supersedes invalid'; END IF;\n END IF;\n IF NEW.origin='model' THEN\n  SELECT * INTO r FROM public.activity_operation_results WHERE activity_id=NEW.activity_id AND operation_id=NEW.operation_id;\n  SELECT * INTO o FROM public.activity_operations WHERE activity_id=NEW.activity_id AND operation_id=NEW.operation_id;\n  b:=r.payload::jsonb->'value';\n  IF c.execution_kind<>'model' OR c.operation_id<>NEW.operation_id OR (NOT public.data_loading_allowed() AND (NOT c.launch_claimed OR c.obsolete OR c.status<>'started'))\n    OR r.payload_format<>'json' OR r.payload_sha256<>NEW.body_sha256 OR o.kind<>'model' OR o.state<>'received'\n    OR r.admission_id<>o.admission_id OR r.execution_generation<>o.execution_generation OR r.scope_revision<>NEW.scope_revision\n    OR b->>'profile' IS DISTINCT FROM 'interview.v1' OR b->>'activity_id' IS DISTINCT FROM NEW.activity_id::text OR b->>'business_key' IS DISTINCT FROM NEW.business_key::text\n    OR b->>'request_sha256' IS DISTINCT FROM c.request_sha256 OR b->>'context_sha256' IS DISTINCT FROM c.context_sha256 OR b->'value'->>'type' IS DISTINCT FROM NEW.kind\n    THEN RAISE EXCEPTION 'interview result binding invalid'; END IF;\n ELSE\n  b:=NEW.local_body::jsonb;\n  IF b->>'schema' IS DISTINCT FROM 'interview.local.v1' OR b->>'activity_id' IS DISTINCT FROM NEW.activity_id::text OR b->>'business_key' IS DISTINCT FROM NEW.business_key::text\n     OR b->>'kind' IS DISTINCT FROM NEW.kind OR (b->>'goal_version')::integer IS DISTINCT FROM NEW.goal_version OR (b->>'scope_revision')::integer IS DISTINCT FROM NEW.scope_revision\n     OR jsonb_typeof(b->'value') IS DISTINCT FROM 'object'\n     THEN RAISE EXCEPTION 'interview local binding invalid'; END IF;\n END IF;\n RETURN NEW;\nEND;\n", 'interview_result_eligible': "\n SELECT EXISTS(SELECT 1 FROM public.interview_commands c JOIN public.interview_heads h USING(activity_id)\n  JOIN public.interview_records ir ON ir.activity_id=c.activity_id AND ir.business_key=c.business_key AND ir.origin='model'\n  JOIN public.activities a ON a.id=c.activity_id\n  JOIN public.activity_operations o ON o.activity_id=c.activity_id AND o.operation_id=c.operation_id\n  JOIN public.activity_operation_results r ON r.activity_id=o.activity_id AND r.operation_id=o.operation_id\n WHERE c.activity_id=aid AND c.operation_id=op AND c.duplicate_of IS NULL AND c.effect_applied AND c.status IN ('committed','history')\n  AND NOT c.obsolete AND c.goal_version=h.goal_version AND c.scope_revision=h.scope_revision AND h.scope_revision=a.scope_revision\n  AND a.status<>'cancelled' AND ir.operation_id=c.operation_id AND ir.payload_sha256=r.payload_sha256 AND ir.body_sha256=r.payload_sha256\n  AND r.admission_id=o.admission_id AND r.execution_generation=o.execution_generation AND r.scope_revision=o.scope_revision AND o.state='received' AND o.kind='model'\n  AND r.payload_format='json'\n  AND NOT EXISTS(SELECT 1 FROM public.activity_scope_sources s LEFT JOIN public.material_sources m ON m.id=s.source_id\n    WHERE s.activity_id=aid AND (m.id IS NULL OR m.current_version IS DISTINCT FROM s.version_id OR m.revision<>s.source_revision))\n  AND EXISTS(SELECT 1 FROM public.activity_scope_sources WHERE activity_id=aid)\n  AND NOT EXISTS(SELECT 1 FROM public.activity_memory_bindings WHERE activity_id=aid))\n"}
+-ORIGINAL_CONSTRAINTS_013={'interview_command_execution': "CHECK ((((duplicate_of IS NOT NULL) AND (operation_id IS NULL) AND (context_body IS NULL) AND (context_sha256 IS NULL) AND (NOT effect_applied) AND (NOT launch_claimed)) OR ((duplicate_of IS NULL) AND (execution_kind = 'local'::text) AND (operation_id IS NULL) AND (context_body IS NULL) AND (context_sha256 IS NULL) AND (NOT launch_claimed)) OR ((duplicate_of IS NULL) AND (execution_kind = 'model'::text) AND (action = ANY (ARRAY['ask'::text, 'review'::text])) AND (context_body IS NOT NULL) AND (context_sha256 IS NOT NULL) AND (operation_id = ('int10m.'::text || replace((business_key)::text, '-'::text, ''::text))))))"}
+-FORWARD_CONSTRAINTS_014={'interview_command_execution': "CHECK ((((duplicate_of IS NOT NULL) AND (operation_id IS NULL) AND (context_body IS NULL) AND (context_sha256 IS NULL) AND (NOT effect_applied) AND (NOT launch_claimed)) OR ((duplicate_of IS NULL) AND (execution_kind = 'local'::text) AND (operation_id IS NULL) AND (context_body IS NULL) AND (context_sha256 IS NULL) AND (NOT launch_claimed)) OR ((duplicate_of IS NULL) AND (execution_kind = 'model'::text) AND (action = ANY (ARRAY['ask'::text, 'review'::text])) AND (context_body IS NOT NULL) AND (context_sha256 IS NOT NULL) AND (((((request_body)::jsonb ->> 'schema'::text) = 'interview.command.v1'::text) AND (((context_body)::jsonb ->> 'schema'::text) = 'interview.context.v1'::text) AND (operation_id = ('int10m.'::text || replace((business_key)::text, '-'::text, ''::text)))) OR ((((request_body)::jsonb ->> 'schema'::text) = 'interview.command.v2'::text) AND (((context_body)::jsonb ->> 'schema'::text) = 'interview.context.v2'::text) AND (operation_id = ('int18m.'::text || replace((business_key)::text, '-'::text, ''::text))))))))"}
+-EXTRA_FUNCTIONS={'interview_head_guard': '6219aa292d679bff71b2dbdbe54c4757a17bdee5cd3e2a76927d2fa9a7abc134', 'interview_record_insert_guard': 'f7423ecf9109244b5a87db568a552f9a0027b2ad9968281af66af07c56729c90', 'interview_result_eligible': '3a876b12080499d63c36bd7b1fa0d7960dc902f07bcabec99750cdf242342da6', 'purge_retrieval_payloads': '9061a126b5071be4fb7fb290715cda2b32f3d36dd9b8c3fcd8c30152a69f9879', 'retrieval_chunk_guard': '2b8801abe7c42eaaa8c2ffc5e4117e251c459c593110c16faf0016d696431bab', 'retrieval_command_guard': '60f095b5fce6112ba379e55225fe1d5891776af49add282732b35f76922af8f9', 'retrieval_embedding_operation_guard': '281ee019897fa19348f4dbcf4ef3413bb3ee437f425013fb388798cf39ce1d1f', 'retrieval_grant_guard': '4180d259e118ea97920af23c4b522a81407c64fcf56255ec8cff3cda8fb3a7b1', 'retrieval_result_guard': '4be9a24c1b99970b490ea9668b322112008ea63a0feac62ae1b5fcc6639f42dc', 'retrieval_space_guard': 'd59fb999006732863da65b08717fe2dfddf4afcc796cd7d0dc9348cebcd38321', 'retrieval_vector_digest': 'f02439231d89a6da4fe1497980e114042719ff5eb36ab884e530ad9e232ba4cb'}
+-
+-NEW_COLUMNS={
+- 'retrieval_spaces':{'space_id':'text','provider':'text','configured_model':'text','dimensions':'smallint','normalization':'text','chunk_recipe':'text','created_at':'timestamptz'},
+- 'retrieval_commands':{'activity_id':'uuid','business_key':'uuid','action':'text','space_id':'text','scope_revision':'integer','domain':'text','domain_revision':'integer','request_body':'text','request_sha256':'text','source_refs':'jsonb','parent_refs':'jsonb','query_sha256':'text','manifest_sha256':'text','batch_count':'smallint','status':'text','terminal_disposition':'text','result_sha256':'text','error_code':'text','created_at':'timestamptz','updated_at':'timestamptz'},
+- 'retrieval_chunks':{'space_id':'text','evidence_id':'text','source_id':'uuid','source_version_id':'uuid','source_revision':'integer','origin':'text','physical_page':'integer','start_codepoint':'integer','end_codepoint':'integer','text_sha256':'text','vector_value':'vector(512)','vector_sha256':'text','committed_activity_id':'uuid','committed_operation_id':'text','created_at':'timestamptz'}}
+-columns02=deepcopy(COLUMNS);columns02['activities']['outbound_grant_sha256']='text';columns02.update(NEW_COLUMNS)
+-tables02=['retrieval_spaces']
+-for table in TABLES:
+-    if table=='activity_operations':tables02.append('retrieval_commands')
+-    tables02.append(table)
+-    if table=='activity_operation_results':tables02.append('retrieval_chunks')
+-
+-
+-@dataclass(frozen=True)
+-class SchemaProfile:
+-    name:str
+-    tables:tuple
+-    columns:dict
+-    codec_migrations:dict
+-    migration_chain:dict
+-
+-
+-def get_profile(name):
+-    chain01={**MIGRATIONS,'013_data_exit.sql':MIGRATION_013}
+-    if name==PROFILE:return SchemaProfile(PROFILE,TABLES,COLUMNS,MIGRATIONS,chain01)
+-    if name in (R02,R03):
+-        chain02={**chain01,'014_step018_retrieval.sql':MIGRATION_014}
+-        chain=chain02 if name==R02 else {**chain02,'015_activity_scope_delete_permission.sql':MIGRATION_015}
+-        return SchemaProfile(name,tuple(tables02),columns02,chain,chain)
+-    raise DataError('schema_profile_mismatch',503)
+-
+-
+-def observed_profile(connection,*,empty_profile=None):
+-    row=connection.execute('SELECT schema_profile FROM public.data_export_control_v1').fetchone()
+-    if row is None:
+-        if empty_profile is None:raise DataError('mode_unknown',503)
+-        return get_profile(empty_profile)
+-    return get_profile(row['schema_profile'] if isinstance(row,dict) else row[0])
+-
+-
+-async def observed_profile_async(connection):
+-    cursor=await connection.execute('SELECT schema_profile FROM public.data_export_control_v1');row=await cursor.fetchone()
+-    if row is None:raise DataError('mode_unknown',503)
+-    return get_profile(row['schema_profile'])
+-
+-
+-def extra_shape_queries():
+-    """仅固定新增对象和明确旧表增量；常量hash由本卡受信迁移实库冻结。"""
+-    return {
+-      'columns':"""SELECT c.relname,a.attname,format_type(a.atttypid,a.atttypmod) AS type,a.attnotnull,pg_get_expr(d.adbin,d.adrelid) AS default,r.rolname AS owner,r.rolsuper AS owner_super,a.attacl::text AS acl
+-        FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_roles r ON r.oid=c.relowner JOIN pg_attribute a ON a.attrelid=c.oid
+-        LEFT JOIN pg_attrdef d ON d.adrelid=c.oid AND d.adnum=a.attnum
+-        WHERE n.nspname='public' AND a.attnum>0 AND NOT a.attisdropped AND (c.relname IN('retrieval_spaces','retrieval_commands','retrieval_chunks') OR c.relname='activities' AND a.attname='outbound_grant_sha256') ORDER BY c.relname,a.attnum""",
+-      'constraints':"""SELECT c.relname,k.conname,pg_get_constraintdef(k.oid) AS definition,k.convalidated,k.condeferrable,k.condeferred
+-        FROM pg_constraint k JOIN pg_class c ON c.oid=k.conrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+-        WHERE n.nspname='public' AND (c.relname IN('retrieval_spaces','retrieval_commands','retrieval_chunks') OR k.conname IN('activities_outbound_grant_sha256_check','activity_operations_kind_domain','activity_operations_kind_shape','activity_operations_max_output_tokens_check','interview_command_execution','data_control_schema_profile_check')) ORDER BY c.relname,k.conname""",
+-      'indexes':"SELECT tablename,indexname,indexdef FROM pg_indexes WHERE schemaname='public' AND tablename IN('retrieval_spaces','retrieval_commands','retrieval_chunks') ORDER BY tablename,indexname",
+-      'triggers':"""SELECT c.relname,t.tgname,t.tgenabled,pg_get_triggerdef(t.oid) AS definition FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+-        WHERE n.nspname='public' AND NOT t.tgisinternal AND (c.relname IN('retrieval_spaces','retrieval_commands','retrieval_chunks') OR t.tgname IN('retrieval_embedding_result','retrieval_embedding_operation','retrieval_grant_immutable','retrieval_source_tombstone')) ORDER BY c.relname,t.tgname""",
+-      'table_acl':"SELECT c.relname,c.relacl::text AS acl FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname IN('retrieval_spaces','retrieval_commands','retrieval_chunks') ORDER BY c.relname",
+-      'roles':"SELECT rolname,rolcanlogin,rolsuper,rolcreatedb,rolcreaterole,rolreplication,rolbypassrls FROM pg_roles WHERE rolname IN('retrolume_retrieval_owner','retrolume_retrieval_app') ORDER BY rolname",
+-      'functions':"""SELECT p.proname,pg_get_function_identity_arguments(p.oid) AS arguments,p.prosrc,p.prosecdef,p.provolatile,p.proconfig,r.rolname AS owner,p.proacl::text AS acl
+-        FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_roles r ON r.oid=p.proowner
+-        WHERE n.nspname='public' AND p.proname IN('retrieval_vector_digest','retrieval_space_guard','retrieval_command_guard','retrieval_result_guard','retrieval_chunk_guard','retrieval_grant_guard','retrieval_embedding_operation_guard','purge_retrieval_payloads','interview_head_guard','interview_record_insert_guard','interview_result_eligible') ORDER BY p.proname""",
+-      'interview_read_acl':"SELECT c.relname,has_table_privilege('retrolume_interview_owner',c.oid,'SELECT') AS readable,has_table_privilege('retrolume_interview_owner',c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') AS writable FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname IN('learning_memories','learning_memory_revisions','learning_memory_bodies','learning_memory_dependencies','learning_memory_commands','activity_memory_choices','teaching_commands','material_versions','pdf_review_candidates','pdf_review_pages','pdf_extracted_pages','teaching_records') ORDER BY c.relname",
+-      'extensions':"SELECT extname,extversion FROM pg_extension WHERE extname='vector'"}
+-
+-
+-def normalized_extra_shape(shape):
+-    """缓存集群bootstrap owner名字可不同；只规范grantor，权限集合仍必须精确。"""
+-    import copy,re
+-    value=copy.deepcopy(shape)
+-    for row in value.get('columns',[]):
+-        if row['relname']=='activities' and row['attname']=='outbound_grant_sha256' and row.get('owner_super') is True:
+-            row['owner']='bootstrap_owner'
+-    for section in ('columns','table_acl','functions'):
+-        for row in value.get(section,[]):
+-            if row.get('acl'):
+-                row['acl']=re.sub(r'/[^,}]+','/trusted_owner',row['acl'])
+-    return value
+-
+-
+-PROFILE_CONSTRAINT_02="CHECK ((schema_profile = ANY (ARRAY['data_exit.v1.r01'::text, 'data_exit.v1.r02'::text])))"
+-PROFILE_CONSTRAINT_03="CHECK ((schema_profile = 'data_exit.v1.r03'::text))"
+-
+-
+-def check_extra_shape(shape,profile=R02):
+-    if profile==R03:
+-        shape=deepcopy(shape)
+-        rows=[r for r in shape.get('constraints',[]) if r['conname']=='data_control_schema_profile_check']
+-        if len(rows)!=1 or rows[0]['definition']!=PROFILE_CONSTRAINT_03:raise DataError('data_schema_not_ready',503)
+-        rows[0]['definition']=PROFILE_CONSTRAINT_02
+-    elif profile!=R02:raise DataError('schema_profile_mismatch',503)
+-    if digest(canonical(normalized_extra_shape(shape)))!=R02_EXTRA_SHAPE_SHA:raise DataError('data_schema_not_ready',503)
+-
+-
+-SCOPE_ACL_QUERY="""SELECT a.attname,CASE WHEN x.grantee=c.relowner THEN '<owner>'
+- ELSE COALESCE(g.rolname,'<public>') END AS grantee,x.privilege_type,x.is_grantable,
+- x.grantor=c.relowner AS trusted_grantor,d.mode_observed,
+- ARRAY(SELECT privilege_type FROM aclexplode(acldefault('r',c.relowner)) ORDER BY privilege_type) AS owner_privileges
+- FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace CROSS JOIN public.data_export_control_v1 d
+- CROSS JOIN LATERAL (SELECT NULL::name AS attname,c.relacl AS acl UNION ALL
+- SELECT attname,attacl FROM pg_attribute WHERE attrelid=c.oid AND attnum>0 AND NOT attisdropped) a
+- CROSS JOIN LATERAL aclexplode(a.acl) x LEFT JOIN pg_roles g ON g.oid=x.grantee
+- WHERE n.nspname='public' AND c.relname='activity_scope_sources'
+- ORDER BY a.attname NULLS FIRST,grantee,x.privilege_type"""
+-
+-
+-def check_scope_permissions(rows,profile):
+-    get_profile(profile)
+-    modes={row['mode_observed'] for row in rows}
+-    if len(modes)!=1 or not modes<={'normal','loading','frozen','restored_readonly'}:raise DataError('data_schema_not_ready',503)
+-    expected={None:{'<owner>':set(rows[0]['owner_privileges']) if rows else set(),
+-      'retrolume_data_app':{'SELECT','INSERT','UPDATE'}|({'DELETE'} if profile==R03 else set()),
+-      'retrolume_data_owner':{'SELECT'},'retrolume_data_restore_loader':{'SELECT','INSERT'},
+-      'retrolume_interview_owner':{'SELECT'},'retrolume_html_owner':{'SELECT'}}}
+-    if profile in (R02,R03):expected[None]['retrolume_retrieval_owner']={'SELECT'}
+-    if modes=={'restored_readonly'}:expected[None]['retrolume_data_snapshot']={'SELECT'}
+-    for column in ('activity_id','source_id','version_id','source_revision'):
+-        expected[column]={'retrolume_data_snapshot':{'SELECT'}}
+-    actual={}
+-    for row in rows:
+-        if row['is_grantable'] and row['grantee']!='<owner>' or not row['trusted_grantor']:
+-            raise DataError('data_schema_not_ready',503)
+-        actual.setdefault(row['attname'],{}).setdefault(row['grantee'],set()).add(row['privilege_type'])
+-    if actual!=expected:raise DataError('data_schema_not_ready',503)
+-
+-
+-def project_scope_permission(shape):
+-    """Only after assert_data_schema checked the actual profile and exact ACL."""
+-    result=deepcopy(shape)
+-    for section in ('columns','table_acl','qualification_column_acls'):
+-        for row in result.get(section,[]):
+-            if row.get('relname')!='activity_scope_sources':continue
+-            for field in ('acl','table_acl','column_acl'):
+-                text=row.get(field)
+-                if text:
+-                    import re
+-                    row[field]=re.sub(r'(?<=[{,])retrolume_data_app=arwd/', 'retrolume_data_app=arw/',text)
+-    return result
+-
+-
+-def project_014(shape):
+-    """经精确R02校验后，旧领域指纹只扣除已注册014变化，不采用未知DDL。"""
+-    import re
+-    result=deepcopy(shape)
+-    for row in result.get('functions',[]):
+-        name=row['proname']
+-        if name in FORWARD_FUNCTIONS:
+-            actual=digest(re.sub(r'\s+','',row['prosrc']))
+-            if actual==FORWARD_FUNCTIONS[name]:row['prosrc']=ORIGINAL_FUNCTIONS_013[name]
+-            elif actual!=digest(re.sub(r'\s+','',ORIGINAL_FUNCTIONS_013[name])):raise DataError('data_schema_not_ready',503)
+-    for row in result.get('constraints',[]):
+-        if row['conname'] in ORIGINAL_CONSTRAINTS_013:
+-            if row['definition']==FORWARD_CONSTRAINTS_014[row['conname']]:row['definition']=ORIGINAL_CONSTRAINTS_013[row['conname']]
+-            elif row['definition']!=ORIGINAL_CONSTRAINTS_013[row['conname']]:raise DataError('data_schema_not_ready',503)
+-    # 新授予interview owner的记忆只读/资格执行，逐项精确校验后回投旧形状。
+-    readable={'learning_memories','learning_memory_revisions','learning_memory_bodies','learning_memory_dependencies','learning_memory_commands','activity_memory_choices','teaching_commands','material_versions','pdf_review_candidates','pdf_review_pages','pdf_extracted_pages','teaching_records'}
+-    functions={'memory_revision_readable','memory_revision_eligible','activity_memory_eligible','memory_dependency_line','memory_dependency_digest','memory_scope_digest','memory_choice_digest'}
+-    for section in ('columns','table_acl','functions','qualification_column_acls'):
+-        for row in result.get(section,[]):
+-            for field in ('acl','table_acl','column_acl'):
+-                text=row.get(field)
+-                if not text:continue
+-                kept=[]
+-                for entry in text[1:-1].split(','):
+-                    if entry.startswith('retrolume_interview_owner='):
+-                        privilege=entry.split('=',1)[1].split('/',1)[0]
+-                        if not ((section=='functions' and row['proname'] in functions and privilege=='X') or row.get('relname') in readable and privilege=='r'):
+-                            kept.append(entry);continue
+-                    else:kept.append(entry)
+-                row[field]='{'+','.join(kept)+'}' if kept else None
+-    return result
++"""封闭数据profile；旧常量不改，R03仅增加015单表权限。"""
++from dataclasses import dataclass
++from copy import deepcopy
++from .contracts import PROFILE,TABLES,DataError,canonical,digest
++from .schema import COLUMNS,MIGRATIONS,MIGRATION_013
++
++R02='data_exit.v1.r02'
++R03='data_exit.v1.r03'
++LEGACY_MIGRATION_015='59b2e556a81a5383e9144a967fa90b5abedb26284d50cbf150db1dd77f34ef0e'
++MIGRATION_015='874d2a173f401ce923680d184eb5687c121fd70831d8b86cd9b6740a7c330915'
++MIGRATION_014='3a919b2562ded5765de132519b841c1d1439c65c001795cfbd608cbc03586e78'
++VECTOR_EXTENSION_VERSION='0.8.6'
++R02_EXTRA_SHAPE_SHA='5b7dc68a94101307bcbd63a16607c5b2ee79906b5f32669d764853a55172dc12'
++FORWARD_FUNCTIONS={'interview_head_guard': '6219aa292d679bff71b2dbdbe54c4757a17bdee5cd3e2a76927d2fa9a7abc134', 'interview_record_insert_guard': 'f7423ecf9109244b5a87db568a552f9a0027b2ad9968281af66af07c56729c90', 'interview_result_eligible': '3a876b12080499d63c36bd7b1fa0d7960dc902f07bcabec99750cdf242342da6'}
++ORIGINAL_FUNCTIONS_013={'interview_head_guard': "\nDECLARE a public.activities; ptr uuid; p public.interview_records;\nBEGIN\n IF TG_OP='DELETE' THEN RAISE EXCEPTION 'interview heads retained'; END IF;\n SELECT * INTO a FROM public.activities WHERE id=NEW.activity_id;\n IF TG_OP='INSERT' THEN\n  IF NOT public.data_loading_allowed() AND (a.status<>'pending' OR a.execution_generation<>0 OR a.executor_id IS NOT NULL OR a.lease_expires_at IS NOT NULL\n     OR a.requests_reserved<>0 OR a.cost_reserved_microunits<>0 OR a.tools_reserved<>0 OR a.running_reserved_seconds<>0 OR a.running_settled_seconds<>0\n     OR EXISTS(SELECT 1 FROM public.teaching_heads WHERE activity_id=NEW.activity_id)\n     OR EXISTS(SELECT 1 FROM public.activity_operations WHERE activity_id=NEW.activity_id)\n     OR EXISTS(SELECT 1 FROM public.activity_memory_bindings WHERE activity_id=NEW.activity_id)\n     OR NEW.revision<>1) THEN RAISE EXCEPTION 'interview requires fresh unselected activity'; END IF;\n ELSE\n  IF NEW.activity_id<>OLD.activity_id OR NEW.created_at<>OLD.created_at OR NEW.revision NOT BETWEEN OLD.revision AND OLD.revision+1\n    OR NEW.goal_version NOT BETWEEN OLD.goal_version AND OLD.goal_version+1 OR NEW.last_seq<OLD.last_seq\n    OR (NEW.revision=OLD.revision AND (to_jsonb(NEW)-ARRAY['pending_key','updated_at']) IS DISTINCT FROM (to_jsonb(OLD)-ARRAY['pending_key','updated_at']))\n    OR (OLD.phase='ended' AND NEW.phase<>'ended') THEN RAISE EXCEPTION 'interview head revision invalid'; END IF;\n END IF;\n IF NEW.scope_revision<>a.scope_revision OR NEW.last_seq<>(SELECT max(seq) FROM public.interview_records WHERE activity_id=NEW.activity_id)\n    THEN RAISE EXCEPTION 'interview head scope/sequence invalid'; END IF;\n FOREACH ptr IN ARRAY ARRAY[NEW.goal_record_id,NEW.root_question_id,NEW.current_question_id,NEW.current_answer_id,NEW.current_feedback_id] LOOP\n  IF ptr IS NOT NULL THEN\n   SELECT * INTO p FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=ptr;\n   IF p.record_id IS NULL OR p.goal_version<>NEW.goal_version OR p.scope_revision<>NEW.scope_revision THEN RAISE EXCEPTION 'interview head pointer invalid'; END IF;\n  END IF;\n END LOOP;\n IF NEW.goal_record_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=NEW.goal_record_id AND kind='goal') THEN RAISE EXCEPTION 'goal pointer kind'; END IF;\n IF NEW.current_question_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=NEW.current_question_id AND kind IN ('question','probe')) THEN RAISE EXCEPTION 'question pointer kind'; END IF;\n IF NEW.current_answer_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=NEW.current_answer_id AND kind='answer' AND question_record_id=NEW.current_question_id) THEN RAISE EXCEPTION 'answer pointer kind'; END IF;\n IF NEW.current_feedback_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=NEW.current_feedback_id AND kind='feedback') THEN RAISE EXCEPTION 'feedback pointer kind'; END IF;\n RETURN NEW;\nEND;\n", 'interview_record_insert_guard': "\nDECLARE c public.interview_commands; p public.interview_records; r public.activity_operation_results; o public.activity_operations; b jsonb; ref jsonb;\nBEGIN\n SELECT * INTO c FROM public.interview_commands WHERE activity_id=NEW.activity_id AND business_key=NEW.business_key;\n IF c.activity_id IS NULL OR c.duplicate_of IS NOT NULL OR (NOT public.data_loading_allowed() AND (c.effect_applied OR c.status NOT IN ('accepted','started')))\n    OR NEW.seq<>(SELECT COALESCE(max(seq),0)+1 FROM public.interview_records WHERE activity_id=NEW.activity_id)\n    THEN RAISE EXCEPTION 'interview record command/sequence invalid'; END IF;\n IF cardinality(NEW.parent_ids)<>(SELECT count(DISTINCT x) FROM unnest(NEW.parent_ids) x) THEN RAISE EXCEPTION 'duplicate parents'; END IF;\n FOR p IN SELECT * FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=ANY(NEW.parent_ids) LOOP\n  IF p.seq>=NEW.seq OR p.goal_version<>NEW.goal_version OR p.scope_revision<>NEW.scope_revision THEN RAISE EXCEPTION 'interview parent invalid'; END IF;\n END LOOP;\n IF cardinality(NEW.parent_ids)<>(SELECT count(*) FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=ANY(NEW.parent_ids)) THEN RAISE EXCEPTION 'missing parents'; END IF;\n IF NEW.kind='answer' THEN\n  SELECT * INTO p FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=NEW.question_record_id;\n  IF p.kind NOT IN ('question','probe') OR p.goal_version<>NEW.goal_version OR p.scope_revision<>NEW.scope_revision\n     OR NEW.answer_version<>(SELECT COALESCE(max(answer_version),0)+1 FROM public.interview_records WHERE activity_id=NEW.activity_id AND question_record_id=NEW.question_record_id)\n     THEN RAISE EXCEPTION 'answer version invalid'; END IF;\n  IF NEW.answer_version>1 AND NOT EXISTS(SELECT 1 FROM public.interview_records a WHERE a.activity_id=NEW.activity_id AND a.record_id=NEW.supersedes_record_id\n     AND a.question_record_id=NEW.question_record_id AND a.answer_version=NEW.answer_version-1) THEN RAISE EXCEPTION 'supersedes invalid'; END IF;\n END IF;\n IF NEW.origin='model' THEN\n  SELECT * INTO r FROM public.activity_operation_results WHERE activity_id=NEW.activity_id AND operation_id=NEW.operation_id;\n  SELECT * INTO o FROM public.activity_operations WHERE activity_id=NEW.activity_id AND operation_id=NEW.operation_id;\n  b:=r.payload::jsonb->'value';\n  IF c.execution_kind<>'model' OR c.operation_id<>NEW.operation_id OR (NOT public.data_loading_allowed() AND (NOT c.launch_claimed OR c.obsolete OR c.status<>'started'))\n    OR r.payload_format<>'json' OR r.payload_sha256<>NEW.body_sha256 OR o.kind<>'model' OR o.state<>'received'\n    OR r.admission_id<>o.admission_id OR r.execution_generation<>o.execution_generation OR r.scope_revision<>NEW.scope_revision\n    OR b->>'profile' IS DISTINCT FROM 'interview.v1' OR b->>'activity_id' IS DISTINCT FROM NEW.activity_id::text OR b->>'business_key' IS DISTINCT FROM NEW.business_key::text\n    OR b->>'request_sha256' IS DISTINCT FROM c.request_sha256 OR b->>'context_sha256' IS DISTINCT FROM c.context_sha256 OR b->'value'->>'type' IS DISTINCT FROM NEW.kind\n    THEN RAISE EXCEPTION 'interview result binding invalid'; END IF;\n ELSE\n  b:=NEW.local_body::jsonb;\n  IF b->>'schema' IS DISTINCT FROM 'interview.local.v1' OR b->>'activity_id' IS DISTINCT FROM NEW.activity_id::text OR b->>'business_key' IS DISTINCT FROM NEW.business_key::text\n     OR b->>'kind' IS DISTINCT FROM NEW.kind OR (b->>'goal_version')::integer IS DISTINCT FROM NEW.goal_version OR (b->>'scope_revision')::integer IS DISTINCT FROM NEW.scope_revision\n     OR jsonb_typeof(b->'value') IS DISTINCT FROM 'object'\n     THEN RAISE EXCEPTION 'interview local binding invalid'; END IF;\n END IF;\n RETURN NEW;\nEND;\n", 'interview_result_eligible': "\n SELECT EXISTS(SELECT 1 FROM public.interview_commands c JOIN public.interview_heads h USING(activity_id)\n  JOIN public.interview_records ir ON ir.activity_id=c.activity_id AND ir.business_key=c.business_key AND ir.origin='model'\n  JOIN public.activities a ON a.id=c.activity_id\n  JOIN public.activity_operations o ON o.activity_id=c.activity_id AND o.operation_id=c.operation_id\n  JOIN public.activity_operation_results r ON r.activity_id=o.activity_id AND r.operation_id=o.operation_id\n WHERE c.activity_id=aid AND c.operation_id=op AND c.duplicate_of IS NULL AND c.effect_applied AND c.status IN ('committed','history')\n  AND NOT c.obsolete AND c.goal_version=h.goal_version AND c.scope_revision=h.scope_revision AND h.scope_revision=a.scope_revision\n  AND a.status<>'cancelled' AND ir.operation_id=c.operation_id AND ir.payload_sha256=r.payload_sha256 AND ir.body_sha256=r.payload_sha256\n  AND r.admission_id=o.admission_id AND r.execution_generation=o.execution_generation AND r.scope_revision=o.scope_revision AND o.state='received' AND o.kind='model'\n  AND r.payload_format='json'\n  AND NOT EXISTS(SELECT 1 FROM public.activity_scope_sources s LEFT JOIN public.material_sources m ON m.id=s.source_id\n    WHERE s.activity_id=aid AND (m.id IS NULL OR m.current_version IS DISTINCT FROM s.version_id OR m.revision<>s.source_revision))\n  AND EXISTS(SELECT 1 FROM public.activity_scope_sources WHERE activity_id=aid)\n  AND NOT EXISTS(SELECT 1 FROM public.activity_memory_bindings WHERE activity_id=aid))\n"}
++ORIGINAL_CONSTRAINTS_013={'interview_command_execution': "CHECK ((((duplicate_of IS NOT NULL) AND (operation_id IS NULL) AND (context_body IS NULL) AND (context_sha256 IS NULL) AND (NOT effect_applied) AND (NOT launch_claimed)) OR ((duplicate_of IS NULL) AND (execution_kind = 'local'::text) AND (operation_id IS NULL) AND (context_body IS NULL) AND (context_sha256 IS NULL) AND (NOT launch_claimed)) OR ((duplicate_of IS NULL) AND (execution_kind = 'model'::text) AND (action = ANY (ARRAY['ask'::text, 'review'::text])) AND (context_body IS NOT NULL) AND (context_sha256 IS NOT NULL) AND (operation_id = ('int10m.'::text || replace((business_key)::text, '-'::text, ''::text))))))"}
++FORWARD_CONSTRAINTS_014={'interview_command_execution': "CHECK ((((duplicate_of IS NOT NULL) AND (operation_id IS NULL) AND (context_body IS NULL) AND (context_sha256 IS NULL) AND (NOT effect_applied) AND (NOT launch_claimed)) OR ((duplicate_of IS NULL) AND (execution_kind = 'local'::text) AND (operation_id IS NULL) AND (context_body IS NULL) AND (context_sha256 IS NULL) AND (NOT launch_claimed)) OR ((duplicate_of IS NULL) AND (execution_kind = 'model'::text) AND (action = ANY (ARRAY['ask'::text, 'review'::text])) AND (context_body IS NOT NULL) AND (context_sha256 IS NOT NULL) AND (((((request_body)::jsonb ->> 'schema'::text) = 'interview.command.v1'::text) AND (((context_body)::jsonb ->> 'schema'::text) = 'interview.context.v1'::text) AND (operation_id = ('int10m.'::text || replace((business_key)::text, '-'::text, ''::text)))) OR ((((request_body)::jsonb ->> 'schema'::text) = 'interview.command.v2'::text) AND (((context_body)::jsonb ->> 'schema'::text) = 'interview.context.v2'::text) AND (operation_id = ('int18m.'::text || replace((business_key)::text, '-'::text, ''::text))))))))"}
++EXTRA_FUNCTIONS={'interview_head_guard': '6219aa292d679bff71b2dbdbe54c4757a17bdee5cd3e2a76927d2fa9a7abc134', 'interview_record_insert_guard': 'f7423ecf9109244b5a87db568a552f9a0027b2ad9968281af66af07c56729c90', 'interview_result_eligible': '3a876b12080499d63c36bd7b1fa0d7960dc902f07bcabec99750cdf242342da6', 'purge_retrieval_payloads': '9061a126b5071be4fb7fb290715cda2b32f3d36dd9b8c3fcd8c30152a69f9879', 'retrieval_chunk_guard': '2b8801abe7c42eaaa8c2ffc5e4117e251c459c593110c16faf0016d696431bab', 'retrieval_command_guard': '60f095b5fce6112ba379e55225fe1d5891776af49add282732b35f76922af8f9', 'retrieval_embedding_operation_guard': '281ee019897fa19348f4dbcf4ef3413bb3ee437f425013fb388798cf39ce1d1f', 'retrieval_grant_guard': '4180d259e118ea97920af23c4b522a81407c64fcf56255ec8cff3cda8fb3a7b1', 'retrieval_result_guard': '4be9a24c1b99970b490ea9668b322112008ea63a0feac62ae1b5fcc6639f42dc', 'retrieval_space_guard': 'd59fb999006732863da65b08717fe2dfddf4afcc796cd7d0dc9348cebcd38321', 'retrieval_vector_digest': 'f02439231d89a6da4fe1497980e114042719ff5eb36ab884e530ad9e232ba4cb'}
++
++NEW_COLUMNS={
++ 'retrieval_spaces':{'space_id':'text','provider':'text','configured_model':'text','dimensions':'smallint','normalization':'text','chunk_recipe':'text','created_at':'timestamptz'},
++ 'retrieval_commands':{'activity_id':'uuid','business_key':'uuid','action':'text','space_id':'text','scope_revision':'integer','domain':'text','domain_revision':'integer','request_body':'text','request_sha256':'text','source_refs':'jsonb','parent_refs':'jsonb','query_sha256':'text','manifest_sha256':'text','batch_count':'smallint','status':'text','terminal_disposition':'text','result_sha256':'text','error_code':'text','created_at':'timestamptz','updated_at':'timestamptz'},
++ 'retrieval_chunks':{'space_id':'text','evidence_id':'text','source_id':'uuid','source_version_id':'uuid','source_revision':'integer','origin':'text','physical_page':'integer','start_codepoint':'integer','end_codepoint':'integer','text_sha256':'text','vector_value':'vector(512)','vector_sha256':'text','committed_activity_id':'uuid','committed_operation_id':'text','created_at':'timestamptz'}}
++columns02=deepcopy(COLUMNS);columns02['activities']['outbound_grant_sha256']='text';columns02.update(NEW_COLUMNS)
++tables02=['retrieval_spaces']
++for table in TABLES:
++    if table=='activity_operations':tables02.append('retrieval_commands')
++    tables02.append(table)
++    if table=='activity_operation_results':tables02.append('retrieval_chunks')
++
++
++@dataclass(frozen=True)
++class SchemaProfile:
++    name:str
++    tables:tuple
++    columns:dict
++    codec_migrations:dict
++    migration_chain:dict
++
++
++def get_profile(name):
++    chain01={**MIGRATIONS,'013_data_exit.sql':MIGRATION_013}
++    if name==PROFILE:return SchemaProfile(PROFILE,TABLES,COLUMNS,MIGRATIONS,chain01)
++    if name in (R02,R03):
++        chain02={**chain01,'014_step018_retrieval.sql':MIGRATION_014}
++        chain=chain02 if name==R02 else {**chain02,'015_activity_scope_delete_permission.sql':MIGRATION_015}
++        return SchemaProfile(name,tuple(tables02),columns02,chain,chain)
++    raise DataError('schema_profile_mismatch',503)
++
++
++def get_read_profile(name,migrations):
++    """Two exact known R03 codec identities; installations always use current DDL.
++
++    Legacy package recognition never claims the old installation passed revised
++    preconditions. A restored target is freshly initialized with current DDL.
++    """
++    profile=get_profile(name)
++    if migrations==profile.codec_migrations:return profile
++    if name==R03:
++        legacy={**get_profile(R02).codec_migrations,'015_activity_scope_delete_permission.sql':LEGACY_MIGRATION_015}
++        if migrations==legacy:
++            return SchemaProfile(name,profile.tables,profile.columns,legacy,profile.migration_chain)
++    raise DataError('codec_mismatch',422)
++
++
++def observed_profile(connection,*,empty_profile=None):
++    row=connection.execute('SELECT schema_profile FROM public.data_export_control_v1').fetchone()
++    if row is None:
++        if empty_profile is None:raise DataError('mode_unknown',503)
++        return get_profile(empty_profile)
++    return get_profile(row['schema_profile'] if isinstance(row,dict) else row[0])
++
++
++async def observed_profile_async(connection):
++    cursor=await connection.execute('SELECT schema_profile FROM public.data_export_control_v1');row=await cursor.fetchone()
++    if row is None:raise DataError('mode_unknown',503)
++    return get_profile(row['schema_profile'])
++
++
++def extra_shape_queries():
++    """仅固定新增对象和明确旧表增量；常量hash由本卡受信迁移实库冻结。"""
++    return {
++      'columns':"""SELECT c.relname,a.attname,format_type(a.atttypid,a.atttypmod) AS type,a.attnotnull,pg_get_expr(d.adbin,d.adrelid) AS default,r.rolname AS owner,r.rolsuper AS owner_super,a.attacl::text AS acl
++        FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_roles r ON r.oid=c.relowner JOIN pg_attribute a ON a.attrelid=c.oid
++        LEFT JOIN pg_attrdef d ON d.adrelid=c.oid AND d.adnum=a.attnum
++        WHERE n.nspname='public' AND a.attnum>0 AND NOT a.attisdropped AND (c.relname IN('retrieval_spaces','retrieval_commands','retrieval_chunks') OR c.relname='activities' AND a.attname='outbound_grant_sha256') ORDER BY c.relname,a.attnum""",
++      'constraints':"""SELECT c.relname,k.conname,pg_get_constraintdef(k.oid) AS definition,k.convalidated,k.condeferrable,k.condeferred
++        FROM pg_constraint k JOIN pg_class c ON c.oid=k.conrelid JOIN pg_namespace n ON n.oid=c.relnamespace
++        WHERE n.nspname='public' AND (c.relname IN('retrieval_spaces','retrieval_commands','retrieval_chunks') OR k.conname IN('activities_outbound_grant_sha256_check','activity_operations_kind_domain','activity_operations_kind_shape','activity_operations_max_output_tokens_check','interview_command_execution','data_control_schema_profile_check')) ORDER BY c.relname,k.conname""",
++      'indexes':"SELECT tablename,indexname,indexdef FROM pg_indexes WHERE schemaname='public' AND tablename IN('retrieval_spaces','retrieval_commands','retrieval_chunks') ORDER BY tablename,indexname",
++      'triggers':"""SELECT c.relname,t.tgname,t.tgenabled,pg_get_triggerdef(t.oid) AS definition FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace
++        WHERE n.nspname='public' AND NOT t.tgisinternal AND (c.relname IN('retrieval_spaces','retrieval_commands','retrieval_chunks') OR t.tgname IN('retrieval_embedding_result','retrieval_embedding_operation','retrieval_grant_immutable','retrieval_source_tombstone')) ORDER BY c.relname,t.tgname""",
++      'table_acl':"SELECT c.relname,c.relacl::text AS acl FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname IN('retrieval_spaces','retrieval_commands','retrieval_chunks') ORDER BY c.relname",
++      'roles':"SELECT rolname,rolcanlogin,rolsuper,rolcreatedb,rolcreaterole,rolreplication,rolbypassrls FROM pg_roles WHERE rolname IN('retrolume_retrieval_owner','retrolume_retrieval_app') ORDER BY rolname",
++      'functions':"""SELECT p.proname,pg_get_function_identity_arguments(p.oid) AS arguments,p.prosrc,p.prosecdef,p.provolatile,p.proconfig,r.rolname AS owner,p.proacl::text AS acl
++        FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_roles r ON r.oid=p.proowner
++        WHERE n.nspname='public' AND p.proname IN('retrieval_vector_digest','retrieval_space_guard','retrieval_command_guard','retrieval_result_guard','retrieval_chunk_guard','retrieval_grant_guard','retrieval_embedding_operation_guard','purge_retrieval_payloads','interview_head_guard','interview_record_insert_guard','interview_result_eligible') ORDER BY p.proname""",
++      'interview_read_acl':"SELECT c.relname,has_table_privilege('retrolume_interview_owner',c.oid,'SELECT') AS readable,has_table_privilege('retrolume_interview_owner',c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') AS writable FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname IN('learning_memories','learning_memory_revisions','learning_memory_bodies','learning_memory_dependencies','learning_memory_commands','activity_memory_choices','teaching_commands','material_versions','pdf_review_candidates','pdf_review_pages','pdf_extracted_pages','teaching_records') ORDER BY c.relname",
++      'extensions':"SELECT extname,extversion FROM pg_extension WHERE extname='vector'"}
++
++
++def normalized_extra_shape(shape):
++    """缓存集群bootstrap owner名字可不同；只规范grantor，权限集合仍必须精确。"""
++    import copy,re
++    value=copy.deepcopy(shape)
++    for row in value.get('columns',[]):
++        if row['relname']=='activities' and row['attname']=='outbound_grant_sha256' and row.get('owner_super') is True:
++            row['owner']='bootstrap_owner'
++    for section in ('columns','table_acl','functions'):
++        for row in value.get(section,[]):
++            if row.get('acl'):
++                row['acl']=re.sub(r'/[^,}]+','/trusted_owner',row['acl'])
++    return value
++
++
++PROFILE_CONSTRAINT_02="CHECK ((schema_profile = ANY (ARRAY['data_exit.v1.r01'::text, 'data_exit.v1.r02'::text])))"
++PROFILE_CONSTRAINT_03="CHECK ((schema_profile = 'data_exit.v1.r03'::text))"
++
++
++def check_extra_shape(shape,profile=R02):
++    if profile==R03:
++        shape=deepcopy(shape)
++        rows=[r for r in shape.get('constraints',[]) if r['conname']=='data_control_schema_profile_check']
++        if len(rows)!=1 or rows[0]['definition']!=PROFILE_CONSTRAINT_03:raise DataError('data_schema_not_ready',503)
++        rows[0]['definition']=PROFILE_CONSTRAINT_02
++    elif profile!=R02:raise DataError('schema_profile_mismatch',503)
++    if digest(canonical(normalized_extra_shape(shape)))!=R02_EXTRA_SHAPE_SHA:raise DataError('data_schema_not_ready',503)
++
++
++SCOPE_ACL_QUERY="""SELECT a.attname,CASE WHEN x.grantee=c.relowner THEN '<owner>'
++ ELSE COALESCE(g.rolname,'<public>') END AS grantee,x.privilege_type,x.is_grantable,
++ x.grantor=c.relowner AS trusted_grantor,d.mode_observed,
++ ARRAY(SELECT privilege_type FROM aclexplode(acldefault('r',c.relowner)) ORDER BY privilege_type) AS owner_privileges
++ FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace CROSS JOIN public.data_export_control_v1 d
++ CROSS JOIN LATERAL (SELECT NULL::name AS attname,c.relacl AS acl UNION ALL
++ SELECT attname,attacl FROM pg_attribute WHERE attrelid=c.oid AND attnum>0 AND NOT attisdropped) a
++ CROSS JOIN LATERAL aclexplode(a.acl) x LEFT JOIN pg_roles g ON g.oid=x.grantee
++ WHERE n.nspname='public' AND c.relname='activity_scope_sources'
++ ORDER BY a.attname NULLS FIRST,grantee,x.privilege_type"""
++
++
++def check_scope_permissions(rows,profile):
++    get_profile(profile)
++    modes={row['mode_observed'] for row in rows}
++    if len(modes)!=1 or not modes<={'normal','loading','frozen','restored_readonly'}:raise DataError('data_schema_not_ready',503)
++    expected={None:{'<owner>':set(rows[0]['owner_privileges']) if rows else set(),
++      'retrolume_data_app':{'SELECT','INSERT','UPDATE'}|({'DELETE'} if profile==R03 else set()),
++      'retrolume_data_owner':{'SELECT'},'retrolume_data_restore_loader':{'SELECT','INSERT'},
++      'retrolume_interview_owner':{'SELECT'},'retrolume_html_owner':{'SELECT'}}}
++    if profile in (R02,R03):expected[None]['retrolume_retrieval_owner']={'SELECT'}
++    if modes=={'restored_readonly'}:expected[None]['retrolume_data_snapshot']={'SELECT'}
++    for column in ('activity_id','source_id','version_id','source_revision'):
++        expected[column]={'retrolume_data_snapshot':{'SELECT'}}
++    actual={}
++    for row in rows:
++        if row['is_grantable'] and row['grantee']!='<owner>' or not row['trusted_grantor']:
++            raise DataError('data_schema_not_ready',503)
++        actual.setdefault(row['attname'],{}).setdefault(row['grantee'],set()).add(row['privilege_type'])
++    if actual!=expected:raise DataError('data_schema_not_ready',503)
++
++
++def project_scope_permission(shape):
++    """Only after assert_data_schema checked the actual profile and exact ACL."""
++    result=deepcopy(shape)
++    for section in ('columns','table_acl','qualification_column_acls'):
++        for row in result.get(section,[]):
++            if row.get('relname')!='activity_scope_sources':continue
++            for field in ('acl','table_acl','column_acl'):
++                text=row.get(field)
++                if text:
++                    import re
++                    row[field]=re.sub(r'(?<=[{,])retrolume_data_app=arwd/', 'retrolume_data_app=arw/',text)
++    return result
++
++
++def project_014(shape):
++    """经精确R02校验后，旧领域指纹只扣除已注册014变化，不采用未知DDL。"""
++    import re
++    result=deepcopy(shape)
++    for row in result.get('functions',[]):
++        name=row['proname']
++        if name in FORWARD_FUNCTIONS:
++            actual=digest(re.sub(r'\s+','',row['prosrc']))
++            if actual==FORWARD_FUNCTIONS[name]:row['prosrc']=ORIGINAL_FUNCTIONS_013[name]
++            elif actual!=digest(re.sub(r'\s+','',ORIGINAL_FUNCTIONS_013[name])):raise DataError('data_schema_not_ready',503)
++    for row in result.get('constraints',[]):
++        if row['conname'] in ORIGINAL_CONSTRAINTS_013:
++            if row['definition']==FORWARD_CONSTRAINTS_014[row['conname']]:row['definition']=ORIGINAL_CONSTRAINTS_013[row['conname']]
++            elif row['definition']!=ORIGINAL_CONSTRAINTS_013[row['conname']]:raise DataError('data_schema_not_ready',503)
++    # 新授予interview owner的记忆只读/资格执行，逐项精确校验后回投旧形状。
++    readable={'learning_memories','learning_memory_revisions','learning_memory_bodies','learning_memory_dependencies','learning_memory_commands','activity_memory_choices','teaching_commands','material_versions','pdf_review_candidates','pdf_review_pages','pdf_extracted_pages','teaching_records'}
++    functions={'memory_revision_readable','memory_revision_eligible','activity_memory_eligible','memory_dependency_line','memory_dependency_digest','memory_scope_digest','memory_choice_digest'}
++    for section in ('columns','table_acl','functions','qualification_column_acls'):
++        for row in result.get(section,[]):
++            for field in ('acl','table_acl','column_acl'):
++                text=row.get(field)
++                if not text:continue
++                kept=[]
++                for entry in text[1:-1].split(','):
++                    if entry.startswith('retrolume_interview_owner='):
++                        privilege=entry.split('=',1)[1].split('/',1)[0]
++                        if not ((section=='functions' and row['proname'] in functions and privilege=='X') or row.get('relname') in readable and privilege=='r'):
++                            kept.append(entry);continue
++                    else:kept.append(entry)
++                row[field]='{'+','.join(kept)+'}' if kept else None
++    return result
+--- before/backend/app/data_exit/packages.py
++++ after/backend/app/data_exit/packages.py
+@@ -164,6 +164,8 @@
+                 value=load_json(self.archive.read(entry["path"]), self.limits)
+                 if entry['path']=='metadata/source_control.json':validate_metadata('source_control',value,PROFILE)
+                 if entry['path']=='codec_description.json':
++                    from .schema_profiles import get_read_profile
++                    self.schema_profile=get_read_profile(PROFILE,value.get('migration_sha256'))
+                     COLUMNS=self.schema_profile.columns;MIGRATIONS=self.schema_profile.codec_migrations
+                     from .codec import TRANSFORMS
+                     if value!={'profile':PROFILE,'columns':COLUMNS,'transformations':TRANSFORMS,'bigint_encoding':'decimal_string',
+--- before/backend/app/data_exit/schema_checks.py
++++ after/backend/app/data_exit/schema_checks.py
+@@ -54,6 +54,8 @@
+     from .schema import DATA_FUNCTIONS
+     from .schema_profiles import observed_profile,get_profile,R02,R03,extra_shape_queries,check_extra_shape,SCOPE_ACL_QUERY,check_scope_permissions
+     profile=get_profile(profile) if profile is not None else observed_profile(connection)
++    from .q_roles import assert_roles_sync
++    assert_roles_sync(connection,profile.name)
+     rows=connection.execute(FUNCTION_QUERY,(list(DATA_FUNCTIONS),)).fetchall()
+     roles=connection.execute(ROLE_QUERY,(DATA_ROLES,)).fetchall()
+     triggers=connection.execute(TRIGGER_QUERY).fetchall()
+@@ -68,6 +70,8 @@
+     from .schema import DATA_FUNCTIONS
+     from .schema_profiles import observed_profile_async,R02,R03,extra_shape_queries,check_extra_shape,SCOPE_ACL_QUERY,check_scope_permissions
+     profile=await observed_profile_async(connection)
++    from .q_roles import assert_roles
++    await assert_roles(connection,profile.name)
+     cursor=await connection.execute(FUNCTION_QUERY,(list(DATA_FUNCTIONS),))
+     rows=await cursor.fetchall()
+     cursor=await connection.execute(ROLE_QUERY,(DATA_ROLES,))
+--- /dev/null
++++ after/backend/app/data_exit/q_roles.py
+@@ -0,0 +1,96 @@
++"""Purpose-specific PG17 capability separation, before shape/ACL projection.
++
++Membership alone is not a privilege. Follow SET chains and, from each possible
++current role, INHERIT chains; inspect ADMIN edges separately. SQL privilege
++inquiries below report actual inherited table rights, not an ACL simulation.
++"""
++from .contracts import DataError
++
++GROUPS=('retrolume_data_app','retrolume_data_snapshot','retrolume_data_restore_loader','retrolume_data_owner')
++OWNERS=('retrolume_data_owner','retrolume_memory_owner','retrolume_teaching_owner',
++        'retrolume_interview_owner','retrolume_html_owner','retrolume_retrieval_owner')
++PRIVILEGES=('SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER','MAINTAIN')
++DANGEROUS_PREDEFINED=frozenset(('pg_execute_server_program','pg_read_server_files','pg_write_server_files',
++    'pg_signal_backend','pg_checkpoint','pg_maintain','pg_create_subscription'))
++ROLE_CAPABILITIES="""SELECT r.oid,r.rolname,r.rolcanlogin,r.rolsuper,r.rolcreatedb,r.rolcreaterole,
++ r.rolreplication,r.rolbypassrls,
++ ARRAY(SELECT p FROM unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER','MAINTAIN']) p
++       WHERE has_table_privilege(r.oid,'public.activity_scope_sources',p) ORDER BY p) AS privileges,
++ ARRAY(SELECT p FROM unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER','MAINTAIN']) p
++       WHERE has_table_privilege(r.oid,'public.data_control',p) ORDER BY p) AS control_privileges,
++ has_schema_privilege(r.oid,'public','CREATE') AS schema_create,
++ has_database_privilege(r.oid,current_database(),'CREATE') AS database_create,
++ EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
++        WHERE c.relowner=r.oid AND n.nspname='public' AND c.relkind IN('r','p','v')) AS owns_objects,
++ EXISTS(SELECT 1 FROM pg_proc f JOIN pg_namespace n ON n.oid=f.pronamespace
++        WHERE f.proowner=r.oid AND n.nspname='public' AND f.prosecdef) AS owns_definers
++ FROM pg_roles r ORDER BY r.oid"""
++MEMBERSHIPS="SELECT roleid,member,grantor,inherit_option,set_option,admin_option FROM pg_auth_members ORDER BY member,roleid,grantor"
++
++
++def check_role_capabilities(roles,members,profile):
++    if len(roles)>1024 or len(members)>4096:raise DataError('data_role_capability_mismatch',503)
++    by_id={r['oid']:r for r in roles};by_name={r['rolname']:r for r in roles};edges={}
++    if not set(GROUPS)<=set(by_name):raise DataError('data_role_capability_mismatch',503)
++    for m in members:edges.setdefault(m['member'],[]).append(m)
++    def closure(start,option):
++        result={start};pending=[start]
++        while pending:
++            for edge in edges.get(pending.pop(),[]):
++                if edge[option] and edge['roleid'] not in result:
++                    result.add(edge['roleid']);pending.append(edge['roleid'])
++        return result
++    def accessible(oid):
++        # SET uses the session-user chain. It is never made transitively
++        # available through an INHERIT-only hop.
++        selected=closure(oid,'set_option')
++        effective=set().union(*(closure(x,'inherit_option') for x in selected))
++        return selected,effective
++    def management(role):
++        return any(role[k] for k in ('rolsuper','rolcreatedb','rolcreaterole','rolreplication','rolbypassrls'))
++    def extra_management(role):
++        return bool(role['control_privileges'] or role['schema_create'] or role['database_create']
++                    or role['rolname'] in DANGEROUS_PREDEFINED)
++    audited=[]
++    for subject in roles:
++        name=subject['rolname'];selected,effective=accessible(subject['oid'])
++        group_names={by_id[x]['rolname'] for x in effective}&set(GROUPS)
++        owner=name in OWNERS
++        if name not in GROUPS and not owner and not (subject['rolcanlogin'] and group_names):continue
++        # A trusted function/table owner may manage its own declared objects,
++        # never via membership in another owner or normal application group.
++        if owner:allowed={'SELECT'}
++        elif name=='retrolume_data_snapshot' or 'retrolume_data_snapshot' in group_names:allowed={'SELECT'}
++        elif name=='retrolume_data_restore_loader' or 'retrolume_data_restore_loader' in group_names:allowed={'SELECT','INSERT'}
++        else:allowed={'SELECT','INSERT','UPDATE'}|({'DELETE'} if profile=='data_exit.v1.r03' else set())
++        for oid in effective:
++            role=by_id[oid]
++            if role['rolname'] in DANGEROUS_PREDEFINED or role['schema_create'] or role['database_create']:
++                raise DataError('data_role_capability_mismatch',503)
++            if role['control_privileges'] and not (name=='retrolume_data_owner' and oid==subject['oid']):
++                raise DataError('data_role_capability_mismatch',503)
++            if not set(role['privileges'])<=allowed:
++                raise DataError('data_role_capability_mismatch',503)
++            if (role['owns_objects'] or role['owns_definers']) and not (owner and oid==subject['oid']):
++                raise DataError('data_role_capability_mismatch',503)
++            for edge in edges.get(oid,[]):
++                target=by_id[edge['roleid']]
++                if edge['admin_option'] and (management(target) or extra_management(target) or target['owns_objects'] or target['owns_definers']
++                        or not set(target['privileges'])<=allowed):
++                    raise DataError('data_role_capability_mismatch',503)
++        if any(management(by_id[oid]) for oid in selected):raise DataError('data_role_capability_mismatch',503)
++        audited.append({'role':name,'purpose':'trusted_owner' if owner else sorted(group_names),
++                        'set_roles':[by_id[x]['rolname'] for x in sorted(selected)],
++                        'effective_roles':[by_id[x]['rolname'] for x in sorted(effective)]})
++    return audited
++
++
++def assert_roles_sync(connection,profile):
++    roles=connection.execute(ROLE_CAPABILITIES).fetchall();members=connection.execute(MEMBERSHIPS).fetchall()
++    return check_role_capabilities(roles,members,profile)
++
++
++async def assert_roles(connection,profile):
++    cursor=await connection.execute(ROLE_CAPABILITIES);roles=await cursor.fetchall()
++    cursor=await connection.execute(MEMBERSHIPS);members=await cursor.fetchall()
++    return check_role_capabilities(roles,members,profile)
+--- before/backend/app/data_exit/q_store.py
++++ after/backend/app/data_exit/q_store.py
+@@ -10,6 +10,7 @@
+ 
+ from .contracts import DataError
+ from .files import RootLease, regular
++from . import q_clock
+ from app.capabilities.q_protocol import (AuthorizationRef, DecisionBody, InstanceBinding, PreparedRequest,
+     SourceManifestV2, canonical, digest, load_json, raw_digest, utcnow)
+ 
+@@ -37,6 +38,13 @@
+         q['requests'][pid]['approval'] = payload['approval']
+         q['requests'][pid].pop('revoked', None)
+         q['approval_events'] += 1
++        q['requests'][pid].pop('approval_seen',None)
++    elif kind == 'q.approval_seen':
++        row=q['requests'][pid]
++        if row.get('approval',{}).get('approval_id')!=payload['approval_id']:raise DataError('q_approval_identity')
++        row['approval_seen']=payload['sample']
++    elif kind == 'q.approval_invalidated':
++        q['requests'][pid].setdefault('invalid_approvals',{})[payload['approval_id']]=payload['reason']
+     elif kind == 'q.revoked':
+         q['requests'][pid]['revoked'] = True
+     elif kind == 'q.claim':
+@@ -51,6 +59,13 @@
+         q['observed'][payload['fact']['admission_id']] = payload['fact']
+     elif kind == 'q.closed':
+         q['requests'][pid]['closed'] = payload['reason']
++    elif kind == 'q.cleanup_pending':
++        if q['requests'][pid].get('cleanup'):raise DataError('q_cleanup_conflict')
++        q['requests'][pid]['cleanup']=payload['cleanup']
++    elif kind == 'q.cleanup_done':
++        row=q['requests'][pid]
++        if not row.get('cleanup'):raise DataError('q_cleanup_missing')
++        row['cleanup']['state']='done';row['cleanup']['outcome']=payload['outcome']
+ 
+ 
+ def authority_for(ledger):
+@@ -218,6 +233,8 @@
+                      if r['prepared']['activity_id']==aid and r['prepared']['operation_id']==oid), None)
+ 
+     def artifact(self, row):
++        current=self.request(row['prepared_id'])
++        if current.get('cleanup'):raise DataError('q_body_cleanup_closed',409)
+         raw = self.hub.read_artifact('q-prepared',row['prepared_id'],row['artifact_sha256'],262144)
+         value = load_json(raw)
+         if set(value) != {'prepared','request','payload','provenance','intent'} or digest(value['prepared']) != row['prepared_sha256']:
+@@ -229,7 +246,7 @@
+             raise DataError('q_artifact_identity')
+         return value
+ 
+-    def prepare(self, prepared, request, payload, provenance, intent=None):
++    def prepare(self, prepared, request, payload, provenance, intent=None,*,dependencies=None):
+         if prepared.domain=='learning':
+             candidates=[r for r in self.hub.state()['q']['requests'].values() if r['prepared']['activity_id']==prepared.activity_id
+                 and r['prepared']['domain']=='learning' and (r['prepared']['business_key']==prepared.business_key
+@@ -255,35 +272,51 @@
+             if any(r['prepared']['activity_id']==prepared.activity_id and r['prepared']['operation_id']==prepared.operation_id for r in q['requests'].values()):
+                 raise DataError('q_original_key_conflict',409)
+             return {'prepared_id':prepared.prepared_id,'prepared':prepared.model_dump(mode='json'),
+-                    'prepared_sha256':prepared.sha256,'artifact_sha256':artifact_sha}
++                    'prepared_sha256':prepared.sha256,'artifact_sha256':artifact_sha,
++                    'dependencies':dependencies or {'sources':[x['source_id'] for x in prepared.snapshot.get('sources',[])],
++                        'memories':[x['memory_id'] for x in prepared.snapshot.get('memory',{}).get('refs',[])]}}
+         self.hub.q_decide('q.prepared',decide)
+         return self.request(prepared.prepared_id)
+ 
+-    def projection(self, row, *, current=True):
+-        self.artifact(row)
++    def approval_valid(self,row):
++        """Every authorizing projection/reference/consumer uses this same CAS.
++
++        A negative observation is durable before it is returned. A later UTC
++        rollback or another process cannot resurrect that exact decision.
++        """
++        if not row.get('approval'):return False
++        result={}
++        # Kind must be chosen from the same current state while holding the
++        # journal lock, so use a tiny closed hub clock-observation operation.
++        self.hub.q_observe_approval(row['prepared_id'],result)
++        return result.get('valid',False)
++
++    def projection(self, row, *, current=True, pg_consumed=False):
++        if not row.get('cleanup'):self.artifact(row)
+         now=utcnow(); approval=row.get('approval')
+-        state='invalidated' if not current or row.get('closed') else 'consumed' if row.get('claim') or row.get('launch_claimed') else 'revoked' if row.get('revoked') else 'pending'
++        state='invalidated' if not current or row.get('closed') or row.get('cleanup') else 'consumed' if pg_consumed or row.get('claim') or row.get('launch_claimed') else 'revoked' if row.get('revoked') else 'pending'
+         if state=='pending' and approval:
+-            state='approved' if datetime.fromisoformat(approval['body']['expires_at'])>now else 'expired'
++            state='approved' if self.approval_valid(row) else 'expired'
+         p=row['prepared']
+         return {'state':state,'prepared_id':row['prepared_id'],'purpose':p['action'],'provider':p['provider'],
+                 'model':p['configured_model'],'request_count':1,'reserve_microunits':250000,
+                 'expires_at':approval['body']['expires_at'] if approval else None,'can_continue':state=='approved','reason':None if state=='approved' else 'q_'+state}
+ 
+-    def approve(self, pid, principal, *, current):
++    def approve(self, pid, principal, *, current, pg_consumed=False):
+         if principal not in self.bundle['operator_principals'] or not current:
+             raise DataError('q_operator_or_currentness_denied')
+         with self.policy():
+             row=self.request(pid); self.artifact(row)
+-            if row.get('claim') or row.get('launch_claimed') or row.get('closed'):
++            if pg_consumed or row.get('claim') or row.get('launch_claimed') or row.get('closed') or row.get('cleanup'):
+                 raise DataError('q_approval_consumed')
+-            result={}
++            valid=self.approval_valid(row) if row.get('approval') and not row.get('revoked') else False
++            sample=q_clock.sample();result={}
+             def decide(state, seq):
+                 q=state['q']; r=q['requests'][pid]
+                 if r.get('claim') or r.get('launch_claimed') or r.get('closed'):
+                     raise DataError('q_approval_consumed')
+-                old=r.get('approval'); now=utcnow()
+-                if old and not r.get('revoked') and datetime.fromisoformat(old['body']['expires_at'])>now:
++                old=r.get('approval'); now=datetime.fromisoformat(sample['utc'])
++                if old and valid and not r.get('revoked'):
+                     result.update(old); return None
+                 if q['approval_events']>=256:
+                     raise DataError('q_approval_limit')
+@@ -291,7 +324,8 @@
+                 if end<=now:
+                     raise DataError('q_prepared_expired')
+                 body=DecisionBody(prepared_sha256=r['prepared_sha256'],root_sha256=self.manifest.sha256,
+-                    operator_principal_id=principal,issued_at=now.isoformat(),expires_at=end.isoformat(),event_seq=seq)
++                    operator_principal_id=principal,issued_at=now.isoformat(),expires_at=end.isoformat(),event_seq=seq,
++                    clock=q_clock.certificate(sample,end))
+                 approval={'body':body.model_dump(mode='json'),'approval_id':body.approval_id}
+                 result.update(approval)
+                 return {'prepared_id':pid,'approval':approval}
+@@ -321,7 +355,7 @@
+             raise DataError('q_testonly_external_forbidden')
+         if (ref.root_sha256!=self.manifest.sha256 or ref.prepared_sha256!=row['prepared_sha256'] or not approval
+             or ref.approval_id!=approval['approval_id'] or ref.approval_event_seq!=approval['body']['event_seq']
+-            or row.get('revoked') or row.get('closed') or datetime.fromisoformat(approval['body']['expires_at'])<=utcnow()
++            or row.get('revoked') or row.get('closed') or row.get('cleanup') or not self.approval_valid(row)
+             or DecisionBody.model_validate_json(canonical(approval['body'])).approval_id!=approval['approval_id']):
+             raise DataError('q_approval_invalid')
+         if context is not None:
+--- /dev/null
++++ after/backend/app/data_exit/q_clock.py
+@@ -0,0 +1,77 @@
++"""Private approval clocks. Unknown boot/clock domains never authorize a send.
++
++Windows QPC is system wide. A boot GUID distinguishes its otherwise undefined
++epoch across boots, including API/operator/worker process restarts. The native
++boot information query is optional: an unsupported/ambiguous result closes Q.
++No clock is set, and no clock information enters a provider request.
++"""
++import ctypes
++from datetime import datetime, timezone
++import os
++import time
++from uuid import UUID
++
++from .contracts import DataError, digest
++
++
++def domain():
++    if os.name!='nt':raise DataError('q_clock_domain_unknown')
++    info=time.get_clock_info('monotonic')
++    if not info.monotonic or info.adjustable or info.implementation not in ('QueryPerformanceCounter()','GetTickCount64()'):
++        raise DataError('q_clock_domain_unknown')
++    query=ctypes.WinDLL('ntdll').NtQuerySystemInformation
++    query.argtypes=[ctypes.c_ulong,ctypes.c_void_p,ctypes.c_ulong,ctypes.POINTER(ctypes.c_ulong)]
++    query.restype=ctypes.c_long
++    data=ctypes.create_string_buffer(32);length=ctypes.c_ulong()
++    # SystemBootEnvironmentInformation: GUID, firmware type, padding, boot flags.
++    if query(90,data,len(data),ctypes.byref(length))!=0 or length.value!=32:
++        raise DataError('q_clock_domain_unknown')
++    boot=UUID(bytes_le=data.raw[:16])
++    if boot.int==0:raise DataError('q_clock_domain_unknown')
++    return digest('windows-boot-clock.v1:'+info.implementation+':'+str(boot))
++
++
++def sample():
++    identity=domain()
++    before=time.monotonic_ns();utc=datetime.now(timezone.utc);after=time.monotonic_ns()
++    if after<before or after-before>1_000_000_000:raise DataError('q_clock_sample_unknown')
++    return {'domain':identity,'mono_ns':before,'upper_ns':after,'utc':utc.isoformat()}
++
++
++def certificate(now,end):
++    issued=datetime.fromisoformat(now['utc']);duration=(end-issued).total_seconds()
++    if issued.utcoffset() is None or not 0<duration<=900:raise DataError('q_clock_deadline_invalid')
++    return {'schema':'retrolume.q-clock.v1','domain':now['domain'],'issued_mono_ns':now['mono_ns'],
++            'issued_upper_ns':now['upper_ns'],'deadline_mono_ns':now['mono_ns']+int(duration*1e9)}
++
++
++def validate(body,last,now):
++    """Return a denial reason, or None. The caller persists irreversible denials.
++
++    Exact UTC regressions relative to any observed sample reject immediately.
++    The 1s allowance below bounds sampling/NTP drift, never the 900s deadline.
++    """
++    try:
++        clock=body.get('clock');issued=datetime.fromisoformat(body['issued_at']);end=datetime.fromisoformat(body['expires_at'])
++        wall=datetime.fromisoformat(now['utc'])
++        if not clock or clock['schema']!='retrolume.q-clock.v1' or not now['domain'] or clock['domain']!=now['domain']:
++            return 'q_clock_domain_unknown'
++        if any(x.utcoffset() is None for x in (issued,end,wall)):return 'q_clock_domain_unknown'
++        duration=(end-issued).total_seconds()
++        start=clock['issued_mono_ns'];upper=clock['issued_upper_ns'];deadline=clock['deadline_mono_ns']
++        if not (0<duration<=900 and 0<=start<=upper<start+1_000_000_001
++                and deadline==start+int(duration*1e9)):return 'q_clock_certificate_invalid'
++        if now['mono_ns']<upper or now['upper_ns']<now['mono_ns']:return 'q_clock_regressed'
++        prior=last or {'utc':body['issued_at'],'mono_ns':start,'upper_ns':upper,'domain':clock['domain']}
++        if prior['domain']!=clock['domain']:return 'q_clock_domain_unknown'
++        if wall<issued or wall<datetime.fromisoformat(prior['utc']) or now['mono_ns']<prior['mono_ns']:
++            return 'q_clock_regressed'
++        if wall>=end or now['mono_ns']>=deadline:return 'q_approval_expired'
++        # Detect a backwards UTC step even between the first two observations.
++        if (wall-issued).total_seconds()<(now['mono_ns']-upper)/1e9-1:
++            return 'q_clock_regressed'
++        if (wall-datetime.fromisoformat(prior['utc'])).total_seconds()<(now['mono_ns']-prior['upper_ns'])/1e9-1:
++            return 'q_clock_regressed'
++        return None
++    except (KeyError,TypeError,ValueError,OverflowError):
++        return 'q_clock_domain_unknown'
+--- /dev/null
++++ after/backend/app/data_exit/q_cleanup.py
+@@ -0,0 +1,114 @@
++"""Exact, journaled prepared-body cleanup. No directory scan or arbitrary path.
++
++The Q policy lease is held before the business tombstone and through cleanup.
++Pending is an irreversible denial; a retry confirms the same registered file
++or its absence, never a replacement. Only the body file is removed, not events,
++prepared digests, business keys, 007 records or financial reservations.
++"""
++import ctypes
++from ctypes import wintypes
++import os
++import stat
++
++from .contracts import DataError, digest
++from .files import regular,safe_root
++
++
++def dependencies(row):
++    result={'sources':set(),'memories':set()}
++    stored=row.get('dependencies')
++    if stored is not None:
++        for key in result:result[key].update(stored[key])
++    snapshot=row['prepared']['snapshot']
++    result['sources'].update(x['source_id'] for x in snapshot.get('sources',[]))
++    result['memories'].update(x['memory_id'] for x in snapshot.get('memory',{}).get('refs',[]))
++    return result
++
++
++def remove_registered(hub,pid,identity):
++    """Windows handle deletion: deny rename/write races and reparse objects."""
++    if os.name!='nt':raise DataError('q_cleanup_platform_unknown',503)
++    hub.assert_writable();safe_root(hub.root)
++    path=hub.artifact_path('q-prepared',pid)
++    try:info=regular(path)
++    except FileNotFoundError:return 'absent_confirmed'
++    if identity is None:raise DataError('q_cleanup_identity_unknown',503)
++    if (info.st_dev,info.st_ino,info.st_size)!=(identity['volume'],identity['file_id'],identity['bytes']):
++        raise DataError('q_cleanup_file_changed',503)
++    kernel=ctypes.WinDLL('kernel32',use_last_error=True)
++    kernel.CreateFileW.argtypes=[wintypes.LPCWSTR,wintypes.DWORD,wintypes.DWORD,ctypes.c_void_p,wintypes.DWORD,wintypes.DWORD,wintypes.HANDLE]
++    kernel.CreateFileW.restype=wintypes.HANDLE
++    kernel.CloseHandle.argtypes=[wintypes.HANDLE]
++    kernel.GetFileInformationByHandleEx.argtypes=[wintypes.HANDLE,ctypes.c_int,ctypes.c_void_p,wintypes.DWORD]
++    kernel.SetFileInformationByHandle.argtypes=[wintypes.HANDLE,ctypes.c_int,ctypes.c_void_p,wintypes.DWORD]
++    invalid=ctypes.c_void_p(-1).value
++    # A held directory handle disallows replacing the root while opening the
++    # exact child. Both handles explicitly open the reparse point itself.
++    directory=kernel.CreateFileW(str(hub.root),0x80,3,None,3,0x02200000,None)
++    if directory==invalid:raise ctypes.WinError(ctypes.get_last_error())
++    handle=None
++    try:
++        attrs=(wintypes.DWORD*2)()
++        if not kernel.GetFileInformationByHandleEx(directory,9,attrs,ctypes.sizeof(attrs)) or attrs[0]&0x400:
++            raise DataError('q_cleanup_root_changed',503)
++        safe_root(hub.root)
++        handle=kernel.CreateFileW(str(path),0x10081,1,None,3,0x00200000,None)
++        if handle==invalid:handle=None;raise ctypes.WinError(ctypes.get_last_error())
++        if not kernel.GetFileInformationByHandleEx(handle,9,attrs,ctypes.sizeof(attrs)) or attrs[0]&(0x400|0x10):
++            raise DataError('q_cleanup_file_changed',503)
++        import msvcrt
++        descriptor=msvcrt.open_osfhandle(handle,os.O_RDONLY|os.O_BINARY);handle=None
++        with os.fdopen(descriptor,'rb') as stream:
++            opened=os.fstat(stream.fileno())
++            if not stat.S_ISREG(opened.st_mode) or opened.st_nlink!=1 or (opened.st_dev,opened.st_ino,opened.st_size)!=(identity['volume'],identity['file_id'],identity['bytes']):
++                raise DataError('q_cleanup_file_changed',503)
++            raw=stream.read(262145)
++            if len(raw)!=identity['bytes'] or digest(raw)!=identity['sha256']:raise DataError('q_cleanup_file_changed',503)
++            hub.assert_writable();safe_root(hub.root)
++            deletion=wintypes.BOOL(True)
++            if not kernel.SetFileInformationByHandle(msvcrt.get_osfhandle(stream.fileno()),4,ctypes.byref(deletion),ctypes.sizeof(deletion)):
++                raise ctypes.WinError(ctypes.get_last_error())
++        if os.path.lexists(path):raise DataError('q_cleanup_unconfirmed',503)
++        return 'removed_confirmed'
++    finally:
++        if handle:kernel.CloseHandle(handle)
++        kernel.CloseHandle(directory)
++
++
++def cleanup(hub,*,source_ids=(),memory_ids=()):
++    from .q_store import POLICY
++    if 'q' not in hub.state():return []
++    policy=POLICY.get()
++    if policy is None or policy!=(hub.control_id,False):raise DataError('q_cleanup_policy_required',503)
++    sources=set(source_ids);memories=set(memory_ids);outcomes=[]
++    for pid,row in hub.state()['q']['requests'].items():
++        refs=dependencies(row)
++        if not (sources&refs['sources'] or memories&refs['memories']):continue
++        pending=row.get('cleanup')
++        if pending is None:
++            identity=None
++            try:
++                path=hub.artifact_path('q-prepared',pid);info=regular(path)
++                if info.st_size>262144:raise DataError('q_artifact_limit')
++                raw=hub.read_artifact('q-prepared',pid,row['artifact_sha256'],262144)
++                identity={'volume':info.st_dev,'file_id':info.st_ino,'bytes':info.st_size,'sha256':digest(raw)}
++            except FileNotFoundError:pass
++            except (OSError,DataError):
++                # Mark denial even if the existing path cannot be identified.
++                identity=None
++            pending={'state':'pending','identity':identity,'source_ids':sorted(sources&refs['sources']),
++                     'memory_ids':sorted(memories&refs['memories'])}
++            hub.q_decide('q.cleanup_pending',lambda state,seq,pid=pid,pending=pending:
++                None if state['q']['requests'][pid].get('cleanup') else {'prepared_id':pid,'cleanup':pending})
++        if pending['state']=='done':
++            # A recreated path is never deleted under an old confirmation.
++            if os.path.lexists(hub.artifact_path('q-prepared',pid)):
++                outcomes.append({'prepared_id':pid,'state':'physical_result_unknown'});continue
++            outcomes.append({'prepared_id':pid,'state':'absent_confirmed'});continue
++        try:
++            state=remove_registered(hub,pid,pending['identity'])
++            hub.q_decide('q.cleanup_done',lambda current,seq,pid=pid,state=state:{'prepared_id':pid,'outcome':state})
++            outcomes.append({'prepared_id':pid,'state':state})
++        except (OSError,DataError):
++            outcomes.append({'prepared_id':pid,'state':'physical_result_unknown'})
++    return outcomes
+--- before/backend/app/data_exit/control.py
++++ after/backend/app/data_exit/control.py
+@@ -1,359 +1,388 @@
+-"""私有日志为长期操作和选择器的唯一权威；GET 不执行动作。"""
+-import ctypes
+-import io
+-import json
+-import os
+-from pathlib import Path
+-import struct
+-from uuid import uuid4
+-from datetime import datetime, timezone
+-from .contracts import DataContext, DataError, canonical, digest, business_key, uuid
+-from .files import RootLease, safe_root, regular, publish,private_file
+-
+-MAX_FRAME, MAX_JOURNAL = 65536, 64 * 1024**2
+-TAIL = b"\nCOMMIT:"
+-PUBLIC_JOB = ("job_id", "business_key", "kind", "request_sha256", "state", "stage", "revision",
+-              "control_seq", "package_id", "root_sha256", "plan_id", "target_id", "error_code",
+-              "selection_generation", "created_at", "updated_at", "counts", "latest_status")
+-PUBLIC_JOB += ('receipt_id','receipt_sha256')
+-
+-
+-class ControlHub:
+-    def __init__(self, root):
+-        self.root = safe_root(root)
+-        private_file(self.root,directory=True)
+-        self.lock = RootLease(self.root, ".journal.lock")
+-        self.operation_lock = RootLease(self.root, ".operation.lock")
+-        self.path = self.root / "journal.bin"
+-        with self.lock.acquire(True):
+-            if not self.path.exists():
+-                with self.path.open("xb") as stream:
+-                    stream.flush(); os.fsync(stream.fileno())
+-                private_file(self.path)
+-                self._append([], "hub.init", {"control_id": str(uuid4())})
+-            events, tail = self._read()
+-            if not events or events[0]["kind"] != "hub.init":
+-                raise DataError("control_unavailable", 503)
+-            self.control_id = events[0]["payload"]["control_id"]
+-
+-    def _read(self, snapshot=None):
+-        regular(self.path)
+-        if self.path.stat().st_size > MAX_JOURNAL:
+-            raise DataError("capacity_exceeded", 413)
+-        events, previous = [], "0" * 64
+-        with (self.path.open("rb") if snapshot is None else io.BytesIO(snapshot)) as stream:
+-            while True:
+-                header = stream.read(4)
+-                if not header:
+-                    return events, False
+-                if len(header) != 4:
+-                    return events, True
+-                length = struct.unpack("!I", header)[0]
+-                if not 1 <= length <= MAX_FRAME:
+-                    raise DataError("control_corrupt", 503)
+-                raw = stream.read(length)
+-                tail = stream.read(len(TAIL) + 65)
+-                if len(raw) != length or len(tail) != len(TAIL) + 65:
+-                    return events, True
+-                if tail != TAIL + digest(raw).encode("ascii") + b"\n":
+-                    raise DataError("control_corrupt", 503)
+-                try:
+-                    from .codec import load_json
+-                    event = load_json(raw)
+-                    valid = (event["format"] == "data.control.v1" and event["seq"] == len(events) + 1
+-                             and event["prev_hash"] == previous and event["body_hash"] == digest(canonical(event["payload"])))
+-                except (KeyError, ValueError, TypeError):
+-                    valid = False
+-                if not valid:
+-                    raise DataError("control_corrupt", 503)
+-                if raw != canonical(event).encode('utf-8'):
+-                    raise DataError('control_corrupt',503)
+-                previous = digest(raw)
+-                events.append(event)
+-
+-    def _append(self, events, kind, payload):
+-        event = {"format": "data.control.v1", "seq": len(events) + 1,
+-                 "prev_hash": "0" * 64 if not events else digest(canonical(events[-1])),
+-                 "event_id": str(uuid4()), "kind": kind, "payload": payload,
+-                 "body_hash": digest(canonical(payload)), "utc": datetime.now(timezone.utc).isoformat()}
+-        raw = canonical(event).encode("utf-8")
+-        frame = struct.pack("!I", len(raw)) + raw + TAIL + digest(raw).encode("ascii") + b"\n"
+-        if len(raw) > MAX_FRAME or self.path.stat().st_size + len(frame) > MAX_JOURNAL:
+-            raise DataError("capacity_exceeded", 413)
+-        with self.path.open("ab") as stream:
+-            stream.write(frame); stream.flush(); os.fsync(stream.fileno())
+-        return event
+-
+-    @staticmethod
+-    def replay(events):
+-        state = {"jobs": {}, "plans": {}, "targets": {}, "selection": None, "fence": None, "owned": {}, "deletions": {}, 'source':None}
+-        for event in events:
+-            kind, p = event["kind"], event["payload"]
+-            if kind in ("job.create", "job.update"):
+-                old = state["jobs"].get(p["job_id"], {})
+-                state["jobs"][p["job_id"]] = {**old, **p, "control_seq": event["seq"]}
+-            elif kind == "plan.create":
+-                state["plans"][p["plan_id"]] = p
+-            elif kind in ("target.register", "target.seal"):
+-                state["targets"][p["target_id"]] = {**state["targets"].get(p["target_id"], {}), **p}
+-            elif kind == "selector_commit":
+-                state["selection"] = p
+-            elif kind == "maintenance.fence":
+-                state["fence"] = p
+-            elif kind in ("owned.begin", "owned.end"):
+-                state["owned"][p["owned_id"]] = {**state["owned"].get(p["owned_id"], {}), **p}
+-            elif kind == "deletion.observe":
+-                state["deletions"][p["entity_kind"] + ":" + p["entity_id"]] = p
+-            elif kind=='source.register':state['source']=p
+-            elif kind.startswith('q.'):
+-                from .q_store import replay_event
+-                replay_event(state, kind, p)
+-        return state
+-
+-    def _validated_locked(self, *, writable=False):
+-        """仅由持有本hub真实文件锁的读写入口调用，返回当前完整字节的已验快照。"""
+-        # 每次仍在真实锁内读取当前完整字节；仅复用同一文件对象和摘要的已验投影。
+-        info = regular(self.path)
+-        with self.path.open('rb') as stream:
+-            opened = os.fstat(stream.fileno())
+-            if (info.st_dev, info.st_ino) != (opened.st_dev, opened.st_ino):
+-                raise DataError('control_corrupt', 503)
+-            if opened.st_size > MAX_JOURNAL:
+-                raise DataError('capacity_exceeded', 413)
+-            raw = stream.read(opened.st_size + 1)
+-            after = os.fstat(stream.fileno())
+-        current = regular(self.path)
+-        if len(raw) > MAX_JOURNAL:
+-            raise DataError('capacity_exceeded', 413)
+-        if (opened.st_dev, opened.st_ino, opened.st_size) != (after.st_dev, after.st_ino, len(raw)) or (current.st_dev, current.st_ino, current.st_size) != (opened.st_dev, opened.st_ino, len(raw)):
+-            raise DataError('control_corrupt', 503)
+-        identity = (opened.st_dev, opened.st_ino, digest(raw))
+-        cached = getattr(self, '_state_cache', None)
+-        if cached is None or cached[0] != identity:
+-            events, tail = self._read(raw)
+-            if not events or events[0]['kind']!='hub.init' or events[0]['payload'].get('control_id')!=self.control_id:
+-                raise DataError('control_corrupt',503)
+-            state = self.replay(events)
+-            cached = (identity, canonical(state), {key: canonical(job) for key, job in state['jobs'].items()}, tail, events)
+-            self._state_cache = cached
+-        if writable and cached[3]:
+-            raise DataError('control_tail_unconfirmed', 503)
+-        return cached
+-
+-    def _current_snapshot(self, job_id=None, *, writable=False):
+-        with self.lock.acquire():
+-            cached = self._validated_locked(writable=writable)
+-            # 不把可变的日志payload或缓存对象交给调用者。
+-            return json.loads(cached[1] if job_id is None else cached[2][job_id])
+-
+-    def state(self):
+-        return self._current_snapshot()
+-
+-    def execution_job(self, job_id):
+-        """同一完整字节校验，只复制当前操作，避免逐行解码无关计划。"""
+-        return self._current_snapshot(job_id)
+-
+-    def commit(self, kind, payload, *, validate=None):
+-        with self.lock.acquire(True, timeout=1):
+-            cached = self._validated_locked(writable=True)
+-            events, state = cached[4], json.loads(cached[1])
+-            if validate is not None:
+-                validate(state)
+-            return self._append(events, kind, payload)
+-
+-    def assert_writable(self):
+-        return self._current_snapshot(writable=True)
+-
+-    def q_decide(self, kind, decide):
+-        """Q-only CAS. Decision seq is selected under the actual journal lock (K1)."""
+-        if kind not in ('q.bind','q.prepared','q.approved','q.revoked','q.claim','q.launch_claim',
+-                        'q.admission_intent','q.admission_observed','q.closed'):
+-            raise DataError('q_event_not_allowed')
+-        with self.lock.acquire(True, timeout=1):
+-            cached = self._validated_locked(writable=True)
+-            state, events = json.loads(cached[1]), cached[4]
+-            payload = decide(state, len(events) + 1)
+-            if payload is None:
+-                return None
+-            self._append(events, kind, payload)
+-            return payload
+-
+-    @staticmethod
+-    def receipt(job):
+-        return {key: job[key] for key in PUBLIC_JOB if key in job}
+-
+-    def current_receipt(self, state, job):
+-        receipt = self.receipt(job)
+-        if job.get('completion_protocol') == 1 and job['state'] in ('published','received','verified','active_readonly','deleted','deleted_pending'):
+-            confirmation=job.get('completion_confirmed_ns')
+-            deadline=job.get('execution',{}).get('deadline_ns')
+-            if type(confirmation) is not int or type(deadline) is not int or not 0 < confirmation < deadline:
+-                receipt.update(state={'portable_export':'published_unconfirmed','restore_checkpoint':'published_unconfirmed',
+-                    'upload':'upload_unconfirmed','restore':'restore_unconfirmed','activate':'activation_unconfirmed',
+-                    'source_delete':'deletion_unconfirmed'}[job['kind']],stage='completion_unconfirmed')
+-        if job['kind']=='restore':
+-            receipt.update(plan_id=job['scope']['plan_id'],plan_sha256=job['scope']['plan_sha256'])
+-        selection = state['selection']
+-        if selection is not None and selection.get('activation_job_id') == job['job_id']:
+-            receipt.update(selector_commit='confirmed',selection_generation=selection['generation'],target_id=selection['target_id'])
+-            if job['state'] != 'active_readonly':
+-                receipt.update(state='activation_unconfirmed', stage='selector_committed')
+-        return receipt
+-
+-    def create_or_get_job(self, command, origin_context):
+-        request_sha = digest(command.normalized())
+-        key = business_key(command.business_key)
+-        with self.lock.acquire(True, timeout=1):
+-            cached = self._validated_locked(writable=True)
+-            events, state = cached[4], json.loads(cached[1])
+-            for job in state["jobs"].values():
+-                if job["business_key"] == key:
+-                    if job["request_sha256"] != request_sha or job["kind"] != command.kind:
+-                        raise DataError("request_conflict")
+-                    return self.current_receipt(state, job)
+-            if len(state["jobs"]) >= 256:
+-                raise DataError("capacity_exceeded", 413)
+-            now = datetime.now(timezone.utc).isoformat()
+-            job = {"job_id": str(uuid4()), "business_key": key, "kind": command.kind,
+-                   "request_sha256": request_sha, "scope": command.scope,
+-                   "origin": origin_context.public(), "state": "prepared", "stage": "prepared",
+-                   "revision": 1, "created_at": now, "updated_at": now, "execution_protocol": 2, "completion_protocol": 1}
+-            event = self._append(events, "job.create", job)
+-            return self.receipt({**job, "control_seq": event["seq"]})
+-
+-    def update_job(self, job_id, expected_revision, *, expected_states=None, validate=None, **changes):
+-        uuid(job_id)
+-        changes.pop("control_seq", None)
+-        forbidden = {"business_key", "kind", "request_sha256", "origin", "scope", "job_id", "revision"}
+-        if forbidden.intersection(changes):
+-            raise ValueError("不可改写操作身份")
+-        payload = {"job_id": job_id, **changes, "revision": expected_revision + 1,
+-                   "updated_at": datetime.now(timezone.utc).isoformat()}
+-        def check(state):
+-            job = state["jobs"].get(job_id)
+-            if job is None or job["revision"] != expected_revision:
+-                raise DataError("request_conflict")
+-            if expected_states is not None and job['state'] not in expected_states:
+-                raise DataError('request_conflict')
+-            if job['state'] in ('cancelled', 'cancel_requested') and changes.get('state', job['state']) not in ('cancel_requested', 'cancelled', 'cleanup_unconfirmed'):
+-                raise DataError('operation_cancelled')
+-            if changes.get('state') in ('published', 'received', 'verified', 'active_readonly', 'deleted', 'deleted_pending'):
+-                from .operations import validate_success
+-                if job.get('execution_protocol') != 2 or validate is None or expected_states != ('committing',):
+-                    raise DataError('operation_authority_unknown')
+-                validate_success(job, changes['state'])
+-            if validate is not None:
+-                validate(job)
+-        self.commit("job.update", payload, validate=check)
+-        return self.get(job_id)
+-
+-    def change_job(self, job_id, decide):
+-        """短锁内读取、验证与CAS；decide仅计算字段，不能进行I/O。"""
+-        uuid(job_id)
+-        with self.lock.acquire(True, timeout=1):
+-            cached = self._validated_locked(writable=True)
+-            events, state = cached[4], json.loads(cached[1])
+-            job = state['jobs'].get(job_id)
+-            if job is None: raise DataError('not_found', 404)
+-            changes = decide(job)
+-            if changes:
+-                payload = {'job_id': job_id, **changes, 'revision': job['revision'] + 1,
+-                           'updated_at': datetime.now(timezone.utc).isoformat()}
+-                event = self._append(events, 'job.update', payload)
+-                job = {**job, **payload, 'control_seq': event['seq']}
+-            return self.current_receipt(state, job)
+-
+-    def get(self, job_id):
+-        state = self.state()
+-        job = state["jobs"].get(uuid(job_id))
+-        if job is None:
+-            raise DataError("not_found", 404)
+-        return self.current_receipt(state, job)
+-
+-    def get_by_key(self, key, kind=None):
+-        business_key(key)
+-        state = self.state()
+-        for job in state["jobs"].values():
+-            if job["business_key"] == key and (kind is None or kind == job["kind"]):
+-                return self.current_receipt(state, job)
+-        raise DataError("not_found", 404)
+-
+-    def reconcile(self, job_id):
+-        return {**self.get(job_id), "reconcile": "journal_confirmed"}
+-
+-    def artifact_path(self, category, identity):
+-        if category not in ("plans", "credentials", "overlays", "receipts", "q-root", "q-prepared"):
+-            raise ValueError("私有类别未受信")
+-        uuid(identity)
+-        return self.root / f"{category}-{identity}.bin"
+-
+-    def save_artifact(self, category, identity, data, check=lambda: None):
+-        check()
+-        path = self.artifact_path(category, identity)
+-        temporary = path.with_suffix(".pending")
+-        with temporary.open("xb") as stream:
+-            check()
+-            stream.write(data); stream.flush(); os.fsync(stream.fileno())
+-        check()
+-        private_file(temporary)
+-        if os.name=='nt' and category in ('q-root','q-prepared'):
+-            # Windows rename is atomic and refuses an existing destination.
+-            # Unlike hard links it also works inside the workspace file sandbox.
+-            os.rename(temporary,path)
+-            check()
+-            return digest(data)
+-        publish(temporary, path, check=check)
+-        # 只删除本调用准确临时文件，发布原件保留。
+-        temporary.unlink()
+-        check()
+-        return digest(data)
+-
+-    def read_artifact(self, category, identity, expected_sha=None, limit=64 * 1024**2):
+-        path = self.artifact_path(category, identity)
+-        if regular(path).st_size > limit:
+-            raise DataError("capacity_exceeded", 413)
+-        data = path.read_bytes()
+-        if expected_sha is not None and digest(data) != expected_sha:
+-            raise DataError("integrity_failed", 422)
+-        return data
+-
+-
+-class CredentialVault:
+-    """只读凭据仅以当前 Windows 用户的 DPAPI 密文持久保存。"""
+-    def __init__(self, hub):
+-        self.hub = hub
+-
+-    @staticmethod
+-    def _crypt(data, decrypt=False):
+-        if os.name != "nt":
+-            raise DataError("credential_unavailable", 503)
+-        from ctypes import wintypes
+-        class Blob(ctypes.Structure):
+-            _fields_ = [("size", wintypes.DWORD), ("data", ctypes.POINTER(ctypes.c_ubyte))]
+-        buf = ctypes.create_string_buffer(data)
+-        incoming = Blob(len(data), ctypes.cast(buf, ctypes.POINTER(ctypes.c_ubyte)))
+-        outgoing = Blob()
+-        dll = ctypes.WinDLL("crypt32", use_last_error=True)
+-        function = dll.CryptUnprotectData if decrypt else dll.CryptProtectData
+-        function.argtypes = [ctypes.POINTER(Blob), ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(Blob)]
+-        if not function(ctypes.byref(incoming), None, None, None, None, 1, ctypes.byref(outgoing)):
+-            raise DataError("credential_unavailable", 503)
+-        try:
+-            return ctypes.string_at(outgoing.data, outgoing.size)
+-        finally:
+-            kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+-            kernel.LocalFree.argtypes = [ctypes.c_void_p]
+-            kernel.LocalFree(outgoing.data)
+-
+-    def save(self, credentials):
+-        identity = str(uuid4())
+-        encrypted = self._crypt(canonical(credentials).encode("utf-8"))
+-        sha = self.hub.save_artifact("credentials", identity, encrypted)
+-        return {"id": identity, "sha256": sha}
+-
+-    def read(self, reference):
+-        try:
+-            encrypted = self.hub.read_artifact("credentials", reference["id"], reference["sha256"], 65536)
+-            return json.loads(self._crypt(encrypted, True))
+-        except (OSError, ValueError, KeyError):
+-            raise DataError("credential_unavailable", 503) from None
++"""私有日志为长期操作和选择器的唯一权威；GET 不执行动作。"""
++import ctypes
++import io
++import json
++import os
++from pathlib import Path
++import struct
++from uuid import uuid4
++from datetime import datetime, timezone
++from .contracts import DataContext, DataError, canonical, digest, business_key, uuid
++from .files import RootLease, safe_root, regular, publish,private_file
++
++MAX_FRAME, MAX_JOURNAL = 65536, 64 * 1024**2
++TAIL = b"\nCOMMIT:"
++PUBLIC_JOB = ("job_id", "business_key", "kind", "request_sha256", "state", "stage", "revision",
++              "control_seq", "package_id", "root_sha256", "plan_id", "target_id", "error_code",
++              "selection_generation", "created_at", "updated_at", "counts", "latest_status")
++PUBLIC_JOB += ('receipt_id','receipt_sha256')
++
++
++class ControlHub:
++    def __init__(self, root):
++        self.root = safe_root(root)
++        private_file(self.root,directory=True)
++        self.lock = RootLease(self.root, ".journal.lock")
++        self.operation_lock = RootLease(self.root, ".operation.lock")
++        self.path = self.root / "journal.bin"
++        with self.lock.acquire(True):
++            if not self.path.exists():
++                with self.path.open("xb") as stream:
++                    stream.flush(); os.fsync(stream.fileno())
++                private_file(self.path)
++                self._append([], "hub.init", {"control_id": str(uuid4())})
++            events, tail = self._read()
++            if not events or events[0]["kind"] != "hub.init":
++                raise DataError("control_unavailable", 503)
++            self.control_id = events[0]["payload"]["control_id"]
++
++    def _read(self, snapshot=None):
++        regular(self.path)
++        if self.path.stat().st_size > MAX_JOURNAL:
++            raise DataError("capacity_exceeded", 413)
++        events, previous = [], "0" * 64
++        with (self.path.open("rb") if snapshot is None else io.BytesIO(snapshot)) as stream:
++            while True:
++                header = stream.read(4)
++                if not header:
++                    return events, False
++                if len(header) != 4:
++                    return events, True
++                length = struct.unpack("!I", header)[0]
++                if not 1 <= length <= MAX_FRAME:
++                    raise DataError("control_corrupt", 503)
++                raw = stream.read(length)
++                tail = stream.read(len(TAIL) + 65)
++                if len(raw) != length or len(tail) != len(TAIL) + 65:
++                    return events, True
++                if tail != TAIL + digest(raw).encode("ascii") + b"\n":
++                    raise DataError("control_corrupt", 503)
++                try:
++                    from .codec import load_json
++                    event = load_json(raw)
++                    valid = (event["format"] == "data.control.v1" and event["seq"] == len(events) + 1
++                             and event["prev_hash"] == previous and event["body_hash"] == digest(canonical(event["payload"])))
++                except (KeyError, ValueError, TypeError):
++                    valid = False
++                if not valid:
++                    raise DataError("control_corrupt", 503)
++                if raw != canonical(event).encode('utf-8'):
++                    raise DataError('control_corrupt',503)
++                previous = digest(raw)
++                events.append(event)
++
++    def _append(self, events, kind, payload):
++        event = {"format": "data.control.v1", "seq": len(events) + 1,
++                 "prev_hash": "0" * 64 if not events else digest(canonical(events[-1])),
++                 "event_id": str(uuid4()), "kind": kind, "payload": payload,
++                 "body_hash": digest(canonical(payload)), "utc": datetime.now(timezone.utc).isoformat()}
++        raw = canonical(event).encode("utf-8")
++        frame = struct.pack("!I", len(raw)) + raw + TAIL + digest(raw).encode("ascii") + b"\n"
++        if len(raw) > MAX_FRAME or self.path.stat().st_size + len(frame) > MAX_JOURNAL:
++            raise DataError("capacity_exceeded", 413)
++        with self.path.open("ab") as stream:
++            stream.write(frame); stream.flush(); os.fsync(stream.fileno())
++        return event
++
++    @staticmethod
++    def replay(events):
++        state = {"jobs": {}, "plans": {}, "targets": {}, "selection": None, "fence": None, "owned": {}, "deletions": {}, 'source':None}
++        for event in events:
++            kind, p = event["kind"], event["payload"]
++            if kind in ("job.create", "job.update"):
++                old = state["jobs"].get(p["job_id"], {})
++                state["jobs"][p["job_id"]] = {**old, **p, "control_seq": event["seq"]}
++            elif kind == "plan.create":
++                state["plans"][p["plan_id"]] = p
++            elif kind in ("target.register", "target.seal"):
++                state["targets"][p["target_id"]] = {**state["targets"].get(p["target_id"], {}), **p}
++            elif kind == "selector_commit":
++                state["selection"] = p
++            elif kind == "maintenance.fence":
++                state["fence"] = p
++            elif kind in ("owned.begin", "owned.end"):
++                state["owned"][p["owned_id"]] = {**state["owned"].get(p["owned_id"], {}), **p}
++            elif kind == "deletion.observe":
++                state["deletions"][p["entity_kind"] + ":" + p["entity_id"]] = p
++            elif kind=='source.register':state['source']=p
++            elif kind.startswith('q.'):
++                from .q_store import replay_event
++                replay_event(state, kind, p)
++        return state
++
++    def _validated_locked(self, *, writable=False):
++        """仅由持有本hub真实文件锁的读写入口调用，返回当前完整字节的已验快照。"""
++        # 每次仍在真实锁内读取当前完整字节；仅复用同一文件对象和摘要的已验投影。
++        info = regular(self.path)
++        with self.path.open('rb') as stream:
++            opened = os.fstat(stream.fileno())
++            if (info.st_dev, info.st_ino) != (opened.st_dev, opened.st_ino):
++                raise DataError('control_corrupt', 503)
++            if opened.st_size > MAX_JOURNAL:
++                raise DataError('capacity_exceeded', 413)
++            raw = stream.read(opened.st_size + 1)
++            after = os.fstat(stream.fileno())
++        current = regular(self.path)
++        if len(raw) > MAX_JOURNAL:
++            raise DataError('capacity_exceeded', 413)
++        if (opened.st_dev, opened.st_ino, opened.st_size) != (after.st_dev, after.st_ino, len(raw)) or (current.st_dev, current.st_ino, current.st_size) != (opened.st_dev, opened.st_ino, len(raw)):
++            raise DataError('control_corrupt', 503)
++        identity = (opened.st_dev, opened.st_ino, digest(raw))
++        cached = getattr(self, '_state_cache', None)
++        if cached is None or cached[0] != identity:
++            events, tail = self._read(raw)
++            if not events or events[0]['kind']!='hub.init' or events[0]['payload'].get('control_id')!=self.control_id:
++                raise DataError('control_corrupt',503)
++            state = self.replay(events)
++            cached = (identity, canonical(state), {key: canonical(job) for key, job in state['jobs'].items()}, tail, events)
++            self._state_cache = cached
++        if writable and cached[3]:
++            raise DataError('control_tail_unconfirmed', 503)
++        return cached
++
++    def _current_snapshot(self, job_id=None, *, writable=False):
++        with self.lock.acquire():
++            cached = self._validated_locked(writable=writable)
++            # 不把可变的日志payload或缓存对象交给调用者。
++            return json.loads(cached[1] if job_id is None else cached[2][job_id])
++
++    def state(self):
++        return self._current_snapshot()
++
++    def execution_job(self, job_id):
++        """同一完整字节校验，只复制当前操作，避免逐行解码无关计划。"""
++        return self._current_snapshot(job_id)
++
++    def commit(self, kind, payload, *, validate=None):
++        with self.lock.acquire(True, timeout=1):
++            cached = self._validated_locked(writable=True)
++            events, state = cached[4], json.loads(cached[1])
++            if validate is not None:
++                validate(state)
++            return self._append(events, kind, payload)
++
++    def assert_writable(self):
++        return self._current_snapshot(writable=True)
++
++    def q_decide(self, kind, decide):
++        """Q-only CAS. Decision seq is selected under the actual journal lock (K1)."""
++        if kind not in ('q.bind','q.prepared','q.approved','q.revoked','q.claim','q.launch_claim',
++                        'q.admission_intent','q.admission_observed','q.closed',
++                        'q.approval_seen','q.approval_invalidated','q.cleanup_pending','q.cleanup_done'):
++            raise DataError('q_event_not_allowed')
++        with self.lock.acquire(True, timeout=1):
++            cached = self._validated_locked(writable=True)
++            state, events = json.loads(cached[1]), cached[4]
++            payload = decide(state, len(events) + 1)
++            if payload is None:
++                return None
++            self._append(events, kind, payload)
++            return payload
++
++    def q_observe_approval(self,pid,result):
++        """Clock check and its irreversible witness share the journal CAS."""
++        from . import q_clock
++        with self.lock.acquire(True,timeout=1):
++            cached=self._validated_locked(writable=True)
++            state=json.loads(cached[1]);row=state.get('q',{}).get('requests',{}).get(pid)
++            if row is None or not row.get('approval'):result['valid']=False;return
++            approval=row['approval'];aid=approval['approval_id']
++            invalid=row.get('invalid_approvals',{}).get(aid)
++            if invalid:result['valid']=False;return
++            # Sample inside the lock: concurrent valid readers cannot commit
++            # observations out of order and manufacture a UTC regression.
++            try:now=q_clock.sample()
++            except (DataError,OSError,AttributeError):now=None
++            reason='q_clock_domain_unknown' if now is None else q_clock.validate(approval['body'],row.get('approval_seen'),now)
++            result['valid']=reason is None
++            payload={'prepared_id':pid,'approval_id':aid}
++            if reason:kind='q.approval_invalidated';payload['reason']=reason
++            else:kind='q.approval_seen';payload['sample']=now
++            self._append(cached[4],kind,payload)
++
++    @staticmethod
++    def receipt(job):
++        return {key: job[key] for key in PUBLIC_JOB if key in job}
++
++    def current_receipt(self, state, job):
++        receipt = self.receipt(job)
++        if job.get('completion_protocol') == 1 and job['state'] in ('published','received','verified','active_readonly','deleted','deleted_pending'):
++            confirmation=job.get('completion_confirmed_ns')
++            deadline=job.get('execution',{}).get('deadline_ns')
++            if job['kind']=='source_delete' and job.get('cleanup_execution'):
++                attempt=job['cleanup_execution'];proof=job.get('cleanup_confirmation') or {}
++                deadline=attempt.get('deadline_ns')
++                confirmation=proof.get('confirmed_ns') if (
++                    proof.get('actor_id')==attempt.get('actor_id')
++                    and proof.get('clock_domain')==attempt.get('clock_domain')
++                    and proof.get('tombstone_id')) else None
++            if type(confirmation) is not int or type(deadline) is not int or not 0 < confirmation < deadline:
++                receipt.update(state={'portable_export':'published_unconfirmed','restore_checkpoint':'published_unconfirmed',
++                    'upload':'upload_unconfirmed','restore':'restore_unconfirmed','activate':'activation_unconfirmed',
++                    'source_delete':'deletion_unconfirmed'}[job['kind']],stage='completion_unconfirmed')
++        if job['kind']=='restore':
++            receipt.update(plan_id=job['scope']['plan_id'],plan_sha256=job['scope']['plan_sha256'])
++        selection = state['selection']
++        if selection is not None and selection.get('activation_job_id') == job['job_id']:
++            receipt.update(selector_commit='confirmed',selection_generation=selection['generation'],target_id=selection['target_id'])
++            if job['state'] != 'active_readonly':
++                receipt.update(state='activation_unconfirmed', stage='selector_committed')
++        return receipt
++
++    def create_or_get_job(self, command, origin_context):
++        request_sha = digest(command.normalized())
++        key = business_key(command.business_key)
++        with self.lock.acquire(True, timeout=1):
++            cached = self._validated_locked(writable=True)
++            events, state = cached[4], json.loads(cached[1])
++            for job in state["jobs"].values():
++                if job["business_key"] == key:
++                    if job["request_sha256"] != request_sha or job["kind"] != command.kind:
++                        raise DataError("request_conflict")
++                    return self.current_receipt(state, job)
++            if len(state["jobs"]) >= 256:
++                raise DataError("capacity_exceeded", 413)
++            now = datetime.now(timezone.utc).isoformat()
++            job = {"job_id": str(uuid4()), "business_key": key, "kind": command.kind,
++                   "request_sha256": request_sha, "scope": command.scope,
++                   "origin": origin_context.public(), "state": "prepared", "stage": "prepared",
++                   "revision": 1, "created_at": now, "updated_at": now, "execution_protocol": 2, "completion_protocol": 1}
++            event = self._append(events, "job.create", job)
++            return self.receipt({**job, "control_seq": event["seq"]})
++
++    def update_job(self, job_id, expected_revision, *, expected_states=None, validate=None, **changes):
++        uuid(job_id)
++        changes.pop("control_seq", None)
++        forbidden = {"business_key", "kind", "request_sha256", "origin", "scope", "job_id", "revision"}
++        if forbidden.intersection(changes):
++            raise ValueError("不可改写操作身份")
++        payload = {"job_id": job_id, **changes, "revision": expected_revision + 1,
++                   "updated_at": datetime.now(timezone.utc).isoformat()}
++        def check(state):
++            job = state["jobs"].get(job_id)
++            if job is None or job["revision"] != expected_revision:
++                raise DataError("request_conflict")
++            if expected_states is not None and job['state'] not in expected_states:
++                raise DataError('request_conflict')
++            if job['state'] in ('cancelled', 'cancel_requested') and changes.get('state', job['state']) not in ('cancel_requested', 'cancelled', 'cleanup_unconfirmed'):
++                raise DataError('operation_cancelled')
++            if changes.get('state') in ('published', 'received', 'verified', 'active_readonly', 'deleted', 'deleted_pending'):
++                from .operations import validate_success
++                if job.get('execution_protocol') != 2 or validate is None or expected_states != ('committing',):
++                    raise DataError('operation_authority_unknown')
++                validate_success(job, changes['state'])
++            if validate is not None:
++                validate(job)
++        self.commit("job.update", payload, validate=check)
++        return self.get(job_id)
++
++    def change_job(self, job_id, decide):
++        """短锁内读取、验证与CAS；decide仅计算字段，不能进行I/O。"""
++        uuid(job_id)
++        with self.lock.acquire(True, timeout=1):
++            cached = self._validated_locked(writable=True)
++            events, state = cached[4], json.loads(cached[1])
++            job = state['jobs'].get(job_id)
++            if job is None: raise DataError('not_found', 404)
++            changes = decide(job)
++            if changes:
++                payload = {'job_id': job_id, **changes, 'revision': job['revision'] + 1,
++                           'updated_at': datetime.now(timezone.utc).isoformat()}
++                event = self._append(events, 'job.update', payload)
++                job = {**job, **payload, 'control_seq': event['seq']}
++            return self.current_receipt(state, job)
++
++    def get(self, job_id):
++        state = self.state()
++        job = state["jobs"].get(uuid(job_id))
++        if job is None:
++            raise DataError("not_found", 404)
++        return self.current_receipt(state, job)
++
++    def get_by_key(self, key, kind=None):
++        business_key(key)
++        state = self.state()
++        for job in state["jobs"].values():
++            if job["business_key"] == key and (kind is None or kind == job["kind"]):
++                return self.current_receipt(state, job)
++        raise DataError("not_found", 404)
++
++    def reconcile(self, job_id):
++        return {**self.get(job_id), "reconcile": "journal_confirmed"}
++
++    def artifact_path(self, category, identity):
++        if category not in ("plans", "credentials", "overlays", "receipts", "q-root", "q-prepared"):
++            raise ValueError("私有类别未受信")
++        uuid(identity)
++        return self.root / f"{category}-{identity}.bin"
++
++    def save_artifact(self, category, identity, data, check=lambda: None):
++        check()
++        path = self.artifact_path(category, identity)
++        temporary = path.with_suffix(".pending")
++        with temporary.open("xb") as stream:
++            check()
++            stream.write(data); stream.flush(); os.fsync(stream.fileno())
++        check()
++        private_file(temporary)
++        if os.name=='nt' and category in ('q-root','q-prepared'):
++            # Windows rename is atomic and refuses an existing destination.
++            # Unlike hard links it also works inside the workspace file sandbox.
++            os.rename(temporary,path)
++            check()
++            return digest(data)
++        publish(temporary, path, check=check)
++        # 只删除本调用准确临时文件，发布原件保留。
++        temporary.unlink()
++        check()
++        return digest(data)
++
++    def read_artifact(self, category, identity, expected_sha=None, limit=64 * 1024**2):
++        path = self.artifact_path(category, identity)
++        if regular(path).st_size > limit:
++            raise DataError("capacity_exceeded", 413)
++        data = path.read_bytes()
++        if expected_sha is not None and digest(data) != expected_sha:
++            raise DataError("integrity_failed", 422)
++        return data
++
++
++class CredentialVault:
++    """只读凭据仅以当前 Windows 用户的 DPAPI 密文持久保存。"""
++    def __init__(self, hub):
++        self.hub = hub
++
++    @staticmethod
++    def _crypt(data, decrypt=False):
++        if os.name != "nt":
++            raise DataError("credential_unavailable", 503)
++        from ctypes import wintypes
++        class Blob(ctypes.Structure):
++            _fields_ = [("size", wintypes.DWORD), ("data", ctypes.POINTER(ctypes.c_ubyte))]
++        buf = ctypes.create_string_buffer(data)
++        incoming = Blob(len(data), ctypes.cast(buf, ctypes.POINTER(ctypes.c_ubyte)))
++        outgoing = Blob()
++        dll = ctypes.WinDLL("crypt32", use_last_error=True)
++        function = dll.CryptUnprotectData if decrypt else dll.CryptProtectData
++        function.argtypes = [ctypes.POINTER(Blob), ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(Blob)]
++        if not function(ctypes.byref(incoming), None, None, None, None, 1, ctypes.byref(outgoing)):
++            raise DataError("credential_unavailable", 503)
++        try:
++            return ctypes.string_at(outgoing.data, outgoing.size)
++        finally:
++            kernel = ctypes.WinDLL("kernel32", use_last_error=True)
++            kernel.LocalFree.argtypes = [ctypes.c_void_p]
++            kernel.LocalFree(outgoing.data)
++
++    def save(self, credentials):
++        identity = str(uuid4())
++        encrypted = self._crypt(canonical(credentials).encode("utf-8"))
++        sha = self.hub.save_artifact("credentials", identity, encrypted)
++        return {"id": identity, "sha256": sha}
++
++    def read(self, reference):
++        try:
++            encrypted = self.hub.read_artifact("credentials", reference["id"], reference["sha256"], 65536)
++            return json.loads(self._crypt(encrypted, True))
++        except (OSError, ValueError, KeyError):
++            raise DataError("credential_unavailable", 503) from None
+--- before/backend/app/data_exit/deletions.py
++++ after/backend/app/data_exit/deletions.py
+@@ -1,8 +1,95 @@
+ """准确资料墓碑与清理；原记忆撤销和 M3 清理继续由既有实现负责。"""
+ import asyncio
++import math
++import time
++from uuid import uuid4
+ from .codec import plain
+ from .contracts import DataError, DataJobCommand, Limits, canonical, digest, uuid
+ from .operations import Operation, acknowledge_unstarted, joined_thread
++
++
++class _CleanupAttempt(Operation):
++    """Fresh, bounded cleanup only; never restores the original execution ticket.
++
++    The source tombstone must be read back from PG before any cleanup or success.
++    The original execution/admission remains immutable journal history. This
++    attempt cannot admit a tombstone, launch work, or extend a Q approval.
++    """
++    def __init__(self, hub, job_id, seconds):
++        from .operations import CLOCK_DOMAIN
++        if not math.isfinite(seconds) or seconds <= 0:
++            raise DataError('operation_timeout',504)
++        self.hub,self.job_id,self.actor=hub,job_id,str(uuid4())
++        now=time.monotonic_ns()
++        self.deadline_ns=now+int(seconds*1e9)
++        self.admission=None
++        self.tombstone=None
++        self.clock_domain=CLOCK_DOMAIN
++        def begin(job):
++            execution=job.get('execution') or {}
++            if (job['kind']!='source_delete' or job.get('execution_protocol')!=2
++                or job.get('completion_protocol')!=1
++                or (execution.get('admission') or {}).get('phase')!='source_tombstone_commit'
++                or not (execution.get('admission') or {}).get('ticket')):
++                raise DataError('operation_authority_unknown')
++            if job['state'] not in ('deleted_pending','deletion_unconfirmed'):
++                raise DataError('request_conflict')
++            self.original_execution=canonical(execution)
++            return {'stage':'cleanup_retry','cleanup_execution':{
++                'clock_domain':self.clock_domain,'actor_id':self.actor,
++                'started_ns':now,'deadline_ns':self.deadline_ns},'cleanup_confirmation':None}
++        self.revision=hub.change_job(job_id,begin)['revision']
++
++    def _validate(self,job,*,deadline=True):
++        from .operations import CLOCK_DOMAIN
++        attempt=job.get('cleanup_execution') or {}
++        if (CLOCK_DOMAIN!=self.clock_domain or attempt.get('clock_domain')!=self.clock_domain
++            or attempt.get('actor_id')!=self.actor or attempt.get('deadline_ns')!=self.deadline_ns
++            or canonical(job.get('execution'))!=self.original_execution):
++            raise DataError('operation_authority_unknown')
++        if job['kind']!='source_delete' or job['state'] not in ('deleted_pending','deletion_unconfirmed','deleted'):
++            raise DataError('request_conflict')
++        if job['revision']!=self.revision:raise DataError('request_conflict')
++        if deadline:self.remaining()
++
++    def admit(self,phase):
++        raise DataError('operation_authority_unknown')
++
++    def confirm_tombstone(self,tomb):
++        self.check()
++        job=self.hub.execution_job(self.job_id);scope=job['scope']
++        if (tomb.get('entity_kind')!='source' or str(tomb.get('entity_id'))!=scope['source_id']
++            or tomb.get('business_id_observed')!=job['business_key']
++            or tomb.get('manifest_sha256')!=scope['impact_sha256']
++            or tomb.get('effective_revision')!=scope['expected_revision']+1):
++            raise DataError('deletion_unconfirmed',503)
++        self.tombstone=str(tomb['tombstone_id'])
++
++    def finish(self,state,stage=None,**changes):
++        if self.tombstone is None or state not in ('deleted','deleted_pending'):
++            raise DataError('operation_authority_unknown')
++        def finish(job):
++            self._validate(job)
++            if job['state'] not in ('deleted_pending','deletion_unconfirmed') or job.get('cleanup_confirmation'):
++                raise DataError('request_conflict')
++            return {**changes,'state':state,'stage':stage or state,'cleanup_confirmation':None}
++        self.revision=self.hub.change_job(self.job_id,finish)['revision']
++        confirmed_ns=time.monotonic_ns()
++        def confirm(job):
++            self._validate(job)
++            return {'cleanup_confirmation':{'actor_id':self.actor,'clock_domain':self.clock_domain,
++                'confirmed_ns':confirmed_ns,'tombstone_id':self.tombstone}}
++        receipt=self.hub.change_job(self.job_id,confirm)
++        self.revision=receipt['revision']
++        return receipt
++
++    def fail(self,error,*,cleanup_complete,state='deletion_unconfirmed',**facts):
++        def fail(job):
++            self._validate(job,deadline=False)
++            return {**facts,'state':'deletion_unconfirmed','stage':'deletion_unconfirmed',
++                'cleanup_confirmation':None,
++                'error_code':error.code if isinstance(error,DataError) else 'storage_unavailable'}
++        return self.hub.change_job(self.job_id,fail)
+ 
+ 
+ class SourceDeletionService:
+@@ -10,6 +97,14 @@
+         self.hub, self.repository, self.references, self.gate = hub, repository, references, gate
+         self.stop_affected = stop_affected
+         self.limits = limits or Limits()
++
++    @staticmethod
++    def _memories(connection,source_id):
++        return plain(connection.execute("""WITH RECURSIVE affected AS(
++          SELECT memory_id FROM public.learning_memory_dependencies WHERE source_id=%s
++          UNION SELECT d.memory_id FROM public.learning_memory_dependencies d JOIN affected a ON d.upstream_memory_id=a.memory_id
++        ) SELECT r.memory_id,r.version FROM public.learning_memory_revisions r
++          WHERE memory_id IN(SELECT memory_id FROM affected) ORDER BY memory_id,version""",(source_id,)).fetchall())
+ 
+     @staticmethod
+     def _activities(connection,source_id):
+@@ -35,7 +130,7 @@
+         versions = plain(connection.execute("SELECT id,filename,format,sha256,size FROM public.material_versions WHERE source_id=%s ORDER BY id", (source_id,)).fetchall())
+         if len(versions) > 50000: raise DataError("capacity_exceeded", 413)
+         activities = self._activities(connection,source_id)
+-        memories = plain(connection.execute("SELECT DISTINCT memory_id,version FROM public.learning_memory_dependencies WHERE source_id=%s ORDER BY memory_id,version", (source_id,)).fetchall())
++        memories = self._memories(connection,source_id)
+         candidates = plain(connection.execute("SELECT id,version_id,status FROM public.pdf_review_candidates WHERE source_id=%s ORDER BY id", (source_id,)).fetchall())
+         activity_ids = [r["activity_id"] for r in activities]
+         previews = plain(connection.execute("SELECT preview_id,activity_id,state,reserve_seconds,elapsed_seconds FROM public.html_preview_sessions WHERE activity_id=ANY(%s::uuid[]) ORDER BY preview_id", (activity_ids,)).fetchall())
+@@ -63,6 +158,11 @@
+             return self._impact(connection, source_id, expected_revision)
+ 
+     async def confirm(self, source_id, expected_revision, impact_sha, business_key):
++        if 'q' in self.hub.state():
++            from .q_store import QAuthority
++            async with QAuthority(self.hub).async_policy():
++                with self.hub.operation_lock.acquire(True,timeout=1):
++                    return await self._confirm(source_id,expected_revision,impact_sha,business_key)
+         with self.hub.operation_lock.acquire(True,timeout=1):
+             return await self._confirm(source_id,expected_revision,impact_sha,business_key)
+ 
+@@ -92,7 +192,8 @@
+                                 (source_id,business_key,impact_sha)).fetchone()
+                             if tomb is None:raise DataError('deletion_unconfirmed',503)
+                             if tomb['effective_revision']!=expected_revision+1:raise DataError('request_conflict')
+-                            return {'hash_size_targets':tomb['hash_size_targets'],'activities':self._activities(connection,source_id)},plain(tomb)
++                            return {'hash_size_targets':tomb['hash_size_targets'],'activities':self._activities(connection,source_id),
++                                    'memories':self._memories(connection,source_id)},plain(tomb)
+                         impact = self._impact(connection, source_id, expected_revision, lock=True)
+                         if impact["impact_sha256"] != impact_sha: raise DataError("snapshot_changed")
+                         connection.execute('SELECT memory_id FROM public.learning_memories WHERE memory_id=ANY(%s::uuid[]) ORDER BY memory_id FOR UPDATE',
+@@ -106,14 +207,19 @@
+                     return impact, value
+         tombstone_confirmed=False
+         try:
+-            operation = Operation.resume_cleanup(self.hub, job['job_id']) if retry else Operation(self.hub, job['job_id'], self.limits.operation_seconds, 'checking_deletion')
++            operation = _CleanupAttempt(self.hub,job['job_id'],self.limits.operation_seconds) if retry else Operation(self.hub, job['job_id'], self.limits.operation_seconds, 'checking_deletion')
+             impact, tomb = await joined_thread(tombstone)
++            if retry:operation.confirm_tombstone(tomb)
+             tombstone_confirmed=True
+             self.hub.commit("deletion.observe", plain(tomb))
+             operation.check()
+             stop_state = "not_owned"
+             if self.stop_affected is not None:
+                 stop_state = await asyncio.wait_for(self.stop_affected([r["activity_id"] for r in impact["activities"]]), operation.remaining())
++            operation.check()
++            from .q_cleanup import cleanup
++            q_outcomes=await joined_thread(cleanup,self.hub,source_ids=[source_id],
++                memory_ids=[row['memory_id'] for row in impact['memories']])
+             operation.check()
+             outcomes = await joined_thread(self.references.exclusive_cleanup, impact["hash_size_targets"], operation=operation)
+             def observe():
+@@ -124,16 +230,16 @@
+                             (tomb['tombstone_id'],impact_sha,Jsonb(outcomes),self.references.maintenance_key))
+             try:await joined_thread(observe)
+             except DataError:pass
+-            uncertain = any(r["state"] == "physical_result_unknown" for r in outcomes) or stop_state=='unconfirmed'
++            uncertain = any(r["state"] == "physical_result_unknown" for r in outcomes+q_outcomes) or stop_state=='unconfirmed'
+             receipt = {"source_id": source_id, "tombstone_id": tomb["tombstone_id"], "effective_revision": tomb["effective_revision"],
+-                       "cleanup": outcomes, "preview_stop": stop_state, "history_and_old_backups_retained": True}
++                       "cleanup": outcomes,"q_cleanup":q_outcomes, "preview_stop": stop_state, "history_and_old_backups_retained": True}
+             from uuid import uuid4
+             receipt_id=str(uuid4())
+             receipt_sha=self.hub.save_artifact("receipts", receipt_id, canonical(receipt).encode("utf-8"), operation.check)
+             return operation.finish('deleted_pending' if uncertain else 'deleted',
+                                       stage="cleanup_unconfirmed" if uncertain else "deleted",
+                                       receipt_id=receipt_id,receipt_sha256=receipt_sha,
+-                                      counts={"originals": len(outcomes), "unconfirmed": sum(r["state"] == "physical_result_unknown" for r in outcomes)})
++                                      counts={"originals": len(outcomes), "unconfirmed": sum(r["state"] == "physical_result_unknown" for r in outcomes+q_outcomes)})
+         except BaseException as error:
+             try:
+                 rejected=(not tombstone_confirmed and isinstance(error,DataError)
+--- before/backend/app/capabilities/q_context.py
++++ after/backend/app/capabilities/q_context.py
+@@ -326,10 +326,51 @@
+             configured_model=service.model,service_sha256=service_identity(service),template_set_sha256=authority.manifest.template_set_sha256,
+             snapshot=state,provenance_sha256=digest(provenance),max_output_tokens=getattr(request,'max_output_tokens',0),
+             created_at=utcnow().isoformat(),valid_until=min(datetime.fromisoformat(state['activity']['deadline_at']),datetime.fromisoformat(authority.grant.valid_until_utc)).isoformat())
+-        row=authority.prepare(p,raw,payload,provenance,intent)
+-        projection=authority.projection(row,current=row['prepared']['snapshot']==state)
++        dependencies=await cleanup_dependencies(ledger,aid,state,raw,payload,intent)
++        row=authority.prepare(p,raw,payload,provenance,intent,dependencies=dependencies)
++        projection=authority.projection(row,current=row['prepared']['snapshot']==state,
++            pg_consumed=(await command_fact(ledger,row))['consumed'])
+         ref=authority.reference(row) if projection['can_continue'] else None
+         return projection,service.model_copy(update={'outbound_authorization':ref}) if ref else service
++
++
++async def cleanup_dependencies(ledger,aid,state,*documents):
++    """All selected historical versions and transitive memory/source edges.
++
++    This denial index contains identifiers only. The artifact digest continues
++    to bind the complete request/payload/provenance/intent original bytes.
++    """
++    from uuid import UUID
++    sources={s['source_id'] for s in state['sources']}
++    memories={m['memory_id'] for m in state['memory'].get('refs',[])}
++    def walk(value):
++        if isinstance(value,dict):
++            for key,item in value.items():
++                if key in ('source_id','memory_id','upstream_memory_id') and isinstance(item,str):
++                    try:identity=str(UUID(item))
++                    except ValueError:pass
++                    else:(sources if key=='source_id' else memories).add(identity)
++                walk(item)
++        elif isinstance(value,(list,tuple)):
++            for item in value:walk(item)
++        elif isinstance(value,str) and value[:1] in ('{','['):
++            try:parsed=json.loads(value)
++            except (ValueError,RecursionError):return
++            walk(parsed)
++    for document in documents:walk(document)
++    async def q_snapshot_dependencies(connection):
++        cursor=await connection.execute("""WITH RECURSIVE selected(memory_id,version) AS(
++          SELECT memory_id,version FROM public.activity_memory_choices WHERE activity_id=%s
++          UNION SELECT d.upstream_memory_id,d.upstream_version FROM public.learning_memory_dependencies d
++          JOIN selected s USING(memory_id,version) WHERE d.upstream_memory_id IS NOT NULL
++        ) SELECT s.memory_id::text,d.source_id::text,d.upstream_memory_id::text
++          FROM selected s LEFT JOIN public.learning_memory_dependencies d USING(memory_id,version)""",(aid,))
++        return await cursor.fetchall()
++    for dep in await ledger._transaction(q_snapshot_dependencies):
++        memories.add(dep['memory_id'])
++        if dep['upstream_memory_id']:memories.add(dep['upstream_memory_id'])
++        if dep['source_id']:sources.add(dep['source_id'])
++    return {'sources':sorted(sources),'memories':sorted(memories)}
+ 
+ 
+ async def public_projection(ledger,aid,key,*,expected=False):
+@@ -339,9 +380,42 @@
+     rows=[r for r in authority.hub.state()['q']['requests'].values() if r['prepared']['activity_id']==aid and r['prepared']['business_key']==key]
+     if not rows:return {'state':'unavailable','can_continue':False,'reason':'q_request_not_prepared'} if expected else None
+     state,_,_=await snapshot(ledger,aid)
+-    values=[authority.projection(r,current=r['prepared']['snapshot']==state) for r in rows]
++    values=[authority.projection(r,current=r['prepared']['snapshot']==state,
++            pg_consumed=(await command_fact(ledger,r))['consumed']) for r in rows]
+     if len(values)==1:return values[0]
+     return {'state':'approved' if all(x['can_continue'] for x in values) else 'pending','can_continue':all(x['can_continue'] for x in values),'batches':values}
++
++
++async def q_snapshot_command_fact(ledger,row):
++    """Volatile PG consumption facts stay outside the frozen request snapshot.
++
++    A worker legitimately sees a started command after the API claim; it uses
++    check_reference/check_snapshot_sql instead of this UI/operator-only gate.
++    """
++    p=row['prepared'];domain=p['domain']
++    tables={'teaching':'teaching_commands','interview':'interview_commands',
++            'html':'html_commands','retrieval':'retrieval_commands'}
++    async def q_snapshot_command(connection):
++        if domain=='learning':
++            cursor=await connection.execute('SELECT state,disposition FROM public.activity_operations WHERE activity_id=%s AND operation_id=%s',
++                (p['activity_id'],p['operation_id']))
++            fact=await cursor.fetchone()
++            return {'exists':fact is not None,'status':fact['state'] if fact else None,'launch_claimed':False,
++                    'terminal':fact['disposition'] if fact else None,'consumed':fact is not None}
++        table=tables.get(domain)
++        if table is None:raise AdmissionDenied('q_command_domain_unknown')
++        cursor=await connection.execute('SELECT to_jsonb(c) AS fact FROM public.'+table+' c WHERE activity_id=%s AND business_key=%s',
++            (p['activity_id'],p['business_key']))
++        found=await cursor.fetchone();fact=found['fact'] if found else None
++        if fact is None:return {'exists':False,'status':None,'launch_claimed':False,'terminal':None,'consumed':True}
++        claimed=bool(fact.get('launch_claimed') or fact.get('launch_claimed_at'))
++        terminal=fact.get('terminal_disposition') or fact.get('effect_applied') or fact.get('obsolete') or fact.get('obsolete_at') or fact.get('abandoned_at')
++        return {'exists':True,'status':fact['status'],'launch_claimed':claimed,'terminal':bool(terminal),
++                'consumed':claimed or bool(terminal) or fact['status']!='accepted'}
++    return await ledger._transaction(q_snapshot_command)
++
++
++command_fact=q_snapshot_command_fact
+ 
+ 
+ async def check_snapshot_sql(connection,state,authority):
+@@ -393,6 +467,7 @@
+         for service in services:
+             row=authority.check_reference(service.outbound_authorization)
+             if row.get('claim') or row.get('launch_claimed'):raise AdmissionDenied('q_launch_consumed')
++            if (await command_fact(ledger,row))['consumed']:raise AdmissionDenied('q_launch_consumed')
+             state,_,_=await snapshot(ledger,row['prepared']['activity_id'])
+             check_instance(authority,ledger,state)
+             if state!=row['prepared']['snapshot']:raise AdmissionDenied('q_prepared_changed')
+--- before/backend/app/operator/q_request.py
++++ after/backend/app/operator/q_request.py
+@@ -38,11 +38,13 @@
+ 
+ 
+ async def inspect_request(ledger,pid):
+-    from app.capabilities.q_context import snapshot,check_instance,check_snapshot_sql
++    from app.capabilities.q_context import snapshot,check_instance,check_snapshot_sql,command_fact
+     authority=authority_for(ledger)
+     if authority is None:raise DataError('q_control_missing')
+     async with authority.async_policy(shared=True):
+         row=authority.request(pid)
++        if row.get('cleanup'):
++            return {'prepared_id':pid,'state':'invalidated','request_available':False,'cleanup':row['cleanup']['state']}
+         state,_,_=await snapshot(ledger,row['prepared']['activity_id'])
+         check_instance(authority,ledger,state)
+         current=state==row['prepared']['snapshot']
+@@ -52,8 +54,9 @@
+             await check_snapshot_sql(connection,state,authority)
+         await ledger._transaction(q_snapshot)
+         artifact=authority.artifact(row)
++        fact=await command_fact(ledger,row)
+         return {'prepared_id':pid,'prepared_sha256':row['prepared_sha256'],
+-            'projection':authority.projection(row),'prepared':row['prepared'],
++            'projection':authority.projection(row,pg_consumed=fact['consumed']),'prepared':row['prepared'],'pg_command_fact':fact,
+             'request':artifact['request'],'provider_object':artifact['payload'],
+             'provider_bytes_utf8':canonical(artifact['payload']),'provenance':artifact['provenance'],
+             'request_available':True,'execution_class':authority.bundle['execution_class']}
+@@ -66,7 +69,7 @@
+         inspection=await inspect_request(ledger,pid)
+         if not inspection['request_available'] or inspection.get('prepared_sha256')!=expected_sha256:
+             raise DataError('q_inspection_changed')
+-        return authority.approve(pid,principal_id(),current=True)
++        return authority.approve(pid,principal_id(),current=True,pg_consumed=inspection['pg_command_fact']['consumed'])
+ 
+ 
+ def read_config(path):
+--- before/backend/app/memory/service.py
++++ after/backend/app/memory/service.py
+@@ -14,6 +14,14 @@
+ 
+     @owned_service
+     async def submit_command(self,command):
++        from app.data_exit.q_store import authority_for
++        authority=authority_for(self.ledger)
++        if authority is not None:
++            async with authority.async_policy():
++                return await self._submit_command(command)
++        return await self._submit_command(command)
++
++    async def _submit_command(self,command):
+         capabilities=await self.capabilities()
+         if not capabilities["write"]:
+             raise MemoryRefusal(capabilities["reason"] or "memory_permissions_not_ready","学习记忆写入暂不可用",503)
+@@ -35,6 +43,20 @@
+                 except Exception:pass
+                 receipt["cleanup_status_unconfirmed"]=receipt["purge_state_now"]!="done"
+         observer=getattr(self.ledger,'tombstone_observer',None)
++        gate=getattr(self.ledger,'mutation_gate',None)
++        if command.action in ('revoke','purge') and gate is not None and 'q' in gate.hub.state():
++            from app.data_exit.q_cleanup import cleanup
++            from app.data_exit.operations import joined_thread
++            try:
++                ids=await self.ledger.q_snapshot_memory_cleanup_ids(command.memory_id)
++                outcomes=await joined_thread(cleanup,gate.hub,memory_ids=ids)
++                unconfirmed=any(x['state']=='physical_result_unknown' for x in outcomes)
++            except Exception:unconfirmed=True
++            if unconfirmed:
++                # Existing receipt vocabulary reports combined cleanup, even
++                # when the independent database-body purge already committed.
++                receipt['cleanup_status_unconfirmed']=True
++                receipt['purge_state_now']='pending'
+         if command.action in ('revoke','purge') and observer is not None:
+             try:await observer(command.memory_id)
+             except Exception:pass
+--- before/backend/app/memory/repository.py
++++ after/backend/app/memory/repository.py
+@@ -468,6 +468,15 @@
+          VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+          (command.business_key,command.action,command.memory_id,command.request_sha(),command.slot(),effect,
+           command.expected_revision,after_revision,after_version,canonical(meta),manifest,sha(manifest) if manifest else None))
++
++    async def q_snapshot_memory_cleanup_ids(self,memory_id):
++        async def q_snapshot_memory_dependencies(connection):
++            cursor=await connection.execute("""WITH RECURSIVE affected(memory_id) AS(
++              SELECT %s::uuid UNION SELECT d.memory_id FROM public.learning_memory_dependencies d
++              JOIN affected a ON d.upstream_memory_id=a.memory_id
++            ) SELECT memory_id::text FROM affected ORDER BY memory_id""",(memory_id,))
++            return [row['memory_id'] for row in await cursor.fetchall()]
++        return await self._transaction(q_snapshot_memory_dependencies)
+ 
+     async def apply_memory_command(self,command:MemoryCommandInput):
+         async def operation(connection):
+--- before/backend/app/capabilities/q_protocol.py
++++ after/backend/app/capabilities/q_protocol.py
+@@ -200,6 +200,14 @@
+         return digest(self.model_dump(mode='json'))
+ 
+ 
++class ApprovalClock(Closed):
++    schema: Literal['retrolume.q-clock.v1'] = 'retrolume.q-clock.v1'
++    domain: str = Field(pattern=HEX)
++    issued_mono_ns: int = Field(ge=0)
++    issued_upper_ns: int = Field(ge=0)
++    deadline_mono_ns: int = Field(gt=0)
++
++
+ class DecisionBody(Closed):
+     schema: Literal['retrolume.q-decision.v2'] = 'retrolume.q-decision.v2'
+     prepared_sha256: str = Field(pattern=HEX)
+@@ -209,11 +217,12 @@
+     expires_at: str
+     decision: Literal['approve'] = 'approve'
+     event_seq: int = Field(gt=0)
++    clock: ApprovalClock | None = None
+ 
+     @property
+     def approval_id(self):
+         # K1: this object has no approval_id field and its seq is fixed under the journal lock.
+-        return digest(self.model_dump(mode='json'))
++        return digest(self.model_dump(mode='json',exclude_none=True))
+ 
+ 
+ def utcnow():

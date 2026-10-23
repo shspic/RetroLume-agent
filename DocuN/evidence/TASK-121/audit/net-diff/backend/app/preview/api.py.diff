@@ -1,0 +1,35 @@
+--- initial/backend/app/preview/api.py
++++ final/backend/app/preview/api.py
+@@ -36,11 +36,17 @@
+     if request.headers.get("content-type","").split(";")[0].strip()!="application/json":raise HtmlRefusal("unsupported_media_type",status=415)
+     data=bytearray()
+     async for part in request.stream():
+         if len(data)+len(part)>maximum:raise HtmlRefusal("html_input_limit",status=413)
+         data.extend(part)
+-    try:return model.model_validate(load_json(data,maximum))
++    try:
++        value=load_json(data,maximum)
++        parsed=model.model_validate(value)
++        if model is HtmlCommand:
++            from app.capabilities.q_context import check_input_bytes
++            check_input_bytes(value,parsed,_config(request).model_service)
++        return parsed
+     except (ValueError,TypeError):raise HtmlRefusal("invalid_input",status=422) from None
+ 
+ 
+ def identity(request,activity_id):
+     _guard(request);return _uuid_text(activity_id,"activity_id")
+@@ -69,10 +75,13 @@
+ @router.get("/{activity_id}/html/commands/{business_key}")
+ async def read_command(request:Request,activity_id:str,business_key:str):
+     aid=identity(request,activity_id);key=_uuid_text(business_key,"business_key")
+     try:
+         value=await _ledger(request).read_html_command(aid,key)
++        if value is not None:
++            from app.capabilities.q_context import public_projection
++            value['outbound_approval']=await public_projection(_ledger(request),aid,key,expected=value.get('status')=='accepted')
+         return reply(value) if value is not None else error(HtmlRefusal("not_found",status=404))
+     except (HtmlRefusal,AdmissionUnavailable) as exc:return error(exc)
+ 
+ 
+ @router.get("/{activity_id}/html/artifacts")

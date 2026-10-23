@@ -1,0 +1,25 @@
+--- before/backend/tests/fixtures/task120/queued.py
++++ after/backend/tests/fixtures/task120/queued.py
+@@ -16,17 +16,20 @@
+ PHASES=PHASES|frozenset(('f05_reconcile','f05_bootstrap','f05_permissions','f05_ack','f05_head','f05_revoke','f05_scope','f05_source','f05_memory','f05_memory_reconcile','f05_reconcile_final','f05_ui','f05_delete','f05_readonly','f05_financials','f05_scope_diagnose','f05_scope_removal'))
+ VALIDATION_PERMIT='TASK-120-Q-PREP-VALIDATION-04-20261019'
+ SCOPE_PERMIT='TASK-120-Q-PREP-CONTINUATION-06-20261020'
+ AUDIT_PERMIT='TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021'
++REPAIR08_PERMIT='TASK-120-Q-PREP-TARGETED-REPAIR-08-20261021'
++PHASES=PHASES|frozenset(('r08_permissions','r08_memory','r08_final'))
+ PHASES=PHASES|frozenset(('a07_permissions','a07_bootstrap','a07_claim_clock','a07_cleanup','a07_final'))
+ PHASES=PHASES|frozenset(('c06_bootstrap','c06_scope','c06_shrink_race','c06_ui','c06_financials','c06_compat'))
+ PHASES=PHASES|frozenset(('c06_ro_check','c06_ro_ui'))
+ PHASES=PHASES|frozenset(('v04_exercise','v04_ui','v04_boundaries','v04_races','v04_financials','v04_flow_final'))
+ 
+ def read_plan(path):
+     value=json.loads(Path(path).read_text(encoding='utf-8'))
+-    if set(value)!={'schema','permit_id','root_id','stages'} or value['schema']!='task120.finite-plan.v1' or value['permit_id'] not in (PERMIT,REPAIR_PERMIT,VALIDATION_PERMIT,FINAL_PERMIT,SCOPE_PERMIT,AUDIT_PERMIT):raise ValueError('closed_plan')
+-    low,high=(52,64) if value['permit_id']==AUDIT_PERMIT else (41,64) if value['permit_id']==SCOPE_PERMIT else (25,64) if value['permit_id']==FINAL_PERMIT else (21,24) if value['permit_id']==VALIDATION_PERMIT else (17,20) if value['permit_id']==REPAIR_PERMIT else (9,16)
++    if set(value)!={'schema','permit_id','root_id','stages'} or value['schema']!='task120.finite-plan.v1' or value['permit_id'] not in (PERMIT,REPAIR_PERMIT,VALIDATION_PERMIT,FINAL_PERMIT,SCOPE_PERMIT,AUDIT_PERMIT,REPAIR08_PERMIT):raise ValueError('closed_plan')
++    low,high=(61,64) if value['permit_id']==REPAIR08_PERMIT else (52,64) if value['permit_id']==AUDIT_PERMIT else (41,64) if value['permit_id']==SCOPE_PERMIT else (25,64) if value['permit_id']==FINAL_PERMIT else (21,24) if value['permit_id']==VALIDATION_PERMIT else (17,20) if value['permit_id']==REPAIR_PERMIT else (9,16)
++    if value['permit_id']==REPAIR08_PERMIT and any(not x.get('phase','').startswith('r08_') for x in value['stages']):raise ValueError('repair08_closed_phase')
+     if value['permit_id']==AUDIT_PERMIT and any(not s.get('phase','').startswith('a07_') for s in value['stages']):raise ValueError('audit07_closed_phase')
+     if value['permit_id']==SCOPE_PERMIT and any(not s.get('phase','').startswith('c06_') for s in value['stages']):raise ValueError('continuation06_closed_phase')
+     if value['permit_id']==VALIDATION_PERMIT and any(not s.get('phase','').startswith('v04_') for s in value['stages']):raise ValueError('validation04_closed_phase')
+     if value['permit_id']==FINAL_PERMIT and any(not s.get('phase','').startswith('f05_') for s in value['stages']):raise ValueError('final05_closed_phase')

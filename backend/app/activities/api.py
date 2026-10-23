@@ -203,6 +203,7 @@ def _map_read_error(exc: Exception) -> HTTPException:
 @router.get("/activities/capabilities")
 async def capabilities(request: Request):
     _guard(request)
+    from app.q_readiness import read_readiness
     config = _config(request)
     ledger = getattr(request.app.state, "activities_ledger", None)
     storage_ready = False
@@ -272,6 +273,8 @@ async def capabilities(request: Request):
         "quota_preview": config.quota_preview,
         "provider": provider_info,
         "retrieval":getattr(request.app.state,'integration_config',None).public() if getattr(request.app.state,'integration_config',None) is not None else {'available':False,'reason':'retrieval_not_configured'},
+        "q_approval":getattr(request.app.state,'q_readiness',{'available':False,'reason':'q_disabled','real_outbound_authorized':False}),
+        "diagnostics": {"readiness": read_readiness(request.app.state)},
         "supervision_management_budget_seconds": SessionConfig().manager_total_seconds,
         "window_seconds": SessionConfig().window_seconds,
         "followup_max_chars": _FOLLOWUP_MAX_CHARS,

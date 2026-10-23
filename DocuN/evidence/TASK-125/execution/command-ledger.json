@@ -1,0 +1,235 @@
+{
+  "TASK": "TASK-125",
+  "R": "R-119",
+  "scope": "OFFLINE_FIRST_INSTALL_ENGINEERING_NO_Q",
+  "timings": [
+    {
+      "key": "t125_initial",
+      "observation": [
+        {
+          "index": 0,
+          "status": "fulfilled",
+          "wall_seconds": 0.8841767,
+          "exit_code": 0
+        },
+        {
+          "index": 1,
+          "status": "fulfilled",
+          "wall_seconds": 0.9059014,
+          "exit_code": 0
+        },
+        {
+          "index": 2,
+          "status": "fulfilled"
+        }
+      ]
+    },
+    {
+      "key": "t125_reads1",
+      "observation": [
+        {
+          "index": 0,
+          "status": "fulfilled",
+          "wall_seconds": 1.4604904,
+          "exit_code": 0
+        },
+        {
+          "index": 1,
+          "status": "fulfilled",
+          "wall_seconds": 1.1779242,
+          "exit_code": 0
+        },
+        {
+          "index": 2,
+          "status": "fulfilled",
+          "wall_seconds": 1.162104,
+          "exit_code": 0
+        }
+      ]
+    },
+    {
+      "key": "t125_reads2",
+      "observation": [
+        {
+          "index": 0,
+          "status": "fulfilled",
+          "wall_seconds": 1.0549169,
+          "exit_code": 0
+        },
+        {
+          "index": 1,
+          "status": "fulfilled",
+          "wall_seconds": 1.1754872,
+          "exit_code": 1
+        }
+      ]
+    },
+    {
+      "key": "t125_resume_read",
+      "observation": 0.8640501
+    },
+    {
+      "key": "t125_snapshot_reads",
+      "observation": [
+        1.1569692,
+        1.0055905,
+        1.161244
+      ]
+    },
+    {
+      "key": "t125_reads3",
+      "observation": [
+        0.9726513,
+        1.0591025
+      ]
+    },
+    {
+      "key": "t125_reads4",
+      "observation": 0.9027033
+    },
+    {
+      "key": "t125_reads5",
+      "observation": 0.9209281
+    },
+    {
+      "key": "t125_manifest_write",
+      "observation": 0.9176846
+    },
+    {
+      "key": "t125_roles_runbook",
+      "observation": 0.8872432
+    },
+    {
+      "key": "t125_batch1_tool",
+      "observation": {
+        "wall_time_seconds": 2.5987454,
+        "exit_code": 1
+      }
+    },
+    {
+      "key": "t125_junction_diagnostic_tool",
+      "observation": {
+        "wall_time_seconds": 0.9011348,
+        "exit_code": 0
+      }
+    },
+    {
+      "key": "t125_native_fixture_tool",
+      "observation": {
+        "wall_time_seconds": 0.463377,
+        "exit_code": 0
+      }
+    },
+    {
+      "key": "t125_batch2_prep_tool",
+      "observation": {
+        "wall_time_seconds": 0.8994551,
+        "exit_code": 0
+      }
+    },
+    {
+      "key": "t125_batch2_finalprep_tool",
+      "observation": {
+        "wall_time_seconds": 0.9016968,
+        "exit_code": 0
+      }
+    },
+    {
+      "key": "t125_batch2_tool",
+      "observation": {
+        "wall_time_seconds": 1.7695338999999999,
+        "exit_code": 0
+      }
+    },
+    {
+      "key": "t125_freeze_tool",
+      "observation": {
+        "wall_time_seconds": 0.9847594,
+        "exit_code": 0
+      }
+    }
+  ],
+  "unrecovered_calls": "少数只读定位命令及 apply_patch 原始 wall 未逐项持久恢复，记 unknown；不可把已恢复样本和测试秒数当成本卡完整精确工具总计",
+  "budget": {
+    "cap_seconds": 10800,
+    "reserved_close_seconds": 900,
+    "test_batch_cap": 3,
+    "used_test_batches": 2,
+    "per_batch_cap_seconds": 600,
+    "exact_total_tool_wall_seconds": null,
+    "conservative_charge_seconds": 3600,
+    "basis": "可恢复工具样本、全部前台短命令和修改调用由签发后首小时包络保守覆盖；封存须早于2026-10-22T02:12:14.276888Z；不重开历史预算"
+  },
+  "commands": [
+    {
+      "kind": "source_reads",
+      "description": "PowerShell Get-Content/rg；现有 Python -B - 读取规则、卡、许可、61输入原件和15 SQL，建立 pre/hash；无连接/子进程/私配扫描"
+    },
+    {
+      "kind": "mutations",
+      "description": "apply_patch 仅新增五个许可产品文件、最小 README 段落及本卡 execution/结果；标准库脚本生成固定清单、快照和 unified diff"
+    },
+    {
+      "kind": "batch_01",
+      "command_file": "batch-01-command.json",
+      "raw": "batch-01-output.txt",
+      "summary": "batch-01-summary.json",
+      "exit_code": 1,
+      "elapsed_seconds": 1.7728173999930732,
+      "observed": "18方法，17通过，1 junction夹具创建失败"
+    },
+    {
+      "kind": "fixture_diagnostic",
+      "command": "现有 Python -I -S -B -；仅本卡 scratch DeviceIoControl 夹具诊断",
+      "exit_code": 0,
+      "wall_seconds": 0.9011348,
+      "native_winerror": 5,
+      "raw": "junction-diagnostic.json"
+    },
+    {
+      "kind": "fixture_setup",
+      "command": "PowerShell New-Item -ItemType Junction；预先校验绝对路径在 TASK-125 execution/scratch 内，link仅指向同目录target",
+      "exit_code": 0,
+      "wall_seconds": 0.463377,
+      "escalation": "仅夹具文件系统动作自动审查获准；无数据库、网络、服务或安装器 CLI apply"
+    },
+    {
+      "kind": "batch_02",
+      "command_file": "batch-02-command.json",
+      "raw": "batch-02-output.txt",
+      "summary": "batch-02-summary.json",
+      "exit_code": 0,
+      "elapsed_seconds": 1.0162982000038028,
+      "observed": "18方法全部通过；真实 junction 只读拒绝断言通过"
+    },
+    {
+      "kind": "freeze",
+      "description": "Python -I -S -B - 比对最终6产品与批2受测hash、冻结61输入；写post副本/changes.patch，未增加功能测试"
+    }
+  ],
+  "metadata_failures": [
+    "首次 input-manifest 键名误猜 rows 导致 KeyError，随后按 sources 原结构核61项全部匹配；所在 shell最终exit0，不当作产品通过",
+    "猜测旧011/012文件名不存在，定位命令exit1；改用011_text_interview.sql、012_html_explanations.sql，原件未改",
+    "读取不存在的 config/activities.example.json 导致exit1，实际为activity.example.json",
+    "PowerShell把 test_q*/test_data* 作为文字路径导致rg os error123，后续定位改用目录；该shell末命令exit0",
+    "猜测独立 git-status-readonly.txt 不存在，源manifest内已附 git_status_readonly_observed，未做Git写操作",
+    "原始长输出有截断，后续按目标片段补读；不声称被截断内容完整展示"
+  ],
+  "product_and_test_failures": [
+    "批1仅junction夹具创建失败1项；保留原始输出和 WinError5诊断",
+    "普通自查发现容器NAT地址误拒绝，修正连接端/服务端地址语义并加入172.18.0.2映射样本，批2覆盖；未发生真实安装失败",
+    "批2新增失败0；不把旧TASK120/117失败归零"
+  ],
+  "real_operations": {
+    "installer_cli_apply": 0,
+    "pg_connection": 0,
+    "network": 0,
+    "service": 0,
+    "container": 0,
+    "role_mutation": 0,
+    "provider_calls": 0,
+    "fee_cny": 0,
+    "git_write": 0,
+    "delegation": 0
+  }
+}

@@ -1,0 +1,40 @@
+--- initial/deploy/q-approval.md
++++ final/deploy/q-approval.md
+@@ -0,0 +1,37 @@
++# Q v2 本机逐请求批准
++
++Q 默认关闭。`config/q-approval.example.json` 是惰性配置，不能直接启用真实服务。`RETROLUME_Q_APPROVAL_CONFIG` 只接受部署者在服务器环境中提供的绝对配置路径；浏览器不能提交配置、根路径、密钥或批准材料。正常配置中的账号、税费币种、计量、token/framing/reasoning、实际 returned model 身份及适用独审回执仍须分别核实；未知时外部能力保持不可用。`deepseek-flash` 是已采用候选，不能自动回退其他型号；向量候选保持 embedding-3／512。
++
++未来一份许可的共同上限是 100 次／25000000 微单位，单笔预留 250000。三个固定活动分别最多 48／28／24 次、12000000／7000000／6000000 微单位。两家服务共用这一份额度。v1 原有限许可继续按自己的 80 次／20000000 微单位合同执行；两版不能相加。准入后的 UNKNOWN、超时及确定未送均保留原预扣。私有批准日志不提供可花余额，也不提供退款。
++
++本实现不生成正常激活根，不填写真实 T0，不接收账号 key 的用户输入，不把 TESTONLY 根作为部署包。测试配置只在隔离根和最低 transport 合成替身下使用。只有实现者证据并不构成独立审计或真实 Q 启用回执。
++
++## 实际操作
++
++1. 在页面明确保存目标并发起一次生成或查询。服务器提交原 accepted/frozen 事实后准备完整请求，页面显示等待批准。此时没有模型发送、业务 SUP、收费 operation 或新的请求／费用预留。批索引须全部待发批均获得批准。
++2. 页面或只读命令投影提供非敏感 prepared 标识与状态。部署者使用同一 Windows principal，在后端 Python 环境执行下面的 inspect；检查完整 typed request、provider 对象和实际发送字节，特别是正文、用途、来源、父记录、endpoint 和型号。输出含本次允许发送的正文，应仅在受信本机终端查看，不上传公共日志。
++3. 明确批准 inspect 得到的原 prepared SHA256。CLI 要求交互输入精确的 `APPROVE <SHA256>`，不会自动寻找或批准下一个请求。
++4. 回到原页面只读核对，再点击明确继续，使用原业务键、原冻结正文。批准本身不会 POST 或启动执行。页面切换、刷新、重开只核对事实。
++5. 撤销通过真实排他 policy lease 落账后才返回本地阻断。撤销不能收回已经发往远端的字节，也不会退还已准入预留。
++
++在 backend 目录，替换下面的本机配置路径、prepared ID 和 inspect 返回的摘要；它们不是 provider 密钥：
++
++```powershell
++.venv\Scripts\python.exe -m app.operator.q_request inspect --config C:\LocalConfig\q-approval.local.json --prepared-id <PREPARED_ID>
++.venv\Scripts\python.exe -m app.operator.q_request approve --config C:\LocalConfig\q-approval.local.json --prepared-id <PREPARED_ID> --expected-prepared-sha256 <PREPARED_SHA256>
++.venv\Scripts\python.exe -m app.operator.q_request revoke --config C:\LocalConfig\q-approval.local.json --prepared-id <PREPARED_ID>
++```
++
++配置指定的数据库环境变量只由服务器部署提供。不要将 DSN、环境变量值、HMAC／provider key 或私有根内容放进命令参数、工单或浏览器。没有通用 HTTP 批准入口。批准期限取 15 分钟、活动 deadline 和 grant 终点三者最短；同一未过期、未消费请求的重复批准幂等，过期而未 claim 可重新 inspect 后明确续批，已经 claim 或 UNKNOWN 不能靠续批重发。
++
++## 恢复与信任边界
++
++响应丢失后按原键 GET：accepted 未 claim 可在当前资格仍一致时显式继续；已经 claim、可能已发或 UNKNOWN 只读对账。不要更换业务键规避未知结果。原 operation、007 正文、领域记录分别核对，received 但缺合格正文或领域 COMMIT 的结果不能成为后继输入。完整字节、配置、来源、scope/head、记忆、实例或父资格变化后，需要新的明确业务意图，不能沿用旧批准。
++
++共享 policy lease 覆盖资格检查、生产 PG 准入／mark 和有限 transport，在结果落库前释放；随后先取排他 policy lease，再进入 MutationGate 与原 PG 锁。释放间隔有撤销或资格变更时保留既有费用和不可变结果，失效结果不能推进 head。私有 admission intent／observed 是关闭和对账见证；生产 PG 固定 roster SUM、活动与 operation 原事务才是金融权威。
++
++根、批准、私有 artifact、凭据和 journal 留在独立 ACL 控制根，不导出进业务数据包。普通备份、实例复制或隔离只读恢复只保留业务和金融历史，不恢复批准、launch、租约或可花余额。原件或记忆删除后不得从 artifact 重新显示已失效正文；operator inspect 也必须重新检查当前资格。
++
++operator 绑定真实 Windows SID 和文件 ACL。与运行账户同 principal 的受信代码及管理员拥有操作系统层访问能力；Python 方法和私有命名空间不构成对同账户恶意代码的沙箱。密钥、ACL、进程边界和本机部署仍由部署方维护。readiness 仅公开是否可用、原因及 TESTONLY／真实授权区分，不公开配置路径、正文、DSN 或密钥。
++
++本机批准只授模型／embedding 的精确请求。HTML 仍须独立通过正常 host_policy、配置及父结果资格；description 批准不授予 preview、renderer、Docker 或主机启动权限。

@@ -19,6 +19,39 @@ if os.name=='nt':asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopP
 
 
 class ApprovalTests(unittest.TestCase):
+    def test_admission_kernel_witness_cannot_survive_completion(self):
+        from app.data_exit.q_kernel import AdmissionSignal,admission_active
+        signal=AdmissionSignal()
+        self.assertTrue(admission_active(signal.name))
+        signal.close()
+        self.assertFalse(admission_active(signal.name))
+        self.assertFalse(admission_active('Local\\untrusted'))
+
+    def test_q_rejects_silent_text_normalization_and_preserves_schema_alias(self):
+        from types import SimpleNamespace
+        from uuid import uuid4
+        from app.capabilities.q_context import check_input_bytes
+        from app.learning.teaching_contracts import TeachingCommandInput
+        from app.interview.contracts import parse_command
+        service=SimpleNamespace(outbound_grant={'schema':'retrolume.outbound-grant.v2'})
+        raw={'business_key':str(uuid4()),'action':'goal','expected_revision':0,'expected_goal_version':0,'expected_scope_revision':1,'body':{'goal':' '+TEXT+' '}}
+        parsed=TeachingCommandInput.model_validate(raw)
+        with self.assertRaises(ValueError):check_input_bytes(raw,parsed,service)
+        check_input_bytes(raw,parsed,SimpleNamespace(outbound_grant=None))
+        raw={'schema':'interview.command.v1','business_key':str(uuid4()),'action':'start','expected_head_revision':0,'expected_goal_version':0,'expected_scope_revision':1,'body':{'goal':{'target':TEXT}}}
+        check_input_bytes(raw,parse_command(raw),service)
+
+    def test_admission_intent_retains_real_process_witness_and_uncertain_ack_closes(self):
+        authority=store();row=prepared(authority);pid=row['prepared_id']
+        authority.approve(pid,principal_id(),current=True);ref=authority.reference(authority.request(pid))
+        context=CallContext(activity_id=AID,operation_id='offline.request',executor_id='fixture',execution_generation=1,scope_revision=1)
+        authority.check_reference(ref,context=context)
+        authority.admission_intent(ref,context)
+        self.assertEqual(authority.request(pid)['admission_owner']['pid'],os.getpid())
+        authority.admission_failed(ref,definitely_denied=False)
+        self.assertEqual(authority.request(pid)['closed'],'admission_unconfirmed')
+        with self.assertRaises(DataError):authority.check_reference(ref,context=context,claimed=True)
+
     def test_json_is_unambiguous_and_decision_has_no_self_reference(self):
         for value in ('{"a":1,"a":2}','{"a":NaN}','{"a":Infinity}'):
             with self.assertRaises(ValueError):load_json(value)
@@ -95,6 +128,54 @@ class ApprovalTests(unittest.TestCase):
         self.assertNotIn('returned_models',wire['service'])
         self.assertEqual(OneCallInput.from_wire(wire).to_wire(),wire)
 
+    def test_wire4_carries_private_authorization_without_provider_message_change(self):
+        authority=store();row=prepared(authority);authority.approve(row['prepared_id'],principal_id(),current=True)
+        service=ModelServiceConfig(provider='deepseek_chat_completions',base_url='https://api.deepseek.com',model='deepseek-flash',api_key=SecretStr('synthetic'),
+            max_request_bytes=65536,max_response_bytes=65536,outbound_grant=authority.bundle['grant'],outbound_source_manifest=authority.bundle['manifest'],
+            outbound_authorization=authority.reference(authority.request(row['prepared_id'])),returned_models=('deepseek-flash',))
+        request=ModelCallRequest(messages=[{'role':'user','content':TEXT}],max_output_tokens=1)
+        wire=OneCallInput('offline.request',request,service).to_wire()
+        self.assertEqual(wire['protocol'],4)
+        self.assertEqual(OneCallInput.from_wire(wire).to_wire(),wire)
+        payload=__import__('app.capabilities.gateway',fromlist=['ControlledModelGateway']).ControlledModelGateway(service)._build_payload(request)
+        self.assertNotIn('outbound_authorization',canonical(payload));self.assertNotIn(row['prepared_id'],canonical(payload))
+
+    def test_v1_keeps_80_20_while_v2_is_100_25(self):
+        from app.capabilities.embedding import OutboundGrant
+        authority=store();value=dict(authority.bundle['grant']);value.pop('instance_binding_sha256')
+        value.update(schema='retrolume.outbound-grant.v1',global_max_requests=80,global_max_cost_microunits=20000000,
+            provider_capabilities=['deepseek_chat_completions/deepseek-chat','zhipu_embeddings/embedding-3'])
+        self.assertEqual(OutboundGrant.from_wire(value).global_max_requests,80)
+        with self.assertRaises(ValueError):OutboundGrant.from_wire({**value,'global_max_requests':100})
+        self.assertEqual(authority.grant.global_max_requests,100)
+
+
+class ConfigurationTests(unittest.TestCase):
+    def test_normal_examples_are_inert_without_reading_user_configuration(self):
+        from app.service_config import load_activity_config
+        from app.retrieval.service import load_integration_config
+        from app.operator.q_request import read_config
+        project=Path(__file__).resolve().parents[2]
+        with patch.dict(os.environ,{},clear=True):
+            activity=load_activity_config(project/'config/activity.example.json')
+            integration=load_integration_config(project/'config/integration.example.json')
+            approval=read_config(project/'config/q-approval.example.json')
+        self.assertFalse(activity.create_layer.available)
+        self.assertFalse(activity.continue_layer.available)
+        self.assertFalse(activity.learning_layer.available)
+        self.assertFalse(integration.available)
+        self.assertFalse(integration.public()['real_outbound_authorized'])
+        self.assertFalse(approval['enabled'])
+        self.assertIsNone(approval['root_file'])
+
+    def test_operator_configuration_rejects_untrusted_path_types(self):
+        from app.operator.q_request import read_config
+        authority=store();path=authority.hub.root/'invalid-q-config.json'
+        body={'schema':'retrolume.q-approval-config.v2','enabled':True,'control_root':42,
+            'database_url_env':'RETROLUME_TASK120_FLOW_TEST_DATABASE_URL','root_file':[]}
+        path.write_text(json.dumps(body),encoding='utf-8')
+        with self.assertRaises(DataError):read_config(path)
+
 
 class LockTests(unittest.IsolatedAsyncioTestCase):
     async def test_shared_upgrade_is_rejected_and_exclusive_wait_is_bounded(self):
@@ -107,6 +188,26 @@ class LockTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RuntimeControlTests(unittest.TestCase):
+    def test_actual_job_members_restore_after_nested_python_exit(self):
+        import sys,time,subprocess
+        from uuid import uuid4
+        from tests.fixtures.task120.resources import root_job,ROOT
+        identity=str(uuid4())
+        with root_job(identity) as job:
+            job.spawn_suspended([sys._base_executable,'-m','tests.fixtures.task120.merged',identity],cwd=str(ROOT/'backend'))
+            job.resume();self.assertTrue(job.wait_empty_until(time.monotonic_ns()+8_000_000_000))
+            self.assertEqual(job.primary_exit_code(),0)
+
+    def test_fixed_subbatches_expire_without_implicit_retry(self):
+        import time
+        from tests.fixtures.task120.merged import validate,await_request
+        good={'ordinal':1,'phase':'flow','seconds':20,'previous_exit':None}
+        self.assertEqual(validate(good,1,None),good)
+        for bad in ({**good,'phase':'arbitrary-command'},{**good,'seconds':301},{**good,'previous_exit':0}):
+            with self.assertRaises(ValueError):validate(bad,1,None)
+        path=store().hub.root/'not-submitted.json';start=time.monotonic()
+        self.assertIsNone(await_request(path,start+.03));self.assertLess(time.monotonic()-start,.5)
+
     def test_deadline_and_two_low_samples_close_in_reverse_order(self):
         import time
         from tests.fixtures.task120.lifecycle import BoundedResources

@@ -1,0 +1,213 @@
+--- historical/execution/finite-inputs.json
++++ effective/execution/correction-01/finite-inputs.json
+@@ -1,8 +1,8 @@
+ {
+-  "schema": "retrolume.task123.finite-inputs.v1",
++  "schema": "retrolume.task123.finite-inputs.v2",
+   "enabled": false,
+-  "status": "FROZEN_TEXT_ONLY_NOT_RUN",
+-  "created_at": "2026-10-21T16:58:46.862987+00:00",
++  "status": "CORRECTED_DISABLED_FUTURE_READBACK_NOT_RUN",
++  "created_at": "2026-10-22T00:45:22.829834+00:00",
+   "inherited_matrix": {
+     "path": "D:\\shspic\\project_NO3_RetroLume-agent\\DocuN\\evidence\\TASK-122\\preparation\\remaining-must-matrix.json",
+     "sha256": "56bc4d023621b75ed16a545d706f3c30f28f3beb1b9f11c4f9098c01bc1b4198",
+@@ -60,13 +60,29 @@
+     "control_ids": null,
+     "control_note": "标签沿原rubric；真实控件ID由合格封闭description生成并符合hctl_规则，不把裸d/t冒充已生成ID。0和未定义字段是拒绝负例，不新增许可输入。"
+   },
+-  "continuation_reason": {
++  "not_generated": [
++    "normal实例与source/version/fragment真实ID",
++    "typed/payload最终字节",
++    "grant",
++    "T0",
++    "operator批准",
++    "HTML产物与控件实际ID"
++  ],
++  "no_new_answer_or_source_or_must": true,
++  "original_created_at": "2026-10-21T16:58:46.862987+00:00",
++  "supersedes": {
++    "path": "D:\\shspic\\project_NO3_RetroLume-agent\\DocuN\\evidence\\TASK-123\\execution\\finite-inputs.json",
++    "sha256": "9fd4b9fcfb2b800ceb62a5668a197aeeada71baf9c3d058e7f78abed60b63c90",
++    "finding": "F124-01",
++    "history_only": true,
++    "current_effective_document": "D:\\shspic\\project_NO3_RetroLume-agent\\DocuN\\evidence\\TASK-123\\execution\\correction-01\\finite-inputs.json"
++  },
++  "withdrawn_reference": {
+     "text": "继续核对分钟换秒与平均速度的单位，下一步仅按当前已保存的作答、反馈和复测记录选择；本次练习不说明长期掌握。",
+     "encoding": "UTF-8，无BOM，无尾换行",
+     "codepoints": 53,
+     "utf8_bytes": 159,
+     "sha256": "9563a959fa373da25d4b347c84d2b1f5aa198cfe026d9945e750715ba9b5bf2a",
+-    "purpose": "L01/L05之后保存用户的有限继续理由，只记录下一动作依据的边界，不预写成功或长期掌握结论",
+     "source_rubric": {
+       "path": "DocuN/evidence/TASK-116/design/acceptance-contract.md",
+       "scenarios": [
+@@ -75,31 +91,99 @@
+       ],
+       "original": "主链必须完整到保存理由，不能停在生成题。"
+     },
+-    "source_input_pointers": [
+-      "#/inputs/numeric_goal",
+-      "#/inputs/retest_question",
+-      "#/inputs/retest_answer"
++    "status": "WITHDRAWN_NON_EXECUTABLE_REFERENCE",
++    "persisted": false,
++    "include_in_model_context": false,
++    "is_input": false,
++    "reason": "原159字节只保留为撤销映射的历史参考；不承诺由现有接口保存，也不当实际progress.reason或后续模型上下文。",
++    "write_operation": null
++  },
++  "progress_reason_readback_contract": {
++    "schema": "retrolume.task123.progress-reason-readback.v1",
++    "status": "FUTURE_ACCEPTANCE_CONTRACT_NOT_RUN",
++    "evidence_grade": "B 当前源码/原合同事实",
++    "requirement": "FR010/DR002、116 L01/L05及M06要求的真实进度理由；不新增任意用户手写备注Must",
++    "existing_commit": {
++      "action": "evaluate",
++      "branch": "current and normal",
++      "repository": "backend/app/activities/teaching_repository.py",
++      "reason_function": "_progress_reason",
++      "saved_kind": "progress",
++      "saved_field": "body.reason",
++      "insert_function": "_teaching_insert_record",
++      "hash_field": "body_sha256",
++      "head_field": "reason_record_id",
++      "state_field": "state_after",
++      "body_fields": [
++        "feedback_record_id",
++        "answer_record_id",
++        "reason",
++        "observations",
++        "support_checks",
++        "advance",
++        "node_before",
++        "node_after"
++      ],
++      "transaction": "原evaluate正常当前结果分支同一事务保存feedback/progress并更新head；未COMMIT或非当前/非正常结果不得报保存成立"
++    },
++    "read_functions": [
++      "read_teaching_command",
++      "read_teaching_workspace",
++      "read_teaching_record"
+     ],
+-    "allowed_local_projection": {
+-      "TeachingCommandInput.action": "correct",
+-      "CorrectBody.text": "继续核对分钟换秒与平均速度的单位，下一步仅按当前已保存的作答、反馈和复测记录选择；本次练习不说明长期掌握。",
+-      "CorrectBody.target_record_id": null,
+-      "CorrectBody.disputed_dimensions": []
++    "existing_page": {
++      "file": "frontend/src/activities/TeachingWorkspace.tsx",
++      "panel": "更新或保留理由",
++      "projection": "workspace.reason.body.reason / reasonBody.reason"
+     },
+-    "rule": "沿现有correct本地文本保存到真实当前feedback/progress父；先核同一作答链、head和CAS。不是新增advance接口，不触发模型、不改变进度判据。若需要作为下一次模型上下文，须在未来实际manifest有限文字及逐请求完整payload中明确冻结，不由此JSON授外发。",
+-    "current_parent_record_id": null,
+-    "parent_body_sha256": null,
+-    "business_key": null,
+-    "DataContext": null,
+-    "command_committed": false
+-  },
+-  "not_generated": [
+-    "normal实例与source/version/fragment真实ID",
+-    "typed/payload最终字节",
+-    "grant",
+-    "T0",
+-    "operator批准",
+-    "HTML产物与控件实际ID"
+-  ],
+-  "no_new_answer_or_source_or_must": true
++    "actual": {
++      "activity_id": null,
++      "evaluate_business_key": null,
++      "evaluate_command_request_sha256": null,
++      "feedback_record_id": null,
++      "answer_record_id": null,
++      "exercise_record_id": null,
++      "progress_record_id": null,
++      "progress_body_sha256": null,
++      "source_refs": null,
++      "source_versions": null,
++      "scope_revision": null,
++      "goal_version": null,
++      "path_record_id": null,
++      "head_revision": null,
++      "applied_revision": null,
++      "state_after": null,
++      "DataContext": null,
++      "reason": null,
++      "observations": null,
++      "support_checks": null,
++      "advance": null,
++      "node_before": null,
++      "node_after": null,
++      "transaction_committed": null,
++      "reopened_record_sha256": null
++    },
++    "readback_steps": [
++      "沿原evaluate业务键先GET已有命令事实，核同活动、反馈/作答/练习、来源/版本、scope/goal/revision与DataContext；不为取得理由新增请求。",
++      "定位该次evaluate同事务COMMIT的kind=progress记录，核body.reason、feedback_record_id/answer_record_id、原业务键、body_sha256及state_after；只截理由页面不足以证明持久化。",
++      "记录reason及observations.independent_answers/assisted/contested、support_checks、advance、node_before/node_after，保留真实原因，不把159字节参考文字写成实际reason。",
++      "下一动作前GET准确workspace和该progress记录，核当前已有页面的理由；先保存本次progress ID/hash。后续动作如改变head.reason_record_id，读这条历史准确记录，不用新head替代旧理由。",
++      "未来获准真实重开后仍GET相同progress ID并核相同body/hash及其进度事实，保留后续合法变更。此处只写核对合同，当前未运行PG/HTTP/browser或真实语义。"
++    ],
++    "progress_rules": [
++      "单次复测可以保留节点；两份不同且未暴露、required met的独立实例并含复测及推进前置满足时，才按既有规则处理。",
++      "即使独立实例足够，没有满足前置的待推进节点也应保留节点并保存对应理由，不伪造advance。",
++      "原辅助/争议依据及真实纠错保护不改；本修正不追加correction、不把任何作答因参考理由从依据集合剔除。"
++    ],
++    "extra_reason_write_action": null,
++    "extra_model_or_query_requests": 0,
++    "forbidden_reason_storage_shortcuts": [
++      "correct",
++      "select_node",
++      "answer",
++      "goal",
++      "新增reason action/字段/表"
++    ],
++    "actual_runtime_evidence": null
++  }
+ }
+--- historical/execution/deployment-handoff.md
++++ effective/execution/correction-01/deployment-handoff.md
+@@ -1,4 +1,6 @@
+-# TASK123 关闭状态部署交接
++# TASK123 修正01 关闭状态部署交接
++
++本文件为本轮当前有效交接，配套[新finite-inputs.json](D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-123/execution/correction-01/finite-inputs.json)。旧execution目录同名两文件及原报告仅作原字节历史；F124-01的继续理由操作映射已撤销，不沿旧指引执行。
+ 
+ 本交接保持 disabled，不创建 normal、grant、T0、operator 批准或首次启用回执。主体沿 [TASK122 runbook](D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-122/preparation/operation-runbook.md)，原件 hash 为 8cd01070d1d1eaf9556941f43d63773d9706c46ea2e93a651259759ba3bafcd6。原第3—8节的冻结、精确资源、摘要顺序、逐请求批准、原键对账和真实验收保持；本轮只补以下实际增量。旧 runner、TESTONLY 根及运行许可不恢复。
+ 
+@@ -12,6 +14,9 @@
+ 
+ loaded_evidence 的 grant/manifest 可说明已装载形状、摘要及彼此是否相同。price/activation 是已装载 grant 的引用摘要，内容匹配仍为 null；instance 只有引用摘要，不构造实例或伪造 CID/OID/SID。未取得实际部署事实时 normal_deployment、deployment_match 均 null。qualification 保持 unknown，账号、计量和真实返回均未在该投影核证；grant 内自报 verified 不升级其资格。authorizes_requests=false 说明诊断行为不授调用权，q_approval 仍按原装载结果如实投影。
+ 
++
++OBS124-01沿原独审作为非阻塞配置风险保留。模型及returned_models身份栏只填可公开模型别名，不填密钥、密钥hash或私有标签；字符正则不保证识别任意误填秘密，未知别名也不构成真实返回资格。本轮不改产品。
++
+ ## 计量与账号剩余门
+ 
+ 本轮 [计量结论](D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-123/execution/metering-verdict.md) 补齐了当前 DeepSeek 输出/生成/包含 reasoning 明细的文档关系，仍缺两个服务的分词/预处理、完整服务模板及当前版本对应，以及 Embedding 单项和整批容量。原 W+F 公式没有被证明为假，但仍无当前启用资格。未执行模型、Embedding 或计量接口；无有限 token 实测结果。
+@@ -20,9 +25,13 @@
+ 
+ ## 精确文字与真实父的剩余冻结
+ 
+-[finite-inputs.json](D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-123/execution/finite-inputs.json) 冻结 HtmlCommand.focus 与继续理由的完整 UTF8 原文、hash、用途及116 rubric 来源，不改八份原文、既有答案或 Must。HTML 只用 Q01.03.model 当前合格 feedback，排在 Q01.04.query 前；真实 teaching record/body/point/config、业务键、typed/payload、description/artifact 和控件 ID 均 null。只有当前父真实合格才组包，不将 rubric 或本文件作为已通过输出。
++[finite-inputs.json](D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-123/execution/correction-01/finite-inputs.json) 的HTML focus原文、405 UTF8字节/hash、Q01.03.model当前合格feedback父、Q01.04.query前的顺序及未运行状态保持。真实record/body/point/config、业务键、typed/payload、description/artifact和控件ID仍null。原159字节继续理由文字仅在withdrawn_reference保留，非执行、未持久化、不加入模型上下文，也不承诺存在保存该任意文字的中性备注接口。
+ 
+-继续理由沿现有 TeachingCommandInput 的 correct/CorrectBody.text 作本地保存，目标为届时真实当前 feedback/progress，disputed_dimensions 为空。它不新增 advance API、不自己推进进度，也不自动发模型；后续若进入模型上下文，必须纳入真实 manifest 与逐请求 inspect 的精确字节。两个文本都不构成 grant。未来 IDs、24片实际排序与6批的真实批号在获准 normal 导入之后冻结。
++FR010/DR002及116 M06/主链已有承载是原evaluate正常当前结果COMMIT时同事务保存kind=progress、body.reason、feedback/answer、observations/support_checks、advance及node_before/node_after，记录body_sha256和state_after，更新head.reason_record_id。这是当前源码的B级事实，尚不是本轮真实PG/Q或重开验证。保存理由不需另发POST；不得用correct、select_node、answer、goal或新增reason动作替代。现有correct保留其真实争议保护。
++
++未来获准链按progress_reason_readback_contract先GET原evaluate业务键及对应progress，核COMMIT、kind/body/hash、原feedback/answer、来源/版本、scope/goal/revision和DataContext。读取reason、observations的独立/辅助/争议依据、support_checks、advance及前后节点；一次复测可以保留节点。两份合格独立实例且推进前置都满足才按原规则处理，没有可推进节点时保存真实保留理由。
++
++下一明确动作按当时真实阶段进行。动作前保存该次progress的准确record ID/hash，再GETworkspace/record核对页面已有“更新或保留理由”。下一动作若改变head.reason_record_id，之后读取已保存ID对应的历史准确记录，不拿新head替代原理由；未来实际重开仍核同条记录/body/hash及进度。页面截图不能单独证明事务持久化。本轮这些实际记录、理由、绑定和重开值全部null/未运行，不预写参考文案或假UUID，不额外增加模型/query次数。未来 IDs、24片实际排序与6批真实批号仍待获准 normal 导入后冻结。
+ 
+ 89动作、28Must、24片/6索引直接复用主控已采纳基线，预计22.25元预留。学习43/48、面试28/28、补证18/24；面试无失败余量。它们不是已发生扣账或语义成功保证，真实使用仍0，不换键、借额或省 Must。
+ 
+@@ -38,4 +47,4 @@
+ 
+ 工程的13项离线方法已通过，普通 Review 及原始日志、测试字节、前后副本和统一 diff 可供主控核证；两个先前夹具超时/诊断退出不删。没有重跑原120/121安全矩阵或122分片与预算算术。
+ 
+-下一动作是取得外部适用依据并由主控核证稳定差异。新增秘密投影/资格解释若作为运行依据采用，须在稳定候选上完成相应一次独立增量审查；执行者没有自签独审，旧120/121关闭不重开。外部门齐备后才由主控给精确资源与实际部署/真实语义合同，按122 runbook继续；不再派同样浏览/批准协议设计卡。本交接不签 STEP018/019/020、M1、项目或发布通过。
++TASK124独立增量审查的readiness代码、13方法原证据及可核控制通过范围直接继承，原报告、失败和unknown保留。本轮只撤销F124-01错误指引并补已有progress理由的读回合同，由主控对照原独审和准确需求限定核文档；不把此次核证冒充新独审，不预设再派完整审计或重跑13方法。Q外部计量/账号缺口、L01/L05真实语义及恢复门继续保留。外部门齐备后才由主控给精确资源与实际部署/真实语义合同，按122 runbook继续；不再派同样浏览/批准协议设计卡。本交接不签 STEP018/019/020、M1、项目或发布通过。

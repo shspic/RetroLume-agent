@@ -1,0 +1,15 @@
+{
+  "action": "Filesystem-only save-candidate-package.py, without product/test import or service start",
+  "tool_chunk": "0a9da5",
+  "exit_code": 1,
+  "wall_seconds": 8.7844946,
+  "stderr": "line 86, assert not missing: AssertionError",
+  "root_cause": "Metadata packaging treated an explicitly null baseline SHA as an expected existing file. frontend/dist/assets/index-BuUoTjO5.js was already absent at adoption; both receipt-baseline.json and orchestration input-verification.json record null and matching absence.",
+  "correction": "Preserve and validate expected absence separately; do not restore the historical asset or rebuild dist.",
+  "partial_saves": ["budget.json", "events.jsonl", "case-index.json", "remaining-readiness.json", "continuation-01/final-file-identities.json"],
+  "report_modified_by_failed_attempt": false,
+  "subsequent_lookup_diagnostic": {"tool_chunk": "4ce03a", "error": "Guessed resume-verification.json absent; actual adoption evidence is receipt-baseline.json and orchestration input-verification.json"},
+  "metadata_patch_diagnostic": "One apply_patch verification failed on a nonmatching prefix line; no files were modified by that rejected patch.",
+  "no_runtime_or_test_executed": true,
+  "metadata_time_covered_by_conservative_reservation": true
+}

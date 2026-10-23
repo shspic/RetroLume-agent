@@ -1,0 +1,140 @@
+--- initial/backend/app/capabilities/gateway.py
++++ final/backend/app/capabilities/gateway.py
+@@ -96,10 +96,16 @@
+         self._ledger = ledger or RejectingAdmissionLedger()
+         self._transport = transport or HttpxModelTransport()
+         self._tools = tools or ToolRegistry()
+ 
+     async def call(self, context: CallContext, request: ModelCallRequest) -> ModelCallResult:
++        from .q_gateway import call_with_policy, is_v2
++        if is_v2(self._config):
++            return await call_with_policy(self,context,request,self._call_original)
++        return await self._call_original(context,request)
++
++    async def _call_original(self, context: CallContext, request: ModelCallRequest) -> ModelCallResult:
+         # 冻结原请求及服务端配置；await不能把已核正文换成新正文。
+         original_request = request
+         request = request.model_copy(deep=True)
+         config = self._config.model_copy(deep=True)
+         request_snapshot = json.dumps(request.model_dump(mode='json'),sort_keys=True,separators=(',',':'),allow_nan=False)
+@@ -146,10 +152,13 @@
+         if request.max_output_tokens > config.max_output_tokens_limit:
+             return self._result(context, CallStatus.REJECTED, "output_token_limit")
+         try:
+             payload = self._build_payload(request, config=config)
+             encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
++            if config.outbound_authorization:
++                from .q_protocol import canonical
++                encoded=canonical(payload).encode('utf-8')
+         except (ToolValidationError, ValueError, TypeError):
+             return self._result(context, CallStatus.REJECTED, "invalid_request")
+         if len(encoded) > config.max_request_bytes:
+             return self._result(context, CallStatus.REJECTED, "context_limit")
+ 
+@@ -205,53 +214,65 @@
+                 request_bytes=intent.request_bytes, max_output_tokens=intent.max_output_tokens, tool_names=intent.tool_names,
+                 html_binding=HtmlCallBinding(business_key=p.business_key, request_sha256=p.request_sha256,
+                     context_sha256=p.context_sha256, renderer_sha256=p.renderer_sha256,
+                     memory_selection_sha256=frozen.get("memory_selection_sha256")))
+         intent = replace(intent,retrieval_ref=request.retrieval_ref,outbound_grant=approved_grant,outbound_source_manifest=approved_manifest)
++        intent=replace(intent,outbound_authorization=config.outbound_authorization)
+         approved_wire = json.dumps([approved_grant,approved_manifest],sort_keys=True,separators=(',',':'))
+         def check_approved_scope():
+             if approved_grant is None:return
+             if not original_scope_unchanged() or json.dumps([intent.outbound_grant,intent.outbound_source_manifest],sort_keys=True,separators=(',',':'))!=approved_wire:
+                 raise AdmissionDenied('outbound_scope_changed')
+             grant.check(context.activity_id,config.provider.value,config.model,len(encoded),request.max_output_tokens)
+             manifest.check_model(request,json.loads(encoded))
+         stage = "admit"
+         try:
+             check_approved_scope()
++            from .q_gateway import admission_intent, admission_observed
++            admission_intent(intent)
+             permit = await self._ledger.admit(intent)
++            admission_observed(permit)
+             stage = "permit_check"
+             self._validate_permit(permit, context)
+             stage = "mark_dispatch"
+             check_approved_scope()
+             if request.retrieval_ref is not None:await self._ledger.mark_dispatch_started(permit,retrieval_ref=request.retrieval_ref)
+             else:await self._ledger.mark_dispatch_started(permit)
+             stage = "dispatch_scope_check"
+             check_approved_scope()
+         except AdmissionDenied as exc:
++            if stage=='admit':
++                from .q_gateway import admission_failed
++                admission_failed(definitely_denied=True)
+             code = str(exc)
+             if stage=="dispatch_scope_check":
+                 # 已预扣/登记dispatch但尚未调用transport，明确未发送且不退款。
+                 return await self._finish(permit,context,LedgerOutcome(LedgerDisposition.NOT_SENT,error_code='outbound_scope_changed'),CallStatus.NOT_SENT)
+             if not code.startswith("interview_") and code not in {"scope_conflict","source_invalid","result_invalidated","cancelled","budget_exhausted","integrity_error","invalid_input","outbound_scope_changed"}:
+                 code = "admission_denied"
+             return self._result(context, CallStatus.REJECTED, code)
+         except AdmissionUnavailable:
++            from .q_gateway import admission_failed
++            admission_failed(definitely_denied=False)
+             return self._result(context, CallStatus.REJECTED, "admission_unavailable")
+         except Exception as exc:
+             # 意外异常：稳定独立错误码，保持 REJECTED 且不发送；保守账本语义不变
+             #（已预留不退款、不重发、不假记业务成功）。
+             _logger.warning(
+                 "admission_internal_error stage=%s correlation_id=%s exception_type=%s",
+                 stage,
+                 uuid4().hex,
+                 type(exc).__name__,
+             )
++            from .q_gateway import admission_failed
++            admission_failed(definitely_denied=False)
+             return self._result(context, CallStatus.REJECTED, "admission_internal_error")
+ 
+         try:
+             async with asyncio.timeout(config.timeout_seconds):
+-                response = await self._transport.send(
++                from .q_gateway import dispatch_transport
++                response = await dispatch_transport(self._transport,
+                     endpoint=f"{config.base_url}/chat/completions",
+                     api_key=config.api_key.get_secret_value(),
+                     payload=json.loads(encoded),
+                     timeout_seconds=config.timeout_seconds,
+                     max_response_bytes=config.max_response_bytes,
+@@ -419,10 +440,13 @@
+         if (
+             not isinstance(returned_model, str)
+             or re.fullmatch(r"[A-Za-z0-9._:/-]{1,128}", returned_model) is None
+         ):
+             raise ResponseValidationError("invalid_response_shape")
++        from .q_gateway import is_v2
++        if is_v2(self._config) and returned_model not in self._config.returned_models:
++            raise ResponseValidationError('q_returned_model_unverified')
+         if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
+             raise ResponseValidationError("invalid_response_shape")
+         if not isinstance(usage_raw, dict):
+             raise ResponseValidationError("invalid_usage")
+         try:
+@@ -558,10 +582,12 @@
+         提交结果未确认：UNKNOWN + record_unconfirmed。两处 UNKNOWN 都不否定
+         同键历史持久正文；恢复由 record 幂等与只读接口承担，不重发、不补写。
+         SUCCEEDED 仅在合法正文获 RECORDED/ALREADY_PRESENT 确认后返回，实际
+         返回对象携带 payload_sha256；TOOL_PLAN 不持久化业务正文、不自动执行。
+         """
++        from .q_gateway import release_dispatch
++        await release_dispatch()
+         try:
+             confirmation = await self._ledger.record_outcome(permit, outcome)
+         except AdmissionDenied:
+             return self._result(context, CallStatus.UNKNOWN, "record_denied")
+         except Exception:
+@@ -582,10 +608,12 @@
+             finish_reason=outcome.finish_reason,
+             remote_request_id=outcome.remote_request_id,
+         )
+ 
+     async def _record_unknown_best_effort(self, permit: AdmissionPermit, error_code: str) -> None:
++        from .q_gateway import release_dispatch
++        await release_dispatch()
+         try:
+             await self._ledger.record_outcome(
+                 permit,
+                 LedgerOutcome(LedgerDisposition.UNKNOWN, error_code=error_code),
+             )

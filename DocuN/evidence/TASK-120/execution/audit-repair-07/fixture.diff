@@ -1,0 +1,979 @@
+--- before/backend/tests/fixtures/task120/resources.py
++++ after/backend/tests/fixtures/task120/resources.py
+@@ -20,10 +20,14 @@
+ 
+ ROOT=Path(__file__).resolve().parents[4]
+ EVIDENCE=ROOT/'DocuN/evidence/TASK-120/execution'
++EXECUTION=EVIDENCE
+ PRIVATE=ROOT/'.runtime/TASK-120'
+ if os.environ.get('RETROLUME_TASK120_CONTINUATION')=='TASK-120-Q-PREP-CONTINUATION-06-20261020':
+     PRIVATE=PRIVATE/'continuation-06'
+-BUDGET=EVIDENCE/'budget.json'
++if os.environ.get('RETROLUME_TASK120_CONTINUATION')=='TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021':
++    PRIVATE=ROOT/'.runtime/task120-audit07'
++    EVIDENCE=EXECUTION/'audit-repair-07'
++BUDGET=EXECUTION/'budget.json'
+ NAME='retrolume-task120-qprep-pg1'
+ VOLUME='retrolume-task120-qprep-data'
+ IMAGE='pgvector/pgvector@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f'
+@@ -52,7 +56,7 @@
+ 
+ 
+ def update(function):
+-    lock=RootLease(EVIDENCE,'.operation.lock')
++    lock=RootLease(EXECUTION,'.operation.lock')
+     try:
+         with lock.acquire(True,timeout=2):
+             value=state();result=function(value);write(BUDGET,value);return result
+@@ -62,13 +66,17 @@
+ def count(name):
+     def reserve(value):
+         if value['counts'][name]>=value['caps'][name]:raise RuntimeError('task120_count_exhausted_'+name)
++        if name=='native_business_sessions' and value.get('current_permit_id')=='TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021':
++            attempts=value.get('audit_repair07_synthetic_admission_launch_reservations',0)
++            if attempts>=16:raise RuntimeError('audit07_synthetic_admission_attempt_cap')
++            value['audit_repair07_synthetic_admission_launch_reservations']=attempts+1
+         value['counts'][name]+=1
+         return value['counts'][name]
+     return update(reserve)
+ 
+ 
+ def event(kind,**details):
+-    with (EVIDENCE/'events.jsonl').open('a',encoding='utf-8') as stream:
++    with (EXECUTION/'events.jsonl').open('a',encoding='utf-8') as stream:
+         stream.write(json.dumps({'utc':utc(),'mono_ns':time.monotonic_ns(),'kind':kind,**details})+'\n')
+ 
+ 
+@@ -84,14 +92,14 @@
+ 
+ def memory_gate(kind):
+     amount=available_memory()
+-    prospective=state().get('current_permit_id') in ('TASK-120-Q-PREP-VALIDATION-04-20261019','TASK-120-Q-PREP-FINALIZATION-05-20261019','TASK-120-Q-PREP-CONTINUATION-06-20261020')
++    prospective=state().get('current_permit_id') in ('TASK-120-Q-PREP-VALIDATION-04-20261019','TASK-120-Q-PREP-FINALIZATION-05-20261019','TASK-120-Q-PREP-CONTINUATION-06-20261020','TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021')
+     minimum=(512 if prospective or kind!='browser' else 768)*1024**2
+     event('memory_gate',stage=kind,available_bytes=amount,minimum_bytes=minimum)
+     if amount<minimum:raise RuntimeError('task120_low_memory_'+kind)
+ 
+ 
+ def settled_memory_gate(kind,seconds=12):
+-    if state().get('current_permit_id') in ('TASK-120-Q-PREP-VALIDATION-04-20261019','TASK-120-Q-PREP-FINALIZATION-05-20261019','TASK-120-Q-PREP-CONTINUATION-06-20261020'):return memory_gate(kind)
++    if state().get('current_permit_id') in ('TASK-120-Q-PREP-VALIDATION-04-20261019','TASK-120-Q-PREP-FINALIZATION-05-20261019','TASK-120-Q-PREP-CONTINUATION-06-20261020','TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021'):return memory_gate(kind)
+     # Docker warmup can briefly reclaim pages. This finite internal stage does
+     # not start the next layer until its unchanged real threshold is met.
+     until=time.monotonic()+seconds
+--- before/backend/tests/fixtures/task120/setup.py
++++ after/backend/tests/fixtures/task120/setup.py
+@@ -24,7 +24,8 @@
+ 
+ def dsn(slot,admin=False,*,snapshot=False):
+     port=r.state()['ports']['pg']
+-    if slot not in ('flow','budget-01','budget-02','matrix-final','scope-ui-final'):raise RuntimeError('task120_database_not_permitted')
++    if slot not in ('flow','budget-01','budget-02','matrix-final','scope-ui-final','audit07-r02','audit07-main'):raise RuntimeError('task120_database_not_permitted')
++    if slot.startswith('audit07-') and (r.state()['current_permit_id']!='TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021' or r.PRIVATE!=r.ROOT/'.runtime/task120-audit07'):raise RuntimeError('audit07_private_permit_required')
+     if slot=='scope-ui-final' and (r.state()['current_permit_id']!='TASK-120-Q-PREP-CONTINUATION-06-20261020' or r.PRIVATE.name!='continuation-06'):raise RuntimeError('scope_ui_private_permit_required')
+     value=info(slot)
+     return make_conninfo(host='127.0.0.1',port=port,dbname=value['database'],user='postgres' if admin else value['snapshot_user'] if snapshot else value['app_user'],
+@@ -46,6 +47,13 @@
+ 
+ 
+ def initial_files(slot):
++    if slot.startswith('audit07-'):
++        from .audit07_setup import initial_files as initialize
++        return initialize(slot)
++    return _initial_files_legacy(slot)
++
++
++def _initial_files_legacy(slot):
+     base=r.PRIVATE/slot;base.mkdir(parents=True,exist_ok=True)
+     from app.data_exit.files import private_file
+     private_file(base,directory=True)
+@@ -104,6 +112,13 @@
+ 
+ 
+ def migrate(slot):
++    if slot.startswith('audit07-'):
++        from .audit07_setup import migrate as initialize
++        return initialize(slot)
++    return _migrate_legacy(slot)
++
++
++def _migrate_legacy(slot):
+     value=info(slot);port=r.state()['ports']['pg']
+     progress_file=r.PRIVATE/slot/'bootstrap-progress.json'
+     progress=json.loads(progress_file.read_text(encoding='utf-8')) if progress_file.exists() else {'database':value['database'],'create_intent':False,'migrations':[],'roles_ready':False}
+@@ -119,6 +134,12 @@
+         exists=connection.execute('SELECT 1 FROM pg_database WHERE datname=%s',(value['database'],)).fetchone()
+         if exists and not progress['create_intent']:raise RuntimeError('existing_database_requires_reconciliation_not_reset')
+         if not exists:
++            if slot.startswith('audit07-'):
++                def reserve_audit(s):
++                    row=s['audit_repair07_logical_databases'][value['database']]
++                    if row['create_attempts']>=1:raise RuntimeError('audit07_database_create_attempt_cap')
++                    row['create_attempts']+=1
++                r.update(reserve_audit)
+             progress['create_intent']=True;r.write(progress_file,progress,private=True)
+             if slot=='matrix-final':
+                 def reserve(s):
+@@ -131,6 +152,13 @@
+                     s['continuation06_database_create_attempts']=1
+                 r.update(reserve_scope)
+             connection.execute(sql.SQL('CREATE DATABASE {}').format(sql.Identifier(value['database'])))
++        if slot.startswith('audit07-'):
++            actual_oid=connection.execute('SELECT oid FROM pg_database WHERE datname=%s',(value['database'],)).fetchone()[0]
++            def observed_audit(s):
++                row=s['audit_repair07_logical_databases'][value['database']]
++                if row.get('oid',actual_oid)!=actual_oid:raise RuntimeError('audit07_database_OID_changed')
++                row.update(objects=1,oid=actual_oid)
++            r.update(observed_audit)
+     migrations=[]
+     with psycopg.connect(dsn(slot,True),autocommit=True) as connection:
+         known={row[0] for row in connection.execute('SELECT rolname FROM pg_roles').fetchall()}
+@@ -138,7 +166,7 @@
+             from app.data_exit.schema_profiles import get_profile,R02,R03
+             if path.name not in get_profile(R03 if slot=='scope-ui-final' else R02).migration_chain:continue
+             original=path.read_bytes();body=original.decode('utf-8-sig')
+-            if slot in ('budget-02','matrix-final','scope-ui-final'):body=body.replace('\r\n','\n')
++            if slot in ('budget-02','matrix-final','scope-ui-final','audit07-r02','audit07-main'):body=body.replace('\r\n','\n')
+             identity={'name':path.name,'sha256':raw_digest(original)}
+             if any(row==identity for row in progress['migrations']):migrations.append(identity);continue
+             if progress.get('pending_migration'):
+@@ -152,7 +180,7 @@
+                     raise RuntimeError('migration_commit_ack_requires_specific_reconciliation')
+                 r.write(r.EVIDENCE/'budget01-root02-migration-reconciliation.json',{'pending':identity,'transaction_rolled_back':True,'basis':'retained root02 P0001 plus absent learning_memories; original nine migrations retained'})
+                 progress.pop('pending_migration')
+-            if slot in ('budget-01','budget-02','matrix-final','scope-ui-final'):
++            if slot in ('budget-01','budget-02','matrix-final','scope-ui-final','audit07-r02','audit07-main'):
+                 for group in known:
+                     if group.startswith('retrolume_'):
+                         flags=connection.execute('SELECT rolcanlogin,rolsuper,rolcreatedb,rolcreaterole,rolreplication,rolbypassrls FROM pg_roles WHERE rolname=%s',(group,)).fetchone()
+@@ -184,7 +212,7 @@
+         connection.execute('BEGIN')
+         connection.execute("INSERT INTO data_control(dataset_id,instance_id,originals_root_id,schema_profile,mode,maintenance_key_sha256) VALUES(%s,%s,%s,%s,'normal',%s)",
+             (value['dataset_id'],value['instance_id'],value['originals_root_id'],'data_exit.v1.r03' if slot=='scope-ui-final' else 'data_exit.v1.r02',raw_digest(value['maintenance_key'])))
+-        if slot not in ('matrix-final','scope-ui-final'):
++        if slot not in ('matrix-final','scope-ui-final','audit07-r02','audit07-main'):
+             connection.execute(sql.SQL('CREATE ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD {}').format(sql.Identifier(value['app_user']),sql.Literal(value['app_password'])))
+             for group in ('retrolume_data_app','retrolume_memory_app','retrolume_interview_app','retrolume_html_app','retrolume_retrieval_app'):
+                 connection.execute(sql.SQL('GRANT {} TO {}').format(sql.Identifier(group),sql.Identifier(value['app_user'])))
+@@ -330,6 +358,10 @@
+         expiry=r.state()['continuation06']['business_deadline_utc']
+         if now>=datetime.fromisoformat(expiry):raise RuntimeError('scope_ui_business_window_expired')
+         grant['valid_until_utc']=expiry
++    if slot.startswith('audit07-'):
++        expiry=r.state()['audit_repair07']['business_deadline_utc']
++        if now>=datetime.fromisoformat(expiry):raise RuntimeError('audit07_business_window_expired')
++        grant['valid_until_utc']=expiry
+     if slot=='budget-02':
+         expiry='2026-10-19T12:19:22.457756+00:00'
+         if now>=datetime.fromisoformat(expiry):raise RuntimeError('memory_TESTONLY_original_deadline_expired')
+@@ -357,7 +389,7 @@
+             if (existing['max_requests'],existing['max_cost_microunits'])!=LIMITS[index]:raise RuntimeError('bootstrap_roster_drift')
+             continue
+         selection=None
+-        if slot in ('budget-02','matrix-final') and index==1:
++        if slot in ('budget-02','matrix-final','audit07-main') and index==1:
+             from app.memory.contracts import MemoryCommandInput,MemorySelectionInput
+             from app.memory.service import MemoryService
+             selected=base/'creation-memory.json'
+--- before/backend/tests/fixtures/task120/queued.py
++++ after/backend/tests/fixtures/task120/queued.py
+@@ -16,14 +16,17 @@
+ PHASES=PHASES|frozenset(('f05_reconcile','f05_bootstrap','f05_permissions','f05_ack','f05_head','f05_revoke','f05_scope','f05_source','f05_memory','f05_memory_reconcile','f05_reconcile_final','f05_ui','f05_delete','f05_readonly','f05_financials','f05_scope_diagnose','f05_scope_removal'))
+ VALIDATION_PERMIT='TASK-120-Q-PREP-VALIDATION-04-20261019'
+ SCOPE_PERMIT='TASK-120-Q-PREP-CONTINUATION-06-20261020'
++AUDIT_PERMIT='TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021'
++PHASES=PHASES|frozenset(('a07_permissions','a07_bootstrap','a07_claim_clock','a07_cleanup','a07_final'))
+ PHASES=PHASES|frozenset(('c06_bootstrap','c06_scope','c06_shrink_race','c06_ui','c06_financials','c06_compat'))
+ PHASES=PHASES|frozenset(('c06_ro_check','c06_ro_ui'))
+ PHASES=PHASES|frozenset(('v04_exercise','v04_ui','v04_boundaries','v04_races','v04_financials','v04_flow_final'))
+ 
+ def read_plan(path):
+     value=json.loads(Path(path).read_text(encoding='utf-8'))
+-    if set(value)!={'schema','permit_id','root_id','stages'} or value['schema']!='task120.finite-plan.v1' or value['permit_id'] not in (PERMIT,REPAIR_PERMIT,VALIDATION_PERMIT,FINAL_PERMIT,SCOPE_PERMIT):raise ValueError('closed_plan')
+-    low,high=(41,64) if value['permit_id']==SCOPE_PERMIT else (25,64) if value['permit_id']==FINAL_PERMIT else (21,24) if value['permit_id']==VALIDATION_PERMIT else (17,20) if value['permit_id']==REPAIR_PERMIT else (9,16)
++    if set(value)!={'schema','permit_id','root_id','stages'} or value['schema']!='task120.finite-plan.v1' or value['permit_id'] not in (PERMIT,REPAIR_PERMIT,VALIDATION_PERMIT,FINAL_PERMIT,SCOPE_PERMIT,AUDIT_PERMIT):raise ValueError('closed_plan')
++    low,high=(52,64) if value['permit_id']==AUDIT_PERMIT else (41,64) if value['permit_id']==SCOPE_PERMIT else (25,64) if value['permit_id']==FINAL_PERMIT else (21,24) if value['permit_id']==VALIDATION_PERMIT else (17,20) if value['permit_id']==REPAIR_PERMIT else (9,16)
++    if value['permit_id']==AUDIT_PERMIT and any(not s.get('phase','').startswith('a07_') for s in value['stages']):raise ValueError('audit07_closed_phase')
+     if value['permit_id']==SCOPE_PERMIT and any(not s.get('phase','').startswith('c06_') for s in value['stages']):raise ValueError('continuation06_closed_phase')
+     if value['permit_id']==VALIDATION_PERMIT and any(not s.get('phase','').startswith('v04_') for s in value['stages']):raise ValueError('validation04_closed_phase')
+     if value['permit_id']==FINAL_PERMIT and any(not s.get('phase','').startswith('f05_') for s in value['stages']):raise ValueError('final05_closed_phase')
+--- before/backend/tests/fixtures/task120/run.py
++++ after/backend/tests/fixtures/task120/run.py
+@@ -7,7 +7,9 @@
+ ROOT=Path(__file__).resolve().parents[4]
+ root_id=int(os.environ['RETROLUME_TASK120_ROOT_ID'])
+ suffix=('-batch-'+os.environ['RETROLUME_TASK120_BATCH'].zfill(2)) if os.environ.get('RETROLUME_TASK120_BATCH') else ''
+-log=(ROOT/f'DocuN/evidence/TASK-120/execution/root-{root_id:02d}{suffix}-child.log').open('a',encoding='utf-8',buffering=1)
++folder=ROOT/'DocuN/evidence/TASK-120/execution'
++if os.environ.get('RETROLUME_TASK120_CONTINUATION')=='TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021':folder=folder/'audit-repair-07'
++log=(folder/f'root-{root_id:02d}{suffix}-child.log').open('a',encoding='utf-8',buffering=1)
+ sys.stdout=sys.stderr=log
+ 
+ 
+@@ -41,6 +43,9 @@
+             from .merged import run_batches
+             return run_batches()
+         if phase=='bootstrap':bootstrap()
++        elif phase.startswith('a07_'):
++            from .audit07 import execute
++            execute(phase.removeprefix('a07_'))
+         elif phase.startswith('c06_'):
+             from .continuation06 import execute
+             execute(phase.removeprefix('c06_'))
+--- before/backend/tests/fixtures/task120/api_runtime.py
++++ after/backend/tests/fixtures/task120/api_runtime.py
+@@ -89,7 +89,7 @@
+     async def observed_transaction(operation,*args,**kwargs):
+         observed_operation=operation
+         transaction_identity={}
+-        if r.state().get('current_permit_id') in ('TASK-120-Q-PREP-FINALIZATION-05-20261019','TASK-120-Q-PREP-CONTINUATION-06-20261020'):
++        if r.state().get('current_permit_id') in ('TASK-120-Q-PREP-FINALIZATION-05-20261019','TASK-120-Q-PREP-CONTINUATION-06-20261020','TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021'):
+             import functools
+             class ObservedConnection:
+                 def __init__(self,connection):self.connection=connection
+--- /dev/null
++++ after/backend/tests/fixtures/task120/audit07.py
+@@ -0,0 +1,61 @@
++"""One finite07 repair plan. Only named new databases and normal product flows."""
++import json,traceback
++from . import resources as r
++HERE=r.EVIDENCE
++SLOT='audit07-main'
++
++
++def case(name,action):
++    p=HERE/(name+'-PASS.json')
++    if p.exists():return json.loads(p.read_text(encoding='utf-8'))['facts']
++    try:
++        facts=action();r.write(p,{'status':'PASS','facts':facts,'root':r.state()['active_root']});return facts
++    except BaseException as exc:
++        r.write(HERE/(name+'-FAIL-root-'+str(r.state()['active_root'])+'.json'),{'status':'FAIL',
++            'error_type':type(exc).__name__,'code':getattr(exc,'code',None),'sqlstate':getattr(exc,'sqlstate',None),
++            'frames':[{'file':str(x.filename).replace(str(r.ROOT),'PROJECT'),'line':x.lineno,'function':x.name} for x in traceback.extract_tb(exc.__traceback__)]})
++        raise
++
++
++def execute(mode):
++    if r.state()['current_permit_id']!='TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021':raise RuntimeError('audit07_permit_required')
++    if mode=='permissions':
++        from .audit07_permissions import permissions
++        return permissions()
++    if mode=='bootstrap':return bootstrap()
++    if mode=='claim_clock':
++        from .audit07_time_claim import exercise
++        return exercise()
++    if mode=='cleanup':
++        from .audit07_cleanup import exercise
++        return exercise()
++    if mode=='final':return final()
++    raise RuntimeError('audit07_unknown_phase')
++
++
++def bootstrap():
++    from . import setup
++    from .transport import install
++    from .api_runtime import run,financials
++    setup.environment(SLOT);install()
++    from app.main import create_app
++    app=create_app()
++    assert app.state.data_exit is not None and app.state.data_exit_error is None
++    mapping=setup.seed_sources(app,SLOT);run(setup.bind_root(app,SLOT,mapping))
++    return case('new-main-normal-root',lambda:{'identity':{k:setup.info(SLOT)[k] for k in ('database','database_oid','dataset_id','instance_id','originals_root_id')},
++        'schema_profile':'data_exit.v1.r03','fixed_sources':len(mapping),'financials':financials(SLOT),'execution_class':'TESTONLY','real_Q':'FROZEN'})
++
++
++def final():
++    from .api_runtime import financials
++    from . import setup
++    import psycopg
++    from psycopg.rows import dict_row
++    from app.data_exit.schema_checks import assert_data_schema_sync
++    values={}
++    for slot in ('audit07-r02','audit07-main'):
++        with psycopg.connect(setup.dsn(slot),row_factory=dict_row) as c:
++            c.execute('SET TRANSACTION READ ONLY');assert_data_schema_sync(c)
++            values[slot]={'identity':{k:setup.info(slot)[k] for k in ('database','database_oid','dataset_id','instance_id')},'financials':financials(slot)}
++    assert sum(x['financials']['requests'] for x in values.values())<=16
++    return case('final-new-instances-separated',lambda:values)
+--- /dev/null
++++ after/backend/tests/fixtures/task120/audit07_setup.py
+@@ -0,0 +1,35 @@
++"""Exactly two new07 logical databases; no new login/membership or old writes."""
++import json,secrets
++from uuid import uuid4
++from . import resources as r,setup
++from app.data_exit.files import private_file
++
++SLOTS={'audit07-r02':'retrolume_task120_audit07_r02','audit07-main':'retrolume_task120_audit07_main'}
++
++
++def initial_files(slot):
++    if slot not in SLOTS or r.state()['current_permit_id']!='TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021':raise RuntimeError('audit07_exact_slot_required')
++    r.PRIVATE.mkdir(exist_ok=True);private_file(r.PRIVATE,directory=True)
++    cluster=r.PRIVATE/'cluster.json'
++    if not cluster.exists():
++        r.write(cluster,json.loads((r.ROOT/'.runtime/TASK-120/cluster.json').read_text(encoding='utf-8')),private=True)
++    base=r.PRIVATE/slot;base.mkdir(exist_ok=True);private_file(base,directory=True)
++    path=base/'identity.json'
++    if not path.exists():
++        prior=json.loads((r.ROOT/'.runtime/TASK-120/flow/identity.json').read_text(encoding='utf-8'))
++        value={k:prior[k] for k in ('app_user','app_password','snapshot_user','snapshot_password')}
++        value.update(slot=slot,database=SLOTS[slot],maintenance_key=secrets.token_hex(32),dataset_id=str(uuid4()),
++            instance_id=str(uuid4()),originals_root_id=str(uuid4()),synthetic_model_key=secrets.token_urlsafe(24),synthetic_embedding_key=secrets.token_urlsafe(24))
++        r.write(path,value,private=True)
++    setup._initial_files_legacy(slot)
++    if slot=='audit07-main':
++        activity=json.loads((base/'activity.json').read_text(encoding='utf-8'))
++        activity['memory_context']={'selected_items':1,'max_memory_bytes':4096,'max_memory_chars':2048,'model_context_tokens':131072,
++            'max_input_tokens_estimate':65536,'protocol_reserve_tokens':1024,'reserved_output_tokens':2048,'safety_tokens':1024,
++            'estimate_policy':'utf8_bytes.v1','model_identity':activity['model_identity']}
++        r.write(base/'activity.json',activity,private=True)
++
++
++def migrate(slot):
++    if slot not in SLOTS:raise RuntimeError('audit07_exact_database_required')
++    return setup._migrate_legacy(slot)
+--- /dev/null
++++ after/backend/tests/fixtures/task120/audit07_permissions.py
+@@ -0,0 +1,131 @@
++"""F01/F02 real PG17 transactions; one client, exact rollback, no API/worker."""
++import json
++from pathlib import Path
++import psycopg
++from psycopg import sql
++from psycopg.rows import dict_row
++from . import resources as r,setup
++from .audit07 import HERE,case
++from app.data_exit.contracts import DataError
++from app.data_exit.codec import plain
++from app.data_exit.schema_checks import assert_data_schema_sync
++from app.data_exit.schema_profiles import MIGRATION_015,SCOPE_ACL_QUERY
++from app.data_exit.q_roles import ROLE_CAPABILITIES,MEMBERSHIPS
++
++
++def image(c):
++    return plain({'control':c.execute('SELECT dataset_id,instance_id,schema_profile,mode FROM public.data_control').fetchall(),
++        'constraints':c.execute("SELECT conname,pg_get_constraintdef(oid) AS definition FROM pg_constraint WHERE conrelid='public.data_control'::regclass ORDER BY conname").fetchall(),
++        'scope_ACL':c.execute(SCOPE_ACL_QUERY).fetchall(),
++        'objects':c.execute("SELECT c.relname,c.relkind,r.rolname AS owner,c.relacl::text FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_roles r ON r.oid=c.relowner WHERE n.nspname='public' ORDER BY c.relname").fetchall()})
++
++
++def graph(c):return plain({'roles':c.execute(ROLE_CAPABILITIES).fetchall(),'members':c.execute(MEMBERSHIPS).fetchall()})
++
++
++def single(c):
++    clients=c.execute("SELECT pid,datname,usename,application_name FROM pg_stat_activity WHERE backend_type='client backend' AND pid<>pg_backend_pid() ORDER BY pid").fetchall()
++    assert not clients,clients
++    return plain(c.execute('SELECT pg_backend_pid() AS backend_pid,current_database() AS database,(SELECT system_identifier::text FROM pg_control_system()) AS cluster_system_identifier').fetchone())
++
++
++def permissions():
++    risk=json.loads((HERE/'permission-risk-final-before-PG.json').read_text(encoding='utf-8'))
++    assert risk['status']=='PASS' and risk['revised015_sha256']==MIGRATION_015
++    for slot in ('audit07-r02','audit07-main'):setup.initial_files(slot);setup.migrate(slot)
++    migration=(r.ROOT/'backend/migrations/015_activity_scope_delete_permission.sql').read_text(encoding='utf-8')
++    for title,missing in [('missing-insert',['INSERT']),('missing-update',['UPDATE']),('select-only',['INSERT','UPDATE'])]:
++        def negative(missing=missing):
++            with psycopg.connect(setup.dsn('audit07-r02',True),autocommit=True,row_factory=dict_row) as c:
++                endpoint=single(c);before=image(c);assert_data_schema_sync(c)
++                c.execute('BEGIN');error=None
++                try:
++                    for privilege in missing:c.execute('REVOKE '+privilege+' ON public.activity_scope_sources FROM retrolume_data_app')
++                    observed={p:c.execute('SELECT has_table_privilege(%s,%s,%s) AS ok',('retrolume_data_app','public.activity_scope_sources',p)).fetchone()['ok'] for p in ('SELECT','INSERT','UPDATE')}
++                    try:c.execute(migration,prepare=False)
++                    except psycopg.Error as exc:error={'sqlstate':exc.sqlstate,'message':exc.diag.message_primary}
++                    assert error=={'sqlstate':'P0001','message':'scope_delete_migration_requires_exact_quiescent_r02'},error
++                finally:c.execute('ROLLBACK')
++                after=image(c);assert after==before
++            with psycopg.connect(setup.dsn('audit07-r02',True),autocommit=True,row_factory=dict_row) as verify:
++                assert image(verify)==before
++            return {'missing':missing,'actual_preconditions':observed,'error':error,'endpoint':endpoint,
++                    'before':before,'after':after,'new_connection_equal':True,'DDL_ACL_profile_metadata_unchanged':True}
++        case('F01-'+title,negative)
++    def positive():
++        with psycopg.connect(setup.dsn('audit07-main',True),autocommit=True,row_factory=dict_row) as c:
++            endpoint=single(c);before=image(c);assert before['control'][0]['schema_profile']=='data_exit.v1.r02'
++            r.write(HERE/('F01-normal-R02-before015-root-'+str(r.state()['active_root'])+'.json'),before)
++            c.execute(migration,prepare=False)
++            after=image(c);assert after['control'][0]['schema_profile']=='data_exit.v1.r03'
++            assert_data_schema_sync(c)
++            progress_path=r.PRIVATE/'audit07-main/bootstrap-progress.json';progress=json.loads(progress_path.read_text(encoding='utf-8'))
++            progress['migrations'].append({'name':'015_activity_scope_delete_permission.sql','sha256':MIGRATION_015});r.write(progress_path,progress,private=True)
++            return {'endpoint':endpoint,'before':before,'after':after,'revised015_sha256':MIGRATION_015,'normal_R02_row_present_before_apply':True,'actual_COMMIT':True}
++    case('F01-normal-R03-install',positive)
++    actual_login=setup.info('audit07-main')['snapshot_user']
++    app=setup.info('audit07-main')['app_user']
++    cases=[('direct-inherit-snapshot',[
++        'GRANT retrolume_data_app TO retrolume_data_snapshot WITH INHERIT TRUE, SET FALSE'],True,False,'retrolume_data_snapshot'),
++      ('indirect-inherit-snapshot',[
++        'CREATE ROLE retrolume_task120_audit07_bridge1 NOLOGIN',
++        'GRANT retrolume_data_app TO retrolume_task120_audit07_bridge1 WITH INHERIT TRUE, SET FALSE',
++        'GRANT retrolume_task120_audit07_bridge1 TO retrolume_data_snapshot WITH INHERIT TRUE, SET FALSE'],True,False,'retrolume_data_snapshot'),
++      ('set-only-indirect-snapshot',[
++        'CREATE ROLE retrolume_task120_audit07_bridge1 NOLOGIN',
++        'CREATE ROLE retrolume_task120_audit07_bridge2 NOLOGIN',
++        'GRANT retrolume_data_app TO retrolume_task120_audit07_bridge2 WITH INHERIT FALSE, SET TRUE',
++        'GRANT retrolume_task120_audit07_bridge2 TO retrolume_task120_audit07_bridge1 WITH INHERIT FALSE, SET TRUE',
++        'GRANT retrolume_task120_audit07_bridge1 TO retrolume_data_snapshot WITH INHERIT FALSE, SET TRUE'],False,True,'retrolume_data_snapshot'),
++      ('loader-inherit-app',['GRANT retrolume_data_app TO retrolume_data_restore_loader WITH INHERIT TRUE, SET FALSE'],True,False,'retrolume_data_restore_loader'),
++      ('trusted-owner-inherit-app',['GRANT retrolume_data_app TO retrolume_interview_owner WITH INHERIT TRUE, SET FALSE'],True,False,'retrolume_interview_owner'),
++      ('application-inherit-controller-owner',['GRANT retrolume_data_owner TO retrolume_data_app WITH INHERIT TRUE, SET FALSE'],True,False,'retrolume_data_app'),
++      ('admin-without-inherit-or-set',['GRANT retrolume_data_app TO retrolume_data_snapshot WITH ADMIN TRUE, INHERIT FALSE, SET FALSE'],False,False,'retrolume_data_snapshot'),
++      ('legal-harmless-membership',['CREATE ROLE retrolume_task120_audit07_bridge1 NOLOGIN',
++        'GRANT retrolume_task120_audit07_bridge1 TO retrolume_data_snapshot WITH INHERIT TRUE, SET FALSE'],False,False,'retrolume_data_snapshot'),
++      ('application-inherit-write-all-data',['GRANT pg_write_all_data TO retrolume_data_app WITH INHERIT TRUE, SET FALSE'],True,False,'retrolume_data_app'),
++      ('snapshot-SET-only-server-program',['CREATE ROLE retrolume_task120_audit07_bridge1 NOLOGIN',
++        'GRANT pg_execute_server_program TO retrolume_task120_audit07_bridge1 WITH INHERIT FALSE, SET TRUE',
++        'GRANT retrolume_task120_audit07_bridge1 TO retrolume_data_snapshot WITH INHERIT FALSE, SET TRUE'],False,False,'retrolume_data_snapshot'),
++      ('legal-harmless-membership-current-management',['CREATE ROLE retrolume_task120_audit07_bridge1 NOLOGIN',
++        'GRANT retrolume_task120_audit07_bridge1 TO retrolume_data_snapshot WITH INHERIT TRUE, SET FALSE'],False,False,'retrolume_data_snapshot')]
++    for name,statements,inherit,can_set,subject in cases:
++        def role_case(name=name,statements=statements,inherit=inherit,can_set=can_set,subject=subject):
++            with psycopg.connect(setup.dsn('audit07-main',True),autocommit=True,row_factory=dict_row) as c:
++                endpoint=single(c);before=graph(c);assert_data_schema_sync(c);c.execute('BEGIN')
++                try:
++                    for statement in statements:c.execute(statement)
++                    capability=c.execute("SELECT has_table_privilege(%s,'public.activity_scope_sources','DELETE') AS actual_delete,pg_has_role(%s,'retrolume_data_app','SET') AS can_set_app",(subject,subject)).fetchone()
++                    # App already has DELETE by design; the owner leak is a
++                    # management failure, not a newly missing table privilege.
++                    if subject!='retrolume_data_app':assert capability=={'actual_delete':inherit,'can_set_app':can_set},capability
++                    observed_graph=graph(c);denial=None
++                    management=c.execute("SELECT has_table_privilege(%s,'public.data_control','UPDATE') AS actual_control_update,pg_has_role(%s,'pg_execute_server_program','SET') AS can_set_server_program",(subject,subject)).fetchone()
++                    try:assert_data_schema_sync(c)
++                    except DataError as exc:denial=exc.code
++                    if name.startswith('legal-harmless-membership'):assert denial is None
++                    else:assert denial=='data_role_capability_mismatch',denial
++                    actual_write=None
++                    if subject=='retrolume_data_snapshot' and (inherit or can_set):
++                        c.execute(sql.SQL('SET LOCAL SESSION AUTHORIZATION {}').format(sql.Identifier(actual_login)))
++                        if can_set:c.execute('SET LOCAL ROLE retrolume_data_app')
++                        actual_write=c.execute('DELETE FROM public.activity_scope_sources WHERE false').rowcount
++                        c.execute('RESET ROLE');c.execute('RESET SESSION AUTHORIZATION')
++                    return_value={'name':name,'endpoint':endpoint,'subject':subject,'exact_uncommitted_statements':statements,
++                        'actual_PG_capability':capability,'actual_management_capability':management,'actual_snapshot_login':actual_login if actual_write is not None else None,
++                        'actual_DELETE_false_rows':actual_write,'schema_check_error':denial,'baseline_graph':before,'uncommitted_graph':observed_graph}
++                finally:c.execute('ROLLBACK')
++                assert graph(c)==before
++            with psycopg.connect(setup.dsn('audit07-main',True),autocommit=True,row_factory=dict_row) as verify:
++                assert graph(verify)==before;assert_data_schema_sync(verify)
++            return {**return_value,'ROLLBACK_confirmed':True,'new_connection_graph_exact':True,'temporary_bridges_retained':False}
++        case('F02-'+name,role_case)
++    def normal_snapshot_denied():
++        with psycopg.connect(setup.dsn('audit07-main',snapshot=True),autocommit=True,row_factory=dict_row) as c:
++            assert_data_schema_sync(c)
++            try:c.execute('DELETE FROM public.activity_scope_sources WHERE false')
++            except psycopg.Error as exc:assert exc.sqlstate=='42501';error=exc.sqlstate
++            else:raise AssertionError('snapshot gained delete')
++            return {'actual_login':actual_login,'normal_configuration_passed':True,'write_error':error,'old_sealed_reader_guard':'continuation06 inherited, target not started'}
++    case('F02-normal-snapshot-read-and-write-denial-current-management',normal_snapshot_denied)
++    return {'F01':'PASS','F02':'PASS','all_role_changes':'ROLLBACK only','API_and_worker_during_role_negatives':0}
+--- /dev/null
++++ after/backend/tests/fixtures/task120/audit07_cleanup.py
+@@ -0,0 +1,201 @@
++"""F03 real new files, normal source/memory commands, one exact failure/retry."""
++import json,os
++from pathlib import Path
++from uuid import uuid4
++from unittest.mock import patch
++import psycopg
++from psycopg.rows import dict_row
++from . import resources as r,setup,final05
++from .api_runtime import application,run,financials
++from .audit07 import HERE,SLOT,case
++from app.capabilities.q_protocol import ROSTER,raw_digest as digest,canonical
++from app.data_exit.codec import plain
++from app.data_exit.contracts import DataError
++from app.data_exit.files import regular,safe_root
++from app.data_exit import q_cleanup
++
++
++def targets(authority,*,source_ids=(),memory_ids=()):
++    return [row for row in authority.hub.state()['q']['requests'].values()
++        if set(source_ids)&q_cleanup.dependencies(row)['sources'] or set(memory_ids)&q_cleanup.dependencies(row)['memories']]
++
++
++def register(paths,purpose):
++    file=HERE/'F03-exact-new-deletion-manifest.json'
++    value=json.loads(file.read_text(encoding='utf-8')) if file.exists() else {'root':str(r.PRIVATE),'maximum':16,'files':[]}
++    allowed=r.PRIVATE.resolve();existing={x['path']:x for x in value['files']}
++    for path in paths:
++        path=Path(path).absolute();assert path.resolve().is_relative_to(allowed)
++        if str(path) in existing:continue
++        safe_root(path.parent);info=regular(path);assert info.st_nlink==1
++        row={'path':str(path),'volume':info.st_dev,'file_id':info.st_ino,'bytes':info.st_size,'sha256':digest(path.read_bytes()),'purpose':purpose,
++             'synthetic_frozen_input_only':True,'personal_content':False}
++        value['files'].append(row);existing[str(path)]=row
++    assert len(value['files'])<=16
++    r.write(file,value)
++    return value
++
++
++def witness(authority):
++    with psycopg.connect(setup.dsn(SLOT),row_factory=dict_row) as db:
++        db.execute('SET TRANSACTION READ ONLY')
++        operations=plain(db.execute('SELECT activity_id,operation_id,admission_id,state,reserved_cost_microunits FROM activity_operations ORDER BY activity_id,operation_id').fetchall())
++        original007=plain(db.execute('SELECT activity_id,operation_id,payload_sha256 FROM activity_operation_results ORDER BY activity_id,operation_id').fetchall())
++    return {'operations':operations,'007_hashes':original007,'prepared_hashes':{pid:{k:row[k] for k in ('prepared_sha256','artifact_sha256')}
++        for pid,row in authority.hub.state()['q']['requests'].items()},'financials':financials(SLOT)}
++
++
++def bodies_closed(c,authority,rows,saved=None):
++    from app.operator.q_request import inspect_request
++    out=[]
++    for old in rows:
++        pid=old['prepared_id'];row=authority.request(pid)
++        try:authority.artifact(row)
++        except DataError as exc:assert exc.code=='q_body_cleanup_closed'
++        else:raise AssertionError('cleaned body readable')
++        inspection=run(inspect_request(c.app.state.activities_ledger,pid));assert inspection['request_available'] is False
++        assert authority.reference(row) is None
++        out.append({'prepared_id':pid,'cleanup':row['cleanup']['state'],'artifact_read_error':'q_body_cleanup_closed','operator_request_available':False,'authorization_reference':None})
++    if saved is not None:
++        row,artifact,ref=saved
++        from app.capabilities.contracts import ModelCallRequest,CallContext
++        from app.capabilities.gateway import ControlledModelGateway
++        config=c.app.state.activity_config.model_service.model_copy(update={'outbound_authorization':ref})
++        gateway=ControlledModelGateway(config,ledger=c.app.state.activities_ledger)
++        request=ModelCallRequest.model_validate_json(canonical(artifact['request']))
++        context=CallContext(activity_id=row['prepared']['activity_id'],operation_id=row['prepared']['operation_id'],
++            executor_id='audit07-closed-body-probe',execution_generation=1,scope_revision=1)
++        result=run(gateway.call(context,request))
++        assert result.error_code=='q_authorization_denied'
++        out.append({'real_worker_gateway_logic':'ControlledModelGateway.call -> q_gateway.call_with_policy -> actual check_reference',
++            'error_code':result.error_code,'new_native_launch':False,'original_approved_body_and_reference_used':True})
++    return out
++
++
++def exercise():
++    from .audit07_clock_hook import install
++    install()
++    from app.data_exit.q_store import authority_for
++    from app.operator.q_request import principal_id
++    final05.SLOT=SLOT
++    with application(SLOT) as c:
++        f=final05.Matrix(c);authority=authority_for(f.ledger)
++        memory=json.loads((r.PRIVATE/SLOT/'creation-memory.json').read_text(encoding='utf-8'))
++        mid=memory['memory_id'];mapping=json.loads((r.PRIVATE/SLOT/'sources.json').read_text(encoding='utf-8'));sid=str(mapping['N']['id'])
++        memrows=targets(authority,memory_ids=[mid]);source_rows=targets(authority,source_ids=[sid])
++        originals=c.app.state.originals._path(mapping['N']['sha256'])
++        register([authority.hub.artifact_path('q-prepared',x['prepared_id']) for x in memrows+source_rows]+[originals],
++                 'normal memory revoke/purge or normal sourceN deletion and exact Q dependency closure')
++        affected={x['prepared_id'] for x in memrows+source_rows}
++        unrelated=[x for x in authority.hub.state()['q']['requests'].values() if x['prepared_id'] not in affected]
++        untouched={x['prepared_id']:digest(authority.hub.artifact_path('q-prepared',x['prepared_id']).read_bytes()) for x in unrelated}
++        f.save('audit07-unrelated-body-identities',untouched)
++        def memory_cleanup():
++            before=witness(authority);row=authority.request(f.state['audit07-memory-prepared.prepared_id'])
++            if authority.reference(row) is None:
++                c.approve(row['prepared']['activity_id'],row['prepared']['business_key'])
++                row=authority.request(row['prepared_id'])
++            artifact=authority.artifact(row);ref=authority.reference(row);assert ref is not None
++            if 'audit07-memory-revoke' not in f.state:
++                preview=run(f.ledger.preview_memory_change(mid,1,'revoke'))
++                f.retain('audit07-memory-revoke',{'business_key':str(uuid4()),'memory_id':mid,'expected_revision':1,'action':'revoke',
++                    'body':{'impact_token':preview['impact_token'],'confirm_revoke':True,'purge_memory_content':True}})
++            receipt=c.request('POST','/api/memories/commands',f.state['audit07-memory-revoke'])
++            f.save('audit07-memory-revoke.receipt',receipt)
++            assert receipt['purge_state_now']=='done' and not receipt.get('cleanup_status_unconfirmed',False),receipt
++            closed=bodies_closed(c,authority,memrows,(row,artifact,ref))
++            assert all(not os.path.lexists(authority.hub.artifact_path('q-prepared',x['prepared_id'])) for x in memrows)
++            with psycopg.connect(setup.dsn(SLOT),row_factory=dict_row) as db:
++                db.execute('SET TRANSACTION READ ONLY');state=db.execute('SELECT state,revision,purge_state,(SELECT count(*) FROM learning_memory_bodies b WHERE b.memory_id=h.memory_id) AS body_rows FROM learning_memories h WHERE memory_id=%s',(mid,)).fetchone()
++            assert state['state']=='revoked' and state['purge_state']=='done' and state['body_rows']==0
++            after=witness(authority);assert before['operations']==after['operations'] and before['financials']==after['financials']
++            assert before['prepared_hashes']==after['prepared_hashes']
++            return {'normal_HTTP_receipt':receipt,'memory':state,'Q_bodies':closed,'before':before,'after':after,
++                'Q_body_files_absent':True,'no_refund_or_new_admission':True,'zero_resend':True}
++        case('F03-normal-memory-revoke-purge',memory_cleanup)
++        def source_failure():
++            key=f.state['audit07-legacy-followup']['business_key']
++            row=next(x for x in source_rows if x['prepared']['business_key']==key)
++            reconciled='audit07-source-pending' in f.state
++            if reconciled:
++                # Root58 already committed the tombstone, the intended exact
++                # file failure and all Q/worker denial checks. Its later legacy
++                # GET carried an Origin not allowed on materials routes. Keep
++                # that FAIL; resume observation, never repeat deletion or fault.
++                before=json.loads((HERE/'F03-normal-memory-revoke-purge-PASS.json').read_text(encoding='utf-8'))['facts']['after']
++                receipt=f.state['audit07-source-pending']
++                saved_receipt=json.loads(authority.hub.read_artifact('receipts',receipt['receipt_id'],receipt['receipt_sha256']))
++                assert next(x for x in saved_receipt['q_cleanup'] if x['prepared_id']==row['prepared_id'])['state']=='physical_result_unknown'
++                assert (HERE/'root-58-batch-01-child.log').read_text(encoding='utf-8').count('q_dispatch_rejected code=q_body_cleanup_closed')>=2
++                r.write(HERE/'F03-root58-successful-substeps-reconciled.json',{'source_receipt':saved_receipt,
++                    'boundary':'one original exact file failure; tombstone and physical original deletion already committed',
++                    'actual_worker_gateway_denials_before_later_403':2,'root58_FAIL_unchanged':True,'no_new_deletion_or_fault_injection':True,
++                    '403_was_original_legacy_Origin_guard':'GET should omit Origin, like a normal same-origin browser GET; local-session check retained'})
++                closed=bodies_closed(c,authority,source_rows)
++            else:
++                before=witness(authority)
++                if authority.reference(row) is None:
++                    c.approve(row['prepared']['activity_id'],row['prepared']['business_key'])
++                    row=authority.request(row['prepared_id'])
++                artifact=authority.artifact(row);ref=authority.reference(row);assert ref is not None
++                preview=c.request('POST',f'/api/data/materials/{sid}/deletion-preview',{'expected_revision':mapping['N']['revision']})
++                cmd=f.retain('audit07-source-delete',{'business_key':str(uuid4()),'expected_revision':mapping['N']['revision'],
++                    'impact_sha256':preview['impact_sha256'],'confirm':True})
++                original=q_cleanup.remove_registered;injected=[]
++                def exact_failure(hub,pid,identity):
++                    if pid==row['prepared_id']:
++                        injected.append(pid);raise PermissionError('TESTONLY_exact_new_body_cleanup_failure')
++                    return original(hub,pid,identity)
++                with patch('app.data_exit.q_cleanup.remove_registered',side_effect=exact_failure):
++                    receipt=c.request('POST',f'/api/data/materials/{sid}/deletions',cmd)
++                f.save('audit07-source-pending',receipt)
++                assert injected==[row['prepared_id']]
++                closed=bodies_closed(c,authority,source_rows,(row,artifact,ref))
++            assert receipt['state']=='deleted_pending',receipt
++            assert authority.request(row['prepared_id'])['cleanup']['state']=='pending'
++            assert os.path.lexists(authority.hub.artifact_path('q-prepared',row['prepared_id'])) and not os.path.lexists(originals)
++            good=c.request('GET',f"/api/materials/{mapping['R']['id']}/content",browser_read=True,expect=(200,))
++            assert good['text']==next(x['text'] for x in setup.SAMPLES['sources'] if x['alias']=='R')
++            content=c.request('GET',f'/api/materials/{sid}/content',browser_read=True,expect=(404,))
++            assert content['detail']=='资料不存在'
++            assert next(x['text'] for x in setup.SAMPLES['sources'] if x['alias']=='N') not in canonical(content)
++            view=c.request('GET',f"/api/activities/{ROSTER[0]}/learning/intents/{key}?action=followup")
++            assert view['outbound_approval']['state']=='invalidated' and not view['outbound_approval']['can_continue']
++            c.request('POST',f'/api/activities/{ROSTER[0]}/learning/followups',f.state['audit07-legacy-followup'],expect=(409,))
++            assert c.timeline[-1]['rejection_code']=='result_invalidated'
++            after=witness(authority);assert before['financials']==after['financials'] and before['operations']==after['operations']
++            assert before['prepared_hashes']==after['prepared_hashes']
++            for pid,sha in untouched.items():assert digest(authority.hub.artifact_path('q-prepared',pid).read_bytes())==sha
++            return {'normal_source_HTTP_receipt':receipt,'source_id':sid,'injected_exact_prepared_id':row['prepared_id'],
++                'fault_boundary':'q_cleanup.remove_registered only; real tombstone/normal permissions/PG transactions executed',
++                'pending_file_exists_but_product_reads_and_old_reference_closed':closed,'normal_content_GET_error':{'HTTP':404,'detail':'资料不存在'},
++                'same_authenticated_legacy_GET_unrelated_source_HTTP':200,'normal_continue_POST_error':c.timeline[-1]['rejection_code'],
++                'normal_Q_GET_projection':view['outbound_approval'],'original_root58_successful_steps_reconciled':reconciled,
++                'before':before,'after':after,'unrelated_artifacts_unchanged':untouched}
++        case('F03-source-cleanup-failure-closed',source_failure)
++    # The original API/objects close before recovery. Reopen the normal app;
++    # journal replay must preserve denial and the exact pending file identity.
++    with application(SLOT) as c:
++        f=final05.Matrix(c);authority=authority_for(f.ledger)
++        def recover():
++            pending=f.state['audit07-source-pending'];before=witness(authority)
++            rows=targets(authority,source_ids=[sid]);closed_before=bodies_closed(c,authority,rows)
++            receipt=c.request('POST',f"/api/data/jobs/{pending['job_id']}/retry-cleanup",{'confirm':True})
++            assert receipt['state']=='deleted',receipt
++            closed_after=bodies_closed(c,authority,rows)
++            assert all(not os.path.lexists(authority.hub.artifact_path('q-prepared',x['prepared_id'])) for x in rows)
++            after=witness(authority);assert before['operations']==after['operations'] and before['financials']==after['financials']
++            for pid,sha in f.state['audit07-unrelated-body-identities'].items():assert digest(authority.hub.artifact_path('q-prepared',pid).read_bytes())==sha
++            return {'fresh_normal_API_reopen':True,'same_pending_job':pending['job_id'],'receipt':receipt,
++                'replayed_before_retry':closed_before,'after_retry':closed_after,'all_target_Q_body_paths_absent':True,
++                'before':before,'after':after,'unrelated_hashes_unchanged':True,'zero_resend':True,'original007_hash_witness_and_reservations_retained':True}
++        case('F03-exact-cleanup-replay-and-retry',recover)
++        # Explicitly retire all new-only decisions at the engineering endpoint;
++        # none of the public evidence carries a currently usable approval.
++        retired=[]
++        for row in authority.hub.state()['q']['requests'].values():
++            if row.get('approval') and not row.get('revoked'):
++                authority.revoke(row['prepared_id'],principal_id());retired.append(row['prepared_id'])
++        r.write(HERE/'new-only-approvals-explicitly-retired.json',{'new_instance_only':True,'prepared_ids':retired,'all_existing_new_decisions_revoked':True,'old_instances_touched':False,'financials':financials(SLOT)})
++    return {'F03':'PASS','deletion_manifest_files':len(json.loads((HERE/'F03-exact-new-deletion-manifest.json').read_text(encoding='utf-8'))['files']),
++            'synthetic_files_only':True,'old_Q_roots_or_evidence_deleted':False}
+--- /dev/null
++++ after/backend/tests/fixtures/task120/audit07_time_claim.py
+@@ -0,0 +1,130 @@
++"""F04 legal API/operator/real worker and F05 committed-PG/unclaimed-Q window."""
++from datetime import datetime,timedelta
++import json,os
++from uuid import uuid4
++from unittest.mock import patch
++import psycopg
++from psycopg.rows import dict_row
++from . import resources as r,setup,final05
++from .api_runtime import application,run,financials
++from .audit07 import HERE,SLOT,case
++from app.capabilities.q_protocol import ROSTER,digest
++from app.data_exit.contracts import DataError
++
++
++def sources(aliases):
++    mapping=json.loads((r.PRIVATE/SLOT/'sources.json').read_text(encoding='utf-8'))
++    return [{'source_id':str(mapping[a]['id']),'version_id':str(mapping[a]['version_id']),'source_revision':mapping[a]['revision'],
++             'original_sha256':mapping[a]['sha256']} for a in aliases]
++
++
++def persistent(aid,key):
++    from app.data_exit.codec import plain
++    with psycopg.connect(setup.dsn(SLOT),row_factory=dict_row) as db:
++        db.execute('SET TRANSACTION READ ONLY')
++        command=db.execute('SELECT business_key,status,launch_claimed,operation_id,request_sha256,effect_applied FROM interview_commands WHERE activity_id=%s AND business_key=%s',(aid,key)).fetchone()
++        op=db.execute('SELECT operation_id,admission_id,state,reserved_cost_microunits FROM activity_operations WHERE activity_id=%s AND operation_id=%s',(aid,command['operation_id'])).fetchone()
++        result=db.execute('SELECT payload_sha256 FROM activity_operation_results WHERE activity_id=%s AND operation_id=%s',(aid,command['operation_id'])).fetchone()
++        return plain({'command':command,'operation':op,'007':result})
++
++
++def exercise():
++    # This hook file is used by existing native subprocess startup, without
++    # changing transport, admission, launch or the worker's outcome.
++    hook=r.PRIVATE/'python-hook/sitecustomize.py'
++    hook.write_text('from tests.fixtures.task120.transport import install\ninstall()\nfrom tests.fixtures.task120.audit07_clock_hook import install as clock_install\nclock_install()\n',encoding='utf-8')
++    from app.data_exit.files import private_file
++    private_file(hook)
++    r.write(r.PRIVATE/'clock-mode.json',{'offset_seconds':2},private=True)
++    from .audit07_clock_hook import install
++    install()
++    final05.SLOT=SLOT
++    with application(SLOT) as c:
++        f=final05.Matrix(c)
++        from app.data_exit.q_store import authority_for
++        from app.operator.q_request import inspect_request,approve_request
++        from app.capabilities.q_context import snapshot,command_fact
++        from app.capabilities.contracts import AdmissionUnavailable
++        from app.data_exit import q_clock
++        authority=authority_for(f.ledger)
++        def legal():
++            aid=ROSTER[0];before=financials(SLOT)
++            cmd=f.retain('audit07-legacy-first',{'business_key':str(uuid4()),'goal':setup.SAMPLES['inputs']['numeric_goal'],'confirmed':True})
++            url=f'/api/activities/{aid}/learning/first'
++            waiting=c.request('POST',url,cmd);assert waiting['status']=='awaiting_approval'
++            row=c.approve(aid,cmd['business_key'])[0]
++            assert run(command_fact(f.ledger,row))['consumed'] is False
++            r.count('native_business_sessions');got=c.request('POST',url,cmd)
++            assert got['status']=='committed_current',got
++            f.save('audit07-legacy-first.done',got)
++            after=financials(SLOT);assert after['requests']==before['requests']+1 and after['cost']==before['cost']+250000
++            records=[json.loads(line) for line in (HERE/'F04-API-worker-clock-samples.jsonl').read_text(encoding='utf-8').splitlines()]
++            pids={x['pid'] for x in records};assert os.getpid() in pids and len(pids)>=2
++            assert len({x['domain'] for x in records})==1 and all(x['offset_seconds']==2 for x in records)
++            state=authority.request(row['prepared_id']);assert state.get('claim') and state.get('admission')
++            return {'API_pid':os.getpid(),'actual_clock_process_ids':sorted(pids),'same_boot_domain':records[0]['domain'],
++                'clock_dependency_only_offset_seconds':2,'normal_unclaimed_positive':True,'original_business_key':cmd['business_key'],
++                'prepared_id':row['prepared_id'],'result':{k:got.get(k) for k in ('status','operation_id','payload_sha256')},
++                'financials_before':before,'financials_after':after,'real_provider_calls':0,'one_production_admission':True,'real_SUP_worker_and_result_commit':True}
++        case('F04-real-API-operator-worker-normal-combination',legal)
++        # Prepare a second legitimate, still unclaimed request for F03. It uses
++        # the immutable result that just committed, without sending it now.
++        aid=ROSTER[0];parent=f.state['audit07-legacy-first.done']
++        cmd=f.retain('audit07-legacy-followup',{'business_key':str(uuid4()),'parent_operation_id':parent['operation_id'],
++            'question':setup.SAMPLES['inputs']['numeric_initial_question'],'confirmed':True})
++        waiting=c.request('POST',f'/api/activities/{aid}/learning/followups',cmd);assert waiting['status']=='awaiting_approval'
++        c.approve(aid,cmd['business_key'])
++        # Independent source R for the retained PG-claimed/unrelated artifact.
++        aid=ROSTER[2];f.goal(aid,'audit07-independent-goal')
++        bad=f.state.get('audit07-independent-source-R')
++        if bad and 'audit07-independent-source-R.done' not in f.state and 'original_sha256' not in bad['body']['sources'][0]:
++            absent=c.request('GET',f.url(aid)+'/'+bad['business_key'],expect=(404,))
++            r.write(HERE/'root55-invalid-source-binding-fixture-reconciliation.json',{'original_unaccepted_command':bad,
++                'original_HTTP':422,'actual_missing_field':'sources/0/original_sha256','new_connection_GET_HTTP':404,
++                'same_business_key_corrected_only_before_accept':True,'product_validator_unchanged':True})
++            fixed=json.loads(json.dumps(bad));fixed['body']['sources']=sources(('R',))
++            f.save('audit07-independent-source-R',fixed)
++        f.local(aid,'bind_scope',{'sources':sources(('R',)),'material_roles':[]},'audit07-independent-source-R')
++        def pg_claim():
++            cmd,row=f.prepare(aid,'audit07-PG-claimed-window');key=cmd['business_key'];before=financials(SLOT)
++            before_approvals=authority.hub.state()['q']['approval_events'];lost=[];original=f.ledger.claim_interview_launch
++            async def after_commit(*args,**kwargs):
++                result=await original(*args,**kwargs)
++                if result.get('launch_allowed') and not lost:
++                    lost.append(True);r.event('audit07_actual_PG_launch_claim_COMMIT',business_key=key,operation_id=row['prepared']['operation_id'])
++                    raise AdmissionUnavailable('TESTONLY_actual_claim_COMMIT_ACK_lost')
++                return result
++            f.ledger.claim_interview_launch=after_commit
++            try:c.request('POST',f.url(aid),cmd,expect=(503,))
++            finally:f.ledger.claim_interview_launch=original
++            facts=persistent(aid,key);qrow=authority.request(row['prepared_id'])
++            assert lost==[True] and facts['command']['status']=='started' and facts['command']['launch_claimed']
++            assert facts['operation'] is None and facts['007'] is None and not qrow.get('claim') and not qrow.get('launch_claimed')
++            frozen,_,_=run(snapshot(f.ledger,aid));assert frozen==qrow['prepared']['snapshot']
++            first=c.request('GET',f.url(aid)+'/'+key);second=c.request('GET',f.url(aid)+'/'+key)
++            assert first['outbound_approval']['can_continue'] is False and second['outbound_approval']['can_continue'] is False
++            assert first['outbound_approval']['state']==second['outbound_approval']['state']=='consumed'
++            inspection=run(inspect_request(f.ledger,row['prepared_id']));assert inspection['pg_command_fact']['consumed']
++            sample=q_clock.sample();later={**sample,'utc':(datetime.fromisoformat(sample['utc'])+timedelta(seconds=901)).isoformat(),
++                'mono_ns':sample['mono_ns']+901_000_000_000,'upper_ns':sample['upper_ns']+901_000_000_000}
++            codes=[]
++            for clock in (sample,later):
++                with patch('app.data_exit.q_clock.sample',return_value=clock):
++                    try:run(approve_request(f.ledger,row['prepared_id'],row['prepared_sha256']))
++                    except DataError as exc:codes.append(exc.code)
++                    else:raise AssertionError('PG claimed command renewed')
++            assert codes==['q_approval_consumed','q_approval_consumed']
++            for unused in range(2):c.request('POST',f.url(aid),cmd,expect=(200,202,409))
++            assert financials(SLOT)==before and authority.hub.state()['q']['approval_events']==before_approvals
++            f.save('audit07-PG-claimed-window.prepared_id',row['prepared_id'])
++            return {'actual_PG_COMMIT':facts,'Q_claim_absent':True,'frozen_snapshot_unchanged':True,
++                'immediate_GET_projection':first['outbound_approval'],'repeated_GET_projection':second['outbound_approval'],
++                'operator_immediate_and_after_15min_errors':codes,'repeated_continue_POSTs':2,'financials_before':before,'financials_after':financials(SLOT),
++                'new_approval_events':0,'worker_dispatches_for_claimed_operation':0,'original_unclaimed_positive':'F04-real-API-operator-worker-normal-combination-PASS.json'}
++        case('F05-PG-claimed-before-Q-claim',pg_claim)
++        # The selected-memory request stays unclaimed for the normal revoke+
++        # purge path in F03. Its necessary retrieval operations count normally.
++        f.goal(ROSTER[1],'audit07-memory-goal')
++        cmd,row=f.prepare(ROSTER[1],'audit07-memory-prepared')
++        f.save('audit07-memory-prepared.prepared_id',row['prepared_id'])
++    return {'F04':'PASS','F05':'PASS','F03_inputs':'original normal qualified prepareds retained, not sent'}
+--- /dev/null
++++ after/backend/tests/test_q_audit07.py
+@@ -0,0 +1,66 @@
++"""Targeted F04 actual authorization checks; only the clock dependency is injected."""
++from datetime import datetime,timedelta,timezone
++import json
++from pathlib import Path
++import unittest
++from unittest.mock import patch
++
++from app.capabilities.q_protocol import canonical,digest
++from app.capabilities.contracts import CallContext
++from app.data_exit.contracts import DataError
++from app.data_exit.q_store import QAuthority
++from app.data_exit import q_clock
++from app.operator.q_request import principal_id
++from tests.fixtures.task120.offline import store,prepared,AID
++
++
++class ApprovalClockTests(unittest.TestCase):
++    def test_clock_history_cross_authority_and_claim(self):
++        authority=store();row=prepared(authority);pid=row['prepared_id'];principal=principal_id()
++        origin=datetime.now(timezone.utc);epoch=q_clock.sample();clock=dict(epoch);cases=[]
++        def at(seconds,monoseconds,domain=None):
++            clock.update(utc=(origin+timedelta(seconds=seconds)).isoformat(),mono_ns=epoch['mono_ns']+int(monoseconds*1e9),
++                         upper_ns=epoch['mono_ns']+int(monoseconds*1e9),domain=domain or epoch['domain'])
++        def sign():
++            authority.revoke(pid,principal)
++            return authority.approve(pid,principal,current=True)
++        def ref():return authority.reference(authority.request(pid))
++        def denied(reference):
++            with self.assertRaises(DataError) as error:authority.check_reference(reference)
++            self.assertEqual(error.exception.code,'q_approval_invalid')
++        with patch('app.data_exit.q_clock.sample',side_effect=lambda:dict(clock)):
++            at(0,0);first=sign();reference=ref();self.assertIsNotNone(reference)
++            at(5,5);self.assertEqual(authority.approve(pid,principal,current=True),first)
++            self.assertEqual(authority.hub.state()['q']['approval_events'],1)
++            self.assertEqual(first['approval_id'],digest(first['body']));cases.append('legal_same_domain_and_decision_idempotence')
++            at(901,901);self.assertEqual(authority.projection(authority.request(pid))['state'],'expired');denied(reference)
++            at(10,902);self.assertIsNone(ref());denied(reference);cases.append('seen_expiry_then_UTC_rollback_irreversible')
++            at(20,910);sign();reference=ref()
++            # No intermediate projection: monotonic alone has passed 15min,
++            # while a backwards UTC step leaves wall time inside the old end.
++            at(919,1811);denied(reference);cases.append('unobserved_monotonic_expiry_with_UTC_rollback')
++            at(30,1820);sign();reference=ref();at(31,1821,'f'*64);denied(reference)
++            at(32,1822);denied(reference);cases.append('unknown_domain_cannot_recover')
++            at(40,1830);sign();reference=ref();at(80,1870);self.assertIsNotNone(ref())
++            at(79,1871);denied(reference);at(81,1872);denied(reference);cases.append('observed_UTC_regression_irreversible')
++            at(100,1900);sign();reference=ref()
++            reopened=QAuthority(authority.hub);self.assertIsNotNone(reopened.reference(reopened.request(pid)))
++            at(101,1901,'e'*64)
++            with self.assertRaises(DataError):reopened.check_reference(reference)
++            cases.append('reopen_same_boot_comparable_and_changed_boot_denied')
++            at(110,1910);sign();reference=ref()
++            context=CallContext(activity_id=AID,operation_id='offline.request',executor_id='fixture',execution_generation=1,scope_revision=1)
++            authority.check_reference(reference,context=context)
++            with self.assertRaises(DataError):authority.check_reference(reference,context=context)
++            at(111,1911)
++            with self.assertRaises(DataError) as error:authority.approve(pid,principal,current=True)
++            self.assertEqual(error.exception.code,'q_approval_consumed');cases.append('claim_irreversible_zero_resend')
++        self.assertEqual(q_clock.validate({'issued_at':origin.isoformat(),'expires_at':(origin+timedelta(minutes=15)).isoformat()},None,epoch),'q_clock_domain_unknown')
++        out=Path(__file__).resolve().parents[2]/'DocuN/evidence/TASK-120/execution/audit-repair-07'
++        (out/'F04-clock-authorization-PASS.json').write_text(json.dumps({'status':'PASS','cases':cases,
++            'method':'only q_clock.sample injected; actual QAuthority approve/projection/reference/check_reference, ControlHub/RootLease and real private files',
++            'legacy_approval_without_clock':'fail_closed','same_boot_native_sample':{k:epoch[k] for k in ('domain','mono_ns','upper_ns')},
++            'prepared_files_created':1,'real_provider_calls':0},indent=2)+'\n',encoding='utf-8')
++
++
++if __name__=='__main__':unittest.main(verbosity=2)
+--- before/backend/tests/fixtures/task120/offline.py
++++ after/backend/tests/fixtures/task120/offline.py
+@@ -13,7 +13,9 @@
+ 
+ 
+ def store(*,template_atoms_extra=()):
+-    root=ROOT/'.runtime/TASK-120/offline'/str(uuid4())
++    import os
++    private=ROOT/'.runtime/task120-audit07/offline' if os.environ.get('RETROLUME_TASK120_CONTINUATION')=='TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021' else ROOT/'.runtime/TASK-120/offline'
++    root=private/str(uuid4())
+     root.mkdir(parents=True)
+     private_file(root,directory=True)
+     hub=ControlHub(root)
+--- before/backend/tests/fixtures/task120/validation_memory.py
++++ after/backend/tests/fixtures/task120/validation_memory.py
+@@ -28,7 +28,7 @@
+                     values.append({**row,'working_set_bytes':counter.WorkingSetSize if ok else None})
+                 finally:kernel.CloseHandle(handle)
+         finally:job.close()
+-    folder='continuation-06' if r.state().get('current_permit_id')=='TASK-120-Q-PREP-CONTINUATION-06-20261020' else 'finalization-05' if r.state().get('current_permit_id')=='TASK-120-Q-PREP-FINALIZATION-05-20261019' else 'validation-04'
+-    path=r.EVIDENCE/folder/f'root-{root:02d}-memory-samples.jsonl'
++    folder='audit-repair-07' if r.state().get('current_permit_id')=='TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021' else 'continuation-06' if r.state().get('current_permit_id')=='TASK-120-Q-PREP-CONTINUATION-06-20261020' else 'finalization-05' if r.state().get('current_permit_id')=='TASK-120-Q-PREP-FINALIZATION-05-20261019' else 'validation-04'
++    path=(r.EXECUTION/folder/f'root-{root:02d}-memory-samples.jsonl') if folder=='audit-repair-07' else (r.EVIDENCE/folder/f'root-{root:02d}-memory-samples.jsonl')
+     with path.open('a',encoding='utf-8') as stream:stream.write(json.dumps({'utc':r.utc(),'mono_ns':time.monotonic_ns(),'available_bytes':available,'owned_processes':values})+'\n')
+     return available
+--- /dev/null
++++ after/backend/tests/fixtures/task120/audit07_clock_hook.py
+@@ -0,0 +1,22 @@
++"""TESTONLY: replace only the private approval clock, in API and real workers."""
++from datetime import datetime,timedelta
++import json,os
++from . import resources as r
++
++
++def install():
++    if os.environ.get('RETROLUME_TASK120_CONTINUATION')!='TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021':return
++    from app.data_exit import q_clock
++    if getattr(q_clock.sample,'_audit07',False):return
++    original=q_clock.sample
++    def sample():
++        mode=r.PRIVATE/'clock-mode.json'
++        value=json.loads(mode.read_text(encoding='utf-8')) if mode.exists() else {'offset_seconds':0}
++        assert set(value)=={'offset_seconds'} and value['offset_seconds'] in (0,2)
++        raw=original();offset=value['offset_seconds']
++        raw.update(utc=(datetime.fromisoformat(raw['utc'])+timedelta(seconds=offset)).isoformat(),
++                   mono_ns=raw['mono_ns']+offset*1_000_000_000,upper_ns=raw['upper_ns']+offset*1_000_000_000)
++        with (r.EVIDENCE/'F04-API-worker-clock-samples.jsonl').open('a',encoding='utf-8') as f:
++            f.write(json.dumps({'pid':os.getpid(),'offset_seconds':offset,**raw})+'\n')
++        return raw
++    sample._audit07=True;q_clock.sample=sample
+--- /dev/null
++++ after/backend/tests/test_source_cleanup_recovery07.py
+@@ -0,0 +1,51 @@
++"""Local journal negatives for cleanup authority; actual PG retry has root evidence."""
++from copy import deepcopy
++from unittest import TestCase
++from unittest.mock import patch
++from uuid import uuid4
++
++from app.data_exit.contracts import DataContext,DataJobCommand,DataError,canonical
++from app.data_exit.control import ControlHub
++from app.data_exit.deletions import _CleanupAttempt
++from app.data_exit.operations import Operation
++from tests.fixtures.task120.offline import store
++
++
++class CleanupRecoveryTests(TestCase):
++    def test_new_cleanup_attempt_cannot_restore_old_execution_or_admit(self):
++        hub=store().hub;source=hub.state()['source']
++        scope={'source_id':str(uuid4()),'expected_revision':1,'impact_sha256':'a'*64}
++        job=hub.create_or_get_job(DataJobCommand('source_delete',str(uuid4()),scope),
++            DataContext(hub.control_id,0,source['dataset_id'],source['instance_id'],'normal'))
++        old=Operation(hub,job['job_id'],10,'checking_deletion');old.admit('source_tombstone_commit')
++        old.finish('deleted_pending')
++        original=deepcopy(hub.execution_job(job['job_id'])['execution'])
++        tomb={'tombstone_id':str(uuid4()),'entity_kind':'source','entity_id':scope['source_id'],
++            'business_id_observed':job['business_key'],'manifest_sha256':scope['impact_sha256'],'effective_revision':2}
++        with patch('app.data_exit.operations.CLOCK_DOMAIN','new-process'):
++            with self.assertRaises(DataError):Operation.resume_cleanup(hub,job['job_id'])
++            fresh=_CleanupAttempt(hub,job['job_id'],10)
++            with self.assertRaises(DataError):fresh.admit('source_tombstone_commit')
++            with self.assertRaises(DataError):fresh.finish('deleted')
++            with self.assertRaises(DataError):fresh.confirm_tombstone({**tomb,'manifest_sha256':'b'*64})
++            fresh.confirm_tombstone(tomb)
++            with patch('app.data_exit.operations.CLOCK_DOMAIN','other-process'):
++                with self.assertRaises(DataError):fresh.check()
++            # A replacement attempt invalidates the old actor/revision, even
++            # when both have the same boot/process domain.
++            replacement=_CleanupAttempt(hub,job['job_id'],10)
++            with self.assertRaises(DataError):fresh.check()
++            replacement.confirm_tombstone(tomb)
++            with patch('app.data_exit.deletions.time.monotonic_ns',return_value=replacement.deadline_ns):
++                with self.assertRaises(DataError):replacement.check()
++            receipt=replacement.finish('deleted')
++            self.assertEqual(receipt['state'],'deleted')
++            with self.assertRaises(DataError):replacement.finish('deleted')
++            with self.assertRaises(DataError):_CleanupAttempt(hub,job['job_id'],10)
++        self.assertEqual(canonical(hub.execution_job(job['job_id'])['execution']),canonical(original))
++        reopened=ControlHub(hub.root)
++        self.assertEqual(reopened.get(job['job_id'])['state'],'deleted')
++        events=hub._read()[0]
++        admissions=[e for e in events if e['kind']=='job.update' and
++            e['payload'].get('execution',{}).get('admission')]
++        self.assertEqual(len(admissions),1)

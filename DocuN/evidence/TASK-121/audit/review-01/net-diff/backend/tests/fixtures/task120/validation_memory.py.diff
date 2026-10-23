@@ -1,0 +1,13 @@
+--- before/backend/tests/fixtures/task120/validation_memory.py
++++ after/backend/tests/fixtures/task120/validation_memory.py
+@@ -27,8 +27,8 @@
+                     ok=psapi.GetProcessMemoryInfo(handle,ctypes.byref(counter),counter.cb)
+                     values.append({**row,'working_set_bytes':counter.WorkingSetSize if ok else None})
+                 finally:kernel.CloseHandle(handle)
+         finally:job.close()
+-    folder='continuation-06' if r.state().get('current_permit_id')=='TASK-120-Q-PREP-CONTINUATION-06-20261020' else 'finalization-05' if r.state().get('current_permit_id')=='TASK-120-Q-PREP-FINALIZATION-05-20261019' else 'validation-04'
+-    path=r.EVIDENCE/folder/f'root-{root:02d}-memory-samples.jsonl'
++    folder='audit-repair-07' if r.state().get('current_permit_id')=='TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021' else 'continuation-06' if r.state().get('current_permit_id')=='TASK-120-Q-PREP-CONTINUATION-06-20261020' else 'finalization-05' if r.state().get('current_permit_id')=='TASK-120-Q-PREP-FINALIZATION-05-20261019' else 'validation-04'
++    path=(r.EXECUTION/folder/f'root-{root:02d}-memory-samples.jsonl') if folder=='audit-repair-07' else (r.EVIDENCE/folder/f'root-{root:02d}-memory-samples.jsonl')
+     with path.open('a',encoding='utf-8') as stream:stream.write(json.dumps({'utc':r.utc(),'mono_ns':time.monotonic_ns(),'available_bytes':available,'owned_processes':values})+'\n')
+     return available

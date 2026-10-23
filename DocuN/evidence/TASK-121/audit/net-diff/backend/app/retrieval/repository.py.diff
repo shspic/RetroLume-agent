@@ -1,0 +1,59 @@
+--- initial/backend/app/retrieval/repository.py
++++ final/backend/app/retrieval/repository.py
+@@ -53,11 +53,11 @@
+         row=await cursor.fetchone()
+         if row is None or row['outbound_grant_sha256']!=grant.sha256 or row['reserve_cost_microunits']!=250000:
+             raise AdmissionDenied('outbound_grant_binding_invalid')
+         cursor=await connection.execute('SELECT COALESCE(sum(requests_reserved),0) AS requests,COALESCE(sum(cost_reserved_microunits),0) AS cost FROM activities WHERE id=ANY(%s::uuid[])',(list(ROSTER),))
+         used=await cursor.fetchone()
+-        if used['requests']>=80 or used['cost']+250000>20000000:raise AdmissionDenied('outbound_grant_exhausted')
++        if used['requests']>=grant.global_max_requests or used['cost']+250000>grant.global_max_cost_microunits:raise AdmissionDenied('outbound_grant_exhausted')
+ 
+     async def _retrieval_domain_locked(self,connection,activity):
+         """沿现有活动→operations→head锁序，禁止在多个域之间挪用资格。"""
+         aid=str(activity['id'])
+         await self._teaching_lock_operations(connection,aid)
+@@ -156,10 +156,12 @@
+         context=intent.context;aid=self._uuid(context.activity_id,'activity_id');oid=self._bounded_name(context.operation_id,'operation_id')
+         executor=self._bounded_name(context.executor_id,'executor_id')
+         if type(intent.request_bytes) is not int or not 0<intent.request_bytes<=65536 or intent.max_output_tokens!=0:raise AdmissionDenied('embedding_limits_invalid')
+         async def operation(connection):
+             await self._outbound_lock(connection,aid,intent.outbound_grant,intent.provider,intent.configured_model,intent.request_bytes,0,intent.outbound_source_manifest)
++            from app.capabilities.q_gateway import transaction_check
++            await transaction_check(connection,self,aid,oid,intent=intent)
+             state=await self._memory_lock_prefix(connection,aid);activity=state['activity']
+             if activity is None or not self._activity_allows(activity,intent,executor,now=datetime.now(timezone.utc)) or not state['eligible']:raise AdmissionDenied('embedding_activity_invalid')
+             row,ordinal=await self._embedding_command_locked(connection,activity,oid,state['sources_valid'])
+             binding=intent.binding;body=json.loads(row['request_body'])
+             if (binding.business_key!=str(row['business_key']) or binding.purpose!=row['action'] or binding.batch_ordinal!=ordinal
+@@ -188,11 +190,15 @@
+         return AdmissionPermit(permit.admission_id,permit.operation_id,permit.executor_id)
+ 
+     async def mark_embedding_dispatch_started(self,permit):
+         value=self._embedding_permit(permit)
+         async def operation(connection):
++            from app.capabilities.q_gateway import mark_prefix
++            await mark_prefix(connection,self)
+             activity,call,valid=await self._locked_operation(connection,value,kind='embedding')
++            from app.capabilities.q_gateway import transaction_check
++            await transaction_check(connection,self,str(activity['id']),call['operation_id'],call=call)
+             await self._embedding_command_locked(connection,activity,call['operation_id'],valid)
+             if call['state']!='reserved' or activity['dispatch_closed'] or not self._operation_is_current(activity,call,valid):raise AdmissionDenied('embedding_send_invalidated')
+             await connection.execute("UPDATE activity_operations SET state='dispatched',dispatch_started_at=CURRENT_TIMESTAMP WHERE admission_id=%s",(permit.admission_id,))
+         await self._transaction(operation)
+ 
+@@ -204,10 +210,14 @@
+         if stored is not None:validate_stored_value(stored)
+         async def operation(connection):
+             activity,call,valid=await self._locked_operation(connection,value,kind='embedding')
+             confirmed=await self._terminal_confirmation(connection,call,values,triple)
+             if confirmed is not None:return confirmed
++            from app.capabilities.q_gateway import history_only_result
++            if outcome.disposition is not LedgerDisposition.UNKNOWN and await history_only_result(connection,self,call):
++                await self._write_outcome(connection,call,values,triple)
++                return RecordOutcome.RECORDED
+             row=None
+             if outcome.disposition is not LedgerDisposition.UNKNOWN:
+                 if not self._operation_is_current(activity,call,valid) or activity['dispatch_closed'] or call['state']!='dispatched':raise AdmissionDenied('embedding_result_invalidated')
+                 row,ordinal=await self._embedding_command_locked(connection,activity,call['operation_id'],valid)
+                 if stored is not None:

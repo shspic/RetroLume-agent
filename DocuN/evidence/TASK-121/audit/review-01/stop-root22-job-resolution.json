@@ -1,0 +1,96 @@
+{
+  "pid": 18452,
+  "birth": 134368818656922573,
+  "sample_file": "DocuN\\evidence\\TASK-120\\execution\\validation-04\\root-22-memory-samples.jsonl",
+  "sample_sha256": "fb72e0ecfc571c0492f88d2823300418b9ee470552fdc535b4724d6ec637225b",
+  "member_observation_count": 27,
+  "first": [
+    {
+      "utc": "2026-10-19T11:11:06.008180+00:00",
+      "member": {
+        "pid": 18452,
+        "birth": 134368818656922573,
+        "working_set_bytes": 36233216
+      }
+    }
+  ],
+  "last": [
+    {
+      "utc": "2026-10-19T11:11:32.248457+00:00",
+      "member": {
+        "pid": 18452,
+        "birth": 134368818656922573,
+        "working_set_bytes": 96825344
+      }
+    }
+  ],
+  "root22_identity": "3a9933d8-3d44-430e-a7cb-ef681d0645df",
+  "root22_cleanup": [
+    {
+      "name": "browser-api-native-test-job",
+      "confirmed": true,
+      "proof": {
+        "job": "Local\\RetroLume.Activity.3a9933d83d44430ea7cbef681d0645df.G1",
+        "active_processes": 0,
+        "tree_empty": true
+      }
+    },
+    {
+      "name": "pg",
+      "confirmed": true,
+      "proof": {
+        "Id": "b89522070d4b64fc67efed810852ccc21948058f154bf4fa1889f4d8d69a102f",
+        "Name": "/retrolume-task120-qprep-pg1",
+        "Image": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+        "labels": {
+          "com.docker.compose.project": "retrolume-task120-qprep",
+          "retrolume.permit": "TASK-120-Q-PREP-IMPLEMENTATION-20261018",
+          "retrolume.scope": "q-prep-testonly",
+          "retrolume.task": "TASK-120"
+        },
+        "state": {
+          "Running": false,
+          "Pid": 0,
+          "Status": "exited"
+        },
+        "ports": {
+          "5432/tcp": [
+            {
+              "HostIp": "127.0.0.1",
+              "HostPort": "55480"
+            }
+          ]
+        },
+        "mounts": [
+          {
+            "Type": "volume",
+            "Name": "retrolume-task120-qprep-data",
+            "Destination": "/var/lib/postgresql/data"
+          }
+        ],
+        "limits": {
+          "Memory": 536870912,
+          "NanoCpus": 1000000000,
+          "PidsLimit": 128,
+          "RestartPolicy": {
+            "Name": "no",
+            "MaximumRetryCount": 0
+          },
+          "Privileged": false,
+          "CapAdd": null,
+          "NetworkMode": "bridge"
+        }
+      }
+    }
+  ],
+  "fresh_exact_job_observation": [
+    {
+      "job": "Local\\RetroLume.Activity.3a9933d83d44430ea7cbef681d0645df.G1",
+      "absent": true,
+      "active_processes": 0,
+      "source": "sole-events-log"
+    }
+  ],
+  "reason": "Exact PID/birth was observed inside root22 named Job; its independent tree_empty proof and fresh same-name Job absence are used, not error5 treated as exited.",
+  "fresh_process_probe_by_auditor": false
+}

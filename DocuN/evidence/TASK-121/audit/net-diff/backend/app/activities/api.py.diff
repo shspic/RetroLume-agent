@@ -1,0 +1,28 @@
+--- initial/backend/app/activities/api.py
++++ final/backend/app/activities/api.py
+@@ -270,10 +270,11 @@
+             "reason":memory_reason,
+             "selected_items":4,"max_memory_bytes":4096},
+         "quota_preview": config.quota_preview,
+         "provider": provider_info,
+         "retrieval":getattr(request.app.state,'integration_config',None).public() if getattr(request.app.state,'integration_config',None) is not None else {'available':False,'reason':'retrieval_not_configured'},
++        "q_approval":getattr(request.app.state,'q_readiness',{'available':False,'reason':'q_disabled','real_outbound_authorized':False}),
+         "supervision_management_budget_seconds": SessionConfig().manager_total_seconds,
+         "window_seconds": SessionConfig().window_seconds,
+         "followup_max_chars": _FOLLOWUP_MAX_CHARS,
+     }
+ 
+@@ -354,11 +355,12 @@
+         approved={(s['source_id'],s['source_version_id'],s['source_revision']) for s in manifest.sources}
+         if any((item,str(current[item]['current_version']),int(current[item]['revision'])) not in approved for item in source_ids):raise _error(409,'outbound_source_not_approved','所选资料版本不在已批准的合成清单')
+         if activity_id not in trusted.allowed_activity_ids:raise _error(409,'outbound_grant_mismatch','该活动不在已批准名单')
+         roster=['01800000-0000-4000-8000-000000000001','01800000-0000-4000-8000-000000000002','01800000-0000-4000-8000-000000000003']
+         index=roster.index(activity_id);grant_sha=trusted.sha256
+-        quota.update(deadline_hours=24,max_requests=(40,24,16)[index],max_cost_microunits=(10000000,6000000,4000000)[index],reserve_cost_microunits=250000,max_running_seconds=3600,max_request_bytes=65536,max_output_tokens=4096,max_tool_calls=8)
++        new=trusted.schema=='retrolume.outbound-grant.v2'
++        quota.update(deadline_hours=24,max_requests=((48,28,24) if new else (40,24,16))[index],max_cost_microunits=((12000000,7000000,6000000) if new else (10000000,6000000,4000000))[index],reserve_cost_microunits=250000,max_running_seconds=3600,max_request_bytes=65536,max_output_tokens=4096,max_tool_calls=8)
+     if not quota:
+         raise _error(503, "config_unavailable", "活动额度配置不可用")
+     spec = ActivitySpec(
+         activity_id=activity_id,
+         sources=tuple(

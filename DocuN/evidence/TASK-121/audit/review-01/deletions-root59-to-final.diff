@@ -1,0 +1,109 @@
+--- DocuN\evidence\TASK-120\execution\audit-repair-07\asrun-root059\backend\app\data_exit\deletions.py
++++ backend\app\data_exit\deletions.py
+@@ -1,8 +1,95 @@
+ """准确资料墓碑与清理；原记忆撤销和 M3 清理继续由既有实现负责。"""
+ import asyncio
++import math
++import time
++from uuid import uuid4
+ from .codec import plain
+ from .contracts import DataError, DataJobCommand, Limits, canonical, digest, uuid
+ from .operations import Operation, acknowledge_unstarted, joined_thread
++
++
++class _CleanupAttempt(Operation):
++    """Fresh, bounded cleanup only; never restores the original execution ticket.
++
++    The source tombstone must be read back from PG before any cleanup or success.
++    The original execution/admission remains immutable journal history. This
++    attempt cannot admit a tombstone, launch work, or extend a Q approval.
++    """
++    def __init__(self, hub, job_id, seconds):
++        from .operations import CLOCK_DOMAIN
++        if not math.isfinite(seconds) or seconds <= 0:
++            raise DataError('operation_timeout',504)
++        self.hub,self.job_id,self.actor=hub,job_id,str(uuid4())
++        now=time.monotonic_ns()
++        self.deadline_ns=now+int(seconds*1e9)
++        self.admission=None
++        self.tombstone=None
++        self.clock_domain=CLOCK_DOMAIN
++        def begin(job):
++            execution=job.get('execution') or {}
++            if (job['kind']!='source_delete' or job.get('execution_protocol')!=2
++                or job.get('completion_protocol')!=1
++                or (execution.get('admission') or {}).get('phase')!='source_tombstone_commit'
++                or not (execution.get('admission') or {}).get('ticket')):
++                raise DataError('operation_authority_unknown')
++            if job['state'] not in ('deleted_pending','deletion_unconfirmed'):
++                raise DataError('request_conflict')
++            self.original_execution=canonical(execution)
++            return {'stage':'cleanup_retry','cleanup_execution':{
++                'clock_domain':self.clock_domain,'actor_id':self.actor,
++                'started_ns':now,'deadline_ns':self.deadline_ns},'cleanup_confirmation':None}
++        self.revision=hub.change_job(job_id,begin)['revision']
++
++    def _validate(self,job,*,deadline=True):
++        from .operations import CLOCK_DOMAIN
++        attempt=job.get('cleanup_execution') or {}
++        if (CLOCK_DOMAIN!=self.clock_domain or attempt.get('clock_domain')!=self.clock_domain
++            or attempt.get('actor_id')!=self.actor or attempt.get('deadline_ns')!=self.deadline_ns
++            or canonical(job.get('execution'))!=self.original_execution):
++            raise DataError('operation_authority_unknown')
++        if job['kind']!='source_delete' or job['state'] not in ('deleted_pending','deletion_unconfirmed','deleted'):
++            raise DataError('request_conflict')
++        if job['revision']!=self.revision:raise DataError('request_conflict')
++        if deadline:self.remaining()
++
++    def admit(self,phase):
++        raise DataError('operation_authority_unknown')
++
++    def confirm_tombstone(self,tomb):
++        self.check()
++        job=self.hub.execution_job(self.job_id);scope=job['scope']
++        if (tomb.get('entity_kind')!='source' or str(tomb.get('entity_id'))!=scope['source_id']
++            or tomb.get('business_id_observed')!=job['business_key']
++            or tomb.get('manifest_sha256')!=scope['impact_sha256']
++            or tomb.get('effective_revision')!=scope['expected_revision']+1):
++            raise DataError('deletion_unconfirmed',503)
++        self.tombstone=str(tomb['tombstone_id'])
++
++    def finish(self,state,stage=None,**changes):
++        if self.tombstone is None or state not in ('deleted','deleted_pending'):
++            raise DataError('operation_authority_unknown')
++        def finish(job):
++            self._validate(job)
++            if job['state'] not in ('deleted_pending','deletion_unconfirmed') or job.get('cleanup_confirmation'):
++                raise DataError('request_conflict')
++            return {**changes,'state':state,'stage':stage or state,'cleanup_confirmation':None}
++        self.revision=self.hub.change_job(self.job_id,finish)['revision']
++        confirmed_ns=time.monotonic_ns()
++        def confirm(job):
++            self._validate(job)
++            return {'cleanup_confirmation':{'actor_id':self.actor,'clock_domain':self.clock_domain,
++                'confirmed_ns':confirmed_ns,'tombstone_id':self.tombstone}}
++        receipt=self.hub.change_job(self.job_id,confirm)
++        self.revision=receipt['revision']
++        return receipt
++
++    def fail(self,error,*,cleanup_complete,state='deletion_unconfirmed',**facts):
++        def fail(job):
++            self._validate(job,deadline=False)
++            return {**facts,'state':'deletion_unconfirmed','stage':'deletion_unconfirmed',
++                'cleanup_confirmation':None,
++                'error_code':error.code if isinstance(error,DataError) else 'storage_unavailable'}
++        return self.hub.change_job(self.job_id,fail)
+ 
+ 
+ class SourceDeletionService:
+@@ -120,8 +207,9 @@
+                     return impact, value
+         tombstone_confirmed=False
+         try:
+-            operation = Operation.resume_cleanup(self.hub, job['job_id']) if retry else Operation(self.hub, job['job_id'], self.limits.operation_seconds, 'checking_deletion')
++            operation = _CleanupAttempt(self.hub,job['job_id'],self.limits.operation_seconds) if retry else Operation(self.hub, job['job_id'], self.limits.operation_seconds, 'checking_deletion')
+             impact, tomb = await joined_thread(tombstone)
++            if retry:operation.confirm_tombstone(tomb)
+             tombstone_confirmed=True
+             self.hub.commit("deletion.observe", plain(tomb))
+             operation.check()

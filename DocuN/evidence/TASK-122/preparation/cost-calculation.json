@@ -1,0 +1,123 @@
+{
+  "created_at": "2026-10-21T15:19:06.860427+00:00",
+  "status": "CONDITIONAL_ARITHMETIC_ONLY_NOT_APPLICABLE_ACCOUNT_QUOTE",
+  "currency_candidate": "CNY",
+  "microunits_per_CNY": 1000000,
+  "price_sources": [
+    "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/",
+    "https://docs.bigmodel.cn/cn/guide/models/embedding/embedding-3"
+  ],
+  "public_rates": {
+    "DS_peak_cache_hit": "0.04",
+    "DS_peak_cache_miss": "2",
+    "DS_peak_output": "8",
+    "Embedding3_input": "0.5"
+  },
+  "formula": "ceil(((request_bytes+framing)*input_CNY_per_million+max_output_tokens*output_CNY_per_million)*1.25)",
+  "conditions_not_verified": [
+    "完整输入token≤精确JSON线上bytes+framing",
+    "framing≤4096",
+    "thinking disabled额外计费上界",
+    "实际CNY含税最高价/无未知追加收费"
+  ],
+  "framing_4096_status": "原设计可表达上限，绝非官方证明",
+  "classes_microunits": {
+    "embedding_shared_absolute_65536": 174080,
+    "learning_256_absolute_65536": 176640,
+    "teaching_interview_2048_absolute_65536": 194560,
+    "html_4096_absolute_65536": 215040,
+    "embedding_own_rate_absolute_65536": 43520,
+    "embedding_own_rate_draft_32768": 23040,
+    "source_batch_shared_byte_illustration": 11355
+  },
+  "per_request_reservation": 250000,
+  "class_formal_comparisons": {
+    "embedding_shared_absolute_65536": {
+      "ceiling": 174080,
+      "below_reservation": true
+    },
+    "learning_256_absolute_65536": {
+      "ceiling": 176640,
+      "below_reservation": true
+    },
+    "teaching_interview_2048_absolute_65536": {
+      "ceiling": 194560,
+      "below_reservation": true
+    },
+    "html_4096_absolute_65536": {
+      "ceiling": 215040,
+      "below_reservation": true
+    },
+    "embedding_own_rate_absolute_65536": {
+      "ceiling": 43520,
+      "below_reservation": true
+    },
+    "embedding_own_rate_draft_32768": {
+      "ceiling": 23040,
+      "below_reservation": true
+    },
+    "source_batch_shared_byte_illustration": {
+      "ceiling": 11355,
+      "below_reservation": true
+    }
+  },
+  "matrix_totals": {
+    "model_calls": 41,
+    "query_calls": 41,
+    "index_calls": 6,
+    "html_calls": 1,
+    "requests": 89,
+    "reserve_microunits": 22250000,
+    "conditional_shared_rate_ceiling_microunits": 16373760
+  },
+  "roster": [
+    {
+      "activity_id": "01800000-0000-4000-8000-000000000001",
+      "role": "learning",
+      "max_requests": 48,
+      "max_cost_microunits": 12000000,
+      "planned_requests": 43,
+      "planned_reserve_microunits": 10750000,
+      "remaining_requests_after_normal_path": 5,
+      "remaining_reserve_microunits_after_normal_path": 1250000,
+      "conditional_shared_rate_ceiling_microunits": 7956480,
+      "remaining_now_requests": 48,
+      "remaining_now_reserve_microunits": 12000000
+    },
+    {
+      "activity_id": "01800000-0000-4000-8000-000000000002",
+      "role": "interview",
+      "max_requests": 28,
+      "max_cost_microunits": 7000000,
+      "planned_requests": 28,
+      "planned_reserve_microunits": 7000000,
+      "remaining_requests_after_normal_path": 0,
+      "remaining_reserve_microunits_after_normal_path": 0,
+      "conditional_shared_rate_ceiling_microunits": 5099520,
+      "remaining_now_requests": 28,
+      "remaining_now_reserve_microunits": 7000000
+    },
+    {
+      "activity_id": "01800000-0000-4000-8000-000000000003",
+      "role": "supplement",
+      "max_requests": 24,
+      "max_cost_microunits": 6000000,
+      "planned_requests": 18,
+      "planned_reserve_microunits": 4500000,
+      "remaining_requests_after_normal_path": 6,
+      "remaining_reserve_microunits_after_normal_path": 1500000,
+      "conditional_shared_rate_ceiling_microunits": 3317760,
+      "remaining_now_requests": 24,
+      "remaining_now_reserve_microunits": 6000000
+    }
+  ],
+  "actual_applicable_per_request_ceiling": null,
+  "fallback_using_context_cap_only": {
+    "model_context_tokens": 1048576,
+    "input_only_common_ceiling_microunits": 2621440,
+    "passes_250000": false,
+    "meaning": "仅用官方1M上下文作上界已不足；不能据此绕过缺失的token/framing证明"
+  },
+  "real_paid_calls": 0,
+  "real_paid_cost_microunits": 0
+}

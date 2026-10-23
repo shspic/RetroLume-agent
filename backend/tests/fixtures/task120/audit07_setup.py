@@ -1,0 +1,35 @@
+"""Exactly two new07 logical databases; no new login/membership or old writes."""
+import json,secrets
+from uuid import uuid4
+from . import resources as r,setup
+from app.data_exit.files import private_file
+
+SLOTS={'audit07-r02':'retrolume_task120_audit07_r02','audit07-main':'retrolume_task120_audit07_main'}
+
+
+def initial_files(slot):
+    if slot not in SLOTS or r.state()['current_permit_id']!='TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021':raise RuntimeError('audit07_exact_slot_required')
+    r.PRIVATE.mkdir(exist_ok=True);private_file(r.PRIVATE,directory=True)
+    cluster=r.PRIVATE/'cluster.json'
+    if not cluster.exists():
+        r.write(cluster,json.loads((r.ROOT/'.runtime/TASK-120/cluster.json').read_text(encoding='utf-8')),private=True)
+    base=r.PRIVATE/slot;base.mkdir(exist_ok=True);private_file(base,directory=True)
+    path=base/'identity.json'
+    if not path.exists():
+        prior=json.loads((r.ROOT/'.runtime/TASK-120/flow/identity.json').read_text(encoding='utf-8'))
+        value={k:prior[k] for k in ('app_user','app_password','snapshot_user','snapshot_password')}
+        value.update(slot=slot,database=SLOTS[slot],maintenance_key=secrets.token_hex(32),dataset_id=str(uuid4()),
+            instance_id=str(uuid4()),originals_root_id=str(uuid4()),synthetic_model_key=secrets.token_urlsafe(24),synthetic_embedding_key=secrets.token_urlsafe(24))
+        r.write(path,value,private=True)
+    setup._initial_files_legacy(slot)
+    if slot=='audit07-main':
+        activity=json.loads((base/'activity.json').read_text(encoding='utf-8'))
+        activity['memory_context']={'selected_items':1,'max_memory_bytes':4096,'max_memory_chars':2048,'model_context_tokens':131072,
+            'max_input_tokens_estimate':65536,'protocol_reserve_tokens':1024,'reserved_output_tokens':2048,'safety_tokens':1024,
+            'estimate_policy':'utf8_bytes.v1','model_identity':activity['model_identity']}
+        r.write(base/'activity.json',activity,private=True)
+
+
+def migrate(slot):
+    if slot not in SLOTS:raise RuntimeError('audit07_exact_database_required')
+    return setup._migrate_legacy(slot)

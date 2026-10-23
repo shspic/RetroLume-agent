@@ -1,0 +1,15 @@
+--- initial/backend/app/worker/one_call.py
++++ final/backend/app/worker/one_call.py
+@@ -81,11 +81,11 @@
+         if self.request.input_result is not None and self.request.input_result.operation_id == self.operation_id:
+             raise ValueError("invalid_input")
+         request_wire=self.request.model_dump(mode="json",exclude_none=self.protocol!=4)
+         bounded(request_wire, MAX_BODY_BYTES)
+         # 原v3服务字段及字节保持；仅新v4承载新增受信grant。
+-        service = self.service.model_dump(mode="json", exclude={name for name in ('outbound_grant','outbound_source_manifest') if getattr(self.service,name,None) is None})
++        service = self.service.model_dump(mode="json", exclude={name for name in ('outbound_grant','outbound_source_manifest','outbound_authorization') if getattr(self.service,name,None) is None} | ({'returned_models'} if not getattr(self.service,'returned_models',()) else set()))
+         service["api_key"] = self.service.api_key.get_secret_value()
+         value = {"operation_id": self.operation_id,
+                  "request": request_wire, "service": service}
+         if self.protocol == 4:
+             value = {'protocol': 4, 'capability_kind': self.capability_kind, **value}

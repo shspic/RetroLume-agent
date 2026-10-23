@@ -1,0 +1,1263 @@
+--- /dev/null
++++ b/deploy/initialize_normal.py
+@@ -0,0 +1,538 @@
++"""独立新集群空库首次安装；默认只显示帮助，计划不读取凭据。"""
++import argparse
++import hashlib
++import ipaddress
++import json
++import os
++from pathlib import Path
++import re
++import stat
++import sys
++import uuid
++
++
++ROOT = Path(__file__).absolute().parents[1]
++PROFILE = "data_exit.v1.r03"
++MANIFEST_SHA256 = "f2ed126daa1c5a982b490a9343d6c17053c0f385e7a2f55676ecf4132dd2abf0"
++MIGRATIONS = (
++    "001_materials.sql", "002_activities.sql", "003_pdf_review.sql",
++    "004_activities_time_budget.sql", "005_activities_dispatch_closed.sql",
++    "006_activities_running_owner_session.sql", "007_activity_operation_results.sql",
++    "008_activity_tool_budget.sql", "009_teaching.sql", "010_learning_memory.sql",
++    "011_text_interview.sql", "012_html_explanations.sql", "013_data_exit.sql",
++    "014_step018_retrieval.sql", "015_activity_scope_delete_permission.sql",
++)
++BUSINESS_GROUPS = (
++    "retrolume_data_app", "retrolume_memory_app", "retrolume_interview_app",
++    "retrolume_html_app", "retrolume_retrieval_app",
++)
++SNAPSHOT_GROUPS = ("retrolume_data_snapshot",)
++GLOBAL_ROLES = (
++    "retrolume_memory_owner", "retrolume_memory_app", "retrolume_memory_purger",
++    "retrolume_interview_owner", "retrolume_interview_app",
++    "retrolume_html_owner", "retrolume_html_app", "retrolume_data_owner",
++    "retrolume_data_app", "retrolume_data_snapshot", "retrolume_data_restore_loader",
++    "retrolume_retrieval_owner", "retrolume_retrieval_app",
++)
++TEMPLATES = (
++    "config/activity.example.json", "config/integration.example.json",
++    "config/q-approval.example.json", "config/preview.example.json",
++)
++STAGES = tuple(name[:3] for name in MIGRATIONS[:13]) + (
++    "normal_control", "014", "015", "login_roles",
++)
++
++
++class InstallError(Exception):
++    """错误码固定，不携带驱动异常、路径输入或凭据。"""
++
++
++def require(condition, code):
++    if not condition:
++        raise InstallError(code)
++
++
++def sha256(raw):
++    return hashlib.sha256(raw).hexdigest()
++
++
++def canonical(value):
++    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
++
++
++def safe_path(value, *, existing=True, directory=False):
++    """逐级 lstat，不先 resolve 掩盖符号链接或 Windows junction。"""
++    path = Path(value)
++    require(path.is_absolute() and ".." not in path.parts and not str(path).startswith(("\\\\", "//")), "unsafe_path")
++    for part in path.parts[1:]:
++        require(":" not in part and part == part.rstrip(" .") and
++                re.fullmatch(r"(?i:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?", part) is None, "unsafe_path")
++    for current in reversed((path,) + tuple(path.parents)):
++        try:
++            info = current.lstat()
++        except FileNotFoundError:
++            require(current == path and not existing, "path_missing")
++            continue
++        require(not stat.S_ISLNK(info.st_mode) and not getattr(info, "st_file_attributes", 0) & 0x400, "unsafe_path")
++        if current != path or directory:
++            require(stat.S_ISDIR(info.st_mode), "unsafe_path")
++        else:
++            require(stat.S_ISREG(info.st_mode), "unsafe_path")
++    return path
++
++
++def read_json(path, limit=65536):
++    path = safe_path(path)
++    require(path.stat().st_size <= limit, "input_too_large")
++
++    def unique(pairs):
++        result = {}
++        for key, value in pairs:
++            require(key not in result, "invalid_json")
++            result[key] = value
++        return result
++
++    try:
++        return json.loads(path.read_bytes().decode("utf-8-sig"), object_pairs_hook=unique,
++                          parse_constant=lambda unused: (_ for _ in ()).throw(InstallError("invalid_json")))
++    except (ValueError, UnicodeError):
++        raise InstallError("invalid_json") from None
++
++
++def fixed_path(root, relative):
++    path = root / relative
++    require(path.is_relative_to(root), "unsafe_path")
++    return safe_path(path)
++
++
++def load_bundle(root=ROOT):
++    root = safe_path(root, directory=True)
++    manifest_path = fixed_path(root, "deploy/normal_install_manifest.json")
++    require(sha256(manifest_path.read_bytes()) == MANIFEST_SHA256, "manifest_mismatch")
++    manifest = read_json(manifest_path)
++    require(manifest["schema_profile"] == PROFILE, "profile_mismatch")
++    require([row["path"] for row in manifest["migrations"]] ==
++            ["backend/migrations/" + name for name in MIGRATIONS], "manifest_mismatch")
++    migration_dir = safe_path(root / "backend/migrations", directory=True)
++    require({p.name for p in migration_dir.iterdir() if p.suffix.lower() == ".sql"} == set(MIGRATIONS), "migration_set_mismatch")
++    bodies = []
++    for row in manifest["migrations"]:
++        raw = fixed_path(root, row["path"]).read_bytes()
++        require(len(raw) == row["bytes"] and sha256(raw) == row["sha256"], "migration_hash_mismatch")
++        try:
++            bodies.append(raw.decode("utf-8-sig"))
++        except UnicodeError:
++            raise InstallError("migration_encoding") from None
++    require([r["path"] for r in manifest["closed_templates"]] == list(TEMPLATES), "manifest_mismatch")
++    templates = []
++    for row in manifest["closed_templates"]:
++        path = fixed_path(root, row["path"])
++        require(sha256(path.read_bytes()) == row["sha256"], "template_hash_mismatch")
++        templates.append(read_json(path))
++    activity, integration, approval, preview = templates
++    require(activity["activity_defaults"]["max_requests"] == 0 and
++            activity["activity_defaults"]["max_cost_microunits"] == 0 and
++            integration["enabled"] is False and approval["enabled"] is False and
++            preview["image_id"] == "REPLACE_WITH_VERIFIED_IMMUTABLE_IMAGE_ID", "runtime_not_closed")
++    return {"root": root, "manifest": manifest, "bodies": tuple(bodies)}
++
++
++def identifier(value):
++    require(isinstance(value, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,62}", value) is not None
++            and not value.startswith("pg_") and value not in GLOBAL_ROLES, "invalid_identifier")
++
++
++def load_config(path):
++    config = read_json(path)
++    require(isinstance(config, dict) and set(config) == {
++        "schema", "enabled", "schema_profile", "target", "identities", "roles", "credential_env", "runtime_configs"
++    }, "config_shape")
++    require(config["schema"] == "retrolume.normal-install.v1" and type(config["enabled"]) is bool, "config_shape")
++    require(config["schema_profile"] == PROFILE, "profile_mismatch")
++    target, identities, roles, env = (config[k] for k in ("target", "identities", "roles", "credential_env"))
++    require(isinstance(target, dict) and set(target) == {
++        "host", "port", "database", "system_identifier", "database_oid", "server_major", "installer_login"
++    }, "config_shape")
++    require(target["host"] == "127.0.0.1" and target["server_major"] == 17, "target_unsupported")
++    require(target["port"] is None or type(target["port"]) is int and 1 <= target["port"] <= 65535, "target_unsupported")
++    for key in ("database", "installer_login"):
++        if target[key] is not None:
++            identifier(target[key])
++    require(target["database"] not in ("postgres", "template0", "template1"), "target_unsupported")
++    require(target["system_identifier"] is None or isinstance(target["system_identifier"], str) and
++            re.fullmatch(r"[1-9][0-9]{0,19}", target["system_identifier"]) is not None and
++            int(target["system_identifier"]) < 2 ** 64, "target_unsupported")
++    require(target["database_oid"] is None or type(target["database_oid"]) is int and
++            0 < target["database_oid"] < 2 ** 32, "target_unsupported")
++    require(isinstance(identities, dict) and set(identities) == {"dataset_id", "instance_id", "originals_root_id"}, "config_shape")
++    for value in identities.values():
++        if value is not None:
++            try:
++                require(isinstance(value, str) and str(uuid.UUID(value)) == value and uuid.UUID(value).int != 0, "invalid_identity")
++            except (ValueError, AttributeError):
++                raise InstallError("invalid_identity") from None
++    require(isinstance(roles, dict) and set(roles) == {"business_login", "snapshot_login"}, "config_shape")
++    for value in roles.values():
++        if value is not None:
++            identifier(value)
++    supplied = [v for v in (*roles.values(), target["installer_login"]) if v is not None]
++    require(len(supplied) == len(set(supplied)), "role_identity_overlap")
++    require(isinstance(env, dict) and set(env) == {
++        "installer_password", "business_password", "snapshot_password", "maintenance_key"
++    }, "config_shape")
++    require(all(isinstance(v, str) and re.fullmatch(r"RETROLUME_NORMAL_[A-Z0-9_]{1,80}", v) for v in env.values())
++            and len(set(env.values())) == 4, "credential_reference_invalid")
++    require(config["runtime_configs"] == {"activity": None, "integration": None, "q_approval": None, "preview": None}, "runtime_not_closed")
++    return config
++
++
++def missing_inputs(config):
++    missing = [section + "." + key for section in ("target", "identities", "roles")
++               for key, value in config[section].items() if value is None]
++    if not config["enabled"]:
++        missing.insert(0, "enabled")
++    return missing
++
++
++def binding(config):
++    return sha256(canonical({k: v for k, v in config.items() if k != "enabled"}))
++
++
++def plan(bundle, config):
++    return {
++        "status": "plan_only", "schema_profile": PROFILE, "manifest_sha256": MANIFEST_SHA256,
++        "migrations": bundle["manifest"]["migrations"], "missing": missing_inputs(config),
++        "local_inputs_complete": not missing_inputs(config), "installed": False, "verified": False,
++        "database_observed": False, "credentials_read": False, "runtime_closed": True,
++        "observed": {k: None for k in ("container_id", "system_identifier", "database_oid", "source_snapshot_id",
++                                        "dataset_id", "instance_id", "originals_root_id", "control_root", "data_root", "backup_root", "restore_root")},
++        "next_gate": "独立风险审查及另行精确正常部署许可；计划不证明可执行或允许真实调用",
++    }
++
++
++def new_output(path, root=ROOT):
++    path = safe_path(path, existing=False)
++    require(not path.exists(), "output_exists")
++    # 产品目录只读；输出只落显式本机目录，不允许覆盖产品或配置。
++    for protected in (root / "backend", root / "deploy", root / "config", root / ".git", root / ".agents", root / ".codex"):
++        require(not path.is_relative_to(protected), "unsafe_output")
++    require(path != root / "README.md" and path != root / "AGENTS.md", "unsafe_output")
++    return path
++
++
++class Journal:
++    """排他新建、逐行 fsync；提交前先记 submitted，断线后不重放。"""
++    def __init__(self, path, header):
++        self.file = new_output(path).open("x", encoding="utf-8", newline="\n")
++        try:
++            self.append(header)
++        except BaseException:
++            self.file.close()
++            raise
++
++    def append(self, value):
++        self.file.write(json.dumps(value, ensure_ascii=False, sort_keys=True) + "\n")
++        self.file.flush()
++        os.fsync(self.file.fileno())
++
++    def close(self):
++        self.file.close()
++
++
++IDENTITY_QUERY = """SELECT current_database() AS database,d.oid::bigint AS database_oid,
++ (SELECT system_identifier::text FROM pg_control_system()) AS system_identifier,
++ current_setting('server_version_num')::integer AS version_num,pg_encoding_to_char(d.encoding) AS encoding,
++ current_user AS installer_login,session_user AS session_login,r.rolsuper,
++ inet_server_addr()::text AS server_address,inet_server_port() AS server_port
++ FROM pg_database d JOIN pg_roles r ON r.rolname=current_user WHERE d.datname=current_database()"""
++EMPTY_QUERY = """SELECT
++ EXISTS(SELECT 1 FROM pg_database WHERE NOT datistemplate AND datname NOT IN ('postgres',current_database())) AS other_databases,
++ EXISTS(SELECT 1 FROM pg_stat_activity WHERE backend_type='client backend' AND pid<>pg_backend_pid()) AS other_clients,
++ EXISTS(SELECT 1 FROM pg_namespace WHERE nspname NOT IN('public','information_schema') AND nspname !~ '^pg_') AS extra_schemas,
++ EXISTS(SELECT 1 FROM pg_extension WHERE extname<>'plpgsql') AS extra_extensions,
++ EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public') AS relations,
++ EXISTS(SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public') AS functions,
++ EXISTS(SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid=t.typnamespace WHERE n.nspname='public') AS types,
++ EXISTS(SELECT 1 FROM pg_operator o JOIN pg_namespace n ON n.oid=o.oprnamespace WHERE n.nspname='public') AS operators,
++ EXISTS(SELECT 1 FROM pg_opclass o JOIN pg_namespace n ON n.oid=o.opcnamespace WHERE n.nspname='public') AS opclasses,
++ EXISTS(SELECT 1 FROM pg_opfamily o JOIN pg_namespace n ON n.oid=o.opfnamespace WHERE n.nspname='public') AS opfamilies,
++ EXISTS(SELECT 1 FROM pg_collation c JOIN pg_namespace n ON n.oid=c.collnamespace WHERE n.nspname='public') AS collations,
++ EXISTS(SELECT 1 FROM pg_conversion c JOIN pg_namespace n ON n.oid=c.connamespace WHERE n.nspname='public') AS conversions,
++ EXISTS(SELECT 1 FROM pg_ts_config c JOIN pg_namespace n ON n.oid=c.cfgnamespace WHERE n.nspname='public') AS text_configs,
++ EXISTS(SELECT 1 FROM pg_ts_dict c JOIN pg_namespace n ON n.oid=c.dictnamespace WHERE n.nspname='public') AS text_dicts,
++ EXISTS(SELECT 1 FROM pg_ts_parser c JOIN pg_namespace n ON n.oid=c.prsnamespace WHERE n.nspname='public') AS text_parsers,
++ EXISTS(SELECT 1 FROM pg_ts_template c JOIN pg_namespace n ON n.oid=c.tmplnamespace WHERE n.nspname='public') AS text_templates,
++ EXISTS(SELECT 1 FROM pg_event_trigger) AS event_triggers,EXISTS(SELECT 1 FROM pg_default_acl) AS default_acls,
++ EXISTS(SELECT 1 FROM pg_largeobject_metadata) AS large_objects,EXISTS(SELECT 1 FROM pg_foreign_server) AS foreign_servers,
++ EXISTS(SELECT 1 FROM pg_foreign_data_wrapper) AS foreign_wrappers,EXISTS(SELECT 1 FROM pg_publication) AS publications,
++ EXISTS(SELECT 1 FROM pg_subscription) AS subscriptions,
++ EXISTS(SELECT 1 FROM pg_cast WHERE oid>=16384) AS custom_casts,
++ EXISTS(SELECT 1 FROM pg_roles WHERE rolname !~ '^pg_' AND rolname<>current_user) AS extra_cluster_roles,
++ EXISTS(SELECT 1 FROM pg_namespace n CROSS JOIN LATERAL aclexplode(COALESCE(n.nspacl,acldefault('n',n.nspowner))) a
++        WHERE n.nspname='public' AND a.grantee=0 AND a.privilege_type='CREATE') AS public_schema_create,
++ EXISTS(SELECT 1 FROM pg_database d CROSS JOIN LATERAL aclexplode(COALESCE(d.datacl,acldefault('d',d.datdba))) a
++        WHERE d.datname=current_database() AND a.grantee=0 AND a.privilege_type='CREATE') AS public_database_create,
++ EXISTS(SELECT 1 FROM pg_language WHERE lanname NOT IN('internal','c','sql','plpgsql')) AS extra_languages"""
++
++
++def observe_identity(connection, config):
++    row = connection.execute(IDENTITY_QUERY).fetchone()
++    expected = config["target"]
++    require(row is not None and all(row[k] == expected[k] for k in
++            ("database", "database_oid", "system_identifier", "installer_login")) and
++            row["session_login"] == expected["installer_login"] and row["rolsuper"] is True and
++            170000 <= row["version_num"] < 180000 and row["encoding"] == "UTF8" and
++            isinstance(row["server_address"], str) and type(row["server_port"]) is int and
++            0 < row["server_port"] <= 65535, "target_identity_mismatch")
++    try:
++        ipaddress.ip_address(row["server_address"])
++    except ValueError:
++        raise InstallError("target_identity_mismatch") from None
++    return {k: row[k] for k in ("database", "database_oid", "system_identifier", "installer_login",
++                               "server_address", "server_port", "version_num", "encoding")}
++
++
++def preflight(connection, config):
++    connection.execute("BEGIN READ ONLY")
++    try:
++        observed = observe_identity(connection, config)
++        collisions = connection.execute("SELECT rolname FROM pg_roles WHERE rolname=ANY(%s)",
++            (list(GLOBAL_ROLES) + list(config["roles"].values()),)).fetchall()
++        require(not collisions, "global_role_collision")
++        empty = connection.execute(EMPTY_QUERY).fetchone()
++        require(empty is not None and not any(empty.values()), "target_not_empty_or_exclusive")
++        version = connection.execute("SELECT default_version FROM pg_available_extensions WHERE name='vector'").fetchone()
++        require(version is not None and version["default_version"] == "0.8.6", "vector_version_mismatch")
++        return observed
++    finally:
++        connection.execute("ROLLBACK")
++
++
++def connect(config, credentials):
++    # 本函数仅在显式 apply 或完整收据 verify 的本地校验通过后调用。
++    import psycopg
++    from psycopg.rows import dict_row
++    target = config["target"]
++    return psycopg.connect(host=target["host"], port=target["port"], dbname=target["database"],
++        user=target["installer_login"], password=credentials["installer_password"],
++        connect_timeout=3, autocommit=True, row_factory=dict_row, sslmode="disable", service="",
++        options="-c search_path=public,pg_catalog -c statement_timeout=60000 -c lock_timeout=3000 -c idle_in_transaction_session_timeout=60000")
++
++
++def read_credentials(config, *, readonly=False):
++    keys = ("installer_password",) if readonly else tuple(config["credential_env"])
++    values = {}
++    for key in keys:
++        value = os.environ.get(config["credential_env"][key])
++        require(isinstance(value, str) and 16 <= len(value.encode("utf-8")) <= 1024 and "\x00" not in value, "credential_missing_or_invalid")
++        values[key] = value
++    if not readonly:
++        require(len(set(values.values())) == len(values), "credential_identity_overlap")
++    return values
++
++
++def committed_sql(connection, body):
++    cursor = connection.execute(body, prepare=False)
++    status = cursor.statusmessage
++    while cursor.nextset():
++        status = cursor.statusmessage
++    require(status == "COMMIT" and int(connection.info.transaction_status) == 0, "commit_unknown")
++
++
++def create_control(connection, config, credentials):
++    with connection.transaction():
++        connection.execute("""INSERT INTO public.data_control
++            (dataset_id,instance_id,originals_root_id,schema_profile,mode,maintenance_key_sha256)
++            VALUES(%s,%s,%s,'data_exit.v1.r01','normal',%s)""",
++            tuple(config["identities"][k] for k in ("dataset_id", "instance_id", "originals_root_id")) +
++            (sha256(credentials["maintenance_key"].encode("utf-8")),))
++
++
++def create_logins(connection, config, credentials):
++    from psycopg import sql
++    with connection.transaction():
++        for purpose, groups in (("business", BUSINESS_GROUPS), ("snapshot", SNAPSHOT_GROUPS)):
++            login = config["roles"][purpose + "_login"]
++            connection.execute(sql.SQL("CREATE ROLE {} LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD {}").format(
++                sql.Identifier(login), sql.Literal(credentials[purpose + "_password"])))
++            for group in groups:
++                connection.execute(sql.SQL("GRANT {} TO {} WITH INHERIT TRUE, SET FALSE, ADMIN FALSE").format(
++                    sql.Identifier(group), sql.Identifier(login)))
++            connection.execute(sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
++                sql.Identifier(config["target"]["database"]), sql.Identifier(login)))
++
++
++def product_checks(root=ROOT):
++    # 只装载原有纯核验模块；不装载应用、配置运行时或控制权威。
++    backend = str(root / "backend")
++    if backend not in sys.path:
++        sys.path.insert(0, backend)
++    from app.data_exit.schema_checks import assert_data_schema_sync
++    from app.data_exit.q_roles import ROLE_CAPABILITIES, MEMBERSHIPS, check_role_capabilities
++    from app.data_exit.schema_profiles import get_profile
++    return assert_data_schema_sync, ROLE_CAPABILITIES, MEMBERSHIPS, check_role_capabilities, get_profile
++
++
++def verify_installed(connection, bundle, config):
++    check_schema, role_query, member_query, check_roles, get_profile = product_checks(bundle["root"])
++    require(get_profile(PROFILE).migration_chain == {
++        Path(row["path"]).name: row["sha256"] for row in bundle["manifest"]["migrations"]
++    }, "profile_migration_mismatch")
++    check_schema(connection, PROFILE)
++    roles = connection.execute(role_query).fetchall()
++    memberships = connection.execute(member_query).fetchall()
++    check_roles(roles, memberships, PROFILE)
++    by_name = {r["rolname"]: r for r in roles}
++    for key, groups in (("business_login", BUSINESS_GROUPS), ("snapshot_login", SNAPSHOT_GROUPS)):
++        role = by_name.get(config["roles"][key])
++        require(role is not None and role["rolcanlogin"] is True and not any(role[k] for k in (
++            "rolsuper", "rolcreatedb", "rolcreaterole", "rolreplication", "rolbypassrls", "owns_objects", "owns_definers", "schema_create", "database_create"
++        )), "login_role_unsafe")
++        edges = [r for r in memberships if r["member"] == role["oid"]]
++        require(len(edges) == len(groups) and {r["roleid"] for r in edges} == {by_name[g]["oid"] for g in groups}
++                and all(r["inherit_option"] and not r["set_option"] and not r["admin_option"] for r in edges), "login_membership_mismatch")
++    row = connection.execute("SELECT dataset_id::text,instance_id::text,originals_root_id::text,schema_profile,mode FROM public.data_control").fetchone()
++    require(row is not None and all(row[k] == value for k, value in config["identities"].items())
++            and row["schema_profile"] == PROFILE and row["mode"] == "normal", "normal_control_mismatch")
++
++
++def check_product_profile(bundle):
++    get_profile = product_checks(bundle["root"])[-1]
++    require(get_profile(PROFILE).migration_chain == {
++        Path(row["path"]).name: row["sha256"] for row in bundle["manifest"]["migrations"]
++    }, "profile_migration_mismatch")
++
++
++def apply(bundle, config, receipt, *, connector=connect, verifier=verify_installed):
++    require(not missing_inputs(config), "apply_inputs_incomplete")
++    receipt = new_output(receipt)
++    check_product_profile(bundle)
++    credentials = read_credentials(config)
++    journal = Journal(receipt, {"schema": "retrolume.normal-install-receipt.v1", "event": "intent",
++        "manifest_sha256": MANIFEST_SHA256, "config_binding": binding(config), "target": config["target"],
++        "identities": config["identities"], "roles": config["roles"], "migrations": bundle["manifest"]["migrations"]})
++    confirmed = []
++    pending = None
++    try:
++        with connector(config, credentials) as connection:
++            observed = preflight(connection, config)
++            journal.append({"event": "preflight", "observed": observed})
++
++            def stage(name, action):
++                nonlocal pending
++                journal.append({"event": "submitted", "stage": name})
++                pending = name
++                action()
++                journal.append({"event": "confirmed", "stage": name})
++                confirmed.append(name)
++                pending = None
++
++            for index, body in enumerate(bundle["bodies"]):
++                stage(MIGRATIONS[index][:3], lambda body=body: committed_sql(connection, body))
++                if index == 12:
++                    stage("normal_control", lambda: create_control(connection, config, credentials))
++            stage("login_roles", lambda: create_logins(connection, config, credentials))
++            connection.execute("BEGIN READ ONLY")
++            try:
++                observe_identity(connection, config)
++                verifier(connection, bundle, config)
++            finally:
++                connection.execute("ROLLBACK")
++            journal.append({"event": "complete", "confirmed_stages": confirmed, "schema_profile": PROFILE})
++        return {"status": "installed", "schema_profile": PROFILE, "confirmed_stages": confirmed, "runtime_closed": True}
++    except BaseException as error:
++        # 断线或应答丢失不能据异常文本推断回滚；submitted 保守保留为未知。
++        code = "commit_unknown" if pending else (error.args[0] if isinstance(error, InstallError) else "installation_stopped")
++        try:
++            journal.append({"event": "stopped", "reason": code, "confirmed_stages": confirmed, "unknown_stage": pending})
++        except (OSError, ValueError):
++            pass
++        raise InstallError(code) from None
++    finally:
++        journal.close()
++
++
++def complete_receipt(path, bundle, config):
++    path = safe_path(path)
++    require(path.stat().st_size <= 131072, "receipt_invalid")
++    try:
++        records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
++    except (ValueError, UnicodeError):
++        raise InstallError("receipt_invalid") from None
++    require(len(records) == 3 + 2 * len(STAGES), "receipt_incomplete")
++    header = records[0]
++    require(header == {"schema": "retrolume.normal-install-receipt.v1", "event": "intent",
++        "manifest_sha256": MANIFEST_SHA256, "config_binding": binding(config), "target": config["target"],
++        "identities": config["identities"], "roles": config["roles"], "migrations": bundle["manifest"]["migrations"]}, "receipt_mismatch")
++    require(records[1].get("event") == "preflight" and isinstance(records[1].get("observed"), dict), "receipt_invalid")
++    for index, name in enumerate(STAGES):
++        require(records[2 + index * 2] == {"event": "submitted", "stage": name} and
++                records[3 + index * 2] == {"event": "confirmed", "stage": name}, "receipt_incomplete")
++    require(records[-1] == {"event": "complete", "confirmed_stages": list(STAGES), "schema_profile": PROFILE}, "receipt_incomplete")
++    return records
++
++
++def verify(bundle, config, receipt, *, connector=connect, verifier=verify_installed):
++    require(not [m for m in missing_inputs(config) if m != "enabled"], "verify_inputs_incomplete")
++    records = complete_receipt(receipt, bundle, config)
++    check_product_profile(bundle)
++    credentials = read_credentials(config, readonly=True)
++    try:
++        with connector(config, credentials) as connection:
++            connection.execute("BEGIN READ ONLY")
++            try:
++                observed = observe_identity(connection, config)
++                require(observed == records[1]["observed"], "receipt_target_mismatch")
++                verifier(connection, bundle, config)
++            finally:
++                connection.execute("ROLLBACK")
++        return {"status": "readonly_rechecked", "schema_profile": PROFILE, "observed": observed, "runtime_closed": True}
++    except Exception:
++        raise InstallError("readonly_recheck_failed") from None
++
++
++class Parser(argparse.ArgumentParser):
++    def error(self, message):
++        raise InstallError("invalid_arguments")
++
++
++def main(argv=None):
++    parser = Parser(description=__doc__)
++    commands = parser.add_subparsers(dest="action", parser_class=Parser)
++    for action, help_text in (("plan", "仅核本地固定文件与非敏感输入"),
++                              ("apply", "仅供另行获准的独立新集群空库首次安装"),
++                              ("verify", "仅凭完整成功收据作只读复核")):
++        command = commands.add_parser(action, help=help_text)
++        command.add_argument("--config", type=Path, required=True, help="绝对路径，安装器自己的非敏感 JSON")
++        if action == "plan":
++            command.add_argument("--output", type=Path, help="可选绝对路径，仅排他新建计划文件")
++        else:
++            command.add_argument("--receipt", type=Path, required=True, help="绝对路径；apply 排他新建，verify 仅读完整成功收据")
++    try:
++        args = parser.parse_args(argv)
++        if args.action is None:
++            parser.print_help()
++            return 0
++        config = load_config(args.config)
++        bundle = load_bundle()
++        if args.action == "plan":
++            result = plan(bundle, config)
++            if args.output:
++                with new_output(args.output).open("x", encoding="utf-8", newline="\n") as output:
++                    output.write(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
++        elif args.action == "apply":
++            result = apply(bundle, config, args.receipt)
++        else:
++            result = verify(bundle, config, args.receipt)
++        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
++        return 0
++    except InstallError as error:
++        print(json.dumps({"status": "rejected", "reason": error.args[0]}, ensure_ascii=False))
++        return 2
++    except Exception:
++        print(json.dumps({"status": "rejected", "reason": "local_or_driver_failure"}, ensure_ascii=False))
++        return 2
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+--- /dev/null
++++ b/deploy/normal_install_manifest.json
+@@ -0,0 +1,127 @@
++{
++  "schema": "retrolume.normal-install-manifest.v1",
++  "schema_profile": "data_exit.v1.r03",
++  "postgres_major": 17,
++  "vector_version": "0.8.6",
++  "sql_decoding": "utf-8-sig; preserve all remaining characters and transaction boundaries",
++  "migrations": [
++    {
++      "path": "backend/migrations/001_materials.sql",
++      "bytes": 955,
++      "sha256": "767f47c331ba1e0322e48ffcedfb46619ba53b175b9c0aa69ae267a6d5f07a8d"
++    },
++    {
++      "path": "backend/migrations/002_activities.sql",
++      "bytes": 4203,
++      "sha256": "3a9c5855aa9ddc54a03666327267ff3b7cb81eafa931a9f260c5637922b2dda6"
++    },
++    {
++      "path": "backend/migrations/003_pdf_review.sql",
++      "bytes": 2754,
++      "sha256": "1ac29bafe58348a0b2acf4ece2527f272f8ae93f6ca213fc38df859c9dbc8424"
++    },
++    {
++      "path": "backend/migrations/004_activities_time_budget.sql",
++      "bytes": 2346,
++      "sha256": "8f04f57c743c260f5081e0c6f232860301b30c7b03fef69498d7c0704c0a97cc"
++    },
++    {
++      "path": "backend/migrations/005_activities_dispatch_closed.sql",
++      "bytes": 445,
++      "sha256": "26b71a836355fa9620401f6bbb76e9a42668a1ce52077aa91ecb2f61ebeb50eb"
++    },
++    {
++      "path": "backend/migrations/006_activities_running_owner_session.sql",
++      "bytes": 247,
++      "sha256": "f791f22dcfccf204f6fda369470978452b3b23cca0fc40d2057bd08ea47f6428"
++    },
++    {
++      "path": "backend/migrations/007_activity_operation_results.sql",
++      "bytes": 1363,
++      "sha256": "754b528cd5382fd4aae582258e09475bb3d83a0ec97589cf6b7b2a3cafdf133a"
++    },
++    {
++      "path": "backend/migrations/008_activity_tool_budget.sql",
++      "bytes": 5807,
++      "sha256": "aa97942899eeb6601c82e49c3367ec3409e156b55c5758f789073d4a0df4f959"
++    },
++    {
++      "path": "backend/migrations/009_teaching.sql",
++      "bytes": 16545,
++      "sha256": "11b1c2bc8cb2482a4fa509b897c3afb8f3f5f7be3eb4e8e4aab559706944c1a3"
++    },
++    {
++      "path": "backend/migrations/010_learning_memory.sql",
++      "bytes": 36546,
++      "sha256": "33df4bcd8c040035f360cfc21c845e8f54e426832959e41477e67496f733c83c"
++    },
++    {
++      "path": "backend/migrations/011_text_interview.sql",
++      "bytes": 21990,
++      "sha256": "64d564258f57f419d991c8cfe97d2adb15b2962d4e135e910e2834ff986718a3"
++    },
++    {
++      "path": "backend/migrations/012_html_explanations.sql",
++      "bytes": 26702,
++      "sha256": "a400170b010ad5f8adca2003a6829519b435b14160ade01fd8283e9fcd3c87b7"
++    },
++    {
++      "path": "backend/migrations/013_data_exit.sql",
++      "bytes": 65030,
++      "sha256": "0f432fb2af3c2a055181cbe14de75d547cad1af36621eb808b04fa353e9a9587"
++    },
++    {
++      "path": "backend/migrations/014_step018_retrieval.sql",
++      "bytes": 34265,
++      "sha256": "3a919b2562ded5765de132519b841c1d1439c65c001795cfbd608cbc03586e78"
++    },
++    {
++      "path": "backend/migrations/015_activity_scope_delete_permission.sql",
++      "bytes": 2459,
++      "sha256": "874d2a173f401ce923680d184eb5687c121fd70831d8b86cd9b6740a7c330915"
++    }
++  ],
++  "closed_templates": [
++    {
++      "path": "config/activity.example.json",
++      "sha256": "010df98467ccfe66cd881e5a2bf5a8240c459e21971a25b43590fd064b876841"
++    },
++    {
++      "path": "config/integration.example.json",
++      "sha256": "ca5e3dc21349cd2651478734246ae5dad4d14d20eb971f2fefcf671947005458"
++    },
++    {
++      "path": "config/q-approval.example.json",
++      "sha256": "5e126ff4b09ef5f78de23c7f9e5690a4e45d43d54987cc7a7b461c3b23f46803"
++    },
++    {
++      "path": "config/preview.example.json",
++      "sha256": "bbfefaef7da910c509ffad857e9aad55b97259280ed0ecdd7b65b4d703a0646e"
++    }
++  ],
++  "role_purposes": {
++    "installer": "短时管理员，仅在首次安装或只读复核中连接；不交给应用",
++    "business_login": [
++      "retrolume_data_app",
++      "retrolume_memory_app",
++      "retrolume_interview_app",
++      "retrolume_html_app",
++      "retrolume_retrieval_app"
++    ],
++    "snapshot_login": [
++      "retrolume_data_snapshot"
++    ],
++    "not_login_granted": [
++      "retrolume_data_owner",
++      "retrolume_data_restore_loader",
++      "retrolume_memory_owner",
++      "retrolume_memory_purger",
++      "retrolume_interview_owner",
++      "retrolume_html_owner",
++      "retrolume_retrieval_owner"
++    ]
++  },
++  "control_row_after": "013_data_exit.sql",
++  "control_row_initial_profile": "data_exit.v1.r01",
++  "replay_supported": false
++}
+--- /dev/null
++++ b/deploy/normal-install.md
+@@ -0,0 +1,65 @@
++# 正常首次安装工具
++
++`initialize_normal.py` 是独立新 PostgreSQL 17 集群中已明确创建的全新空数据库首次安装入口，目标为 `data_exit.v1.r03`。它不创建数据库、容器、卷或服务。当前交付是离线工程候选；本轮没有执行真实安装、数据库查询、角色操作或正常启动。首次真实 apply 前须完成一次安装迁移及角色权限独立审查，并由后续运行卡冻结精确资源及许可。
++
++## 本地帮助与计划
++
++从项目根使用已有后端 Python。以下命令不连接数据库、不读取凭据环境值、不启动子进程，也不装载应用、ControlHub 或 QAuthority。
++
++```powershell
++& 'D:/shspic/project_NO3_RetroLume-agent/backend/.venv/Scripts/python.exe' -B 'D:/shspic/project_NO3_RetroLume-agent/deploy/initialize_normal.py'
++& 'D:/shspic/project_NO3_RetroLume-agent/backend/.venv/Scripts/python.exe' -B 'D:/shspic/project_NO3_RetroLume-agent/deploy/initialize_normal.py' --help
++& 'D:/shspic/project_NO3_RetroLume-agent/backend/.venv/Scripts/python.exe' -B 'D:/shspic/project_NO3_RetroLume-agent/deploy/initialize_normal.py' plan --help
++& 'D:/shspic/project_NO3_RetroLume-agent/backend/.venv/Scripts/python.exe' -B 'D:/shspic/project_NO3_RetroLume-agent/deploy/initialize_normal.py' plan --config 'D:/shspic/project_NO3_RetroLume-agent/config/normal-install.example.json'
++```
++
++无动作时只显示帮助，退出0。plan 成功退出0表示本地输入结构、原件和关闭模板核验完成，输出 `status=plan_only`、`installed=false`、`verified=false`、`database_observed=false`。示例的 `enabled=false`，端口、数据库身份、三个安装 UUID 和两个登录名均为 null，因此 `local_inputs_complete=false` 并列出缺项。未知 CID、system_identifier、OID、快照、安装身份及四个运行根均保持 null。重复 plan 不生成身份或安装收据。
++
++plan 可额外指定 `--output` 绝对路径，只排他新建一个计划 JSON；父目录须已存在，已有文件或不安全路径拒绝。省略时只输出到终端。任何拒绝退出2，只返回固定原因，不回显坏参数、连接串或驱动异常。计划不证明真实目标匹配，不授予运行或外发权。
++
++路径必须绝对、非 UNC、无 `..`，逐级拒绝符号链接及 Windows reparse/junction；输出不得落入源码、部署、配置和 Git 元数据目录。工具只枚举项目固定迁移目录以拒绝额外 SQL，再按清单逐项读取，不自动吸纳未来迁移。清单原字节摘要冻结在入口源码；同时校验顺序、数量、每份 SQL 原字节摘要和四份关闭模板摘要。SQL 仅作 utf-8-sig 解码，保留 BOM 后的原换行及全部正文，不删碰撞 guard 或改写 CREATE ROLE。
++
++## 安装输入与关闭配置
++
++`config/normal-install.example.json` 的 schema 为 `retrolume.normal-install.v1`，仅由本安装器读取，不能交给现有应用 loader。它不包含真实连接串、密码、身份、运行根、ACL、grant、源清单、operator 票据或激活回执。
++
++将来受信部署时，在项目外受信私有目录准备自己的副本，并经后续卡冻结绝对路径；不要放入尚未被 Git 忽略的项目配置新路径。需要填写：
++
++- `target`：仅 loopback IPv4，明确映射端口、数据库名、真实集群 `system_identifier`、数据库 OID、PG 主版本17，以及短时安装管理员登录名。数据库不能为 postgres/template0/template1；名称检查不能替代身份观察。
++- `identities`：明确登记的非零 dataset_id、instance_id、originals_root_id 三个 UUID。安装器不自动分配身份，originals_root_id 必须来自后续受信部署的根绑定过程；此工具不绑定或创建运行根。
++- `roles`：互不相同、区别于管理员及现有职责组的全新 business_login 和 snapshot_login。名称只接受小写字母开头的有限 PostgreSQL 标识符。
++- `credential_env`：四个互不相同的 `RETROLUME_NORMAL_...` 环境变量名，分别供安装管理员密码、全新业务密码、全新快照密码、maintenance_key 使用。真实值仅在未来安装进程安全环境中注入，彼此分离，每项16—1024个 UTF-8 字节，不放 argv、JSON、终端记录或收据。维护摘要仅作为现有 data_control 必需值写入数据库，不输出或保存到安装收据。
++- `enabled`：仅表示此安装器的本地实施开关。示例关闭；即使将来明确改 true 且本地项齐全，也必须先满足真实运行许可和独审。`runtime_configs` 四项必须始终 null，不接受顺带启用应用能力。
++
++活动仍沿原生 `config/activity.example.json` 的零次数、零费用和零输出占位，不能产生可用活动能力；integration 和 q-approval 原生示例 enabled=false；preview 沿原生结构保留无效镜像、摘要及票据占位，不虚构一个 loader 不支持的 enabled 字段。安装器核这四份固定关闭模板，没有生成可用配置。原生 data-exit.example.json 也保持关闭；reader 示例只适用隔离只读恢复，不作为正常源配置。
++
++四个独立 data/backup/control/restore 根、真实 Windows ACL/file-id、control_id、selection generation 及连接绑定只能在后续正常部署时核定，本卡不创建私有运行根。账号计量、分词、Embedding 容量、当前模板及外部采用缺项沿既有关闭交接保留，不能用安装器成功替代。Q 未启用，T0=null，真实调用和费用仍为0，原100次/25元及48/28/24分额不变。
++
++## 未来显式 apply 与只读 verify
++
++以下仅说明已实现参数。`$normalConfig` 和 `$installReceipt` 必须由未来运行卡给出真实绝对路径，收据父目录须预先存在；当前没有执行。apply 不提供恢复、升级、清空或重试选项。
++
++```powershell
++& 'D:/shspic/project_NO3_RetroLume-agent/backend/.venv/Scripts/python.exe' -B 'D:/shspic/project_NO3_RetroLume-agent/deploy/initialize_normal.py' apply --help
++& 'D:/shspic/project_NO3_RetroLume-agent/backend/.venv/Scripts/python.exe' -B 'D:/shspic/project_NO3_RetroLume-agent/deploy/initialize_normal.py' verify --help
++# 仅在未来精确许可及独审满足后：
++& 'D:/shspic/project_NO3_RetroLume-agent/backend/.venv/Scripts/python.exe' -B 'D:/shspic/project_NO3_RetroLume-agent/deploy/initialize_normal.py' apply --config $normalConfig --receipt $installReceipt
++# 仅限同一完整成功收据及目标：
++& 'D:/shspic/project_NO3_RetroLume-agent/backend/.venv/Scripts/python.exe' -B 'D:/shspic/project_NO3_RetroLume-agent/deploy/initialize_normal.py' verify --config $normalConfig --receipt $installReceipt
++```
++
++apply 先核本地全部输入和固定文件，再核现有 profile 原件映射，排他占用新收据，之后才允许管理员连接。数据库已由另行许可创建，安装期间必须独占这个独立集群。短时安装连接明确 host/port/database/user/password，不接收 DSN。初次 preflight 在 READ ONLY 事务中核：真实集群/数据库/当前及会话角色一致、管理员为 bootstrap superuser、PG17/UTF8；连接端固定为 loopback，服务端实际地址/端口如实记录，支持容器端口映射；没有其他业务数据库或客户端、额外用户 schema/对象/扩展/默认 ACL/大对象/事件触发器等；没有所需全局职责组或目标登录角色；除管理员和 PG 内置角色外没有其他集群角色；PUBLIC 没有 schema/database CREATE；可用 vector 默认版本恰为0.8.6。任一失败在首次 DDL/DCL/数据写之前停止，保留拒绝收据。
++
++预检通过后严格按001—013原 SQL 各自事务执行；013提交后单独事务插入 normal/R01 控制行及明确身份、maintenance 摘要；014推进 R02，015推进 R03。随后单独事务创建两个新非超级登录角色，业务只授 data_app、memory_app、interview_app、html_app、retrieval_app；快照只授 data_snapshot。membership 显式 INHERIT TRUE、SET FALSE、ADMIN FALSE，并仅为两个新登录授目标数据库 CONNECT。不会授 owner、purger、restore_loader 或管理角色，不复用、ALTER、DROP 或重置任何既有角色。
++
++最后在只读事务中复用现有 schema_checks、schema_profiles 和 q_roles，核 R03 固定 shape/函数/ACL、全局 SET/INHERIT/ADMIN 传递能力、精确登录组和 normal 控制身份。该检查发生在未来真实数据库中才有动态效力；本轮执行记录器只证明本地调用顺序及停止分支，不能证明 SQL、事务、权限或启动已在 PG 生效。这里没有替代原有领域全部回归验收。
++
++收据为本地逐行 JSON，只含固定原件 hash、非敏感目标及安装身份、preflight 观察和 submitted/confirmed/complete/stopped 阶段。每次提交请求前先 flush/fsync submitted，确认响应后再 fsync confirmed。15份迁移和两个补充事务各自提交，不构成整包原子事务。进程退出、断线、丢响应或保存失败保留已确认阶段；最后 submitted 未确认按提交未知停止，即使驱动报错也不自动推断整包回滚。不会自动重试、重放、回滚历史提交、清库或清角色。
++
++重复 apply 遇到原收据立即拒绝；换空收据也会被真实非空库或角色预检拒绝。部分、未知、损坏或没有完整成功收据的目标交回精确阶段事实，不提供续迁移。verify 只接受完整阶段序列、同一清单/输入/原身份及成功结尾，再只读核真实目标与原观察、当前 schema/角色/控制行；仅使用管理员密码，不读另三份秘密，不修改收据。收据是安装元数据，不是新的授权协议或业务账本。
++
++## 与现有启动衔接
++
++旧 `deploy/initialize-materials.py` 仅执行001，不能在完整安装后再跑；它不承担完整部署。本安装器的帮助、plan、apply、verify 均不会调用它或 `start_local.py`，应用启动也不会自动调用安装器。
++
++只有未来安装及独立运行核验均满足后，才按原有正常源 loader 和四根绑定准备关闭配置，并使用原 `deploy/start_local.py` 的 `--container`、`--port`、`--shutdown-stdin` 启动。公开参数没有 `--profile`、`--initialize`、`--migrate`。启动会产生 PG/应用/ControlHub 事实，需要另一张精确运行卡；不能由本文件示例直接执行或推断安装成功。首次真实 PG 安装、角色能力、应用读取、同库重开及停止组合验证仍待该运行卡完成。
+--- /dev/null
++++ b/config/normal-install.example.json
+@@ -0,0 +1,35 @@
++{
++  "schema": "retrolume.normal-install.v1",
++  "enabled": false,
++  "schema_profile": "data_exit.v1.r03",
++  "target": {
++    "host": "127.0.0.1",
++    "port": null,
++    "database": null,
++    "system_identifier": null,
++    "database_oid": null,
++    "server_major": 17,
++    "installer_login": null
++  },
++  "identities": {
++    "dataset_id": null,
++    "instance_id": null,
++    "originals_root_id": null
++  },
++  "roles": {
++    "business_login": null,
++    "snapshot_login": null
++  },
++  "credential_env": {
++    "installer_password": "RETROLUME_NORMAL_INSTALLER_PASSWORD",
++    "business_password": "RETROLUME_NORMAL_BUSINESS_PASSWORD",
++    "snapshot_password": "RETROLUME_NORMAL_SNAPSHOT_PASSWORD",
++    "maintenance_key": "RETROLUME_NORMAL_MAINTENANCE_KEY"
++  },
++  "runtime_configs": {
++    "activity": null,
++    "integration": null,
++    "q_approval": null,
++    "preview": null
++  }
++}
+--- /dev/null
++++ b/backend/tests/test_normal_install.py
+@@ -0,0 +1,472 @@
++"""首次安装器的离线边界；记录器不证明真实 PG 的 SQL、事务或权限。"""
++from contextlib import contextmanager, redirect_stderr, redirect_stdout
++import copy
++import ctypes
++import importlib.util
++import io
++import json
++import os
++from pathlib import Path
++import shutil
++import struct
++import subprocess
++import sys
++import tempfile
++import unittest
++from unittest.mock import patch
++
++
++ROOT = Path(__file__).absolute().parents[2]
++SPEC = importlib.util.spec_from_file_location("normal_install_under_test", ROOT / "deploy/initialize_normal.py")
++INSTALL = importlib.util.module_from_spec(SPEC)
++SPEC.loader.exec_module(INSTALL)
++EXAMPLE = ROOT / "config/normal-install.example.json"
++
++
++def role_samples(config):
++    names = list(INSTALL.GLOBAL_ROLES) + list(config["roles"].values()) + ["bridge", "danger"]
++    roles = []
++    for oid, name in enumerate(names, 100):
++        values = dict.fromkeys(("rolsuper", "rolcreatedb", "rolcreaterole", "rolreplication", "rolbypassrls",
++                                "schema_create", "database_create", "owns_objects", "owns_definers"), False)
++        privilege = []
++        if name in ("retrolume_data_app", config["roles"]["business_login"]):
++            privilege = ["SELECT", "INSERT", "UPDATE", "DELETE"]
++        elif name in ("retrolume_data_snapshot", config["roles"]["snapshot_login"], "retrolume_data_owner"):
++            privilege = ["SELECT"]
++        elif name == "retrolume_data_restore_loader":
++            privilege = ["SELECT", "INSERT"]
++        if name.endswith("_owner"):
++            values.update(owns_objects=True, owns_definers=True)
++        roles.append(dict(values, oid=oid, rolname=name, rolcanlogin=name in config["roles"].values(),
++                          privileges=privilege, control_privileges=["SELECT"] if name == "retrolume_data_owner" else []))
++    by_name = {r["rolname"]: r for r in roles}
++
++    def edge(member, target, inherit=True, setting=False, admin=False):
++        return dict(member=by_name[member]["oid"], roleid=by_name[target]["oid"], grantor=1,
++                    inherit_option=inherit, set_option=setting, admin_option=admin)
++
++    members = [edge(config["roles"]["business_login"], group) for group in INSTALL.BUSINESS_GROUPS]
++    members += [edge(config["roles"]["snapshot_login"], "retrolume_data_snapshot")]
++    return roles, members, by_name, edge
++
++
++class Cursor:
++    statusmessage = "COMMIT"
++
++    def __init__(self, one=None, many=None):
++        self.one, self.many = one, many or []
++
++    def fetchone(self):
++        return self.one
++
++    def fetchall(self):
++        return self.many
++
++    def nextset(self):
++        return None
++
++
++class Recorder:
++    """仅记录调用类别，绝不记录密码 SQL、维护摘要或 DSN。"""
++    info = type("Info", (), {"transaction_status": 0})()
++
++    def __init__(self, config, bundle, *, mismatch=False, nonempty=False, collision=False, vector="0.8.6", fail_stage=None, server_address="127.0.0.1"):
++        self.config, self.bundle = config, bundle
++        self.mismatch, self.nonempty, self.collision, self.vector, self.fail_stage = mismatch, nonempty, collision, vector, fail_stage
++        self.server_address = server_address
++        self.calls, self.readonly = [], False
++
++    def __enter__(self):
++        self.calls.append("connect")
++        return self
++
++    def __exit__(self, *unused):
++        self.calls.append("close")
++
++    @contextmanager
++    def transaction(self):
++        self.calls.append("transaction_begin")
++        yield
++        self.calls.append("transaction_ack")
++
++    def execute(self, statement, params=None, **kwargs):
++        if statement == "BEGIN READ ONLY":
++            self.readonly = True
++            self.calls.append("read_only_begin")
++        elif statement == "ROLLBACK":
++            self.readonly = False
++            self.calls.append("read_only_end")
++        elif statement == INSTALL.IDENTITY_QUERY:
++            if not self.readonly:
++                raise AssertionError("preflight_not_readonly")
++            self.calls.append("identity_read")
++            target = self.config["target"]
++            return Cursor(one=dict(target, database_oid=target["database_oid"] + int(self.mismatch), session_login=target["installer_login"],
++                                   version_num=170007, encoding="UTF8", rolsuper=True, server_address=self.server_address, server_port=5432))
++        elif statement == INSTALL.EMPTY_QUERY:
++            self.calls.append("empty_read")
++            return Cursor(one={"nonempty": self.nonempty})
++        elif isinstance(statement, str) and statement.startswith("SELECT default_version"):
++            self.calls.append("version_read")
++            return Cursor(one={"default_version": self.vector})
++        elif isinstance(statement, str) and statement.startswith("SELECT rolname FROM pg_roles"):
++            self.calls.append("collision_read")
++            return Cursor(many=[{"rolname": INSTALL.GLOBAL_ROLES[0]}] if self.collision else [])
++        elif statement in self.bundle["bodies"]:
++            name = INSTALL.MIGRATIONS[self.bundle["bodies"].index(statement)][:3]
++            self.calls.append("write:" + name)
++            if self.readonly:
++                raise AssertionError("write_in_readonly")
++            if name == self.fail_stage:
++                raise RuntimeError("driver detail " + "sentinel_" + "dsn_secret")
++        elif isinstance(statement, str) and statement.startswith("INSERT INTO public.data_control"):
++            self.calls.append("write:normal_control")
++        else:
++            from psycopg.sql import Composable
++            if not isinstance(statement, Composable):
++                raise AssertionError("unexpected_call")
++            rendered = statement.as_string()
++            self.calls.append("write:login_ddl" if rendered.startswith("CREATE ROLE") else "write:login_grant")
++        return Cursor()
++
++
++class NormalInstallTests(unittest.TestCase):
++    @classmethod
++    def setUpClass(cls):
++        cls.bundle = INSTALL.load_bundle()
++        parent = os.environ.get("RETROLUME_NORMAL_TEST_SCRATCH", tempfile.gettempdir())
++        cls.scratch = Path(tempfile.mkdtemp(prefix="normal-install-", dir=parent)).absolute()
++
++    def setUp(self):
++        self.work = Path(tempfile.mkdtemp(prefix="case-", dir=self.scratch))
++        self.example = INSTALL.load_config(EXAMPLE)
++
++    def complete_config(self):
++        config = copy.deepcopy(self.example)
++        config["enabled"] = True
++        config["target"].update(port=55464, database="normal_empty", system_identifier="1234567890123456789", database_oid=16400,
++                                installer_login="bootstrap_admin")
++        config["roles"].update(business_login="normal_business", snapshot_login="normal_snapshot")
++        config["identities"].update(dataset_id="00000000-0000-4000-8000-000000000001",
++                                    instance_id="00000000-0000-4000-8000-000000000002",
++                                    originals_root_id="00000000-0000-4000-8000-000000000003")
++        return config
++
++    def credentials(self, config):
++        return {name: "synthetic_" + str(index) + "_credential_sentinel" for index, name in enumerate(config["credential_env"].values())}
++
++    def write_config(self, value):
++        path = self.work / "input.json"
++        path.write_text(json.dumps(value), encoding="utf-8")
++        return path
++
++    def cli(self, argv):
++        output, error = io.StringIO(), io.StringIO()
++        with redirect_stdout(output), redirect_stderr(error):
++            try:
++                code = INSTALL.main(argv)
++            except SystemExit as exc:
++                code = exc.code
++        return code, output.getvalue() + error.getvalue()
++
++    def copy_bundle(self):
++        root = self.work / "product"
++        for rel in ("deploy/normal_install_manifest.json",) + tuple("backend/migrations/" + n for n in INSTALL.MIGRATIONS) + INSTALL.TEMPLATES:
++            path = root / rel
++            path.parent.mkdir(parents=True, exist_ok=True)
++            shutil.copyfile(ROOT / rel, path)
++        return root
++
++    def test_01_default_help_bad_arguments_and_plan_have_no_runtime_effect(self):
++        import builtins
++        real_import = builtins.__import__
++        forbidden = ("app.main", "app.data_exit.control", "app.data_exit.config", "app.q_authority")
++
++        def restricted_import(name, *args, **kwargs):
++            if name.startswith(forbidden):
++                raise AssertionError("runtime_import")
++            return real_import(name, *args, **kwargs)
++
++        def deny(*unused, **kwargs):
++            raise AssertionError("forbidden_effect")
++
++        environment_get = os.environ.get
++
++        def guarded_environment(name, *args):
++            if name.startswith(("RETROLUME_", "PG", "OPENAI_", "DEEPSEEK_", "ZHIPU_")):
++                raise AssertionError("credential_environment_read")
++            return environment_get(name, *args)
++
++        with patch.object(INSTALL.os.environ, "get", side_effect=guarded_environment), patch.object(subprocess, "Popen", side_effect=deny), \
++                patch.object(INSTALL, "connect", side_effect=deny), patch.object(builtins, "__import__", side_effect=restricted_import):
++            for argv in ([], ["--help"], ["plan", "--help"], ["apply", "--help"], ["verify", "--help"],
++                         ["plan", "--config", str(EXAMPLE)]):
++                with self.subTest(argv=argv[:1]):
++                    code, unused = self.cli(argv)
++                    self.assertEqual(code, 0)
++            code, output = self.cli(["--unknown", "sentinel_" + "dsn_secret"])
++            self.assertEqual(code, 2)
++            self.assertTrue("sentinel_" + "dsn_secret" not in output, "argument_exposed")
++
++    def test_02_plan_is_repeatable_closed_and_does_not_make_identities(self):
++        before = set(self.work.iterdir())
++        first = INSTALL.plan(self.bundle, self.example)
++        second = INSTALL.plan(self.bundle, self.example)
++        self.assertEqual(first, second)
++        self.assertEqual(before, set(self.work.iterdir()))
++        self.assertFalse(first["local_inputs_complete"])
++        self.assertFalse(first["installed"])
++        self.assertFalse(first["verified"])
++        self.assertTrue(all(v is None for v in first["observed"].values()))
++        self.assertTrue(all(v is None for v in self.example["runtime_configs"].values()))
++
++    def test_03_missing_and_extra_sql_are_rejected(self):
++        root = self.copy_bundle()
++        path = root / "backend/migrations" / INSTALL.MIGRATIONS[0]
++        raw = path.read_bytes()
++        path.unlink()
++        with self.assertRaisesRegex(INSTALL.InstallError, "migration_set_mismatch"):
++            INSTALL.load_bundle(root)
++        path.write_bytes(raw)
++        (path.parent / "016_unadopted.sql").write_text("SELECT 1", encoding="utf-8")
++        with self.assertRaisesRegex(INSTALL.InstallError, "migration_set_mismatch"):
++            INSTALL.load_bundle(root)
++
++    def test_04_manifest_order_extra_and_hash_edits_are_rejected(self):
++        root = self.copy_bundle()
++        path = root / "deploy/normal_install_manifest.json"
++        original = json.loads(path.read_text(encoding="utf-8"))
++        for change in ("order", "extra", "hash"):
++            value = copy.deepcopy(original)
++            if change == "order":
++                value["migrations"].reverse()
++            elif change == "extra":
++                value["migrations"].append(value["migrations"][-1])
++            else:
++                value["migrations"][0]["sha256"] = "0" * 64
++            path.write_text(json.dumps(value), encoding="utf-8")
++            with self.subTest(change=change), self.assertRaisesRegex(INSTALL.InstallError, "manifest_mismatch"):
++                INSTALL.load_bundle(root)
++
++    def test_05_original_sql_byte_drift_is_rejected(self):
++        root = self.copy_bundle()
++        path = root / "backend/migrations" / INSTALL.MIGRATIONS[0]
++        path.write_bytes(path.read_bytes() + b"\n")
++        with self.assertRaisesRegex(INSTALL.InstallError, "migration_hash_mismatch"):
++            INSTALL.load_bundle(root)
++
++    def test_06_profile_identifiers_and_runtime_enablement_are_rejected(self):
++        for change in ("profile", "identifier", "runtime", "overlap"):
++            value = self.complete_config()
++            if change == "profile":
++                value["schema_profile"] = "data_exit.v1.r02"
++            elif change == "identifier":
++                value["roles"]["business_login"] = 'bad";role'
++            elif change == "runtime":
++                value["runtime_configs"]["integration"] = "enabled.json"
++            else:
++                value["roles"]["snapshot_login"] = value["roles"]["business_login"]
++            with self.subTest(change=change), self.assertRaises(INSTALL.InstallError):
++                INSTALL.load_config(self.write_config(value))
++
++    def test_07_plan_entry_rejects_output_conflicts_and_path_escape(self):
++        output = self.work / "plan.json"
++        args = ["plan", "--config", str(EXAMPLE), "--output", str(output)]
++        self.assertEqual(self.cli(args)[0], 0)
++        raw = output.read_bytes()
++        self.assertEqual(self.cli(args)[0], 2)
++        self.assertEqual(output.read_bytes(), raw)
++        for path in (self.work / ".." / "escape.json", ROOT / "deploy/new-output.json", self.work / "file:stream", self.work / "NUL"):
++            self.assertEqual(self.cli(args[:-1] + [str(path)])[0], 2)
++
++    def test_08_real_junction_or_symlink_is_rejected(self):
++        provided = os.environ.get("RETROLUME_NORMAL_TEST_JUNCTION")
++        target, junction = self.work / "target", self.work / "junction"
++        target.mkdir()
++        if provided:
++            # 受限沙箱允许读 reparse 元数据；夹具由测试操作者预建在同一 scratch。
++            junction = Path(provided)
++            self.assertTrue(junction.is_absolute() and junction.parent.is_relative_to(self.scratch.parent))
++            self.assertTrue(getattr(junction.lstat(), "st_file_attributes", 0) & 0x400)
++            self.assertTrue(junction.resolve().is_relative_to(self.scratch.parent))
++        elif os.name == "nt":
++            junction.mkdir()
++            kernel = ctypes.WinDLL("kernel32", use_last_error=True)
++            kernel.CreateFileW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p,
++                                          ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p]
++            kernel.CreateFileW.restype = ctypes.c_void_p
++            kernel.DeviceIoControl.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32,
++                                              ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p]
++            kernel.CloseHandle.argtypes = [ctypes.c_void_p]
++            substitute = ("\\??\\" + str(target)).encode("utf-16-le")
++            printable = str(target).encode("utf-16-le")
++            paths = substitute + b"\0\0" + printable + b"\0\0"
++            data = struct.pack("<LHHHHHH", 0xA0000003, 8 + len(paths), 0, 0, len(substitute), len(substitute) + 2, len(printable)) + paths
++            handle = kernel.CreateFileW(str(junction), 0x40000000, 0, None, 3, 0x02200000, None)
++            self.assertTrue(handle not in (None, ctypes.c_void_p(-1).value), "junction_handle_failed")
++            try:
++                buffer, returned = ctypes.create_string_buffer(data), ctypes.c_uint32()
++                self.assertTrue(kernel.DeviceIoControl(handle, 0x900A4, buffer, len(data), None, 0, ctypes.byref(returned), None), "junction_create_failed")
++            finally:
++                kernel.CloseHandle(handle)
++        else:
++            junction.symlink_to(target, target_is_directory=True)
++        with self.assertRaisesRegex(INSTALL.InstallError, "unsafe_path"):
++            INSTALL.safe_path(junction / "plan.json", existing=False)
++        self.assertEqual(self.cli(["plan", "--config", str(EXAMPLE), "--output", str(junction / "plan.json")])[0], 2)
++
++    def test_09_disabled_apply_does_not_read_credentials_or_connect(self):
++        with patch.object(INSTALL.os.environ, "get", side_effect=AssertionError("env_read")):
++            with self.assertRaisesRegex(INSTALL.InstallError, "apply_inputs_incomplete"):
++                INSTALL.apply(self.bundle, self.example, self.work / "receipt.jsonl", connector=lambda *unused: self.fail("connected"))
++        self.assertFalse((self.work / "receipt.jsonl").exists())
++
++    def test_10_preflight_refusals_have_zero_write_requests(self):
++        config = self.complete_config()
++        for number, option in enumerate(({"mismatch": True}, {"nonempty": True}, {"collision": True}, {"vector": "0.8.5"})):
++            recorder = Recorder(config, self.bundle, **option)
++            with self.subTest(option=number), patch.dict(os.environ, self.credentials(config), clear=True):
++                with self.assertRaises(INSTALL.InstallError):
++                    INSTALL.apply(self.bundle, config, self.work / (str(number) + ".jsonl"), connector=lambda *unused: recorder)
++            self.assertFalse(any(c.startswith("write:") for c in recorder.calls))
++            self.assertIn("read_only_end", recorder.calls)
++
++    def test_11_apply_order_raw_chain_control_and_role_separation(self):
++        config = self.complete_config()
++        recorder, receipt = Recorder(config, self.bundle, server_address="172.18.0.2"), self.work / "receipt.jsonl"
++
++        def verify(connection, bundle, current):
++            self.assertTrue(connection.readonly)
++            connection.calls.append("role_schema_check")
++
++        with patch.dict(os.environ, self.credentials(config), clear=True):
++            result = INSTALL.apply(self.bundle, config, receipt, connector=lambda *unused: recorder, verifier=verify)
++        self.assertEqual(result["confirmed_stages"], list(INSTALL.STAGES))
++        self.assertLess(recorder.calls.index("version_read"), recorder.calls.index("write:001"))
++        self.assertLess(recorder.calls.index("write:013"), recorder.calls.index("write:normal_control"))
++        self.assertLess(recorder.calls.index("write:normal_control"), recorder.calls.index("write:014"))
++        self.assertLess(recorder.calls.index("write:015"), recorder.calls.index("write:login_ddl"))
++        self.assertEqual(recorder.calls.count("write:login_ddl"), 2)
++        INSTALL.complete_receipt(receipt, self.bundle, config)
++        text = receipt.read_text(encoding="utf-8")
++        self.assertTrue(all(value not in text and INSTALL.sha256(value.encode()) not in text for value in self.credentials(config).values()), "receipt_secret_exposed")
++
++    def test_12_unknown_commit_preserves_prior_stage_and_blocks_replay(self):
++        config, receipt = self.complete_config(), self.work / "partial.jsonl"
++        recorder = Recorder(config, self.bundle, fail_stage="002")
++        with patch.dict(os.environ, self.credentials(config), clear=True):
++            with self.assertRaisesRegex(INSTALL.InstallError, "commit_unknown"):
++                INSTALL.apply(self.bundle, config, receipt, connector=lambda *unused: recorder)
++            before = list(recorder.calls)
++            with self.assertRaisesRegex(INSTALL.InstallError, "output_exists"):
++                INSTALL.apply(self.bundle, config, receipt, connector=lambda *unused: recorder)
++        self.assertEqual(recorder.calls, before)
++        rows = [json.loads(line) for line in receipt.read_text(encoding="utf-8").splitlines()]
++        self.assertEqual(rows[-1]["confirmed_stages"], ["001"])
++        self.assertEqual(rows[-1]["unknown_stage"], "002")
++        self.assertNotIn("write:003", recorder.calls)
++        self.assertTrue("sentinel_" + "dsn_secret" not in receipt.read_text(encoding="utf-8"), "driver_detail_exposed")
++        with self.assertRaisesRegex(INSTALL.InstallError, "receipt_incomplete"):
++            INSTALL.verify(self.bundle, config, receipt, connector=lambda *unused: self.fail("connected"))
++
++    def test_13_complete_receipt_allows_only_readonly_recheck(self):
++        config, receipt = self.complete_config(), self.work / "complete.jsonl"
++        first = Recorder(config, self.bundle)
++        with patch.dict(os.environ, self.credentials(config), clear=True):
++            INSTALL.apply(self.bundle, config, receipt, connector=lambda *unused: first, verifier=lambda *unused: None)
++        original = receipt.read_bytes()
++        second = Recorder(config, self.bundle)
++        only = {config["credential_env"]["installer_password"]: next(iter(self.credentials(config).values()))}
++        with patch.dict(os.environ, only, clear=True):
++            result = INSTALL.verify(self.bundle, config, receipt, connector=lambda *unused: second, verifier=lambda *unused: None)
++        self.assertEqual(result["status"], "readonly_rechecked")
++        self.assertEqual(receipt.read_bytes(), original)
++        self.assertFalse(any(c.startswith("write:") for c in second.calls))
++        bad = self.complete_config()
++        bad["target"]["database_oid"] += 1
++        with self.assertRaises(INSTALL.InstallError):
++            INSTALL.verify(self.bundle, bad, receipt, connector=lambda *unused: self.fail("connected"))
++
++    def test_14_existing_pure_role_checker_accepts_intended_separate_logins(self):
++        from app.data_exit.q_roles import check_role_capabilities
++        config = self.complete_config()
++        roles, members, unused, unused_edge = role_samples(config)
++        result = check_role_capabilities(roles, members, INSTALL.PROFILE)
++        audited = {r["role"]: r for r in result}
++        self.assertIn(config["roles"]["business_login"], audited)
++        self.assertEqual(audited[config["roles"]["snapshot_login"]]["purpose"], ["retrolume_data_snapshot"])
++
++    def test_15_existing_checker_rejects_transitive_set_inherit_admin_and_cross_purpose(self):
++        from app.data_exit.contracts import DataError
++        from app.data_exit.q_roles import check_role_capabilities
++        config = self.complete_config()
++        for mode in ("set", "inherit", "admin", "owner", "snapshot_write", "management"):
++            roles, members, by_name, edge = role_samples(config)
++            business = config["roles"]["business_login"]
++            if mode in ("set", "management"):
++                by_name["danger"]["rolsuper"] = True
++                members.extend((edge(business, "bridge", inherit=False, setting=True), edge("bridge", "danger", inherit=False, setting=True)))
++            elif mode == "inherit":
++                by_name["danger"]["database_create"] = True
++                members.extend((edge(business, "bridge"), edge("bridge", "danger")))
++            elif mode == "admin":
++                by_name["danger"]["rolcreaterole"] = True
++                members.extend((edge(business, "bridge"), edge("bridge", "danger", inherit=False, admin=True)))
++            elif mode == "owner":
++                members.append(edge(business, "retrolume_memory_owner"))
++            else:
++                members.append(edge(config["roles"]["snapshot_login"], "retrolume_data_app"))
++            with self.subTest(mode=mode), self.assertRaises(DataError):
++                check_role_capabilities(roles, members, INSTALL.PROFILE)
++
++    def test_16_production_verifier_reuses_schema_and_capability_checks(self):
++        config = self.complete_config()
++        from app.data_exit.q_roles import ROLE_CAPABILITIES, MEMBERSHIPS, check_role_capabilities
++        from app.data_exit.schema_profiles import get_profile
++        roles, members, unused, unused_edge = role_samples(config)
++        schema_calls = []
++
++        class CheckRecorder:
++            def execute(self, query):
++                if query == ROLE_CAPABILITIES:
++                    return Cursor(many=roles)
++                if query == MEMBERSHIPS:
++                    return Cursor(many=members)
++                return Cursor(one=dict(config["identities"], schema_profile=INSTALL.PROFILE, mode="normal"))
++
++        with patch.object(INSTALL, "product_checks", return_value=(lambda conn, profile: schema_calls.append(profile),
++                           ROLE_CAPABILITIES, MEMBERSHIPS, check_role_capabilities, get_profile)):
++            INSTALL.verify_installed(CheckRecorder(), self.bundle, config)
++        self.assertEqual(schema_calls, [INSTALL.PROFILE])
++
++    def test_17_redacted_cli_failure_and_runtime_dependency_boundary(self):
++        config = self.complete_config()
++        path = self.write_config(config)
++        secret = "sentinel_" + "dsn_secret"
++        with patch.object(INSTALL, "apply", side_effect=RuntimeError(secret)):
++            code, output = self.cli(["apply", "--config", str(path), "--receipt", str(self.work / "out.jsonl")])
++        self.assertEqual(code, 2)
++        self.assertTrue(secret not in output, "driver_detail_exposed")
++        source = (ROOT / "deploy/initialize_normal.py").read_text(encoding="utf-8")
++        for forbidden in ("DocuN", "fixtures", "tests/", "project_NO3_", "项目开发提示词", "sitecustomize", "TESTONLY"):
++            self.assertNotIn(forbidden, source)
++
++    def test_18_help_documentation_and_original_startup_arguments_agree(self):
++        for action in ("plan", "apply", "verify"):
++            code, output = self.cli([action, "--help"])
++            self.assertEqual(code, 0)
++            self.assertIn("--config", output)
++            self.assertIn("--output" if action == "plan" else "--receipt", output)
++        import ast
++        tree = ast.parse((ROOT / "deploy/start_local.py").read_text(encoding="utf-8-sig"))
++        options = {arg.value for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
++                   and n.func.attr == "add_argument" for arg in n.args if isinstance(arg, ast.Constant) and isinstance(arg.value, str)}
++        self.assertTrue({"--container", "--port", "--shutdown-stdin"} <= options)
++        self.assertFalse({"--profile", "--migrate", "--initialize"} & options)
++        doc = (ROOT / "deploy/normal-install.md").read_text(encoding="utf-8")
++        self.assertTrue(all(option in doc for option in ("--config", "--output", "--receipt", "--shutdown-stdin")))
++
++
++if __name__ == "__main__":
++    unittest.main()
+--- a/README.md
++++ b/README.md
+@@ -30,7 +30,7 @@
+ 
+ 设置两个互相独立、已存在的绝对目录：`RETROLUME_DATA_DIR` 与 `RETROLUME_BACKUP_DIR`。资料与备份可位于项目外，但它们是数据配置，不能指向外部源码。可参考 `config/local.env.example`，不要提交真实路径、连接串或密码。
+ 
+-若要连接既有本地 PostgreSQL，再在当前会话设置 `RETROLUME_DATABASE_URL`，或在 `config/database.local.json` 保存仅本机使用的私有配置（该文件已忽略）。应用不会自动创建数据库或迁移用户库。`deploy/initialize-materials.py` 仅供另行明确批准的新库首次初始化。模型调用需要完整配置和用户显式动作，读取、零费新建及刷新不会启动模型。
++若要连接既有本地 PostgreSQL，再在当前会话设置 `RETROLUME_DATABASE_URL`，或在 `config/database.local.json` 保存仅本机使用的私有配置（该文件已忽略）。应用不会自动创建数据库或迁移用户库。旧 `deploy/initialize-materials.py` 仅处理001；完整001—015首次空库安装使用 [正常首次安装说明](deploy/normal-install.md) 中的 `deploy/initialize_normal.py`，默认只显示帮助，`plan` 无数据库操作，真实 `apply` 仍需另行精确许可与独立风险审查。模型调用需要完整配置和用户显式动作，读取、零费新建及刷新不会启动模型。
+ 
+ 开发健康检查可在设置上述两个目录后运行：
+ 

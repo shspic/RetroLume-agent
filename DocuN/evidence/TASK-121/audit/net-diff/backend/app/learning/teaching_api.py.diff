@@ -1,0 +1,39 @@
+--- initial/backend/app/learning/teaching_api.py
++++ final/backend/app/learning/teaching_api.py
+@@ -100,10 +100,12 @@
+     _guard(request)
+     activity_id = _uuid_text(activity_id, "activity_id")
+     body = await _read_bounded_body(request)
+     try:
+         command = TeachingCommandInput.model_validate(body, strict=True)
++        from app.capabilities.q_context import check_input_bytes
++        check_input_bytes(body,command,_config(request).model_service)
+     except Exception:
+         raise _error(422, "invalid_input", "教学命令字段或类型非法") from None
+     try:
+         receipt = await _service(request).submit_command(
+             activity_id, command, _config(request),
+@@ -125,10 +127,11 @@
+         "applied_revision": receipt.applied_revision,
+         "head_revision_now": receipt.head_revision_now,
+         "qualification": receipt.qualification, "error_code": receipt.error_code,
+         "model_called": receipt.model_called, "tool_called": receipt.tool_called,
+         "retry_policy": receipt.retry_policy, "exposed_part": receipt.exposed_part,
++        "outbound_approval":receipt.outbound_approval,
+     }
+ 
+ 
+ @router.get("/{activity_id}/teaching/commands/{business_key}")
+ async def read_teaching_command(request: Request, activity_id: str, business_key: str):
+@@ -159,10 +162,11 @@
+             and row['obsolete_at'] is None and row['abandoned_at'] is None else
+             "read_only" if row["status"] in ('accepted','started','unknown') else
+             "explicit_new_key_after_confirmed_failure" if row["status"] in ('failed','not_sent') else "none",
+         "created_at":row["created_at"],"launch_claimed_at":row["launch_claimed_at"],
+         "obsolete_at":row["obsolete_at"],"abandoned_at":row["abandoned_at"],"exposed_part":None}
++    result['outbound_approval']=current.get('outbound_approval')
+     return _public_response(result,65536)
+ 
+ 
+ @router.get("/{activity_id}/teaching/workspace")
+ async def read_teaching_workspace(request: Request, activity_id: str, history_limit: int = 20):

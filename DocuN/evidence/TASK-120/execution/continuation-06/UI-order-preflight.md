@@ -1,0 +1,14 @@
+# 续作06最后两项UI的有限顺序核对
+
+本核对在新源永久冻结和工厂创建之前保存。B的正常移除、负例与真实收缩K2先完成，金融/范围checkpoint先落盘。
+
+1. 使用正常生产应用、新R03源和既有最低传输替身，仅形成一个A1 legacy first父。旧活动/批准均不复用为新执行资格。一个Browser/context/page打开正式bundle。
+2. 经UI形成两个独立待批准续问，逐个本机批准；每次真实intent GET200完整取得原headers/body后，只暂停浏览器交付。第一次捕获后通过正常视图往返释放组件busy，再形成第二次；源仍normal，两个can_continue均真实为true。每个立即落盘路由、业务键、六字段身份及字节hash。
+3. 两个响应都捕获后，调用正常POST /api/data/jobs形成restore_checkpoint，等待published。已读snapshot.capture与capture_and_publish：此备份使用正常只读快照/RootLease，不冻结源；即使以后正常链触发维护，此时两个响应也已取得。
+4. 生产maintenance.drain_for_readonly_switch冻结源并正常关闭lease。不在冻结后重新取Q正常响应或构造authority。UI进入数据与备份，生产capabilities刷新后核六字段与后续真实请求header：namespace保持，mode/read_only改变。等待该刷新链完成再释放响应1，记录真实native fetch完成/正文解析调用和界面、草稿、台账不变。
+5. 用生产文件上传、restore-plan、restore-jobs→verified及TargetFactory.allocate。创建前两端口实际bind核对；create/start先计数，返回CID立即登记，父控制器和watchdog预先覆盖精确目标清场。工厂正常初始化015、加载、seal与readonly probe，不手写verified或selector。
+6. 为使真实namespace晚到路径留在同一文档，先发起生产capabilities刷新，fixture在已通过真实local_session检查后的caps方法入口设置一次有限barrier，再由独立HTTP请求正常activate_readonly。此真实并发请求合法在令牌轮换前通过认证，caps在生产selector/rebind提交后读取新状态；不改body、header、token、客户端setter或认证判断。中间件按请求入口写原header，caps body为实际新状态，二者原样保存，沿既有bootstrap canAdvance处理。caps barrier finally释放且有20秒硬界。
+7. UI通过生产capabilities body和实际后续请求header观察新dataset/instance/generation及完整只读状态，等待刷新链结束；轮换后旧token读取的401如实记录，不冒称新会话读取成功。此时释放响应2，真实原fetch可到达既有响应守卫；记录零业务正文消费/零自动POST以及当前内容、输入、localStorage/IDB身份台账不变。若实际发生abort，保存真实传输事实并保留覆盖限制，不能只写取消标签或假称handler消费。
+8. 释放两个barrier后正常重新bootstrap会话，验证恢复目标只读查看、实际storage namespace，以及金融副本分账不提供新额度。每个子例独立checkpoint。最后关闭Browser/API/业务Job，精确停止源和实际目标CID、核三端口，数据/容器/卷全部保留。
+
+本夹具仅观测和有限暂停实际响应/调用点，不注入响应字节，不扩大公开接口。未知失败先核持久事实，不重发已claim，不再建目标，不解除永久冻结。

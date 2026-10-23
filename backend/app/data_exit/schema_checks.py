@@ -52,21 +52,26 @@ def check_data_shape(rows,roles,triggers,constraints,profile='data_exit.v1.r01')
 
 def assert_data_schema_sync(connection,profile=None):
     from .schema import DATA_FUNCTIONS
-    from .schema_profiles import observed_profile,get_profile,R02,extra_shape_queries,check_extra_shape
+    from .schema_profiles import observed_profile,get_profile,R02,R03,extra_shape_queries,check_extra_shape,SCOPE_ACL_QUERY,check_scope_permissions
     profile=get_profile(profile) if profile is not None else observed_profile(connection)
+    from .q_roles import assert_roles_sync
+    assert_roles_sync(connection,profile.name)
     rows=connection.execute(FUNCTION_QUERY,(list(DATA_FUNCTIONS),)).fetchall()
     roles=connection.execute(ROLE_QUERY,(DATA_ROLES,)).fetchall()
     triggers=connection.execute(TRIGGER_QUERY).fetchall()
     check_data_shape(rows,roles,triggers,connection.execute(CONSTRAINT_QUERY).fetchall(),profile.name)
-    if profile.name==R02:
+    check_scope_permissions(connection.execute(SCOPE_ACL_QUERY).fetchall(),profile.name)
+    if profile.name in (R02,R03):
         shape={key:connection.execute(query).fetchall() for key,query in extra_shape_queries().items()}
-        check_extra_shape(shape)
+        check_extra_shape(shape,profile.name)
 
 
 async def assert_data_schema(connection):
     from .schema import DATA_FUNCTIONS
-    from .schema_profiles import observed_profile_async,R02,extra_shape_queries,check_extra_shape
+    from .schema_profiles import observed_profile_async,R02,R03,extra_shape_queries,check_extra_shape,SCOPE_ACL_QUERY,check_scope_permissions
     profile=await observed_profile_async(connection)
+    from .q_roles import assert_roles
+    await assert_roles(connection,profile.name)
     cursor=await connection.execute(FUNCTION_QUERY,(list(DATA_FUNCTIONS),))
     rows=await cursor.fetchall()
     cursor=await connection.execute(ROLE_QUERY,(DATA_ROLES,))
@@ -75,11 +80,13 @@ async def assert_data_schema(connection):
     triggers=await cursor.fetchall()
     cursor=await connection.execute(CONSTRAINT_QUERY)
     check_data_shape(rows,roles,triggers,await cursor.fetchall(),profile.name)
-    if profile.name==R02:
+    cursor=await connection.execute(SCOPE_ACL_QUERY)
+    check_scope_permissions(await cursor.fetchall(),profile.name)
+    if profile.name in (R02,R03):
         shape={}
         for key,query in extra_shape_queries().items():
             cursor=await connection.execute(query);shape[key]=await cursor.fetchall()
-        check_extra_shape(shape)
+        check_extra_shape(shape,profile.name)
 
 
 async def schema_mode(connection):
@@ -94,8 +101,8 @@ def legacy_business_shape(shape):
     """核十三版精确新增后投影回十二版指纹，任意额外授权仍会失败。"""
     import copy
     from .schema import BUSINESS_FUNCTIONS_013,LEGACY_FUNCTION_SOURCES
-    from .schema_profiles import project_014
-    shape=project_014(shape)
+    from .schema_profiles import project_014,project_scope_permission
+    shape=project_014(project_scope_permission(shape))
     result=copy.deepcopy(shape)
     allowed={'retrolume_data_snapshot':{'r'},'retrolume_data_restore_loader':{'ar','ra'},'retrolume_data_owner':{'r'}}
     runtime_tables={'material_sources','material_versions','pdf_review_candidates','pdf_extracted_pages','pdf_review_pages',

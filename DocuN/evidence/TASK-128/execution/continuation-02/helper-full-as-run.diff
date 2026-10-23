@@ -1,0 +1,77 @@
+--- entry07/as-run
++++ entry08/as-run
+@@ -70,7 +70,7 @@
+         self.state["entries"] += 1
+         self.entry = self.state["entries"]
+         self.entry_clock = time.monotonic()
+-        self.preparation_conservative_seconds = 8700
++        self.preparation_conservative_seconds = 9000
+         self.run = E / ("entry-" + str(self.entry).zfill(2))
+         self.run.mkdir(exist_ok=False)
+         self.redactions, self.credentials = [], {}
+@@ -445,6 +445,7 @@
+         require(self.state["api_starts"] < 3, "api_start_cap")
+         target = self.state["slots"]["source"]
+         before = self.database_facts("source")
++        self.evidence("api-"+str(index)+"-database-before.json",before)
+         if not self.state.get("api_port"):self.state["api_port"] = self.choose_port([18122, 18124, 18126], "api")
+         self.state["api_starts"] += 1
+         self.save()
+@@ -515,6 +516,7 @@
+                 "source": hub_state["source"], "binding": binding, "listener": listeners, "processes": [{"pid": ref.pid, "birth": ref.birth} for ref in self.api_refs],
+                 "actual_pg_stat_activity": login_observations, "pg_already_started_by_controller": True, "admin_environment_inherited": False})
+         finally:
++            close_requested = time.monotonic()
+             if process.poll() is None:
+                 seen={ref.pid for ref in self.api_refs}
+                 for pid in WIN.descendants(process.pid):
+@@ -524,24 +526,34 @@
+             if process.poll() is None:
+                 try:process.stdin.write(b"stop\n"); process.stdin.flush()
+                 except (OSError, ValueError):pass
++                try:process.stdin.close()
++                except OSError:pass
+             try:process.wait(timeout=220)
+             except subprocess.TimeoutExpired:
+                 for ref in reversed(self.api_refs):ref.stop()
+                 process.wait(timeout=10)
+             drain_thread.join(timeout=3)
+             login_stop.set(); login_thread.join(timeout=5)
++            # 父进程退出与后代句柄信号存在短暂先后，按原生170秒上界等待收尾。
++            descendant_wait_started=time.monotonic()
++            initial_stop=[{"pid":ref.pid,"birth":ref.birth,"exited":not ref.alive()} for ref in self.api_refs]
++            while any(ref.alive() for ref in self.api_refs) and time.monotonic()-close_requested<170:
++                time.sleep(.05)
+             interval.update(seconds=time.time() - interval["start_epoch"], stopped=utc(), exit_code=process.returncode)
+             status = [{"pid": ref.pid, "birth": ref.birth, "exited": not ref.alive()} for ref in self.api_refs]
+-            require(all(ref["exited"] for ref in status), "api_tree_stop_unconfirmed")
+             for ref in self.api_refs:ref.close()
+             self.api_refs = []; self.active_api = None
+             listeners_after = WIN.port_owners({self.state["api_port"]})
+             self.evidence("api-" + str(index) + "-output.json", {"output": output.decode("utf-8", errors="replace"), "stop_proof": status,
+-                "listener_after": listeners_after, "interval": interval, "login_observations": login_observations})
++                "listener_after": listeners_after, "interval": interval, "login_observations": login_observations,
++                "immediate_stop_observation":initial_stop,"descendant_wait_seconds":time.monotonic()-descendant_wait_started})
+             self.save()
++            require(all(ref["exited"] for ref in status), "api_tree_stop_unconfirmed")
+             require(not any(row["state"] == 2 for row in listeners_after), "api_listener_stop_unconfirmed")
+             require(process.returncode == 0, "native_shutdown_not_clean")
+-        require(self.database_facts("source") == before, "business_data_changed_by_native_reopen")
++        after=self.database_facts("source")
++        self.evidence("api-"+str(index)+"-database-after.json",after)
++        require(after == before, "business_data_changed_by_native_reopen")
+         self.state.setdefault("api_completed", []).append(index); self.save()
+ 
+     def check4(self):
+@@ -615,10 +627,8 @@
+             receipt=Path(self.state["slots"]["source"]["successful_receipt"])
+             require(digest(receipt.read_bytes())=="a2211aa56f0497ef55e2ff42f4ea2e6b3b50bb3049cca62cbd5ef06844df6f06","source_receipt_drift")
+             # Fifth item is independent and remains unique even on a resumed entry.
+-            stage("5",self.check5)
+-            if self.state["slots"]["interrupted"].get("holding"):self.stop_pg("interrupted")
++            require(self.state["checks"].get("5",{}).get("status")=="passed" and self.state["checks"].get("6",{}).get("status")=="passed", "backup_requires_existing_fifth_and_sixth_pass")
+             self.start_pg("source")
+-            stage("6",self.check6)
+             if stage("api1",lambda:self.api_once(1)):
+                 self.state["source_after_first_api"]={"facts":self.database_facts("source"),"control_id":self.state["slots"]["source"]["control_id"]};self.save()
+                 self.stop_pg("source")

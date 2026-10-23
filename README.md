@@ -1,8 +1,8 @@
 # RetroLume 本地工程入口
 
-本目录为 RetroLume 本地工程，提供资料、学习、文字面试、低信任记忆和隔离只读恢复入口。STEP018 的混合检索集成仍在 TASK117 合成候选收口中；实际验收状态以 [执行动态文档](DocuS/执行动态文档.MD) 为准。合成传输与真实供应商语义分别验证。
+本目录为 RetroLume 本地工程，提供资料、学习、文字面试、低信任记忆和隔离只读恢复入口。STEP018 的 Q v2 有限工程切片已验收关闭，真实供应商语义仍待前置核齐后的有限验证；实际验收状态以 [执行动态文档](DocuS/执行动态文档.MD) 为准。
 
-TASK117 S08已形成四项缺陷修正的合成工程候选，正式bundle8完成八项定向浏览器检查；等待原TASK118增量独审，Q继续冻结。已有PG、恢复、PDF和固定预览证据按原版本继承，本轮未重跑这些业务链，也未启用真实供应商或费用。
+2026-10-21，主控已关闭 TASK120 有限工程交付并接受 TASK121 review02 的五项关闭结论；历史执行控制不通过保留。Q 从未正式启用，T0/72小时尚未开始，真实调用与费用仍为0。TASK122只整理启用前置和操作包，账号、计量及正常部署门未核齐时继续关闭。下列TASK117/S06说明保留其历史适用范围。
 
 TASK117 的 S06 工程候选已补齐本轮定向证据，提交主控安排独立复核，真实供应商调用保持关闭。面试须先开始场次，再明确确认资料索引；模型动作等待持久目标正文核对就绪，并使用该版本的目标构造查询。合成 source/compat 已应用记忆资格的传递只读授权及删源触发器别名修补，通过受信目录与业务行不变检查。该事实只适用于本次两个合成库，不授权自动迁移用户库。
 
@@ -30,7 +30,9 @@ npm.cmd ci --ignore-scripts --no-audit --no-fund
 
 设置两个互相独立、已存在的绝对目录：`RETROLUME_DATA_DIR` 与 `RETROLUME_BACKUP_DIR`。资料与备份可位于项目外，但它们是数据配置，不能指向外部源码。可参考 `config/local.env.example`，不要提交真实路径、连接串或密码。
 
-若要连接既有本地 PostgreSQL，再在当前会话设置 `RETROLUME_DATABASE_URL`，或在 `config/database.local.json` 保存仅本机使用的私有配置（该文件已忽略）。应用不会自动创建数据库或迁移用户库。`deploy/initialize-materials.py` 仅供另行明确批准的新库首次初始化。模型调用需要完整配置和用户显式动作，读取、零费新建及刷新不会启动模型。
+若要连接既有本地 PostgreSQL，再在当前会话设置 `RETROLUME_DATABASE_URL`，或在 `config/database.local.json` 保存仅本机使用的私有配置（该文件已忽略）。应用不会自动创建数据库或迁移用户库。旧 `deploy/initialize-materials.py` 仅处理001；完整001—015首次空库安装使用 [正常首次安装说明](deploy/normal-install.md) 中的 `deploy/initialize_normal.py`，默认只显示帮助，`plan` 无数据库操作，真实 `apply` 仍需另行精确许可与独立风险审查。模型调用需要完整配置和用户显式动作，读取、零费新建及刷新不会启动模型。
+
+2026-10-23，TASK128批准的关闭出站正常安装六项有限成果已由主控验收通过并关闭，TASK129独审结论有效。正常API的storage_ready、normal/R03与跨PG重开只证明关闭出站的存储及控制面；模型和integration未加载，create仍因config_invalid不可用。Q保持冻结，T0/72小时尚未开始，真实调用与费用仍为0；真实模型完整学习／面试、28项Must及供应商计量、账号、完整模板、Embedding容量与启用前置仍未闭合。验收范围见[TASK128最终裁定](DocuN/results/TASK-128-work-decision.md)及上述正常首次安装说明。对已安装库不得重放迁移。
 
 开发健康检查可在设置上述两个目录后运行：
 
@@ -52,7 +54,7 @@ npm.cmd ci --ignore-scripts --no-audit --no-fund
 
 一次动作最多检查10个来源、合计5 MiB原件和512个候选片段，PDF最多50物理页。旧词项入口保持原有限行为。集成入口显式确认当前资料索引，再对本轮必要问题查询；512维向量与词项按固定规则合并，仍逐段核对当前原件。索引按每批最多4段预览次数和预留，缓存命中不重复索引。查询后还需一次模型时，先检查完整两次调用的次数、费用与时间余量；预览不替代服务器逐笔事务准入。同名歧义、证据不足和冲突保持可见，检索排序不证明结论正确。
 
-`RETROLUME_INTEGRATION_CONFIG` 指向私有配置，结构见 `config/integration.example.json`。真实外发需要主控采用的激活回执、独立审核结果、价格原件、不可重绑的 OutboundGrant 和实际 source/version/revision/原件哈希及必要片段白名单。grant 的 `source_manifest_sha256` 绑定 `retrolume.outbound-sources.v1` 规范JSON摘要，清单另保留冻结设计样本摘要；不能以文件名或64位格式检查替代范围核对。provider密钥只在服务器环境，不能通过浏览器、资料或operator预览票据批准模型外发。当前TASK117的Q未启用。
+`RETROLUME_INTEGRATION_CONFIG` 指向私有配置，结构见 `config/integration.example.json`。真实外发需要主控采用的激活回执、独立审核结果、价格原件、不可重绑的 OutboundGrant 和实际 source/version/revision/原件哈希及必要片段白名单。当前Q v2的grant以 `source_manifest_sha256` 绑定 `retrolume.outbound-sources.v2` 规范JSON摘要；旧v1清单只在其原兼容边界适用。清单另保留冻结设计样本摘要；不能以文件名或64位格式检查替代范围核对。provider密钥只在服务器环境，不能通过浏览器、资料或operator预览票据批准模型外发。当前Q仍未启用。后续S08的 `model_requests` 说明属于v1历史边界；当前v2使用本机逐请求精确批准。
 
 S08修正进一步要求模型清单批准完整发送范围。`model_requests`最多128项，每项只有`payload_sha256`和`request_sha256`，分别绑定规范JSON的完整供应商payload与`ModelCallRequest.model_dump(mode='json')`。payload包含模型、system/user/history、选用记忆及版本、派生上下文、输出/格式/工具等实际发送字段；仅批准资料片段不足以批准这些正文。空字段保持原Embedding清单摘要，旧清单的模型外发失败关闭。非空字段进入新的manifest摘要，loader、grant和私有wire必须共同绑定新值；不能改活动已绑定的grant或复用旧hash。准入和dispatch前核同一冻结对象，await中变化保留已预扣、停止发送，不退款或自动重发。
 
@@ -146,3 +148,18 @@ RETROLUME_DATA_DIR、RETROLUME_BACKUP_DIR、RETROLUME_RESTORE_ROOT、RETROLUME_C
 已保存记忆和派生历史在同一读取时点核对来源、事件与上游关系。资格失效、已删除或无法核对时隐藏正文，保留头、版本和原哈希。页面刷新只接受当前身份的新鲜回复；旧实例的材料、记录与未提交草稿不会自动迁到新只读身份。
 
 本机 CLI 为 deploy/data_restore.py，可读取 capabilities 和 job，或显式 prepare plan、verify 副本；验证须带 confirm-readonly 和原业务键。应用关闭仅停止本次启动的准确进程和数据库，保留容器、卷、备份及失败证据。当前能力为数据退出、隔离恢复验证与永久只读查看，尚不完成恢复后继续学习、付费调用、工具和预览执行的全部要求。
+
+## Q 逐请求批准
+
+Q v2 在本机准备完整不可变请求后等待 operator 精确批准；批准不自动执行，教学、面试、检索、旧资料问答和 HTML description 均须原键显式继续。刷新和重开只读取事实，已领取或 UNKNOWN 不得借重新批准重发。配置默认关闭，正常账号、计量、返回型号与适用独审尚未核实的条件保持 UNKNOWN；当前工程合成验证不开放真实 Q。
+
+惰性模板见 `config/q-approval.example.json`，逐步操作、CLI、共同 100 次／25 元条件上限、兼容与失败恢复见 [本机批准部署说明](deploy/q-approval.md)。批准日志不是费用账，导出或只读恢复不能恢复执行权；HTML 模型批准仍须独立满足原 host 权限。
+
+
+真实启用须先核当前官方能力、账号适用含税价、token/framing/额外计费上界、严格返回身份、正常服务器非敏感readiness及新normal绑定，再由主控保存首次启用回执。两个provider共用唯一100次/25元条件额度，三个固定活动分额48/28/24次及12/7/6元；示例配置、密钥存在、TESTONLY通过和本地批准都不代替该回执。
+
+正常operator使用同一受信本机身份，先inspect本次完整请求与实际字节，再交互输入精确APPROVE摘要，返回原页面GET核对并明确继续原键。已claim、可能已发或UNKNOWN只读对账；不得换key、重新批准重发或清空预算。部署配置与两个provider密钥只经正常服务器安全环境注入，不发送到聊天或浏览器。
+
+当前准备成果、正常配置字段、已知readiness缺口、默认关闭草案及一次后续操作包见 [TASK122前置结果](D:/shspic/project_NO3_RetroLume-agent/DocuN/results/TASK-122-result.md) 与 [后续操作包](D:/shspic/project_NO3_RetroLume-agent/DocuN/evidence/TASK-122/preparation/operation-runbook.md)。这些文档不创建资源、不启用Q；旧TESTONLY库、runner和运行许可继续封存。
+
+现有 capabilities 增加版本化只读字段 diagnostics.readiness，区分启动时候选、最终有效配置、两个 key 的存在性和未核资格；原 q_approval 不变。诊断只复制启动快照，不重新装载配置、绑定或批准，不追加数据库探测。摘要引用、配置 allowlist、key 存在与声明 verified 均不代表真实账号、计量或 normal 部署已经核证。字段和未知原因见 [本机批准部署说明](deploy/q-approval.md)；完整 GET 仍包含原 storage/memory 探测，须在获准启动后使用。

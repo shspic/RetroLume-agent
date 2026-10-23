@@ -1,0 +1,337 @@
+{
+  "schema": "retrolume.task122.command-ledger.v1",
+  "recorded_at": "2026-10-21T15:35:49.718Z",
+  "commands": [
+    {
+      "id": "bootstrap01",
+      "cmd": "Get-Location\nrg -n -C 3 -- 'RetroLume|overvalidation|规划|前置|baseline' 'C:\\Users\\28432\\.codex\\memories\\MEMORY.md'\nGet-Content -LiteralPath 'AGENTS.md' -Encoding UTF8\nGet-Content -LiteralPath 'DocuN\\tasks\\TASK-122.md' -Encoding UTF8\nGet-Content -LiteralPath 'DocuN\\evidence\\v4-migration-20260930\\rules-snapshot.json' -Encoding UTF8",
+      "exit_code": 0,
+      "wall_seconds": 1.3,
+      "started_at": "unknown; bounded by issued_at and first clock"
+    },
+    {
+      "id": "bootstrap02",
+      "cmd": "Get-Content -LiteralPath 'DocuN\\evidence\\TASK-122\\orchestration-20261021\\input-manifest.json' -Encoding UTF8\nGet-Content -LiteralPath 'DocuN\\evidence\\TASK-122\\orchestration-20261021\\permit.json' -Encoding UTF8\nGet-Content -LiteralPath 'DocuN\\evidence\\TASK-122\\orchestration-20261021\\handoff-facts.json' -Encoding UTF8\nGet-Content -LiteralPath 'D:\\spiritice\\AA文件\\MS_spi knowledge libraay\\obsidian_1\\&职业相关\\项目流程\\项目开发提示词V4\\DocuS\\AGENTS.MD' -Encoding UTF8\nrg -n -- '^#|task_model|授权|合同|验证|A\\+|身份|预算' 'D:\\spiritice\\AA文件\\MS_spi knowledge libraay\\obsidian_1\\&职业相关\\项目流程\\项目开发提示词V4\\DocuS\\WORK.MD'\nGet-Item -LiteralPath 'DocuS\\执行动态文档.MD','DocuN\\results\\TASK-119-result.md','DocuN\\results\\TASK-120-result.md','DocuN\\results\\TASK-121-result.md' | Select-Object FullName,Length",
+      "exit_code": 0,
+      "wall_seconds": 1.1237715,
+      "started_at": "before first reliable clock 2026-10-21T14:41:11Z",
+      "output_truncated": true
+    },
+    {
+      "id": "read03",
+      "cmd": "$rules = 'D:\\spiritice\\AA文件\\MS_spi knowledge libraay\\obsidian_1\\&职业相关\\项目流程\\项目开发提示词V4'\nGet-Content -LiteralPath \"$rules\\DocuS\\AGENTS.MD\" -Encoding UTF8\nGet-Content -LiteralPath \"$rules\\DocuS\\WORK.MD\" -Encoding UTF8 | Select-Object -First 52\nGet-Content -LiteralPath \"$rules\\DocuS\\WORK.MD\" -Encoding UTF8 | Select-Object -Skip 141 -First 74\nGet-Content -LiteralPath \"$rules\\task_model\\prompts\\07_开发执行循环.md\" -Encoding UTF8\nGet-Content -LiteralPath 'DocuN\\results\\TASK-119-work-decision.md' -Encoding UTF8\nGet-Content -LiteralPath 'DocuN\\evidence\\TASK-120\\orchestration-20261018\\adoption-receipt.json' -Encoding UTF8\nGet-Content -LiteralPath 'DocuN\\evidence\\TASK-120\\orchestration-closure-20261021\\closure-receipt.json' -Encoding UTF8\nGet-Item -LiteralPath '.', 'DocuN','DocuN\\evidence','DocuN\\evidence\\TASK-122','DocuN\\results','README.md' | Select-Object FullName,Attributes,LinkType,Target",
+      "exit_code": 0,
+      "wall_seconds": 1.010575,
+      "started_at": "2026-10-21T14:42:03.028Z"
+    },
+    {
+      "cmd": "@'\nimport hashlib,json,sys\nfrom pathlib import Path\nfrom datetime import datetime,timezone\nsys.stdout.reconfigure(encoding='utf-8')\nr=Path.cwd();o=r/'DocuN/evidence/TASK-122/preparation'\nm=json.loads((r/'DocuN/evidence/TASK-122/orchestration-20261021/input-manifest.json').read_text(encoding='utf-8-sig'))\nrows=[]\nfor e in m['rules']+m['inputs']+[m['main_finite_closure']]:\n p=Path(e.get('absolute_path',e.get('path')))\n if not p.is_absolute():p=r/p\n b=p.read_bytes();h=hashlib.sha256(b).hexdigest();rows.append({'path':str(p),'bytes':len(b),'expected':e['sha256'],'actual':h,'match':h==e['sha256']})\n(o/'input-identity.json').write_text(json.dumps({'checked_at':datetime.now(timezone.utc).isoformat(),'rows':rows},ensure_ascii=False,indent=2)+'\\n',encoding='utf-8')\nb=(r/'README.md').read_bytes();(o/'README.before.bin').write_bytes(b)\nreceipt={'task':'TASK-122','R':'R-116','role':'A+ enhanced executor','client':'Codex desktop','model_label':'GPT-6 (developer-provided agent family); exact deployed model id unknown','issued_at':m['frozen_at'],'first_reliable_clock_utc':'2026-10-21T14:41:11Z','receipt_exact_time':'unknown; use issued_at conservatively','calendar_deadline':'2026-10-22T22:37:01.283336+08:00','bootstrap_before_registration':True,'task_attempt':1,'previous_attempts':0,'real_Q':'FROZEN','T0':None,'provider_calls':0,'paid_cost_microunits':0,'README_before_sha256':hashlib.sha256(b).hexdigest(),'history_source':'../orchestration-20261021/handoff-facts.json','tools_cap_seconds':2400,'search_themes_cap':12,'official_documents_cap':24,'human_model_tokens':'unknown'}\n(o/'receipt.json').write_text(json.dumps(receipt,ensure_ascii=False,indent=2)+'\\n',encoding='utf-8')\nprint(json.dumps({'identities':len(rows),'mismatches':[x for x in rows if not x['match']],'README_backup_bytes':len(b),'receipt':receipt},ensure_ascii=False,indent=2))\n'@ | python -\npython DocuN/evidence/TASK-122/preparation/read_inputs.py 'D:/spiritice/AA文件/MS_spi knowledge libraay/obsidian_1/&职业相关/项目流程/项目开发提示词V4/DocuS/WORK.MD::25::52' 'DocuN/evidence/TASK-119/orchestration-acceptance-20261018/adoption-proposal.md' 'DocuN/evidence/TASK-116/design/sample-inputs.json'\nrg -n -- '^#|C1|C2|C3|D3|framing|token|provider|silicon|deepseek' DocuN/results/TASK-119-result.md\nrg -n -- '^#|TASK-122|v2.88|Q.*冻结' 'DocuS/执行动态文档.MD' | Select-Object -First 24",
+      "started_at": "2026-10-21T14:43:48.744Z",
+      "exit_code": 0,
+      "wall_seconds": 1.2602581
+    },
+    {
+      "cmd": "python DocuN/evidence/TASK-122/preparation/read_inputs.py 'DocuN/results/TASK-119-result.md::133::181' 'DocuN/evidence/TASK-119/design/call-matrix.json'\nrg -n -- '^class |^def |^    def |framing|margin|tokens|_BYTES|MAX_|api_key|API_KEY|environment|environ|enabled|provider|returned_model' backend/app/capabilities/embedding.py backend/app/service_config.py backend/app/operator/q_request.py config/activity.example.json config/integration.example.json config/q-approval.example.json",
+      "started_at": "2026-10-21T14:44:17.982Z",
+      "exit_code": 0,
+      "wall_seconds": 0.8326023
+    },
+    {
+      "cmd": "python DocuN/evidence/TASK-122/preparation/read_inputs.py 'DocuN/evidence/TASK-116/design/sample-inputs.json' 'backend/app/capabilities/embedding.py::63::117' 'backend/app/capabilities/embedding.py::203::300'\n@'\nimport json\nfrom pathlib import Path\nm=json.loads(Path('DocuN/evidence/TASK-119/design/call-matrix.json').read_text(encoding='utf-8'))\nfor row in m['rows']:print(json.dumps(row,ensure_ascii=False,separators=(',',':')))\nprint('other keys',list(m))\n'@ | python -\nrg -n -- '^#|L0[1-9]|L10|I0[1-3]|X[0-9]|P0[1-3]' DocuN/evidence/TASK-116/design/acceptance-contract.md",
+      "started_at": "2026-10-21T14:46:08.444Z",
+      "exit_code": 0,
+      "wall_seconds": 1.0498344
+    },
+    {
+      "cmd": "python DocuN/evidence/TASK-122/preparation/read_inputs.py 'backend/app/capabilities/embedding.py::250::299' 'backend/app/capabilities/embedding.py::369::458'\nrg -n -- '^#|fragment|batch|2048|512|readiness|activation|source_manifest|price_snapshot|readonly|source_index|query|index|request' DocuN/evidence/TASK-116/design/integration-contract.md | Select-Object -First 65\nrg -n -- '^def |^class |^    def |^    async def |RETROLUME|environ|token|index|chunk|fragment' backend/app/retrieval/service.py backend/app/capabilities/q_protocol.py backend/app/capabilities/q_gateway.py backend/app/capabilities/q_context.py",
+      "started_at": "2026-10-21T14:46:27.782Z",
+      "exit_code": 0,
+      "wall_seconds": 1.0245524
+    },
+    {
+      "cmd": "python DocuN/evidence/TASK-122/preparation/read_inputs.py 'backend/app/operator/q_request.py::1::180' 'config/activity.example.json' 'config/integration.example.json' 'config/q-approval.example.json'",
+      "started_at": "2026-10-21T14:47:29.880Z",
+      "exit_code": 0,
+      "wall_seconds": 1.019532
+    },
+    {
+      "cmd": "python DocuN/evidence/TASK-122/preparation/read_inputs.py 'backend/app/service_config.py::45::120' 'backend/app/service_config.py::229::278' 'backend/app/retrieval/service.py::21::97'\nrg -n -- 'RETROLUME_(ACTIVITY|INTEGRATION|Q_|MODEL|EMBEDDING)|load_activity_config|load_integration_config|configure_application' backend/app/main.py README.md deploy scripts 2>$null\nrg -n -- '^def build_fragments|MAX_|max_chars|2048|splitlines|yield|_chunk' backend/app/retrieval/evidence.py",
+      "started_at": "2026-10-21T14:47:44.819Z",
+      "exit_code": 0,
+      "wall_seconds": 3.7663432
+    },
+    {
+      "cmd": "python DocuN/evidence/TASK-122/preparation/read_inputs.py 'backend/app/main.py::75::170' 'deploy/q-approval.md' 'backend/app/retrieval/evidence.py::59::99' 'backend/app/retrieval/service.py::131::217'\nrg -n -- 'q_readiness|readiness|config-status|configuration|quota_preview|continue_layer|model_service' backend/app/activities/routes.py backend/app/activities/api.py backend/app/main.py backend/app/api.py 2>$null",
+      "started_at": "2026-10-21T14:48:05.175Z",
+      "exit_code": 1,
+      "wall_seconds": 0.851123
+    },
+    {
+      "cmd": "rg --files DocuN/evidence/TASK-116/design\npython DocuN/evidence/TASK-122/preparation/read_inputs.py 'backend/app/retrieval/evidence.py::1::79' 'backend/app/activities/api.py::205::280' 'DocuN/results/TASK-121-result.md::1::42' 'DocuN/results/TASK-120-result.md::1::35'\nrg -n -- '^##|^###|fragments|inputs/|速度.md|sample|2048' DocuN/evidence/TASK-116/design/integration-contract.md",
+      "started_at": "2026-10-21T14:48:17.687Z",
+      "exit_code": 0,
+      "wall_seconds": 0.8912195
+    },
+    {
+      "cmd": "python DocuN/evidence/TASK-122/preparation/read_inputs.py 'backend/app/retrieval/evidence.py::132::215' 'backend/app/materials/locations.py::1::95' 'backend/app/capabilities/q_protocol.py::133::227'\n@'\nimport json\nfrom pathlib import Path\nm=json.loads(Path('DocuN/evidence/TASK-119/design/call-matrix.json').read_text(encoding='utf-8'))\nfor x in m['rows']:print(x['id'],','.join(x['scenarios']),x['activity'],x['action'],{k:x[k] for k in ('model_calls','query_calls','index_calls','html_calls','requests')})\nprint(json.dumps(m['local_or_inherited'],ensure_ascii=False,indent=2))\n'@ | python -",
+      "started_at": "2026-10-21T14:48:45.682Z",
+      "exit_code": 0,
+      "wall_seconds": 1.0917534
+    },
+    {
+      "cmd": "python DocuN/evidence/TASK-122/preparation/read_inputs.py 'backend/app/capabilities/q_protocol.py::1::132' 'backend/app/capabilities/q_protocol.py::232::255' 'backend/app/capabilities/transport.py'\nrg -n -- '^class ModelServiceConfig|^    def |returned_models|payload|_build|json.dumps|reasoning|completion_tokens|usage|/chat/completions|allow_redirects' backend/app/capabilities/gateway.py\nrg -n -- 'RETROLUME_[A-Z_]+|^def load_profile|^class DataRuntime' backend/app/data_exit/config.py\nrg -n -- '@router.get|def status|capabilities' backend/app/activities/api.py backend/app/retrieval/api.py",
+      "started_at": "2026-10-21T14:51:02.736Z",
+      "exit_code": 0,
+      "wall_seconds": 0.9610605
+    },
+    {
+      "cmd": "rg -n -- 'class ModelServiceConfig' backend/app/capabilities\npython DocuN/evidence/TASK-122/preparation/read_inputs.py 'backend/app/capabilities/gateway.py::298::315' 'backend/app/capabilities/gateway.py::424::469' 'backend/app/data_exit/config.py::18::83' 'backend/app/retrieval/api.py::1::52' 'deploy/q-approval.md::25::37'\nrg -n -- '^class QAuthority|^    def |^    async def |ROSTER|LIMITS|global_max|templates|template_atoms|grant.sha256|root_sha256|operator_principals|receipt|activation' backend/app/data_exit/q_store.py | Select-Object -First 64",
+      "started_at": "2026-10-21T14:51:29.548Z",
+      "exit_code": 0,
+      "wall_seconds": 1.0812985
+    },
+    {
+      "cmd": "python DocuN/evidence/TASK-122/preparation/read_inputs.py 'backend/app/capabilities/contracts.py::37::125' 'backend/app/capabilities/q_gateway.py::1::140' 'backend/app/data_exit/q_store.py::146::184'\nrg -n -- '^#|TASK-120|TASK120|Q |Q未|Q.*启用|80|20元' README.md",
+      "started_at": "2026-10-21T14:51:44.631Z",
+      "exit_code": 0,
+      "wall_seconds": 0.8208959
+    },
+    {
+      "cmd": "python DocuN/evidence/TASK-122/preparation/read_inputs.py 'backend/app/capabilities/q_context.py::173::335' 'README.md::1::12' 'README.md::45::72' 'README.md::150::170' 'DocuN/evidence/TASK-116/design/integration-contract.md::46::87'",
+      "started_at": "2026-10-21T14:51:59.204Z",
+      "exit_code": 0,
+      "wall_seconds": 0.8153199
+    },
+    {
+      "cmd": "rg -n -- 'build_retrieval_query|retrievalQuery|query:|slice\\(|max.*refs|12|retrieval' frontend/src/activities/RetrievalPanel.tsx frontend/src/activities/TeachingWorkspace.tsx frontend/src/activities/InterviewWorkspace.tsx | Select-Object -First 75\nrg -n -- '^@router|^router|class .*Command|Literal\\[|action:' backend/app/learning/teaching_api.py backend/app/interview/api.py backend/app/retrieval/contracts.py\npython DocuN/evidence/TASK-122/preparation/read_inputs.py 'README.md::1::11' 'README.md::150::158' 'DocuN/evidence/TASK-116/design/acceptance-contract.md::1::13'\nrg -n -- 'DERIVATION_POLICY|TEXT_FIELDS|derived|limit' backend/app/capabilities/q_context.py | Select-Object -First 25",
+      "started_at": "2026-10-21T14:52:21.552Z",
+      "exit_code": 0,
+      "wall_seconds": 1.045272
+    },
+    {
+      "cmd": "python DocuN/evidence/TASK-122/preparation/read_inputs.py 'frontend/src/activities/TeachingWorkspace.tsx::345::366' 'frontend/src/activities/InterviewWorkspace.tsx::65::83' 'frontend/src/activities/retrieval-api.ts::1::92' 'backend/app/capabilities/q_context.py::23::32' 'DocuN/evidence/TASK-116/design/integration-contract.md::159::179'\nrg -n -- '^#|CREATE|memory|limit|loopback|2GiB|512|768|5432' deploy/local/README.md deploy/README.md config/data-exit.example.json config/local-services.example.json 2>$null\nrg --files config deploy | Select-Object -First 45",
+      "started_at": "2026-10-21T14:52:37.201Z",
+      "exit_code": 0,
+      "wall_seconds": 1.4533194
+    },
+    {
+      "cmd": "rg -n -- '^def |add_argument|readiness|RETROLUME_|mem_limit|memory|profile|initialize|migrate' deploy/start_local.py | Select-Object -First 105\npython DocuN/evidence/TASK-122/preparation/read_inputs.py 'config/local.env.example' 'config/data-exit.example.json' 'deploy/compose.local.yml'\nrg -n -- 'RETROLUME_|Start-Process|uvicorn|Environment|load_dotenv|local.env' deploy/start-backend.ps1\npython DocuN/evidence/TASK-122/preparation/read_inputs.py 'frontend/src/activities/retrieval-api.ts::43::60'",
+      "started_at": "2026-10-21T14:52:59.637Z",
+      "exit_code": 0,
+      "wall_seconds": 1.2579723
+    },
+    {
+      "cmd": "rg -n -- '^class .*Input|^class .*Body|action:|Literal\\[|mode:|exercise|accept|progress|reason|answer_text' backend/app/learning/teaching_contracts.py | Select-Object -First 70\nrg -n -- '^class .*Goal|focus:|target:|action:|Literal\\[|^class .*Input|^class .*Body' backend/app/interview/contracts.py | Select-Object -First 60\npython DocuN/evidence/TASK-122/preparation/read_inputs.py 'deploy/start_local.py::1::120' 'config/preview.example.json::1::70'\nrg -n -- '^class Settings|RETROLUME_' backend/app/settings.py",
+      "started_at": "2026-10-21T14:54:24.241Z",
+      "exit_code": 1,
+      "wall_seconds": 1.1891604
+    },
+    {
+      "cmd": "rg -n -- 'teach18|teach8m|int18m|html[0-9]|operation_id=' backend/app/learning/teaching_service.py backend/app/interview/service.py backend/app/html/service.py 2>$null\npython DocuN/evidence/TASK-122/preparation/read_inputs.py 'backend/app/learning/teaching_contracts.py::126::203' 'backend/app/interview/contracts.py::100::159' 'backend/app/retrieval/contracts.py::33::59'\nrg --files backend/app -g '*config*' -g '*settings*'",
+      "started_at": "2026-10-21T14:55:22.491Z",
+      "exit_code": 0,
+      "wall_seconds": 0.93197
+    },
+    {
+      "cmd": "rg --files backend/app | rg 'html|settings'\nrg -n -- 'operation_id|teach8m|teach18m|int18m|html' backend/app/learning/teaching_repository.py backend/app/activities/teaching_repository.py backend/app/activities/interview_repository.py backend/app/interview/service.py 2>$null | Select-Object -First 28\npython DocuN/evidence/TASK-122/preparation/read_inputs.py 'README.md::45::71' 'DocuN/evidence/TASK-116/design/integration-contract.md::25::43' 'DocuN/evidence/TASK-116/design/acceptance-contract.md::46::62'\n@'\nimport os,json,sys\nfrom pathlib import Path\nfrom datetime import datetime,timezone\nsys.stdout.reconfigure(encoding='utf-8')\nnames=['RETROLUME_ACTIVITY_CONFIG','RETROLUME_MODEL_API_KEY','RETROLUME_INTEGRATION_CONFIG','RETROLUME_EMBEDDING_API_KEY','RETROLUME_Q_APPROVAL_CONFIG','RETROLUME_DATABASE_URL','RETROLUME_DATA_DIR','RETROLUME_BACKUP_DIR','RETROLUME_DATA_EXIT_CONFIG','RETROLUME_CONTROL_ROOT','RETROLUME_RESTORE_ROOT','RETROLUME_DATA_SNAPSHOT_URL','RETROLUME_DATA_MAINTENANCE_KEY','RETROLUME_PREVIEW_CONFIG','RETROLUME_PREVIEW_REVIEW_KEY']\nr={'at':datetime.now(timezone.utc).isoformat(),'scope':'current metadata subprocess inherited from chat; not normal API server','definition':'name membership only; empty/nonempty not inspected; no values or hashes read/output','variables':{n:('present' if n in os.environ else 'absent') for n in names},'normal_server_injection_verified':False}\nPath('DocuN/evidence/TASK-122/preparation/environment-presence.json').write_text(json.dumps(r,ensure_ascii=False,indent=2)+'\\n',encoding='utf-8');print(json.dumps(r,ensure_ascii=False,indent=2))\n'@ | python -",
+      "started_at": "2026-10-21T14:55:55.103Z",
+      "exit_code": 0,
+      "wall_seconds": 1.2294562
+    },
+    {
+      "cmd": "rg -n -- 'exercise_record_id.*head|head.*exercise_record_id|current_exercise|current_feedback|active_exercise|def .*answer|def .*evaluate|def .*exercise|supersedes' backend/app/learning/teaching_service.py backend/app/activities/teaching_repository.py | Select-Object -First 65\nrg --files backend/app | rg 'explan|preview'\nrg -n -- 'html|description|explanation' backend/app/main.py",
+      "started_at": "2026-10-21T14:57:06.073Z",
+      "exit_code": 0,
+      "wall_seconds": 0.933506
+    },
+    {
+      "cmd": "rg -n -- 'r03|015|CURRENT|PROFILE|schema_profile' backend/app/data_exit/schema_profiles.py | Select-Object -First 25\nrg -n -- '^@router|^router|operation_id|html[0-9]|profile' backend/app/preview/api.py backend/app/preview/generation.py | Select-Object -First 38\nrg -n -- '^def operation_id|teach8m|teach18m|PREFIX' backend/app/learning/teaching_contracts.py backend/app/interview/contracts.py\npython DocuN/evidence/TASK-122/preparation/read_inputs.py 'DocuS/执行动态文档.MD::1::15'",
+      "started_at": "2026-10-21T15:00:29.738Z",
+      "exit_code": 0,
+      "wall_seconds": 1.1096443
+    },
+    {
+      "cmd": "python DocuN/evidence/TASK-122/preparation/read_inputs.py 'deploy/initialize-materials.py::1::120' 'backend/app/preview/api.py::55::85' 'backend/app/preview/generation.py::20::48'\nrg --files backend -g '*migrat*'\nrg -n -- 'migrate|001_|015_|initialize' deploy/initialize-materials.py backend/app/data_exit/schema.py backend/app/data_exit/migrations.py 2>$null\nGet-Item -LiteralPath 'DocuN/evidence/TASK-122/preparation' | Select-Object FullName,Attributes",
+      "started_at": "2026-10-21T15:02:01.556Z",
+      "exit_code": 0,
+      "wall_seconds": 1.2009485
+    },
+    {
+      "cmd": "python DocuN/evidence/TASK-122/preparation/build_preparation.py",
+      "started_at": "2026-10-21T15:06:52.381Z",
+      "exit_code": 0,
+      "wall_seconds": 0.805218
+    },
+    {
+      "cmd": "python DocuN/evidence/TASK-122/preparation/read_inputs.py 'backend/app/activities/api.py::332::387' 'backend/app/activities/contracts.py::1::95' 'backend/app/learning/teaching_contracts.py::369::388'\nrg -n -- 'def create_activity|create_activity\\(' backend/app/activities/service.py backend/app/activities/repository.py | Select-Object -First 12",
+      "started_at": "2026-10-21T15:12:36.078Z",
+      "exit_code": 0,
+      "wall_seconds": 1.256069
+    },
+    {
+      "cmd": "rg -n -- '^class .*Create|activity_id:|class .*Input|ActivityCreate|CreateActivity' backend/app/activities/api.py backend/app/activities/models.py backend/app/activities/service.py 2>$null\npython DocuN/evidence/TASK-122/preparation/read_inputs.py 'backend/app/activities/api.py::50::100' 'backend/app/learning/teaching_contracts.py::369::388'",
+      "started_at": "2026-10-21T15:13:18.033Z",
+      "exit_code": 0,
+      "wall_seconds": 0.9821659
+    },
+    {
+      "cmd": "rg -n -- \"finished|finish|action == 'goal'|action=='goal'|bind_scope|mode.*first|phase|question_record_id\" backend/app/activities/interview_repository.py | Select-Object -First 75\nrg -n -- 'max_refs|len\\(refs\\)|12|reference_limit' backend/app/interview/service.py backend/app/activities/interview_repository.py | Select-Object -First 20\npython DocuN/evidence/TASK-122/preparation/read_inputs.py 'backend/app/activities/teaching_repository.py::358::390' 'backend/app/activities/teaching_repository.py::738::806'",
+      "started_at": "2026-10-21T15:17:31.755Z",
+      "exit_code": 0,
+      "wall_seconds": 1.0523678
+    },
+    {
+      "cmd": "python DocuN/evidence/TASK-122/preparation/build_preparation.py",
+      "started_at": "2026-10-21T15:19:05.787Z",
+      "exit_code": 0,
+      "wall_seconds": 1.0751623
+    },
+    {
+      "cmd": "python DocuN/evidence/TASK-122/preparation/update_readme.py\npython DocuN/evidence/TASK-122/preparation/read_inputs.py 'D:/spiritice/AA文件/MS_spi knowledge libraay/obsidian_1/&职业相关/项目流程/项目开发提示词V4/DocuS/AGENTS.MD::155::210'",
+      "started_at": "2026-10-21T15:27:09.748Z",
+      "exit_code": 0,
+      "wall_seconds": 0.9665448
+    },
+    {
+      "cmd": "rg --files DocuN/results -g 'TASK-120-work-decision.md'\npython DocuN/evidence/TASK-122/preparation/read_inputs.py 'DocuN/results/TASK-120-work-decision.md::1::18' 'backend/app/activities/interview_repository.py::126::138'",
+      "started_at": "2026-10-21T15:28:53.778Z",
+      "exit_code": 0,
+      "wall_seconds": 0.9516372
+    }
+  ],
+  "mutations": [
+    {
+      "at": "2026-10-21T14:43:07.498Z",
+      "action": "apply_patch",
+      "path": "DocuN/evidence/TASK-122/preparation/read_inputs.py",
+      "purpose": "bounded static reads and SHA256 provenance"
+    },
+    {
+      "at": "2026-10-21T15:06:22.744Z",
+      "action": "apply_patch",
+      "path": "DocuN/evidence/TASK-122/preparation/build_preparation.py"
+    },
+    {
+      "at": "2026-10-21T15:08:59.535Z",
+      "action": "apply_patch",
+      "paths": [
+        "official-facts.json",
+        "web-request-ledger.json"
+      ]
+    },
+    {
+      "at": "2026-10-21T15:11:31.389Z",
+      "action": "apply_patch",
+      "paths": [
+        "readiness-plan.json",
+        "decisions-and-blockers.json"
+      ]
+    },
+    {
+      "at": "2026-10-21T15:16:46.268Z",
+      "action": "apply_patch",
+      "path": "operation-runbook.md"
+    },
+    {
+      "at": "2026-10-21T15:19:07.058Z",
+      "action": "apply_patch",
+      "paths": [
+        "build_preparation.py",
+        "operation-runbook.md"
+      ],
+      "purpose": "冻结正常字段和current父依赖；生成对应机器产物"
+    },
+    {
+      "at": "2026-10-21T15:23:21.557Z",
+      "action": "apply_patch",
+      "paths": [
+        "update_readme.py",
+        "DocuN/results/TASK-122-result.md"
+      ]
+    },
+    {
+      "at": "2026-10-21T15:30:54.578Z",
+      "action": "apply_patch",
+      "paths": [
+        "readiness-plan.json",
+        "decisions-and-blockers.json",
+        "operation-runbook.md",
+        "TASK-122-result.md"
+      ],
+      "purpose": "将未冻结回执的兼容限制准确标为条件项，避免无依据新增工程门"
+    },
+    {
+      "at": "2026-10-21T15:33:06.693Z",
+      "action": "apply_patch",
+      "path": "check_documents.py",
+      "purpose": "唯一一次文档核对脚本；不导入或运行产品"
+    }
+  ],
+  "known_subcommand_failures": [
+    {
+      "path": "backend/app/settings.py",
+      "kind": "rg missing path",
+      "exit_code": 2,
+      "continued": "找同组件真实config，未重试猜名"
+    },
+    {
+      "path": "backend/app/activities/contracts.py",
+      "kind": "read_inputs.py FileNotFoundError",
+      "exit_code": 1,
+      "continued": "实际create schema在activities/api.py定向定位；同批后续teaching span未执行后另读"
+    }
+  ],
+  "subcommand_exit_limitations": {
+    "known_minimum_failures": 2,
+    "suppressed_rg_stderr": "有些定向rg同时列候选路径，以2>$null隐藏缺路径错误，末命令覆盖子退出；整批exit0不等于各子项通过。",
+    "candidate_paths_with_unrecorded_subexit": [
+      "backend/app/activities/routes.py",
+      "backend/app/api.py",
+      "deploy/local/README.md",
+      "deploy/README.md",
+      "config/local-services.example.json",
+      "backend/app/html/service.py",
+      "backend/app/learning/teaching_repository.py",
+      "backend/app/data_exit/migrations.py",
+      "backend/app/activities/models.py"
+    ],
+    "actual_total_subcommand_failure_count": "unknown; minimum2; no product failures inferred",
+    "output_truncations": "多次文件批读受到输出token截断；已对真正依赖片段做定向补读，未把截断当已通读"
+  },
+  "permissions_observed": {
+    "product_import": 0,
+    "product_tests": 0,
+    "compile": 0,
+    "build": 0,
+    "PG_SQL": 0,
+    "Docker": 0,
+    "services_API_browser": 0,
+    "provider_calls": 0,
+    "actual_fee_microunits": 0,
+    "Git_writes": 0,
+    "dependency_install": 0,
+    "tokenizer_download_execution": 0,
+    "private_config_account_vault_runtime_read": 0,
+    "subagents": 0
+  },
+  "time": {
+    "first_reliable_clock_utc": "2026-10-21T14:41:11Z",
+    "closing_clock_utc": "2026-10-21 15:35:49 UTC",
+    "calendar_lower_bound": "2026-10-21T22:37:01.283336+08:00",
+    "calendar_deadline": "2026-10-22T22:37:01.283336+08:00",
+    "unmetered_bootstrap_clock_patch_upper_charge_reserved_seconds": 1200,
+    "final_check_and_save_reserved_seconds": 60,
+    "unknown_actual_human_model_tokens": true
+  },
+  "final_document_check_command": {
+    "cmd": "python DocuN/evidence/TASK-122/preparation/check_documents.py",
+    "started_at": "2026-10-21T15:36:23.720Z",
+    "exit_code": 0,
+    "wall_seconds": 1.0993368000000001,
+    "observed_result": "22项文档一致性全部通过，退出0；非产品测试；结果16827字节，SHA256 a96890e662e83dcb7bed41f79b5383796bacc339cda220d5ccfe5806129cc11a",
+    "result_reread": true
+  },
+  "actual_command_count_including_final_check": 33,
+  "known_command_wall_seconds_including_final_check": 37.439890500000004,
+  "documentation_note": "最终文档核对仅运行一次，真实命令/退出/时长已在收到工具回执后追加；最后只写本收尾日志，不更改已核文档或产品。最终日志写补丁工具回执在当前会话。"
+}

@@ -1,0 +1,38 @@
+--- before/backend/app/data_exit/schema_profiles.py
++++ after/backend/app/data_exit/schema_profiles.py
+@@ -5,9 +5,10 @@
+ from .schema import COLUMNS,MIGRATIONS,MIGRATION_013
+ 
+ R02='data_exit.v1.r02'
+ R03='data_exit.v1.r03'
+-MIGRATION_015='59b2e556a81a5383e9144a967fa90b5abedb26284d50cbf150db1dd77f34ef0e'
++LEGACY_MIGRATION_015='59b2e556a81a5383e9144a967fa90b5abedb26284d50cbf150db1dd77f34ef0e'
++MIGRATION_015='874d2a173f401ce923680d184eb5687c121fd70831d8b86cd9b6740a7c330915'
+ MIGRATION_014='3a919b2562ded5765de132519b841c1d1439c65c001795cfbd608cbc03586e78'
+ VECTOR_EXTENSION_VERSION='0.8.6'
+ R02_EXTRA_SHAPE_SHA='5b7dc68a94101307bcbd63a16607c5b2ee79906b5f32669d764853a55172dc12'
+ FORWARD_FUNCTIONS={'interview_head_guard': '6219aa292d679bff71b2dbdbe54c4757a17bdee5cd3e2a76927d2fa9a7abc134', 'interview_record_insert_guard': 'f7423ecf9109244b5a87db568a552f9a0027b2ad9968281af66af07c56729c90', 'interview_result_eligible': '3a876b12080499d63c36bd7b1fa0d7960dc902f07bcabec99750cdf242342da6'}
+@@ -44,8 +45,23 @@
+         chain02={**chain01,'014_step018_retrieval.sql':MIGRATION_014}
+         chain=chain02 if name==R02 else {**chain02,'015_activity_scope_delete_permission.sql':MIGRATION_015}
+         return SchemaProfile(name,tuple(tables02),columns02,chain,chain)
+     raise DataError('schema_profile_mismatch',503)
++
++
++def get_read_profile(name,migrations):
++    """Two exact known R03 codec identities; installations always use current DDL.
++
++    Legacy package recognition never claims the old installation passed revised
++    preconditions. A restored target is freshly initialized with current DDL.
++    """
++    profile=get_profile(name)
++    if migrations==profile.codec_migrations:return profile
++    if name==R03:
++        legacy={**get_profile(R02).codec_migrations,'015_activity_scope_delete_permission.sql':LEGACY_MIGRATION_015}
++        if migrations==legacy:
++            return SchemaProfile(name,profile.tables,profile.columns,legacy,profile.migration_chain)
++    raise DataError('codec_mismatch',422)
+ 
+ 
+ def observed_profile(connection,*,empty_profile=None):
+     row=connection.execute('SELECT schema_profile FROM public.data_export_control_v1').fetchone()

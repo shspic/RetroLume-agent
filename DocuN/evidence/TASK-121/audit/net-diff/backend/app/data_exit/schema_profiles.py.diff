@@ -1,0 +1,105 @@
+--- initial/backend/app/data_exit/schema_profiles.py
++++ final/backend/app/data_exit/schema_profiles.py
+@@ -1,12 +1,14 @@
+-"""两份封闭数据profile；R01原常量不改，R02仅精确014增量。"""
++"""封闭数据profile；旧常量不改，R03仅增加015单表权限。"""
+ from dataclasses import dataclass
+ from copy import deepcopy
+ from .contracts import PROFILE,TABLES,DataError,canonical,digest
+ from .schema import COLUMNS,MIGRATIONS,MIGRATION_013
+ 
+ R02='data_exit.v1.r02'
++R03='data_exit.v1.r03'
++MIGRATION_015='59b2e556a81a5383e9144a967fa90b5abedb26284d50cbf150db1dd77f34ef0e'
+ MIGRATION_014='3a919b2562ded5765de132519b841c1d1439c65c001795cfbd608cbc03586e78'
+ VECTOR_EXTENSION_VERSION='0.8.6'
+ R02_EXTRA_SHAPE_SHA='5b7dc68a94101307bcbd63a16607c5b2ee79906b5f32669d764853a55172dc12'
+ FORWARD_FUNCTIONS={'interview_head_guard': '6219aa292d679bff71b2dbdbe54c4757a17bdee5cd3e2a76927d2fa9a7abc134', 'interview_record_insert_guard': 'f7423ecf9109244b5a87db568a552f9a0027b2ad9968281af66af07c56729c90', 'interview_result_eligible': '3a876b12080499d63c36bd7b1fa0d7960dc902f07bcabec99750cdf242342da6'}
+ ORIGINAL_FUNCTIONS_013={'interview_head_guard': "\nDECLARE a public.activities; ptr uuid; p public.interview_records;\nBEGIN\n IF TG_OP='DELETE' THEN RAISE EXCEPTION 'interview heads retained'; END IF;\n SELECT * INTO a FROM public.activities WHERE id=NEW.activity_id;\n IF TG_OP='INSERT' THEN\n  IF NOT public.data_loading_allowed() AND (a.status<>'pending' OR a.execution_generation<>0 OR a.executor_id IS NOT NULL OR a.lease_expires_at IS NOT NULL\n     OR a.requests_reserved<>0 OR a.cost_reserved_microunits<>0 OR a.tools_reserved<>0 OR a.running_reserved_seconds<>0 OR a.running_settled_seconds<>0\n     OR EXISTS(SELECT 1 FROM public.teaching_heads WHERE activity_id=NEW.activity_id)\n     OR EXISTS(SELECT 1 FROM public.activity_operations WHERE activity_id=NEW.activity_id)\n     OR EXISTS(SELECT 1 FROM public.activity_memory_bindings WHERE activity_id=NEW.activity_id)\n     OR NEW.revision<>1) THEN RAISE EXCEPTION 'interview requires fresh unselected activity'; END IF;\n ELSE\n  IF NEW.activity_id<>OLD.activity_id OR NEW.created_at<>OLD.created_at OR NEW.revision NOT BETWEEN OLD.revision AND OLD.revision+1\n    OR NEW.goal_version NOT BETWEEN OLD.goal_version AND OLD.goal_version+1 OR NEW.last_seq<OLD.last_seq\n    OR (NEW.revision=OLD.revision AND (to_jsonb(NEW)-ARRAY['pending_key','updated_at']) IS DISTINCT FROM (to_jsonb(OLD)-ARRAY['pending_key','updated_at']))\n    OR (OLD.phase='ended' AND NEW.phase<>'ended') THEN RAISE EXCEPTION 'interview head revision invalid'; END IF;\n END IF;\n IF NEW.scope_revision<>a.scope_revision OR NEW.last_seq<>(SELECT max(seq) FROM public.interview_records WHERE activity_id=NEW.activity_id)\n    THEN RAISE EXCEPTION 'interview head scope/sequence invalid'; END IF;\n FOREACH ptr IN ARRAY ARRAY[NEW.goal_record_id,NEW.root_question_id,NEW.current_question_id,NEW.current_answer_id,NEW.current_feedback_id] LOOP\n  IF ptr IS NOT NULL THEN\n   SELECT * INTO p FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=ptr;\n   IF p.record_id IS NULL OR p.goal_version<>NEW.goal_version OR p.scope_revision<>NEW.scope_revision THEN RAISE EXCEPTION 'interview head pointer invalid'; END IF;\n  END IF;\n END LOOP;\n IF NEW.goal_record_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=NEW.goal_record_id AND kind='goal') THEN RAISE EXCEPTION 'goal pointer kind'; END IF;\n IF NEW.current_question_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=NEW.current_question_id AND kind IN ('question','probe')) THEN RAISE EXCEPTION 'question pointer kind'; END IF;\n IF NEW.current_answer_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=NEW.current_answer_id AND kind='answer' AND question_record_id=NEW.current_question_id) THEN RAISE EXCEPTION 'answer pointer kind'; END IF;\n IF NEW.current_feedback_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=NEW.current_feedback_id AND kind='feedback') THEN RAISE EXCEPTION 'feedback pointer kind'; END IF;\n RETURN NEW;\nEND;\n", 'interview_record_insert_guard': "\nDECLARE c public.interview_commands; p public.interview_records; r public.activity_operation_results; o public.activity_operations; b jsonb; ref jsonb;\nBEGIN\n SELECT * INTO c FROM public.interview_commands WHERE activity_id=NEW.activity_id AND business_key=NEW.business_key;\n IF c.activity_id IS NULL OR c.duplicate_of IS NOT NULL OR (NOT public.data_loading_allowed() AND (c.effect_applied OR c.status NOT IN ('accepted','started')))\n    OR NEW.seq<>(SELECT COALESCE(max(seq),0)+1 FROM public.interview_records WHERE activity_id=NEW.activity_id)\n    THEN RAISE EXCEPTION 'interview record command/sequence invalid'; END IF;\n IF cardinality(NEW.parent_ids)<>(SELECT count(DISTINCT x) FROM unnest(NEW.parent_ids) x) THEN RAISE EXCEPTION 'duplicate parents'; END IF;\n FOR p IN SELECT * FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=ANY(NEW.parent_ids) LOOP\n  IF p.seq>=NEW.seq OR p.goal_version<>NEW.goal_version OR p.scope_revision<>NEW.scope_revision THEN RAISE EXCEPTION 'interview parent invalid'; END IF;\n END LOOP;\n IF cardinality(NEW.parent_ids)<>(SELECT count(*) FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=ANY(NEW.parent_ids)) THEN RAISE EXCEPTION 'missing parents'; END IF;\n IF NEW.kind='answer' THEN\n  SELECT * INTO p FROM public.interview_records WHERE activity_id=NEW.activity_id AND record_id=NEW.question_record_id;\n  IF p.kind NOT IN ('question','probe') OR p.goal_version<>NEW.goal_version OR p.scope_revision<>NEW.scope_revision\n     OR NEW.answer_version<>(SELECT COALESCE(max(answer_version),0)+1 FROM public.interview_records WHERE activity_id=NEW.activity_id AND question_record_id=NEW.question_record_id)\n     THEN RAISE EXCEPTION 'answer version invalid'; END IF;\n  IF NEW.answer_version>1 AND NOT EXISTS(SELECT 1 FROM public.interview_records a WHERE a.activity_id=NEW.activity_id AND a.record_id=NEW.supersedes_record_id\n     AND a.question_record_id=NEW.question_record_id AND a.answer_version=NEW.answer_version-1) THEN RAISE EXCEPTION 'supersedes invalid'; END IF;\n END IF;\n IF NEW.origin='model' THEN\n  SELECT * INTO r FROM public.activity_operation_results WHERE activity_id=NEW.activity_id AND operation_id=NEW.operation_id;\n  SELECT * INTO o FROM public.activity_operations WHERE activity_id=NEW.activity_id AND operation_id=NEW.operation_id;\n  b:=r.payload::jsonb->'value';\n  IF c.execution_kind<>'model' OR c.operation_id<>NEW.operation_id OR (NOT public.data_loading_allowed() AND (NOT c.launch_claimed OR c.obsolete OR c.status<>'started'))\n    OR r.payload_format<>'json' OR r.payload_sha256<>NEW.body_sha256 OR o.kind<>'model' OR o.state<>'received'\n    OR r.admission_id<>o.admission_id OR r.execution_generation<>o.execution_generation OR r.scope_revision<>NEW.scope_revision\n    OR b->>'profile' IS DISTINCT FROM 'interview.v1' OR b->>'activity_id' IS DISTINCT FROM NEW.activity_id::text OR b->>'business_key' IS DISTINCT FROM NEW.business_key::text\n    OR b->>'request_sha256' IS DISTINCT FROM c.request_sha256 OR b->>'context_sha256' IS DISTINCT FROM c.context_sha256 OR b->'value'->>'type' IS DISTINCT FROM NEW.kind\n    THEN RAISE EXCEPTION 'interview result binding invalid'; END IF;\n ELSE\n  b:=NEW.local_body::jsonb;\n  IF b->>'schema' IS DISTINCT FROM 'interview.local.v1' OR b->>'activity_id' IS DISTINCT FROM NEW.activity_id::text OR b->>'business_key' IS DISTINCT FROM NEW.business_key::text\n     OR b->>'kind' IS DISTINCT FROM NEW.kind OR (b->>'goal_version')::integer IS DISTINCT FROM NEW.goal_version OR (b->>'scope_revision')::integer IS DISTINCT FROM NEW.scope_revision\n     OR jsonb_typeof(b->'value') IS DISTINCT FROM 'object'\n     THEN RAISE EXCEPTION 'interview local binding invalid'; END IF;\n END IF;\n RETURN NEW;\nEND;\n", 'interview_result_eligible': "\n SELECT EXISTS(SELECT 1 FROM public.interview_commands c JOIN public.interview_heads h USING(activity_id)\n  JOIN public.interview_records ir ON ir.activity_id=c.activity_id AND ir.business_key=c.business_key AND ir.origin='model'\n  JOIN public.activities a ON a.id=c.activity_id\n  JOIN public.activity_operations o ON o.activity_id=c.activity_id AND o.operation_id=c.operation_id\n  JOIN public.activity_operation_results r ON r.activity_id=o.activity_id AND r.operation_id=o.operation_id\n WHERE c.activity_id=aid AND c.operation_id=op AND c.duplicate_of IS NULL AND c.effect_applied AND c.status IN ('committed','history')\n  AND NOT c.obsolete AND c.goal_version=h.goal_version AND c.scope_revision=h.scope_revision AND h.scope_revision=a.scope_revision\n  AND a.status<>'cancelled' AND ir.operation_id=c.operation_id AND ir.payload_sha256=r.payload_sha256 AND ir.body_sha256=r.payload_sha256\n  AND r.admission_id=o.admission_id AND r.execution_generation=o.execution_generation AND r.scope_revision=o.scope_revision AND o.state='received' AND o.kind='model'\n  AND r.payload_format='json'\n  AND NOT EXISTS(SELECT 1 FROM public.activity_scope_sources s LEFT JOIN public.material_sources m ON m.id=s.source_id\n    WHERE s.activity_id=aid AND (m.id IS NULL OR m.current_version IS DISTINCT FROM s.version_id OR m.revision<>s.source_revision))\n  AND EXISTS(SELECT 1 FROM public.activity_scope_sources WHERE activity_id=aid)\n  AND NOT EXISTS(SELECT 1 FROM public.activity_memory_bindings WHERE activity_id=aid))\n"}
+@@ -36,13 +38,14 @@
+ 
+ 
+ def get_profile(name):
+     chain01={**MIGRATIONS,'013_data_exit.sql':MIGRATION_013}
+     if name==PROFILE:return SchemaProfile(PROFILE,TABLES,COLUMNS,MIGRATIONS,chain01)
+-    if name==R02:
++    if name in (R02,R03):
+         chain02={**chain01,'014_step018_retrieval.sql':MIGRATION_014}
+-        return SchemaProfile(R02,tuple(tables02),columns02,chain02,chain02)
++        chain=chain02 if name==R02 else {**chain02,'015_activity_scope_delete_permission.sql':MIGRATION_015}
++        return SchemaProfile(name,tuple(tables02),columns02,chain,chain)
+     raise DataError('schema_profile_mismatch',503)
+ 
+ 
+ def observed_profile(connection,*,empty_profile=None):
+     row=connection.execute('SELECT schema_profile FROM public.data_export_control_v1').fetchone()
+@@ -92,12 +95,68 @@
+             if row.get('acl'):
+                 row['acl']=re.sub(r'/[^,}]+','/trusted_owner',row['acl'])
+     return value
+ 
+ 
+-def check_extra_shape(shape):
++PROFILE_CONSTRAINT_02="CHECK ((schema_profile = ANY (ARRAY['data_exit.v1.r01'::text, 'data_exit.v1.r02'::text])))"
++PROFILE_CONSTRAINT_03="CHECK ((schema_profile = 'data_exit.v1.r03'::text))"
++
++
++def check_extra_shape(shape,profile=R02):
++    if profile==R03:
++        shape=deepcopy(shape)
++        rows=[r for r in shape.get('constraints',[]) if r['conname']=='data_control_schema_profile_check']
++        if len(rows)!=1 or rows[0]['definition']!=PROFILE_CONSTRAINT_03:raise DataError('data_schema_not_ready',503)
++        rows[0]['definition']=PROFILE_CONSTRAINT_02
++    elif profile!=R02:raise DataError('schema_profile_mismatch',503)
+     if digest(canonical(normalized_extra_shape(shape)))!=R02_EXTRA_SHAPE_SHA:raise DataError('data_schema_not_ready',503)
++
++
++SCOPE_ACL_QUERY="""SELECT a.attname,CASE WHEN x.grantee=c.relowner THEN '<owner>'
++ ELSE COALESCE(g.rolname,'<public>') END AS grantee,x.privilege_type,x.is_grantable,
++ x.grantor=c.relowner AS trusted_grantor,d.mode_observed,
++ ARRAY(SELECT privilege_type FROM aclexplode(acldefault('r',c.relowner)) ORDER BY privilege_type) AS owner_privileges
++ FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace CROSS JOIN public.data_export_control_v1 d
++ CROSS JOIN LATERAL (SELECT NULL::name AS attname,c.relacl AS acl UNION ALL
++ SELECT attname,attacl FROM pg_attribute WHERE attrelid=c.oid AND attnum>0 AND NOT attisdropped) a
++ CROSS JOIN LATERAL aclexplode(a.acl) x LEFT JOIN pg_roles g ON g.oid=x.grantee
++ WHERE n.nspname='public' AND c.relname='activity_scope_sources'
++ ORDER BY a.attname NULLS FIRST,grantee,x.privilege_type"""
++
++
++def check_scope_permissions(rows,profile):
++    get_profile(profile)
++    modes={row['mode_observed'] for row in rows}
++    if len(modes)!=1 or not modes<={'normal','loading','frozen','restored_readonly'}:raise DataError('data_schema_not_ready',503)
++    expected={None:{'<owner>':set(rows[0]['owner_privileges']) if rows else set(),
++      'retrolume_data_app':{'SELECT','INSERT','UPDATE'}|({'DELETE'} if profile==R03 else set()),
++      'retrolume_data_owner':{'SELECT'},'retrolume_data_restore_loader':{'SELECT','INSERT'},
++      'retrolume_interview_owner':{'SELECT'},'retrolume_html_owner':{'SELECT'}}}
++    if profile in (R02,R03):expected[None]['retrolume_retrieval_owner']={'SELECT'}
++    if modes=={'restored_readonly'}:expected[None]['retrolume_data_snapshot']={'SELECT'}
++    for column in ('activity_id','source_id','version_id','source_revision'):
++        expected[column]={'retrolume_data_snapshot':{'SELECT'}}
++    actual={}
++    for row in rows:
++        if row['is_grantable'] and row['grantee']!='<owner>' or not row['trusted_grantor']:
++            raise DataError('data_schema_not_ready',503)
++        actual.setdefault(row['attname'],{}).setdefault(row['grantee'],set()).add(row['privilege_type'])
++    if actual!=expected:raise DataError('data_schema_not_ready',503)
++
++
++def project_scope_permission(shape):
++    """Only after assert_data_schema checked the actual profile and exact ACL."""
++    result=deepcopy(shape)
++    for section in ('columns','table_acl','qualification_column_acls'):
++        for row in result.get(section,[]):
++            if row.get('relname')!='activity_scope_sources':continue
++            for field in ('acl','table_acl','column_acl'):
++                text=row.get(field)
++                if text:
++                    import re
++                    row[field]=re.sub(r'(?<=[{,])retrolume_data_app=arwd/', 'retrolume_data_app=arw/',text)
++    return result
+ 
+ 
+ def project_014(shape):
+     """经精确R02校验后，旧领域指纹只扣除已注册014变化，不采用未知DDL。"""
+     import re

@@ -1,0 +1,14 @@
+--- initial/frontend/src/activities/teachingApi.ts
++++ final/frontend/src/activities/teachingApi.ts
+@@ -15,10 +15,11 @@
+   body: Record<string, unknown>;
+   retrieval_ref?: import('./retrieval-api').RetrievalRef;
+ };
+ 
+ export type TeachingReceipt = {
++  outbound_approval?:import('./retrieval-api').QApproval|null;
+   activity_id: string;
+   business_key: string;
+   action: TeachingAction;
+   request_sha256: string;
+   status: "accepted" | "started" | "committed" | "history" | "not_sent" | "failed" | "unknown" | "abandoned";

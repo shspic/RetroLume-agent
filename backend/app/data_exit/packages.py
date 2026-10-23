@@ -164,6 +164,8 @@ class PackageReader:
                 value=load_json(self.archive.read(entry["path"]), self.limits)
                 if entry['path']=='metadata/source_control.json':validate_metadata('source_control',value,PROFILE)
                 if entry['path']=='codec_description.json':
+                    from .schema_profiles import get_read_profile
+                    self.schema_profile=get_read_profile(PROFILE,value.get('migration_sha256'))
                     COLUMNS=self.schema_profile.columns;MIGRATIONS=self.schema_profile.codec_migrations
                     from .codec import TRANSFORMS
                     if value!={'profile':PROFILE,'columns':COLUMNS,'transformations':TRANSFORMS,'bigint_encoding':'decimal_string',

@@ -1,0 +1,131 @@
+--- initial/frontend/src/activities/TeachingWorkspace.tsx
++++ final/frontend/src/activities/TeachingWorkspace.tsx
+@@ -2,10 +2,11 @@
+ // 续答/复测 → 更新理由 → 重开。完整待发正文先入原生 IndexedDB、
+ // 摘要台账再入 localStorage，成功后才 POST；失败保留输入且零 POST。
+ 
+ import { useCallback, useEffect, useRef, useState } from "react";
+ import { TeachingExercise } from "./TeachingExercise";
++import {qApprovalText} from './retrieval-api';
+ import { TeachingFeedback, type FeedbackView } from "./TeachingFeedback";
+ import {
+   getTeachingCommand, getTeachingWorkspace, getTeachingRecord, postTeachingCommand,
+   getTeachingHistory, type TeachingHistoryItem, type TeachingSeed,
+   TeachingApiError, type TeachingAction, type TeachingCommandInput, type TeachingReceipt,
+@@ -351,11 +352,11 @@
+       let retrievalChain:RetrievalChain|undefined;
+       if (['plan','exercise','evaluate'].includes(action)&&retrievalMode==='hybrid') {
+         const owner=await teachingEditorOwner();
+         if(!owner||!stillCurrent()||origin.owner!==owner)throw new Error('编辑身份不可核对，未提交');
+         if(recovered&&JSON.stringify(recovered.domain_input)!==JSON.stringify({...input,body}))throw new Error('原动作版本不同，不能改绑');
+-        const query=String(workspace?.goal?.goal??goalText).trim().slice(0,1024);
++        const query=String(workspace?.goal?.goal??goalText);
+         const result=await retrieveForCommand(token,activityId,owner,'teaching',{...input,body},scopeRevision,input.expected_revision,query,()=>stillCurrent()&&editorOwner.current===owner,recovered,modelService);
+         if(!stillCurrent()||!result.ref)return;
+         input.retrieval_ref=result.ref;retrievalChain=result.row;
+       }
+       const built = await buildTeachingCommand(activityId, { ...input, body });
+@@ -421,10 +422,15 @@
+       if (receipt.activity_id!==activityId||receipt.business_key!==key||receipt.action!==action||receipt.request_sha256!==built.request_sha256) {
+         await updateTeachingIntent(key,{state:"unconfirmed",last_code:"receipt_mismatch"});
+         if (stillCurrent()) { reloadIntents(); setError("回执身份无法核对，原意图已保留"); }
+         return;
+       }
++      if(receipt.outbound_approval&&receipt.status==='accepted'){
++        await updateTeachingIntent(key,{state:'unconfirmed',last_code:receipt.outbound_approval.can_continue?'same_key_before_claim':`q_${receipt.outbound_approval.state}`,last_message:qApprovalText(receipt.outbound_approval)});
++        if(stillCurrent()){reloadIntents();setNotice(qApprovalText(receipt.outbound_approval));}
++        return;
++      }
+       if (receipt.status === "committed" || receipt.status === "history") {
+         await removeTeachingIntent(key); await removeTeachingDraft(`draft-${key}`);
+         if (stillCurrent()) reloadIntents();
+       } else if (["unknown","failed","not_sent"].includes(receipt.status)) {
+         await updateTeachingIntent(key, { state: "unconfirmed", last_code: receipt.error_code ?? undefined, last_message:receipt.status });
+@@ -465,39 +471,55 @@
+         await updateTeachingIntent(intent.key, { state: "refused", last_code: "command_key_conflict" });
+         reloadIntents();
+         setError("已核对：该键绑定不同内容，保留本机输入，未覆盖旧事实。");
+       } else {
+         const status=String(value?.status??"unknown");
+-        const unclaimed=value?.retry_policy==='same_key_before_claim';
++        const approval=value?.outbound_approval as import('./retrieval-api').QApproval|null|undefined;
++        const unclaimed=value?.retry_policy==='same_key_before_claim'&&(!approval||approval.can_continue);
+         await updateTeachingIntent(intent.key, { state: "unconfirmed",last_message:status,last_code:unclaimed?'same_key_before_claim':undefined }); reloadIntents();
+-        setNotice(unclaimed?'已接受且尚未领取启动；可明确恢复原意图一次。':status==="failed"||status==="not_sent"?"已确认本次失败；可显式以新键重试。":"结果仍在途或未知；仅核对，不会重复启动。");
++        setNotice(approval?qApprovalText(approval):unclaimed?'已接受且尚未领取启动；可明确恢复原意图一次。':status==="failed"||status==="not_sent"?"已确认本次失败；可显式以新键重试。":"结果仍在途或未知；仅核对，不会重复启动。");
+       }
+       await refresh(true);
+     } catch (reason) {
+       setError(reason instanceof Error ? reason.message : "核对未完成");
+     } finally { if (mounted.current) setBusy(""); }
+   }
+ 
+   async function resumeAccepted(intent: TeachingIntentSummary) {
+     if (busy||!intent.draft_id) return;
+     const context=contextKey.current; setBusy(`resume-${intent.key}`); setError('');
+-    const current=()=>mounted.current&&activityRef.current===activityId&&context===contextKey.current;
++    const origin={owner:editorOwner.current,view:workspaceToken.current,head:observedHead.current,
++      scope:scopeRef.current,namespace:dataNamespace(),dataContext:canonical(getDataContext())};
++    const current=()=>mounted.current&&activityRef.current===activityId&&context===contextKey.current
++      &&editorOwner.current===origin.owner&&workspaceToken.current===origin.view&&observedHead.current===origin.head
++      &&scopeRef.current===origin.scope&&dataNamespace()===origin.namespace&&canonical(getDataContext())===origin.dataContext;
+     try {
+       const stored=await readTeachingDraft(intent.draft_id);
++      if(!current())return;
+       const receipt=await getTeachingCommand(activityId,intent.key,token);
+-      if (!stored||compareTeachingIntent(intent,receipt)!=='matching'||receipt?.retry_policy!=='same_key_before_claim') {
++      if(!current())return;
++      const approval=receipt?.outbound_approval as import('./retrieval-api').QApproval|null|undefined;
++      if (!stored||!origin.owner||intent.editor_owner_id!==origin.owner||stored.editor_owner_id!==origin.owner
++        ||intent.namespace!==origin.namespace||stored.activity_id!==activityId||stored.head_revision!==intent.head_revision
++        ||compareTeachingIntent(intent,receipt)!=='matching'||receipt?.retry_policy!=='same_key_before_claim'||(approval&&!approval.can_continue)) {
+         if(current()) setNotice('原命令不再满足未领取启动条件；已只读核对，没有重发。'); return;
+       }
+       const original=JSON.parse(stored.content) as Record<string,unknown>;
+       delete original.activity_id;
+-      const result=await postTeachingCommand(activityId,{...original,business_key:intent.key} as TeachingCommandInput,token);
++      const command={...original,business_key:intent.key} as TeachingCommandInput;
++      const built=await buildTeachingCommand(activityId,command);
++      if(!current())return;
++      const owner=await teachingEditorOwner();
++      if(!current()||owner!==origin.owner||built.request_sha256!==intent.request_sha)return;
++      const result=await postTeachingCommand(activityId,command,token,current);
++      if(!current())return;
+       if (result.request_sha256!==intent.request_sha||result.business_key!==intent.key) throw new Error('恢复回执身份未确认');
+       if (['committed','history'].includes(result.status)) { await removeTeachingIntent(intent.key); await removeTeachingDraft(intent.draft_id); }
+       else await updateTeachingIntent(intent.key,{state:'unconfirmed',last_message:result.status,last_code:result.error_code??undefined});
+       if(current()) { reloadIntents(); setNotice('原意图恢复已返回；不会自动再发。'); await refresh(true); }
+     } catch(reason) { if(current()) setError(reason instanceof Error?reason.message:'恢复未确认，原意图保留'); }
+-    finally { if(mounted.current&&activityRef.current===activityId) setBusy(''); }
++    finally { if(current()) setBusy(''); }
+   }
+ 
+   function useCurrentBinding(keepText: boolean) {
+     if (!workspace) return;
+     const key=[activityId,workspace.head.goal_record_id,workspace.head.path_record_id,workspace.head.node_id,
+@@ -607,11 +629,11 @@
+           onChange={event => { editSeq.current++; dirty.current.goal=true; setSelectedSeed(null); setGoalText(event.target.value); }}
+         />
+         <button
+           className="primary" disabled={busy !== "" || !goalText.trim() || !canLocal}
+           onClick={() => void submit("goal", {
+-            goal: goalText.trim(),
++            goal: goalText,
+             self_report: null, domain: null, seed_operation_id: selectedSeed?.operation_id??null, seed_payload_sha256: selectedSeed?.payload_sha256??null,
+           })}
+         >保存目标（不调用模型）</button>
+         {selectedSeed&&<p role="status">已载入G7目标；保存时保留原成果身份，不调用模型或重新启动首次学习。</p>}
+         <p className="quiet">
+@@ -799,11 +821,11 @@
+           disabled={busy !== "" || !canLocal || editConflict || !(correctionTarget||workspace?.head.feedback_record_id||workspace?.head.reason_record_id) || !correctionText.trim()}
+           onClick={() => {
+             const target=correctionTarget||workspace?.head.feedback_record_id||workspace?.head.reason_record_id;
+             if (!target) return;
+             void submit("correct", {
+-              target_record_id:target, text: correctionText.trim(),
++              target_record_id:target, text: correctionText,
+               disputed_dimensions: [],
+             });
+           }}
+         >提交纠错（零费）</button>
+         <p className="quiet">

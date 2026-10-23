@@ -1,0 +1,18 @@
+{
+  "TASK": "TASK-127",
+  "logical_entries": {
+    "1": "首次筹备：同一 Docker 客户端 info API500 与 version 25秒超时；未创建或启动资源",
+    "2": "用户答复恢复后继续；同客户端只读重核成功，控制器核查和实际六项仍属本入口；受限令牌只读端口观察失败获平台权限后同脚本成功"
+  },
+  "observations": [
+    {"action": "docker info --format json.ServerVersion", "restricted_token": true, "executed_resource_start": false, "result": "named pipe access denied", "tool_wall_seconds": 0},
+    {"action": "same docker info under approved host access", "process_exit_code": 0, "product_gate_passed": false, "result": "Docker API /v1.55/info HTTP500; stdout empty JSON string", "resource_writes": 0},
+    {"action": "same docker version read", "evidence": "docker-version.json", "result": "25 second timeout", "resource_writes": 0},
+    {"action": "same docker version recheck after user reply", "evidence": "docker-version-recheck.json", "result": "server responded", "resource_writes": 0},
+    {"action": "prepare-check.py under restricted token", "result": "win-support.py port_owners: GetExtendedTcpTable errno5 port_owner_observation_failed", "tool_wall_seconds": 5.6421773, "resource_writes": 0},
+    {"action": "identical prepare-check.py under approved host access", "evidence": "prepare-check.json", "tool_wall_seconds": 1.4004092, "result": "passed", "resource_writes": 0}
+  ],
+  "preparation_tool_wall_exact": "unknown",
+  "preparation_conservative_reserved_seconds": 4200,
+  "historical_tasks_budgets_reset": false
+}

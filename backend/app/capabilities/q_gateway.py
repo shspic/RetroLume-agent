@@ -23,12 +23,14 @@ class Dispatch:
     manager: object
     token: object = None
     released: bool = False
+    admission_signal: object = None
 
 
 async def release_dispatch():
     current = CURRENT.get()
     if current is not None and not current.released:
         current.released = True
+        if current.admission_signal is not None:current.admission_signal.close()
         CURRENT.reset(current.token)
         await current.manager.__aexit__(None, None, None)
 
@@ -73,6 +75,10 @@ async def call_with_policy(gateway, context, request, original):
     except Exception as exc:
         from app.data_exit.contracts import DataError
         if isinstance(exc,(AdmissionDenied,DataError,ValueError,TypeError)):
+            import logging,re
+            code=getattr(exc,'code',None) or (str(exc) if isinstance(exc,AdmissionDenied) else None)
+            if not isinstance(code,str) or not re.fullmatch('[a-z0-9_]{1,80}',code):code=type(exc).__name__
+            logging.getLogger(__name__).warning('q_dispatch_rejected code=%s field=%s value_sha256=%s',code,getattr(exc,'q_path',None),getattr(exc,'q_value_sha256',None))
             return gateway._result(context,CallStatus.REJECTED,'q_authorization_denied')
         raise
     finally:
@@ -135,7 +141,15 @@ async def transaction_check(connection, ledger, activity_id, operation_id, *, in
 def admission_intent(intent):
     current = CURRENT.get()
     if current is None:return
-    current.authority.admission_intent(current.service.outbound_authorization,intent.context)
+    current.admission_signal=current.authority.admission_intent(current.service.outbound_authorization,intent.context)
+
+
+def admission_failed(*,definitely_denied):
+    current=CURRENT.get()
+    if current is not None:
+        try:current.authority.admission_failed(current.service.outbound_authorization,definitely_denied=definitely_denied)
+        finally:
+            if current.admission_signal is not None:current.admission_signal.close()
 
 
 async def mark_prefix(connection,ledger):
@@ -159,7 +173,8 @@ async def history_only_result(connection,ledger,call):
         raise AdmissionDenied('q_result_witness_missing')
     if str(call['admission_id'])!=row['admission']['admission_id'] or call['state']!='dispatched':
         raise AdmissionDenied('q_result_identity')
-    if row.get('revoked'):return True
+    if (row.get('revoked') or authority.hub.state().get('fence') is not None
+        or call.get('dispatch_closed') or call.get('activity_status_now')=='cancelled'):return True
     try:
         from .q_context import check_snapshot_sql
         await check_snapshot_sql(connection,row['prepared']['snapshot'],authority)
@@ -170,4 +185,6 @@ async def history_only_result(connection,ledger,call):
 def admission_observed(permit):
     current = CURRENT.get()
     if current is None:return
-    current.authority.admission_observed(current.service.outbound_authorization,permit,current.context)
+    try:current.authority.admission_observed(current.service.outbound_authorization,permit,current.context)
+    finally:
+        if current.admission_signal is not None:current.admission_signal.close()

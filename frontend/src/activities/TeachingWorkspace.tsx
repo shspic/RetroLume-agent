@@ -354,7 +354,7 @@ export function TeachingWorkspace({
         const owner=await teachingEditorOwner();
         if(!owner||!stillCurrent()||origin.owner!==owner)throw new Error('编辑身份不可核对，未提交');
         if(recovered&&JSON.stringify(recovered.domain_input)!==JSON.stringify({...input,body}))throw new Error('原动作版本不同，不能改绑');
-        const query=String(workspace?.goal?.goal??goalText).trim().slice(0,1024);
+        const query=String(workspace?.goal?.goal??goalText);
         const result=await retrieveForCommand(token,activityId,owner,'teaching',{...input,body},scopeRevision,input.expected_revision,query,()=>stillCurrent()&&editorOwner.current===owner,recovered,modelService);
         if(!stillCurrent()||!result.ref)return;
         input.retrieval_ref=result.ref;retrievalChain=result.row;
@@ -487,23 +487,37 @@ export function TeachingWorkspace({
   async function resumeAccepted(intent: TeachingIntentSummary) {
     if (busy||!intent.draft_id) return;
     const context=contextKey.current; setBusy(`resume-${intent.key}`); setError('');
-    const current=()=>mounted.current&&activityRef.current===activityId&&context===contextKey.current;
+    const origin={owner:editorOwner.current,view:workspaceToken.current,head:observedHead.current,
+      scope:scopeRef.current,namespace:dataNamespace(),dataContext:canonical(getDataContext())};
+    const current=()=>mounted.current&&activityRef.current===activityId&&context===contextKey.current
+      &&editorOwner.current===origin.owner&&workspaceToken.current===origin.view&&observedHead.current===origin.head
+      &&scopeRef.current===origin.scope&&dataNamespace()===origin.namespace&&canonical(getDataContext())===origin.dataContext;
     try {
       const stored=await readTeachingDraft(intent.draft_id);
+      if(!current())return;
       const receipt=await getTeachingCommand(activityId,intent.key,token);
+      if(!current())return;
       const approval=receipt?.outbound_approval as import('./retrieval-api').QApproval|null|undefined;
-      if (!stored||compareTeachingIntent(intent,receipt)!=='matching'||receipt?.retry_policy!=='same_key_before_claim'||(approval&&!approval.can_continue)) {
+      if (!stored||!origin.owner||intent.editor_owner_id!==origin.owner||stored.editor_owner_id!==origin.owner
+        ||intent.namespace!==origin.namespace||stored.activity_id!==activityId||stored.head_revision!==intent.head_revision
+        ||compareTeachingIntent(intent,receipt)!=='matching'||receipt?.retry_policy!=='same_key_before_claim'||(approval&&!approval.can_continue)) {
         if(current()) setNotice('原命令不再满足未领取启动条件；已只读核对，没有重发。'); return;
       }
       const original=JSON.parse(stored.content) as Record<string,unknown>;
       delete original.activity_id;
-      const result=await postTeachingCommand(activityId,{...original,business_key:intent.key} as TeachingCommandInput,token);
+      const command={...original,business_key:intent.key} as TeachingCommandInput;
+      const built=await buildTeachingCommand(activityId,command);
+      if(!current())return;
+      const owner=await teachingEditorOwner();
+      if(!current()||owner!==origin.owner||built.request_sha256!==intent.request_sha)return;
+      const result=await postTeachingCommand(activityId,command,token,current);
+      if(!current())return;
       if (result.request_sha256!==intent.request_sha||result.business_key!==intent.key) throw new Error('恢复回执身份未确认');
       if (['committed','history'].includes(result.status)) { await removeTeachingIntent(intent.key); await removeTeachingDraft(intent.draft_id); }
       else await updateTeachingIntent(intent.key,{state:'unconfirmed',last_message:result.status,last_code:result.error_code??undefined});
       if(current()) { reloadIntents(); setNotice('原意图恢复已返回；不会自动再发。'); await refresh(true); }
     } catch(reason) { if(current()) setError(reason instanceof Error?reason.message:'恢复未确认，原意图保留'); }
-    finally { if(mounted.current&&activityRef.current===activityId) setBusy(''); }
+    finally { if(current()) setBusy(''); }
   }
 
   function useCurrentBinding(keepText: boolean) {
@@ -617,7 +631,7 @@ export function TeachingWorkspace({
         <button
           className="primary" disabled={busy !== "" || !goalText.trim() || !canLocal}
           onClick={() => void submit("goal", {
-            goal: goalText.trim(),
+            goal: goalText,
             self_report: null, domain: null, seed_operation_id: selectedSeed?.operation_id??null, seed_payload_sha256: selectedSeed?.payload_sha256??null,
           })}
         >保存目标（不调用模型）</button>
@@ -809,7 +823,7 @@ export function TeachingWorkspace({
             const target=correctionTarget||workspace?.head.feedback_record_id||workspace?.head.reason_record_id;
             if (!target) return;
             void submit("correct", {
-              target_record_id:target, text: correctionText.trim(),
+              target_record_id:target, text: correctionText,
               disputed_dimensions: [],
             });
           }}

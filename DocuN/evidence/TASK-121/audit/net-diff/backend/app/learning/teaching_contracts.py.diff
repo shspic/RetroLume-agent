@@ -1,0 +1,14 @@
+--- initial/backend/app/learning/teaching_contracts.py
++++ final/backend/app/learning/teaching_contracts.py
+@@ -485,10 +485,11 @@
+     model_called: bool | None = None
+     tool_called: bool | None = None
+     retry_policy: Literal["none", "same_key_before_claim", "explicit_new_key_after_confirmed_failure",
+                           "read_only"] = "none"
+     exposed_part: dict | None = None
++    outbound_approval: dict | None = None
+ 
+ 
+ # --- 受信内部 profile（099 第 5.2 节） ---
+ 
+ class TeachingProfile(Strict):

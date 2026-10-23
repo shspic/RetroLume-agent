@@ -340,8 +340,11 @@ class PostgresAdmissionLedger(TeachingLedgerMethods, MemoryLedgerMethods, Interv
         policy = None
         policy_entered = False
         try:
-            from app.data_exit.q_store import authority_for, method_name, is_read_method, DISPATCH_METHODS
-            authority=authority_for(self)
+            from app.data_exit.q_store import authority_for, method_name, is_read_method, DISPATCH_METHODS, POLICY
+            # A sealed reader has no normal Q authority. Its named pure reads
+            # still run through the unchanged readonly PG connection guard.
+            readonly_projection=(self.data_readonly or POLICY.get() is not None) and is_read_method(method_name(operation))
+            authority=None if readonly_projection else authority_for(self)
             if authority is not None and not is_read_method(method_name(operation)):
                 policy=authority.async_policy(shared=method_name(operation) in DISPATCH_METHODS)
                 await policy.__aenter__()
@@ -546,11 +549,16 @@ class PostgresAdmissionLedger(TeachingLedgerMethods, MemoryLedgerMethods, Interv
             if actual is None or str(actual["current_version"])!=x.version_id or actual["revision"]!=x.revision:
                 raise ActivityLedgerConflict("source_invalid")
         new_key=tuple(sorted((x.source_id,x.version_id,x.revision) for x in sources))
-        if not force_revision and self._scope_key(await self._source_rows(connection,activity_id))==new_key:return ScopeSnapshot(activity_id,expected_scope_revision,sources)
+        previous=await self._source_rows(connection,activity_id)
+        if not force_revision and self._scope_key(previous)==new_key:return ScopeSnapshot(activity_id,expected_scope_revision,sources)
         if expected_scope_revision==2_147_483_647:raise ActivityLedgerConflict("scope_revision_limit")
-        await connection.execute("DELETE FROM activity_scope_sources WHERE activity_id=%s",(activity_id,))
+        keep={x.source_id for x in sources}
+        for old in previous:
+            if str(old['source_id']) not in keep:
+                await connection.execute("DELETE FROM activity_scope_sources WHERE activity_id=%s AND source_id=%s",(activity_id,old['source_id']))
         for x in sources:
-            await connection.execute("INSERT INTO activity_scope_sources(activity_id,source_id,version_id,source_revision) VALUES (%s,%s,%s,%s)",(activity_id,x.source_id,x.version_id,x.revision))
+            await connection.execute("""INSERT INTO activity_scope_sources(activity_id,source_id,version_id,source_revision) VALUES (%s,%s,%s,%s)
+              ON CONFLICT(activity_id,source_id) DO UPDATE SET version_id=EXCLUDED.version_id,source_revision=EXCLUDED.source_revision""",(activity_id,x.source_id,x.version_id,x.revision))
         await connection.execute("UPDATE activities SET scope_revision=scope_revision+1,updated_at=CURRENT_TIMESTAMP WHERE id=%s",(activity_id,))
         return ScopeSnapshot(activity_id,expected_scope_revision+1,sources)
 

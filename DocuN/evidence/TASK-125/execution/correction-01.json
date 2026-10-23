@@ -1,0 +1,13 @@
+{
+  "first_batch": "18 methods; 17 passed; native junction fixture creation failed before installer assertion",
+  "diagnostic": "junction-diagnostic.json",
+  "winerror": 5,
+  "cause": "Windows sandbox denies native reparse creation; ordinary file writes unaffected",
+  "scope_of_escalation": "only precreate empty scratch/junction-fixture/link -> sibling target; no PG/network/application operations",
+  "fixture_created": true,
+  "approval_review_rejected": false,
+  "fix": "optional explicitly supplied in-scratch precreated junction; actual installer path rejection still runs under sandbox",
+  "product_code_changed_after_batch_01": true,
+  "remaining_correction_batches": 1,
+  "additional_self_review_fix": "原版本误把 PG 服务端地址限定为127.0.0.1，会拒绝合法容器映射；连接 host仍固定loopback，真实system_identifier/OID/DB/role严格匹配，服务端地址按实际记录；成功控制流样本改用172.18.0.2与5432映射55464"
+}

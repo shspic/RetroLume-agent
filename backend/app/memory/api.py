@@ -38,7 +38,7 @@ async def capabilities(request:Request):
 async def command_receipt(request:Request,business_key:str):
     _guard(request)
     try:
-        row=await _service(request).ledger.read_memory_command(uuid_text(business_key))
+        row=await _service(request).read_command(uuid_text(business_key))
         if row is None:raise MemoryRefusal("memory_not_found","尚未发现该动作收据",404)
         return bounded_json(row)
     except Exception as exc:raise _error(exc) from None
@@ -56,7 +56,7 @@ async def submit_command(request:Request):
 @router.get("/memories")
 async def list_memories(request:Request,limit:int=20,cursor:str|None=None):
     _guard(request)
-    try:return bounded_json(await _service(request).ledger.read_memory_snapshot(limit=limit,cursor_token=cursor))
+    try:return bounded_json(await _service(request).read_snapshot(limit=limit,cursor_token=cursor))
     except Exception as exc:raise _error(exc) from None
 
 
@@ -74,7 +74,7 @@ async def read_memory(request:Request,memory_id:str,version:int|None=None):
     _guard(request)
     try:
         if version is not None and not 1<=version<=32:raise ValueError()
-        result=await _service(request).ledger.read_memory_snapshot(uuid_text(memory_id),version=version)
+        result=await _service(request).read_snapshot(uuid_text(memory_id),version=version)
         if result is None:raise MemoryRefusal("memory_not_found","记忆不存在",404)
         return bounded_json(result)
     except Exception as exc:raise _error(exc) from None

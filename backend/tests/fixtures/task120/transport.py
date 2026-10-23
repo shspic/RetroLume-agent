@@ -23,6 +23,17 @@ def install():
         root=r.PRIVATE/os.environ['RETROLUME_TASK120_SLOT']
         faults=json.loads((root/'faults.json').read_text(encoding='utf-8')) if (root/'faults.json').exists() else {}
         mode=faults.get(p['operation_id'],'normal')
+        if mode=='commit_ack_lost':
+            # Inject only an acknowledgement loss AFTER the original real PG
+            # record_outcome (including 007/domain transaction) has returned.
+            # No SQL, outcome or transaction result is synthesized.
+            original=current.ledger.record_outcome
+            async def lost_ack(permit,outcome):
+                result=await original(permit,outcome)
+                r.event('actual_pg_result_COMMIT_ack_lost',operation_id=p['operation_id'],pid=os.getpid(),prepared_id=p['prepared_id'])
+                from app.capabilities.contracts import AdmissionUnavailable
+                raise AdmissionUnavailable('TESTONLY_actual_commit_ack_lost')
+            current.ledger.record_outcome=lost_ack
         r.event('synthetic_provider_transport',pid=os.getpid(),operation_id=p['operation_id'],prepared_id=p['prepared_id'],
             provider=p['provider'],payload_bytes_sha256=hashlib.sha256(payload_bytes).hexdigest(),external=False,actual_fee_microunits=0,mode=mode)
         if mode=='unknown':raise DeliveryUnknown('TESTONLY_delivery_unknown')
@@ -52,6 +63,24 @@ def install():
                 'choices':[{'index':0,'message':{'role':'assistant','content':json.dumps(business,ensure_ascii=False)},'finish_reason':'stop'}],
                 'usage':{'prompt_tokens':100,'completion_tokens':100,'total_tokens':200}}
         body=json.dumps(value,ensure_ascii=False,separators=(',',':')).encode('utf-8')
+        if mode=='release_gap':
+            class GapResponse(TransportResponse):
+                def __getattribute__(self,name):
+                    if name=='status_code' and not getattr(self,'_task120_observed',False):
+                        from app.data_exit.q_store import POLICY
+                        # This hook controls only delivery of a synthetic
+                        # response. The real gateway must already have released
+                        # both its dispatch context and its actual policy lease.
+                        if CURRENT.get() is not None or POLICY.get() is not None:raise RuntimeError('result_parser_still_holds_q_shared')
+                        object.__setattr__(self,'_task120_observed',True)
+                        tag=hashlib.sha256(p['operation_id'].encode()).hexdigest()
+                        r.write(root/('gap-ready-'+tag+'.json'),{'operation_id':p['operation_id'],'dispatch_released':True,'worker_pid':os.getpid(),'worker_thread':__import__('threading').get_ident(),'utc':r.utc()},private=True)
+                        deadline=time.monotonic()+5
+                        while not (root/('gap-release-'+tag)).exists():
+                            if time.monotonic()>=deadline:raise RuntimeError('release_gap_fixture_timeout')
+                            time.sleep(.01)
+                    return super().__getattribute__(name)
+            return GapResponse(200,body,len(body))
         return TransportResponse(200,body,len(body))
     HttpxModelTransport.send=forbid_legacy
     HttpxModelTransport.send_frozen=frozen

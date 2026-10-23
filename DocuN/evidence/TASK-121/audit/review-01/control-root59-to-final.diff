@@ -1,0 +1,16 @@
+--- DocuN\evidence\TASK-120\execution\audit-repair-07\asrun-root059\backend\app\data_exit\control.py
++++ backend\app\data_exit\control.py
+@@ -209,6 +209,13 @@
+         if job.get('completion_protocol') == 1 and job['state'] in ('published','received','verified','active_readonly','deleted','deleted_pending'):
+             confirmation=job.get('completion_confirmed_ns')
+             deadline=job.get('execution',{}).get('deadline_ns')
++            if job['kind']=='source_delete' and job.get('cleanup_execution'):
++                attempt=job['cleanup_execution'];proof=job.get('cleanup_confirmation') or {}
++                deadline=attempt.get('deadline_ns')
++                confirmation=proof.get('confirmed_ns') if (
++                    proof.get('actor_id')==attempt.get('actor_id')
++                    and proof.get('clock_domain')==attempt.get('clock_domain')
++                    and proof.get('tombstone_id')) else None
+             if type(confirmation) is not int or type(deadline) is not int or not 0 < confirmation < deadline:
+                 receipt.update(state={'portable_export':'published_unconfirmed','restore_checkpoint':'published_unconfirmed',
+                     'upload':'upload_unconfirmed','restore':'restore_unconfirmed','activate':'activation_unconfirmed',

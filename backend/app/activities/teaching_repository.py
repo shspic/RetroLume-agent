@@ -1464,6 +1464,24 @@ class TeachingLedgerMethods:
             if row is None or row['activity'] is None:
                 return None
             view = {k:_decode(v) if k!='read_at' else v.isoformat() for k,v in row.items()}
+            if view['memory_selected'] and await self._memory_schema_info(connection)=='ready':
+                # v3 can use retrieval without selected memory. The old version
+                # fallback remains conservative for eligibility; this display
+                # flag distinguishes explicit null-memory frozen contexts only.
+                no_memory="""mt.context_body::jsonb @> '{"schema":"teaching.context.v3","memory_selection_sha256":null,"memory_dependency_sha256":null,"recipe":null}'::jsonb
+                  AND mt.context_body::jsonb->'memory_refs'='[]'::jsonb
+                  AND jsonb_typeof(mt.context_body::jsonb->'messages')='array'"""
+                selected=await connection.execute("""SELECT
+                  EXISTS(SELECT 1 FROM public.activity_memory_bindings mb WHERE mb.activity_id=%s)
+                  OR EXISTS(SELECT 1 FROM public.teaching_commands mt WHERE mt.activity_id=%s AND mt.context_body IS NOT NULL
+                    AND mt.context_body::jsonb->>'schema' IN ('teaching.context.v2','teaching.context.v3')
+                    AND NOT COALESCE(("""+no_memory+"""),FALSE))
+                  OR EXISTS(SELECT 1 FROM public.activity_operation_results mr WHERE mr.activity_id=%s AND mr.payload_format='json'
+                    AND (mr.payload::jsonb->'value'->>'profile' IN ('teaching.v2','interview.v2')
+                      OR mr.payload::jsonb->'value'->>'profile'='teaching.v3' AND NOT EXISTS(
+                        SELECT 1 FROM public.teaching_commands mt WHERE mt.activity_id=mr.activity_id AND mt.operation_id=mr.operation_id
+                          AND COALESCE(("""+no_memory+"""),FALSE)))) AS selected""",(activity_id,activity_id,activity_id))
+                view['memory_selected']=(await selected.fetchone())['selected']
             from app.learning.teaching_views import record_sources_valid, bound_references
             for fact in view['bodies']:
                 fact['memory_qualified']=view['memory_qualified']

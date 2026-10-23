@@ -1,0 +1,71 @@
+--- initial/backend/app/data_exit/control.py
++++ final/backend/app/data_exit/control.py
+@@ -103,10 +103,13 @@
+             elif kind in ("owned.begin", "owned.end"):
+                 state["owned"][p["owned_id"]] = {**state["owned"].get(p["owned_id"], {}), **p}
+             elif kind == "deletion.observe":
+                 state["deletions"][p["entity_kind"] + ":" + p["entity_id"]] = p
+             elif kind=='source.register':state['source']=p
++            elif kind.startswith('q.'):
++                from .q_store import replay_event
++                replay_event(state, kind, p)
+         return state
+ 
+     def _validated_locked(self, *, writable=False):
+         """仅由持有本hub真实文件锁的读写入口调用，返回当前完整字节的已验快照。"""
+         # 每次仍在真实锁内读取当前完整字节；仅复用同一文件对象和摘要的已验投影。
+@@ -159,10 +162,24 @@
+             return self._append(events, kind, payload)
+ 
+     def assert_writable(self):
+         return self._current_snapshot(writable=True)
+ 
++    def q_decide(self, kind, decide):
++        """Q-only CAS. Decision seq is selected under the actual journal lock (K1)."""
++        if kind not in ('q.bind','q.prepared','q.approved','q.revoked','q.claim','q.launch_claim',
++                        'q.admission_intent','q.admission_observed','q.closed'):
++            raise DataError('q_event_not_allowed')
++        with self.lock.acquire(True, timeout=1):
++            cached = self._validated_locked(writable=True)
++            state, events = json.loads(cached[1]), cached[4]
++            payload = decide(state, len(events) + 1)
++            if payload is None:
++                return None
++            self._append(events, kind, payload)
++            return payload
++
+     @staticmethod
+     def receipt(job):
+         return {key: job[key] for key in PUBLIC_JOB if key in job}
+ 
+     def current_receipt(self, state, job):
+@@ -263,11 +280,11 @@
+ 
+     def reconcile(self, job_id):
+         return {**self.get(job_id), "reconcile": "journal_confirmed"}
+ 
+     def artifact_path(self, category, identity):
+-        if category not in ("plans", "credentials", "overlays", "receipts"):
++        if category not in ("plans", "credentials", "overlays", "receipts", "q-root", "q-prepared"):
+             raise ValueError("私有类别未受信")
+         uuid(identity)
+         return self.root / f"{category}-{identity}.bin"
+ 
+     def save_artifact(self, category, identity, data, check=lambda: None):
+@@ -277,10 +294,16 @@
+         with temporary.open("xb") as stream:
+             check()
+             stream.write(data); stream.flush(); os.fsync(stream.fileno())
+         check()
+         private_file(temporary)
++        if os.name=='nt' and category in ('q-root','q-prepared'):
++            # Windows rename is atomic and refuses an existing destination.
++            # Unlike hard links it also works inside the workspace file sandbox.
++            os.rename(temporary,path)
++            check()
++            return digest(data)
+         publish(temporary, path, check=check)
+         # 只删除本调用准确临时文件，发布原件保留。
+         temporary.unlink()
+         check()
+         return digest(data)

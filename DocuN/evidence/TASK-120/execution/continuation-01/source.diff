@@ -1,0 +1,62 @@
+--- before/backend/app/capabilities/q_context.py
++++ after/backend/app/capabilities/q_context.py
+@@ -223,6 +223,20 @@
+     allowed_derived=set(derived)
+     source_hashes={x['input_sha256'] for x in manifest.fragments}
+     records=[]
++    # Frozen interview contexts are typed data inside a JSON message. Property
++    # names declared by those closed schemas are structure, including names
++    # supplied as Python keyword arguments (not literal template atoms). Their
++    # text values still require the same finite source/literal/parent proof.
++    context_fields=set()
++    if request.get('interview_profile'):
++        from app.interview.contracts import InterviewContext,InterviewHybridContext
++        def context_schema(value):
++            if isinstance(value,dict):
++                context_fields.update(value.get('properties',{}))
++                for child in value.values():context_schema(child)
++            elif isinstance(value,list):
++                for child in value:context_schema(child)
++        for model in (InterviewContext,InterviewHybridContext):context_schema(model.model_json_schema())
+     for parent in state.get('parents',[]):
+         if parent.get('operation_id') and 'admission_id' not in parent:raise AdmissionDenied('q_parent_unqualified')
+     profile=request.get('learning_profile') or {}
+@@ -261,7 +275,7 @@
+             deny('q_unapproved_text',path,value)
+         if isinstance(value,dict):
+             for key,item in value.items():
+-                if key not in allowed_atoms and key not in structural:
++                if key not in allowed_atoms and key not in structural and not ('json' in path and key in context_fields):
+                     deny('q_unapproved_field',path,key)
+                 walk(item,path+(key,))
+         elif isinstance(value,(list,tuple)):
+--- before/backend/app/capabilities/q_protocol.py
++++ after/backend/app/capabilities/q_protocol.py
+@@ -100,8 +100,25 @@
+     def check_model(self, request, payload=None):
+         from .embedding import approved_fragment_identity
+         from .contracts import AdmissionDenied
+-        profile = request.learning_profile or request.teaching_profile or request.interview_profile
+-        catalog = profile.catalog if profile else load_json(request.html_profile.context_json).get('catalog', []) if request.html_profile else []
++        profile = request.learning_profile or request.teaching_profile
++        if request.interview_profile is not None:
++            # InterviewProfile contains bindings, not a catalog. Its actual
++            # typed catalog is in the already frozen second message. Recheck
++            # the exact profile/prompt pair before using those source entries.
++            from app.interview.contracts import parse_context,profile_for,InterviewHybridContext
++            from app.interview.prompt import messages
++            try:
++                value=load_json(request.messages[1].content)
++                frozen=parse_context(value.get('context',value))
++                background=value.get('learning_background') if isinstance(frozen,InterviewHybridContext) else None
++                if (profile_for(frozen)!=request.interview_profile
++                    or [m.model_dump(mode='json',exclude_none=True) for m in request.messages]!=messages(frozen,background)):
++                    raise ValueError('interview_binding_invalid')
++                catalog=frozen.catalog
++            except (ValueError,TypeError,KeyError,IndexError):
++                raise AdmissionDenied('outbound_profile_not_approved') from None
++        else:
++            catalog = profile.catalog if profile else load_json(request.html_profile.context_json).get('catalog', []) if request.html_profile else []
+         if not catalog:
+             raise AdmissionDenied('outbound_profile_required')
+         allowed = {x['identity_sha256'] for x in self.fragments}

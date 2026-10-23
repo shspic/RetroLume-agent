@@ -1,0 +1,60 @@
+"""仅最低传输的有限JSON合成响应；不评价真实服务语义质量。"""
+import json
+
+def reply(payload):
+    values=[]
+    for item in payload['messages']:
+        if item.get('role')=='user':
+            try:values.append(json.loads(item['content']))
+            except (ValueError,KeyError):pass
+    value=next((x for x in reversed(values) if isinstance(x,dict) and 'task' in x),values[-1] if values else {})
+    if 'task' in value:
+        ids=[e['id'] for e in value['evidence']][:1]
+        task=value['task'];action=task['kind']
+        if not ids:return {'result_type':'no_evidence','message':'合成传输没有目录证据','missing':['当前资料片段']}
+        goal=value.get('goal',''); evidence=value['evidence']
+        if '火星' in goal:return {'result_type':'no_evidence','message':'冻结资料没有温度依据','missing':['火星平均温度的可靠资料']}
+        if 'Java' in goal and '编程语言' not in goal:
+            return {'result_type':'clarification','message':'Java有两个已选含义','questions':['你指编程语言还是咖啡产地？请明确资料范围。']}
+        if ('冲突' in goal or '说法不同' in goal) and len(evidence)>1:
+            return {'result_type':'conflict','message':'同时保留冲突位置，按秒重新核算','claims':[{'text':e['text'][:256],'citations':[e['id']]} for e in evidence[:2]]}
+        concept='原子性' in goal; program='range' in goal or '循环' in goal
+        dimension='definitions' if concept else 'reasoning' if program else 'units'
+        point='原子性是一起提交或撤销，持久性是提交后在约定恢复条件下保留；二者不相互推出。' if concept else 'range(1,4)只取1、2、3，逐次累加为1、3、6；不运行用户代码。' if program else '先换成秒，再计算米每秒'
+        if action=='plan':
+            return {'result_type':'path','message':'合成路径，仅验证结构与位置','nodes':[{'title':'事务的两个性质' if concept else '循环逐步推理' if program else '分钟换秒与平均速度','objective':point,'prerequisites':[],'rationale':'按当前已核资料安排练习','citations':ids,'completion_dimensions':[{'dimension':dimension,'required_point':point}]}]}
+        if action=='exercise':
+            purpose=task['purpose']
+            distance,minutes,seconds,speed={'initial':('120','2','120','1'),'continuation':('180','1.5','90','2'),'retest':('360','2','120','3')}[purpose]
+            if purpose=='retest' and '360米' in json.dumps(task.get('parent_feedback',{}),ensure_ascii=False):distance,minutes,seconds,speed='240','1','60','4'
+            numeric={'value_decimal':speed,'unit':'米每秒','operation':'divide','left':distance,'right':seconds,'tolerance_decimal':'0'}
+            instance={'kind':'calculation','quantities':[{'name':'路程','value_decimal':distance,'unit':'米'},{'name':'时间','value_decimal':minutes,'unit':'分钟'}]}
+            if concept:instance={'kind':'concept','scenarios':[{'label':'事务提交与恢复','text':'一组修改一起提交；发生约定故障后已提交结果保留。请区分两性质。'}]}
+            if program:instance={'kind':'program','language':'Python','code':'total = 0\nfor i in range(1,4):\n    total += i','inputs':[],'manual_expected':'1、3、6，最终6；只阅读推理。'}
+            return {'result_type':'exercise','message':'冻结合成题目结构验证','exercise_type':'concept' if concept else 'program' if program else 'calculation','difficulty':1,'stem':'解释原子性和持久性，并说明两者能否相互推出。' if concept else '阅读range(1,4)累加代码，逐步推理total，不执行代码。' if program else f'{distance}米用{minutes}分钟，平均速度是多少？请说明换算与单位。','reference_points':[{'point_id':'p1','text':point if concept or program else f'{minutes}分钟为{seconds}秒，平均速度{distance}/{seconds}={speed}米每秒','citations':ids,**({} if concept or program else {'numeric':numeric})}],'reference_explanation':point,'dimensions':[{'id':dimension,'point_ids':['p1'],'description':point}],'hint':'先辨明定义或逐步推理。' if concept or program else '先将分钟转换成秒。','variant':{'purpose':purpose,'parent_exercise_record_id':task.get('parent_exercise_record_id'),'parent_feedback_record_id':task.get('parent_feedback_record_id'),'instance_data':instance}}
+        answer=task['answer_text']
+        wrong=answer.strip()=='1米' or any(x in answer for x in ('60米每秒','1000米每秒','不是1米每秒','range包含4','得到10','原子性可以推出持久性'))
+        uncertain='没确定' in answer or '不能说明持久性' in answer
+        detail={'answer_excerpt':answer[:200],'explanation':'冻结反例遗漏换秒、单位、否定或定义条件。' if wrong else '引用冻结作答，最终资格仍由本地政策核对。','point_ids':['p1'],'citations':ids}
+        correct=[detail] if not wrong and not uncertain else []
+        if wrong and '120' in answer and '除以2' in answer:correct=[{'answer_excerpt':answer[:200],'explanation':'120除以2得到60的除法正确，但该商的单位是米每分钟，不能标成米每秒。','point_ids':['p1'],'citations':ids}]
+        if uncertain and concept:correct=[{'answer_excerpt':answer[:200],'explanation':'已说明原子性的共同提交或撤销，持久性仍需补充。','point_ids':['p1'],'citations':ids}]
+        return {'result_type':'feedback','message':('冻结合成反馈；'+str(task.get('exercise',{}).get('stem','')))[:240],'correct_parts':correct,'errors':[detail] if wrong else [],'evidence_gaps':[detail] if uncertain else [],'cause_hypotheses':[],'dimension_observations':[{'id':dimension,'observation':'not_met' if wrong else 'partial' if uncertain else 'met','reason':'冻结输入的有限反馈；不推断长期掌握','point_ids':['p1']}],'next_focus':{'focus_dimension':dimension,'reason':'需要新实例独立复测并说明依据','suggested_mode':'continuation' if wrong else 'retest'}}
+    context=value.get('context',value)
+    if str(context.get('schema','')).startswith('interview.context.'):
+        ids=[e['citation_id'] for e in context.get('catalog',[])][:1]
+        if context['action']=='ask':return {'type':'question','purpose':'interview','reason':'topic','text':'请区分虚构项目中的个人分工自报与合成测量口径，说明100毫秒到80毫秒能支持什么结论。','reference_ids':ids}
+        if context.get('probe_depth',0)==0:return {'type':'probe','reason':'missing_claim_evidence','text':'请说明同环境各1000次、100到80毫秒的下降比例，以及尚未得到资料证明的个人分工和吞吐收益。','recognitions':[],'gaps':[],'reference_ids':ids}
+        return {'type':'feedback','summary':'合成口径：耗时下降20%；不能推断吞吐、费用或雇主，个人分工仍是自报。','recognitions':[],'gaps':[],'conflicts':[],'next_steps':['请补足独立个人分工依据，再选择下一题。']}
+    if context.get('schema')=='html.context.v2':
+        citations=[]
+        def visit(x):
+            if isinstance(x,dict):
+                for k,v in x.items():
+                    if k in ('citation_id','id') and isinstance(v,str) and v.startswith(('lc_','ic_','hc_')):citations.append(v)
+                    else:visit(v)
+            elif isinstance(x,list):
+                for y in x:visit(y)
+        visit(context);ids=list(dict.fromkeys(citations))[:1]
+        return {'schema':'interactive_description.v1','title':'平均速度换算','concept':'合成固定解释，只验证受控输入、计算与显示。','inputs':[{'id':'hctl_distance','kind':'number','label':'路程（米）','description':'本轮冻结值','min':'1','max':'1000','step':'1','default':'120'},{'id':'hctl_time','kind':'number','label':'时间（秒）','description':'先统一成秒；零值前拒','min':'1','max':'600','step':'1','default':'120'}],'calculations':[{'id':'hcalc_speed','expression':{'op':'div','args':[{'op':'input','id':'hctl_distance'},{'op':'input','id':'hctl_time'}]}}],'views':[{'id':'hout_speed','kind':'readout','label':'平均速度','calculation':'hcalc_speed','unit':'米每秒'}],'actions':[{'id':'hact_reset','kind':'reset','label':'重置'}],'calculation_notes':[{'formula':'v=d/t','domain':'d为1至1000米，t为1至600秒；t不能为0','error':'不含测量误差','samples':[{'input':'d=120,t=120','expected':'1'},{'input':'d=120,t=240','expected':'0.5'}],'citations':ids}],'limitations':['合成传输不构成真实服务语义验收'],'citations':ids}
+    raise ValueError('synthetic_model_profile_not_implemented')

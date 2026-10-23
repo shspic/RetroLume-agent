@@ -16,12 +16,18 @@ import time
 from uuid import uuid4
 from app.data_exit.files import RootLease,private_file
 from app.preview.process import birth
-from app.worker.windows_job import NamedJob
+from .control_job import NamedJob
 
 ROOT=Path(__file__).resolve().parents[4]
 EVIDENCE=ROOT/'DocuN/evidence/TASK-120/execution'
+EXECUTION=EVIDENCE
 PRIVATE=ROOT/'.runtime/TASK-120'
-BUDGET=EVIDENCE/'budget.json'
+if os.environ.get('RETROLUME_TASK120_CONTINUATION')=='TASK-120-Q-PREP-CONTINUATION-06-20261020':
+    PRIVATE=PRIVATE/'continuation-06'
+if os.environ.get('RETROLUME_TASK120_CONTINUATION') in ('TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021','TASK-120-Q-PREP-TARGETED-REPAIR-08-20261021'):
+    PRIVATE=ROOT/'.runtime/task120-audit07'
+    EVIDENCE=EXECUTION/('audit-repair-08' if os.environ.get('RETROLUME_TASK120_CONTINUATION')=='TASK-120-Q-PREP-TARGETED-REPAIR-08-20261021' else 'audit-repair-07')
+BUDGET=EXECUTION/'budget.json'
 NAME='retrolume-task120-qprep-pg1'
 VOLUME='retrolume-task120-qprep-data'
 IMAGE='pgvector/pgvector@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f'
@@ -35,14 +41,22 @@ def write(path,value,private=False):
     path=Path(path);temp=path.with_suffix('.new')
     temp.write_text(json.dumps(value,ensure_ascii=False,indent=2),encoding='utf-8')
     if private:private_file(temp)
-    os.replace(temp,path)
+    # Concurrent readonly watchdog snapshots can briefly deny DELETE sharing
+    # on Windows. Retry only the atomic rename, retaining the same bytes and
+    # the caller's finite metadata lock; persistent ACL errors still fail.
+    until=time.monotonic()+1
+    while True:
+        try:os.replace(temp,path);break
+        except PermissionError:
+            if time.monotonic()>=until:raise
+            time.sleep(.01)
 
 
 def state():return json.loads(BUDGET.read_text(encoding='utf-8-sig'))
 
 
 def update(function):
-    lock=RootLease(EVIDENCE,'.operation.lock')
+    lock=RootLease(EXECUTION,'.operation.lock')
     try:
         with lock.acquire(True,timeout=2):
             value=state();result=function(value);write(BUDGET,value);return result
@@ -52,13 +66,17 @@ def update(function):
 def count(name):
     def reserve(value):
         if value['counts'][name]>=value['caps'][name]:raise RuntimeError('task120_count_exhausted_'+name)
+        if name=='native_business_sessions' and value.get('current_permit_id') in ('TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021','TASK-120-Q-PREP-TARGETED-REPAIR-08-20261021'):
+            attempts=value.get('audit_repair07_synthetic_admission_launch_reservations',0)
+            if attempts>=16:raise RuntimeError('audit07_synthetic_admission_attempt_cap')
+            value['audit_repair07_synthetic_admission_launch_reservations']=attempts+1
         value['counts'][name]+=1
         return value['counts'][name]
     return update(reserve)
 
 
 def event(kind,**details):
-    with (EVIDENCE/'events.jsonl').open('a',encoding='utf-8') as stream:
+    with (EXECUTION/'events.jsonl').open('a',encoding='utf-8') as stream:
         stream.write(json.dumps({'utc':utc(),'mono_ns':time.monotonic_ns(),'kind':kind,**details})+'\n')
 
 
@@ -73,9 +91,23 @@ def available_memory():
 
 
 def memory_gate(kind):
-    amount=available_memory();minimum=(768 if kind=='browser' else 512)*1024**2
+    amount=available_memory()
+    prospective=state().get('current_permit_id') in ('TASK-120-Q-PREP-VALIDATION-04-20261019','TASK-120-Q-PREP-FINALIZATION-05-20261019','TASK-120-Q-PREP-CONTINUATION-06-20261020','TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021','TASK-120-Q-PREP-TARGETED-REPAIR-08-20261021')
+    minimum=(512 if prospective or kind!='browser' else 768)*1024**2
     event('memory_gate',stage=kind,available_bytes=amount,minimum_bytes=minimum)
     if amount<minimum:raise RuntimeError('task120_low_memory_'+kind)
+
+
+def settled_memory_gate(kind,seconds=12):
+    if state().get('current_permit_id') in ('TASK-120-Q-PREP-VALIDATION-04-20261019','TASK-120-Q-PREP-FINALIZATION-05-20261019','TASK-120-Q-PREP-CONTINUATION-06-20261020','TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021','TASK-120-Q-PREP-TARGETED-REPAIR-08-20261021'):return memory_gate(kind)
+    # Docker warmup can briefly reclaim pages. This finite internal stage does
+    # not start the next layer until its unchanged real threshold is met.
+    until=time.monotonic()+seconds
+    while True:
+        try:return memory_gate(kind)
+        except RuntimeError:
+            if time.monotonic()>=until:raise
+            time.sleep(min(2,max(0,until-time.monotonic())))
 
 
 def docker(args,*,timeout=25):
@@ -193,7 +225,7 @@ def public_environment():
 def root_job(identity):
     # A test-controller Job is separate from the unchanged <=4-process native
     # business Job. Chromium needs more processes; no breakaway is allowed.
-    from app.worker.windows_job import _EXTENDED_LIMIT,JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,JOB_OBJECT_LIMIT_ACTIVE_PROCESS,JOB_OBJECT_LIMIT_JOB_MEMORY,JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    from .control_job import _EXTENDED_LIMIT,JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,JOB_OBJECT_LIMIT_ACTIVE_PROCESS,JOB_OBJECT_LIMIT_JOB_MEMORY,JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
     job=NamedJob.create(identity,1)
     limits=_EXTENDED_LIMIT();limits.BasicLimitInformation.LimitFlags=JOB_OBJECT_LIMIT_ACTIVE_PROCESS|JOB_OBJECT_LIMIT_JOB_MEMORY|JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
     limits.BasicLimitInformation.ActiveProcessLimit=32;limits.JobMemoryLimit=1024**3

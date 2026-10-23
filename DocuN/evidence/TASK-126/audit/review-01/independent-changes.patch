@@ -1,0 +1,172 @@
+--- pre/deploy/initialize_normal.py
++++ post/deploy/initialize_normal.py
+@@ -213,10 +213,18 @@
+ def new_output(path, root=ROOT):
+     path = safe_path(path, existing=False)
+     require(not path.exists(), "output_exists")
++    # 先检查原拼写的全部祖先，再取实际目录身份；严格模式不回退短别名字面比较。
++    try:
++        parent = safe_path(path.parent, directory=True).resolve(strict=True)
++        project = safe_path(root, directory=True).resolve(strict=True)
++    except (OSError, RuntimeError):
++        raise InstallError("output_identity_unavailable") from None
++    path = safe_path(parent, directory=True) / path.name
++    project = safe_path(project, directory=True)
+     # 产品目录只读；输出只落显式本机目录，不允许覆盖产品或配置。
+-    for protected in (root / "backend", root / "deploy", root / "config", root / ".git", root / ".agents", root / ".codex"):
++    for protected in (project / "backend", project / "deploy", project / "config", project / ".git", project / ".agents", project / ".codex"):
+         require(not path.is_relative_to(protected), "unsafe_output")
+-    require(path != root / "README.md" and path != root / "AGENTS.md", "unsafe_output")
++    require(path != project / "README.md" and path != project / "AGENTS.md", "unsafe_output")
+     return path
+ 
+ 
+@@ -313,7 +321,7 @@
+     import psycopg
+     from psycopg.rows import dict_row
+     target = config["target"]
+-    return psycopg.connect(host=target["host"], port=target["port"], dbname=target["database"],
++    return psycopg.connect(host=target["host"], hostaddr=target["host"], port=target["port"], dbname=target["database"],
+         user=target["installer_login"], password=credentials["installer_password"],
+         connect_timeout=3, autocommit=True, row_factory=dict_row, sslmode="disable", service="",
+         options="-c search_path=public,pg_catalog -c statement_timeout=60000 -c lock_timeout=3000 -c idle_in_transaction_session_timeout=60000")
+--- pre/backend/tests/test_normal_install.py
++++ post/backend/tests/test_normal_install.py
+@@ -21,6 +21,7 @@
+ INSTALL = importlib.util.module_from_spec(SPEC)
+ SPEC.loader.exec_module(INSTALL)
+ EXAMPLE = ROOT / "config/normal-install.example.json"
++REPAIR_OBSERVATIONS = {}
+ 
+ 
+ def role_samples(config):
+@@ -467,6 +468,109 @@
+         doc = (ROOT / "deploy/normal-install.md").read_text(encoding="utf-8")
+         self.assertTrue(all(option in doc for option in ("--config", "--output", "--receipt", "--shutdown-stdin")))
+ 
++    def test_19_connect_pins_driver_address_for_direct_apply_and_verify(self):
++        import psycopg
++        from psycopg._conninfo_utils import get_param
++        from psycopg.rows import dict_row
++        config = self.complete_config()
++        environment = self.credentials(config)
++        environment.update(PGHOSTADDR="203.0.113.77", PGHOST="synthetic.invalid")
++        credentials = {"installer_password": environment[config["credential_env"]["installer_password"]]}
++        captured, recorders = [], []
++        purpose = "direct"
++
++        def driver_entry(**kwargs):
++            self.assertTrue(kwargs.get("host") == kwargs.get("hostaddr") == "127.0.0.1", "connection_address_not_pinned")
++            self.assertTrue(get_param(kwargs, "hostaddr") == "127.0.0.1", "driver_environment_override")
++            self.assertEqual(kwargs["port"], config["target"]["port"])
++            self.assertEqual(kwargs["dbname"], config["target"]["database"])
++            self.assertEqual(kwargs["user"], config["target"]["installer_login"])
++            self.assertTrue(kwargs["password"] == credentials["installer_password"], "credential_parameter_mismatch")
++            self.assertEqual(kwargs["connect_timeout"], 3)
++            self.assertIs(kwargs["autocommit"], True)
++            self.assertIs(kwargs["row_factory"], dict_row)
++            self.assertEqual((kwargs["sslmode"], kwargs["service"]), ("disable", ""))
++            self.assertIn("search_path=public,pg_catalog", kwargs["options"])
++            captured.append({"purpose": purpose, **{key: kwargs[key] for key in ("host", "hostaddr", "port", "dbname", "user")}})
++            recorder = Recorder(config, self.bundle, server_address="172.18.0.2")
++            recorders.append(recorder)
++            return recorder
++
++        receipt = self.work / "shared-connect.jsonl"
++        # 先替换唯一驱动入口，再设置合成环境；不调用真实 TCP、DNS 或认证。
++        with patch.object(psycopg, "connect", side_effect=driver_entry), patch.dict(os.environ, environment, clear=True):
++            INSTALL.connect(config, credentials)
++            purpose = "apply"
++            INSTALL.apply(self.bundle, config, receipt, verifier=lambda *unused: None)
++            original = receipt.read_bytes()
++            purpose = "verify"
++            INSTALL.verify(self.bundle, config, receipt, verifier=lambda *unused: None)
++            self.assertEqual((os.environ["PGHOSTADDR"], os.environ["PGHOST"]), ("203.0.113.77", "synthetic.invalid"))
++        self.assertEqual([item["purpose"] for item in captured], ["direct", "apply", "verify"])
++        self.assertEqual(receipt.read_bytes(), original)
++        self.assertFalse(any(call.startswith("write:") for call in recorders[-1].calls))
++        REPAIR_OBSERVATIONS["F126-01"] = {"driver_kwargs": captured, "real_authentication_exercised": False,
++                                          "synthetic_environment_preserved": True, "server_address": "172.18.0.2", "server_port": 5432}
++
++    def test_20_real_short_alias_is_rejected_before_plan_or_receipt_write(self):
++        self.assertEqual(os.name, "nt", "actual_windows_short_alias_required")
++        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
++
++        def converted(name, path):
++            function = getattr(kernel, name)
++            function.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32]
++            function.restype = ctypes.c_uint32
++            size = function(str(path), None, 0)
++            self.assertGreater(size, 0, "actual_alias_metadata_unavailable")
++            buffer = ctypes.create_unicode_buffer(size + 1)
++            count = function(str(path), buffer, len(buffer))
++            self.assertTrue(0 < count < len(buffer), "actual_alias_metadata_unavailable")
++            return Path(buffer.value)
++
++        short_root = converted("GetShortPathNameW", ROOT)
++        long_root = converted("GetLongPathNameW", short_root)
++        self.assertNotEqual(short_root, ROOT, "actual_short_alias_unavailable")
++        self.assertTrue(os.path.samefile(short_root, ROOT) and os.path.samefile(long_root, ROOT))
++        actual_open, write_probes, observed = Path.open, [], []
++
++        def no_write(path, mode="r", *args, **kwargs):
++            if any(flag in mode for flag in "wax+"):
++                write_probes.append({"path": str(path), "mode": mode})
++                raise AssertionError("protected_output_write_probe")
++            return actual_open(path, mode, *args, **kwargs)
++
++        for name in ("backend", "deploy", "config"):
++            directory = short_root / name
++            INSTALL.safe_path(directory, directory=True)
++            self.assertTrue(os.path.samefile(directory, ROOT / name))
++            output = directory / ("repair01-" + self.work.name + ".json")
++            self.assertFalse(output.exists())
++            with self.subTest(directory=name), patch.object(Path, "open", no_write), \
++                    patch.object(INSTALL, "read_credentials", side_effect=AssertionError("unexpected_credential_read")):
++                with self.assertRaisesRegex(INSTALL.InstallError, "unsafe_output"):
++                    INSTALL.new_output(output)
++                code, text = self.cli(["plan", "--config", str(EXAMPLE), "--output", str(output)])
++                self.assertEqual(code, 2)
++                self.assertEqual(json.loads(text)["reason"], "unsafe_output")
++                with self.assertRaisesRegex(INSTALL.InstallError, "unsafe_output"):
++                    INSTALL.Journal(output, {"event": "offline_probe"})
++                with self.assertRaisesRegex(INSTALL.InstallError, "unsafe_output"):
++                    INSTALL.apply(self.bundle, self.complete_config(), output)
++            self.assertFalse(output.exists())
++            observed.append({"short_directory": str(directory), "long_directory": str(converted("GetLongPathNameW", directory)),
++                             "same_directory": True, "new_output_plan_journal_apply_rejected": True, "file_created": False})
++        self.assertEqual(write_probes, [])
++        REPAIR_OBSERVATIONS["F126-02"] = {"short_root": str(short_root), "long_root": str(long_root),
++                                          "directories": observed, "blocked_write_probe_calls": write_probes}
++
++    def test_21_directory_identity_failure_is_closed_before_open(self):
++        output = self.work / "identity-unavailable.json"
++        with patch.object(Path, "resolve", side_effect=OSError("synthetic_identity_failure")), \
++                patch.object(Path, "open", side_effect=AssertionError("unexpected_file_open")):
++            with self.assertRaisesRegex(INSTALL.InstallError, "output_identity_unavailable"):
++                INSTALL.new_output(output)
++        self.assertFalse(output.exists())
++
+ 
+ if __name__ == "__main__":
+     unittest.main()
+--- pre/deploy/normal-install.md
++++ post/deploy/normal-install.md
+@@ -17,7 +17,7 @@
+ 
+ plan 可额外指定 `--output` 绝对路径，只排他新建一个计划 JSON；父目录须已存在，已有文件或不安全路径拒绝。省略时只输出到终端。任何拒绝退出2，只返回固定原因，不回显坏参数、连接串或驱动异常。计划不证明真实目标匹配，不授予运行或外发权。
+ 
+-路径必须绝对、非 UNC、无 `..`，逐级拒绝符号链接及 Windows reparse/junction；输出不得落入源码、部署、配置和 Git 元数据目录。工具只枚举项目固定迁移目录以拒绝额外 SQL，再按清单逐项读取，不自动吸纳未来迁移。清单原字节摘要冻结在入口源码；同时校验顺序、数量、每份 SQL 原字节摘要和四份关闭模板摘要。SQL 仅作 utf-8-sig 解码，保留 BOM 后的原换行及全部正文，不删碰撞 guard 或改写 CREATE ROLE。
++路径必须绝对、非 UNC、无 `..`，先按原拼写逐级拒绝符号链接及 Windows reparse/junction，再以严格模式解析现存父目录和项目根的实际长路径身份；8.3短别名同样受保护，归一失败即拒绝，末级仍排他新建。输出不得落入源码、部署、配置和 Git 元数据目录；后续打开仍要求父目录受信，不宣称验证了对手并发替换的竞态。工具只枚举项目固定迁移目录以拒绝额外 SQL，再按清单逐项读取，不自动吸纳未来迁移。清单原字节摘要冻结在入口源码；同时校验顺序、数量、每份 SQL 原字节摘要和四份关闭模板摘要。SQL 仅作 utf-8-sig 解码，保留 BOM 后的原换行及全部正文，不删碰撞 guard 或改写 CREATE ROLE。
+ 
+ ## 安装输入与关闭配置
+ 
+@@ -48,7 +48,7 @@
+ & 'D:/shspic/project_NO3_RetroLume-agent/backend/.venv/Scripts/python.exe' -B 'D:/shspic/project_NO3_RetroLume-agent/deploy/initialize_normal.py' verify --config $normalConfig --receipt $installReceipt
+ ```
+ 
+-apply 先核本地全部输入和固定文件，再核现有 profile 原件映射，排他占用新收据，之后才允许管理员连接。数据库已由另行许可创建，安装期间必须独占这个独立集群。短时安装连接明确 host/port/database/user/password，不接收 DSN。初次 preflight 在 READ ONLY 事务中核：真实集群/数据库/当前及会话角色一致、管理员为 bootstrap superuser、PG17/UTF8；连接端固定为 loopback，服务端实际地址/端口如实记录，支持容器端口映射；没有其他业务数据库或客户端、额外用户 schema/对象/扩展/默认 ACL/大对象/事件触发器等；没有所需全局职责组或目标登录角色；除管理员和 PG 内置角色外没有其他集群角色；PUBLIC 没有 schema/database CREATE；可用 vector 默认版本恰为0.8.6。任一失败在首次 DDL/DCL/数据写之前停止，保留拒绝收据。
++apply 先核本地全部输入和固定文件，再核现有 profile 原件映射，排他占用新收据，之后才允许管理员连接。数据库已由另行许可创建，安装期间必须独占这个独立集群。短时安装连接同时显式固定 host/hostaddr 为127.0.0.1，并给出精确 port/database/user/password，不接收 DSN，也不通过修改全局环境纠偏。初次 preflight 在 READ ONLY 事务中核：真实集群/数据库/当前及会话角色一致、管理员为 bootstrap superuser、PG17/UTF8；连接端固定为 loopback，服务端实际地址/端口如实记录，支持容器端口映射；没有其他业务数据库或客户端、额外用户 schema/对象/扩展/默认 ACL/大对象/事件触发器等；没有所需全局职责组或目标登录角色；除管理员和 PG 内置角色外没有其他集群角色；PUBLIC 没有 schema/database CREATE；可用 vector 默认版本恰为0.8.6。任一失败在首次 DDL/DCL/数据写之前停止，保留拒绝收据。
+ 
+ 预检通过后严格按001—013原 SQL 各自事务执行；013提交后单独事务插入 normal/R01 控制行及明确身份、maintenance 摘要；014推进 R02，015推进 R03。随后单独事务创建两个新非超级登录角色，业务只授 data_app、memory_app、interview_app、html_app、retrieval_app；快照只授 data_snapshot。membership 显式 INHERIT TRUE、SET FALSE、ADMIN FALSE，并仅为两个新登录授目标数据库 CONNECT。不会授 owner、purger、restore_loader 或管理角色，不复用、ALTER、DROP 或重置任何既有角色。
+ 

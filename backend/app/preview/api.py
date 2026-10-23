@@ -79,7 +79,7 @@ async def read_command(request:Request,activity_id:str,business_key:str):
         value=await _ledger(request).read_html_command(aid,key)
         if value is not None:
             from app.capabilities.q_context import public_projection
-            value['outbound_approval']=await public_projection(_ledger(request),aid,key)
+            value['outbound_approval']=await public_projection(_ledger(request),aid,key,expected=value.get('status')=='accepted')
         return reply(value) if value is not None else error(HtmlRefusal("not_found",status=404))
     except (HtmlRefusal,AdmissionUnavailable) as exc:return error(exc)
 

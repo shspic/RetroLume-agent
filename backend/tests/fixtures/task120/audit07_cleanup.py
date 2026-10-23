@@ -1,0 +1,201 @@
+"""F03 real new files, normal source/memory commands, one exact failure/retry."""
+import json,os
+from pathlib import Path
+from uuid import uuid4
+from unittest.mock import patch
+import psycopg
+from psycopg.rows import dict_row
+from . import resources as r,setup,final05
+from .api_runtime import application,run,financials
+from .audit07 import HERE,SLOT,case
+from app.capabilities.q_protocol import ROSTER,raw_digest as digest,canonical
+from app.data_exit.codec import plain
+from app.data_exit.contracts import DataError
+from app.data_exit.files import regular,safe_root
+from app.data_exit import q_cleanup
+
+
+def targets(authority,*,source_ids=(),memory_ids=()):
+    return [row for row in authority.hub.state()['q']['requests'].values()
+        if set(source_ids)&q_cleanup.dependencies(row)['sources'] or set(memory_ids)&q_cleanup.dependencies(row)['memories']]
+
+
+def register(paths,purpose):
+    file=HERE/'F03-exact-new-deletion-manifest.json'
+    value=json.loads(file.read_text(encoding='utf-8')) if file.exists() else {'root':str(r.PRIVATE),'maximum':16,'files':[]}
+    allowed=r.PRIVATE.resolve();existing={x['path']:x for x in value['files']}
+    for path in paths:
+        path=Path(path).absolute();assert path.resolve().is_relative_to(allowed)
+        if str(path) in existing:continue
+        safe_root(path.parent);info=regular(path);assert info.st_nlink==1
+        row={'path':str(path),'volume':info.st_dev,'file_id':info.st_ino,'bytes':info.st_size,'sha256':digest(path.read_bytes()),'purpose':purpose,
+             'synthetic_frozen_input_only':True,'personal_content':False}
+        value['files'].append(row);existing[str(path)]=row
+    assert len(value['files'])<=16
+    r.write(file,value)
+    return value
+
+
+def witness(authority):
+    with psycopg.connect(setup.dsn(SLOT),row_factory=dict_row) as db:
+        db.execute('SET TRANSACTION READ ONLY')
+        operations=plain(db.execute('SELECT activity_id,operation_id,admission_id,state,reserved_cost_microunits FROM activity_operations ORDER BY activity_id,operation_id').fetchall())
+        original007=plain(db.execute('SELECT activity_id,operation_id,payload_sha256 FROM activity_operation_results ORDER BY activity_id,operation_id').fetchall())
+    return {'operations':operations,'007_hashes':original007,'prepared_hashes':{pid:{k:row[k] for k in ('prepared_sha256','artifact_sha256')}
+        for pid,row in authority.hub.state()['q']['requests'].items()},'financials':financials(SLOT)}
+
+
+def bodies_closed(c,authority,rows,saved=None):
+    from app.operator.q_request import inspect_request
+    out=[]
+    for old in rows:
+        pid=old['prepared_id'];row=authority.request(pid)
+        try:authority.artifact(row)
+        except DataError as exc:assert exc.code=='q_body_cleanup_closed'
+        else:raise AssertionError('cleaned body readable')
+        inspection=run(inspect_request(c.app.state.activities_ledger,pid));assert inspection['request_available'] is False
+        assert authority.reference(row) is None
+        out.append({'prepared_id':pid,'cleanup':row['cleanup']['state'],'artifact_read_error':'q_body_cleanup_closed','operator_request_available':False,'authorization_reference':None})
+    if saved is not None:
+        row,artifact,ref=saved
+        from app.capabilities.contracts import ModelCallRequest,CallContext
+        from app.capabilities.gateway import ControlledModelGateway
+        config=c.app.state.activity_config.model_service.model_copy(update={'outbound_authorization':ref})
+        gateway=ControlledModelGateway(config,ledger=c.app.state.activities_ledger)
+        request=ModelCallRequest.model_validate_json(canonical(artifact['request']))
+        context=CallContext(activity_id=row['prepared']['activity_id'],operation_id=row['prepared']['operation_id'],
+            executor_id='audit07-closed-body-probe',execution_generation=1,scope_revision=1)
+        result=run(gateway.call(context,request))
+        assert result.error_code=='q_authorization_denied'
+        out.append({'real_worker_gateway_logic':'ControlledModelGateway.call -> q_gateway.call_with_policy -> actual check_reference',
+            'error_code':result.error_code,'new_native_launch':False,'original_approved_body_and_reference_used':True})
+    return out
+
+
+def exercise():
+    from .audit07_clock_hook import install
+    install()
+    from app.data_exit.q_store import authority_for
+    from app.operator.q_request import principal_id
+    final05.SLOT=SLOT
+    with application(SLOT) as c:
+        f=final05.Matrix(c);authority=authority_for(f.ledger)
+        memory=json.loads((r.PRIVATE/SLOT/'creation-memory.json').read_text(encoding='utf-8'))
+        mid=memory['memory_id'];mapping=json.loads((r.PRIVATE/SLOT/'sources.json').read_text(encoding='utf-8'));sid=str(mapping['N']['id'])
+        memrows=targets(authority,memory_ids=[mid]);source_rows=targets(authority,source_ids=[sid])
+        originals=c.app.state.originals._path(mapping['N']['sha256'])
+        register([authority.hub.artifact_path('q-prepared',x['prepared_id']) for x in memrows+source_rows]+[originals],
+                 'normal memory revoke/purge or normal sourceN deletion and exact Q dependency closure')
+        affected={x['prepared_id'] for x in memrows+source_rows}
+        unrelated=[x for x in authority.hub.state()['q']['requests'].values() if x['prepared_id'] not in affected]
+        untouched={x['prepared_id']:digest(authority.hub.artifact_path('q-prepared',x['prepared_id']).read_bytes()) for x in unrelated}
+        f.save('audit07-unrelated-body-identities',untouched)
+        def memory_cleanup():
+            before=witness(authority);row=authority.request(f.state['audit07-memory-prepared.prepared_id'])
+            if authority.reference(row) is None:
+                c.approve(row['prepared']['activity_id'],row['prepared']['business_key'])
+                row=authority.request(row['prepared_id'])
+            artifact=authority.artifact(row);ref=authority.reference(row);assert ref is not None
+            if 'audit07-memory-revoke' not in f.state:
+                preview=run(f.ledger.preview_memory_change(mid,1,'revoke'))
+                f.retain('audit07-memory-revoke',{'business_key':str(uuid4()),'memory_id':mid,'expected_revision':1,'action':'revoke',
+                    'body':{'impact_token':preview['impact_token'],'confirm_revoke':True,'purge_memory_content':True}})
+            receipt=c.request('POST','/api/memories/commands',f.state['audit07-memory-revoke'])
+            f.save('audit07-memory-revoke.receipt',receipt)
+            assert receipt['purge_state_now']=='done' and not receipt.get('cleanup_status_unconfirmed',False),receipt
+            closed=bodies_closed(c,authority,memrows,(row,artifact,ref))
+            assert all(not os.path.lexists(authority.hub.artifact_path('q-prepared',x['prepared_id'])) for x in memrows)
+            with psycopg.connect(setup.dsn(SLOT),row_factory=dict_row) as db:
+                db.execute('SET TRANSACTION READ ONLY');state=db.execute('SELECT state,revision,purge_state,(SELECT count(*) FROM learning_memory_bodies b WHERE b.memory_id=h.memory_id) AS body_rows FROM learning_memories h WHERE memory_id=%s',(mid,)).fetchone()
+            assert state['state']=='revoked' and state['purge_state']=='done' and state['body_rows']==0
+            after=witness(authority);assert before['operations']==after['operations'] and before['financials']==after['financials']
+            assert before['prepared_hashes']==after['prepared_hashes']
+            return {'normal_HTTP_receipt':receipt,'memory':state,'Q_bodies':closed,'before':before,'after':after,
+                'Q_body_files_absent':True,'no_refund_or_new_admission':True,'zero_resend':True}
+        case('F03-normal-memory-revoke-purge',memory_cleanup)
+        def source_failure():
+            key=f.state['audit07-legacy-followup']['business_key']
+            row=next(x for x in source_rows if x['prepared']['business_key']==key)
+            reconciled='audit07-source-pending' in f.state
+            if reconciled:
+                # Root58 already committed the tombstone, the intended exact
+                # file failure and all Q/worker denial checks. Its later legacy
+                # GET carried an Origin not allowed on materials routes. Keep
+                # that FAIL; resume observation, never repeat deletion or fault.
+                before=json.loads((HERE/'F03-normal-memory-revoke-purge-PASS.json').read_text(encoding='utf-8'))['facts']['after']
+                receipt=f.state['audit07-source-pending']
+                saved_receipt=json.loads(authority.hub.read_artifact('receipts',receipt['receipt_id'],receipt['receipt_sha256']))
+                assert next(x for x in saved_receipt['q_cleanup'] if x['prepared_id']==row['prepared_id'])['state']=='physical_result_unknown'
+                assert (HERE/'root-58-batch-01-child.log').read_text(encoding='utf-8').count('q_dispatch_rejected code=q_body_cleanup_closed')>=2
+                r.write(HERE/'F03-root58-successful-substeps-reconciled.json',{'source_receipt':saved_receipt,
+                    'boundary':'one original exact file failure; tombstone and physical original deletion already committed',
+                    'actual_worker_gateway_denials_before_later_403':2,'root58_FAIL_unchanged':True,'no_new_deletion_or_fault_injection':True,
+                    '403_was_original_legacy_Origin_guard':'GET should omit Origin, like a normal same-origin browser GET; local-session check retained'})
+                closed=bodies_closed(c,authority,source_rows)
+            else:
+                before=witness(authority)
+                if authority.reference(row) is None:
+                    c.approve(row['prepared']['activity_id'],row['prepared']['business_key'])
+                    row=authority.request(row['prepared_id'])
+                artifact=authority.artifact(row);ref=authority.reference(row);assert ref is not None
+                preview=c.request('POST',f'/api/data/materials/{sid}/deletion-preview',{'expected_revision':mapping['N']['revision']})
+                cmd=f.retain('audit07-source-delete',{'business_key':str(uuid4()),'expected_revision':mapping['N']['revision'],
+                    'impact_sha256':preview['impact_sha256'],'confirm':True})
+                original=q_cleanup.remove_registered;injected=[]
+                def exact_failure(hub,pid,identity):
+                    if pid==row['prepared_id']:
+                        injected.append(pid);raise PermissionError('TESTONLY_exact_new_body_cleanup_failure')
+                    return original(hub,pid,identity)
+                with patch('app.data_exit.q_cleanup.remove_registered',side_effect=exact_failure):
+                    receipt=c.request('POST',f'/api/data/materials/{sid}/deletions',cmd)
+                f.save('audit07-source-pending',receipt)
+                assert injected==[row['prepared_id']]
+                closed=bodies_closed(c,authority,source_rows,(row,artifact,ref))
+            assert receipt['state']=='deleted_pending',receipt
+            assert authority.request(row['prepared_id'])['cleanup']['state']=='pending'
+            assert os.path.lexists(authority.hub.artifact_path('q-prepared',row['prepared_id'])) and not os.path.lexists(originals)
+            good=c.request('GET',f"/api/materials/{mapping['R']['id']}/content",browser_read=True,expect=(200,))
+            assert good['text']==next(x['text'] for x in setup.SAMPLES['sources'] if x['alias']=='R')
+            content=c.request('GET',f'/api/materials/{sid}/content',browser_read=True,expect=(404,))
+            assert content['detail']=='资料不存在'
+            assert next(x['text'] for x in setup.SAMPLES['sources'] if x['alias']=='N') not in canonical(content)
+            view=c.request('GET',f"/api/activities/{ROSTER[0]}/learning/intents/{key}?action=followup")
+            assert view['outbound_approval']['state']=='invalidated' and not view['outbound_approval']['can_continue']
+            c.request('POST',f'/api/activities/{ROSTER[0]}/learning/followups',f.state['audit07-legacy-followup'],expect=(409,))
+            assert c.timeline[-1]['rejection_code']=='result_invalidated'
+            after=witness(authority);assert before['financials']==after['financials'] and before['operations']==after['operations']
+            assert before['prepared_hashes']==after['prepared_hashes']
+            for pid,sha in untouched.items():assert digest(authority.hub.artifact_path('q-prepared',pid).read_bytes())==sha
+            return {'normal_source_HTTP_receipt':receipt,'source_id':sid,'injected_exact_prepared_id':row['prepared_id'],
+                'fault_boundary':'q_cleanup.remove_registered only; real tombstone/normal permissions/PG transactions executed',
+                'pending_file_exists_but_product_reads_and_old_reference_closed':closed,'normal_content_GET_error':{'HTTP':404,'detail':'资料不存在'},
+                'same_authenticated_legacy_GET_unrelated_source_HTTP':200,'normal_continue_POST_error':c.timeline[-1]['rejection_code'],
+                'normal_Q_GET_projection':view['outbound_approval'],'original_root58_successful_steps_reconciled':reconciled,
+                'before':before,'after':after,'unrelated_artifacts_unchanged':untouched}
+        case('F03-source-cleanup-failure-closed',source_failure)
+    # The original API/objects close before recovery. Reopen the normal app;
+    # journal replay must preserve denial and the exact pending file identity.
+    with application(SLOT) as c:
+        f=final05.Matrix(c);authority=authority_for(f.ledger)
+        def recover():
+            pending=f.state['audit07-source-pending'];before=witness(authority)
+            rows=targets(authority,source_ids=[sid]);closed_before=bodies_closed(c,authority,rows)
+            receipt=c.request('POST',f"/api/data/jobs/{pending['job_id']}/retry-cleanup",{'confirm':True})
+            assert receipt['state']=='deleted',receipt
+            closed_after=bodies_closed(c,authority,rows)
+            assert all(not os.path.lexists(authority.hub.artifact_path('q-prepared',x['prepared_id'])) for x in rows)
+            after=witness(authority);assert before['operations']==after['operations'] and before['financials']==after['financials']
+            for pid,sha in f.state['audit07-unrelated-body-identities'].items():assert digest(authority.hub.artifact_path('q-prepared',pid).read_bytes())==sha
+            return {'fresh_normal_API_reopen':True,'same_pending_job':pending['job_id'],'receipt':receipt,
+                'replayed_before_retry':closed_before,'after_retry':closed_after,'all_target_Q_body_paths_absent':True,
+                'before':before,'after':after,'unrelated_hashes_unchanged':True,'zero_resend':True,'original007_hash_witness_and_reservations_retained':True}
+        case('F03-exact-cleanup-replay-and-retry',recover)
+        # Explicitly retire all new-only decisions at the engineering endpoint;
+        # none of the public evidence carries a currently usable approval.
+        retired=[]
+        for row in authority.hub.state()['q']['requests'].values():
+            if row.get('approval') and not row.get('revoked'):
+                authority.revoke(row['prepared_id'],principal_id());retired.append(row['prepared_id'])
+        r.write(HERE/'new-only-approvals-explicitly-retired.json',{'new_instance_only':True,'prepared_ids':retired,'all_existing_new_decisions_revoked':True,'old_instances_touched':False,'financials':financials(SLOT)})
+    return {'F03':'PASS','deletion_manifest_files':len(json.loads((HERE/'F03-exact-new-deletion-manifest.json').read_text(encoding='utf-8'))['files']),
+            'synthetic_files_only':True,'old_Q_roots_or_evidence_deleted':False}

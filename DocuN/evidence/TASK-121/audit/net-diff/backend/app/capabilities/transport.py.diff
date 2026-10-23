@@ -1,0 +1,42 @@
+--- initial/backend/app/capabilities/transport.py
++++ final/backend/app/capabilities/transport.py
+@@ -39,10 +39,39 @@
+ 
+ class HttpxModelTransport:
+     """单次 POST；禁代理、禁重定向、禁 SDK/transport 自动重试。"""
+     # 默认真实传输，只有获准合成夹具的最低传输替身可另标False。
+     is_external = True
++
++    async def send_frozen(self, *, endpoint: str, api_key: str, payload_bytes: bytes,
++                          timeout_seconds: float, max_response_bytes: int) -> TransportResponse:
++        """Private Q path: no JSON re-encoding between approval and the socket."""
++        from .q_protocol import canonical, load_json
++        if (type(payload_bytes) is not bytes or not 0<len(payload_bytes)<=65536
++            or canonical(load_json(payload_bytes)).encode('utf-8')!=payload_bytes
++            or not 0<timeout_seconds<=10 or not 0<max_response_bytes<=65536):
++            raise RequestNotSent('q_frozen_transport_invalid')
++        try:
++            async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds),
++                                         follow_redirects=False,trust_env=False) as client:
++                request=client.build_request('POST',endpoint,content=payload_bytes,
++                    headers={'Authorization':f'Bearer {api_key}','Content-Type':'application/json'})
++                response=await client.send(request,stream=True)
++                chunks=[];size=0
++                async for chunk in response.aiter_bytes():
++                    size+=len(chunk)
++                    if size>max_response_bytes:
++                        await response.aclose()
++                        return TransportResponse(response.status_code,b'',size,
++                            response.headers.get('x-request-id'),True)
++                    chunks.append(chunk)
++                await response.aclose()
++                return TransportResponse(response.status_code,b''.join(chunks),size,response.headers.get('x-request-id'))
++        except (httpx.PoolTimeout,httpx.ConnectTimeout,httpx.ConnectError) as exc:
++            raise RequestNotSent('q_connect_failed') from exc
++        except (httpx.TimeoutException,httpx.NetworkError,httpx.RemoteProtocolError) as exc:
++            raise DeliveryUnknown('q_delivery_unknown') from exc
+ 
+     async def send(
+         self,
+         *,
+         endpoint: str,

@@ -1,0 +1,71 @@
+--- pre/deploy/initialize_normal.py
++++ deploy/initialize_normal.py
+@@ -293,7 +293,9 @@
+             isinstance(row["server_address"], str) and type(row["server_port"]) is int and
+             0 < row["server_port"] <= 65535, "target_identity_mismatch")
+     try:
+-        ipaddress.ip_address(row["server_address"])
++        # 兼容PG返回的完整主机掩码；短前缀网段不能作为服务端主机。
++        address = ipaddress.ip_interface(row["server_address"])
++        require(address.network.prefixlen == address.max_prefixlen, "target_identity_mismatch")
+     except ValueError:
+         raise InstallError("target_identity_mismatch") from None
+     return {k: row[k] for k in ("database", "database_oid", "system_identifier", "installer_login",
+--- pre/backend/tests/test_normal_install.py
++++ backend/tests/test_normal_install.py
+@@ -528,6 +528,33 @@
+                     driver.assert_not_called()
+                     self.assertEqual(dict(os.environ), before)
+ 
++    def test_23_identity_accepts_only_host_addresses_and_preserves_other_checks(self):
++        config = self.complete_config()
++        row = dict(config["target"], session_login=config["target"]["installer_login"],
++                   version_num=170011, encoding="UTF8", rolsuper=True, server_address="172.19.0.2/32", server_port=5432)
++        class IdentityRow:
++            def execute(self, statement):
++                assert statement == INSTALL.IDENTITY_QUERY
++                return self
++            def fetchone(self):return row
++        for value in ("172.19.0.2/32", "172.18.0.2", "::1", "2001:db8::2/128"):
++            row["server_address"] = value
++            observed = INSTALL.observe_identity(IdentityRow(), config)
++            self.assertEqual(observed["server_address"], value)
++            self.assertEqual(observed["server_port"], 5432)
++        for value in ("invalid", "172.19.0.2/24", "2001:db8::2/64", "172.19.0.2/33", ""):
++            row["server_address"] = value
++            with self.subTest(address=value), self.assertRaises(INSTALL.InstallError):
++                INSTALL.observe_identity(IdentityRow(), config)
++        row["server_address"] = "172.19.0.2/32"
++        for key, wrong in (("database_oid", 1), ("system_identifier", "wrong"), ("installer_login", "wrong"),
++                           ("session_login", "wrong"), ("rolsuper", False), ("version_num", 160000),
++                           ("encoding", "LATIN1"), ("server_port", 0)):
++            saved = row[key]; row[key] = wrong
++            with self.subTest(field=key), self.assertRaises(INSTALL.InstallError):
++                INSTALL.observe_identity(IdentityRow(), config)
++            row[key] = saved
++
+     def test_20_real_short_alias_is_rejected_before_plan_or_receipt_write(self):
+         self.assertEqual(os.name, "nt", "actual_windows_short_alias_required")
+         kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+--- pre/deploy/normal-install.md
++++ deploy/normal-install.md
+@@ -2,7 +2,7 @@
+ 
+ `initialize_normal.py` 是独立新 PostgreSQL 17 集群中已明确创建的全新空数据库首次安装入口，目标为 `data_exit.v1.r03`。它不创建数据库、容器、卷或服务。原TASK125/126的离线工程及独审范围保留，真实操作须有冻结精确资源的运行许可。
+ 
+-TASK128已在授权隔离库确认并修正空串service连接失败：不再传`service=''`，连接前发现环境中存在`PGSERVICE`或`PGSERVICEFILE`即以`ambient_service_rejected`拒绝，不读取用户service配置、不修改环境；显式host/hostaddr=127.0.0.1及身份核验保留。修后正式只读连接成功，两项定向离线方法通过。当前原身份预检仍拒绝PostgreSQL实际地址文本`172.19.0.2/32`，完整安装、角色权限和正常启动六项尚未通过；不得据连接修复宣称已可完成真实安装。连接增量待独立复核，地址格式问题及后续资源额度待主控处理。
++TASK128已在授权隔离库确认并修正空串service连接失败：不再传`service=''`，连接前发现环境中存在`PGSERVICE`或`PGSERVICEFILE`即以`ambient_service_rejected`拒绝，不读取用户service配置、不修改环境；显式host/hostaddr=127.0.0.1及身份核验保留。续作01另兼容裸IPv4/IPv6及完整主机掩码`/32`、`/128`，拒绝短前缀，观察/收据保留原地址文本。19/22及新增格式方法三项通过；真实正确预检、四类拒绝、原001—015完整安装（37行收据）及两个新登录权限检查已通过。首次API启动和独立槽位启动被可用内存低于512MiB的门拦住，API重开、002提交未知和成功收据verify尚未验证；六项整体未通过，两处产品增量仍待集中独立复核。已成功安装的原库不得重放迁移，仍须保留收据及资源身份。
+ 
+ ## 本地帮助与计划
+ 
+--- pre/README.md
++++ README.md
+@@ -32,7 +32,7 @@
+ 
+ 若要连接既有本地 PostgreSQL，再在当前会话设置 `RETROLUME_DATABASE_URL`，或在 `config/database.local.json` 保存仅本机使用的私有配置（该文件已忽略）。应用不会自动创建数据库或迁移用户库。旧 `deploy/initialize-materials.py` 仅处理001；完整001—015首次空库安装使用 [正常首次安装说明](deploy/normal-install.md) 中的 `deploy/initialize_normal.py`，默认只显示帮助，`plan` 无数据库操作，真实 `apply` 仍需另行精确许可与独立风险审查。模型调用需要完整配置和用户显式动作，读取、零费新建及刷新不会启动模型。
+ 
+-TASK128已修复并实证空串service连接故障，但原身份预检仍拒绝PG实际带主机掩码的地址文本，完整安装及六项部署验证未通过，详见上述正常首次安装说明。
++TASK128续作01已修复连接与完整主机地址格式，在授权隔离源库通过完整安装及两登录权限检查；API/中断场景/verify因启动前内存门未完成，六项整体尚未通过，详见上述正常首次安装说明。对已安装库不得重放迁移。
+ 
+ 开发健康检查可在设置上述两个目录后运行：
+ 

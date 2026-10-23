@@ -1,0 +1,15 @@
+--- initial/frontend/src/data/context.tsx
++++ final/frontend/src/data/context.tsx
+@@ -44,11 +44,11 @@
+   const headers=new Headers(init.headers);
+   if(context)headers.set('X-RetroLume-Data-Context',canonical(context));
+   const response=await fetch(path,{...init,headers});
+   const check=()=>{
+     if(init.signal?.aborted)throw new DOMException('Aborted','AbortError');
+-    if(current?.control_id!==context?.control_id||!(hubRead||hubCancel||bootstrap)&&capture!==dataNamespace())throw new Error("当前数据已切换，旧响应未用于当前页面。");
++    if(current?.control_id!==context?.control_id||!(hubRead||hubCancel||bootstrap)&&(capture!==dataNamespace()||canonical(current)!==canonical(context)))throw new Error("当前数据已切换，旧响应未用于当前页面。");
+     const observed=response.headers.get('X-RetroLume-Data-Context');
+     if(context&&observed){
+       let identity:DataContext;try{identity=JSON.parse(observed);}catch{throw new Error('数据身份无法核对。');}
+       if(hubRead||hubCancel){if(identity.control_id!==context.control_id)throw new Error('控制身份已改变。');}
+       else if(bootstrap){if(!canAdvance(identity))throw new Error('能力响应已过期，请重新刷新。');}

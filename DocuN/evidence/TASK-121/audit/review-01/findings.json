@@ -1,0 +1,130 @@
+{
+  "task": "TASK-121",
+  "round": "R-115",
+  "review": "review-01",
+  "scope": "Five fixes and direct effects only",
+  "decisions": [
+    {
+      "id": "F01",
+      "state": "关闭",
+      "kind": "targeted_fix_verified_with_saved_evidence",
+      "paths": [
+        "backend/migrations/015_activity_scope_delete_permission.sql:17",
+        "backend/app/data_exit/schema_profiles.py:51",
+        "backend/app/data_exit/packages.py:168"
+      ],
+      "limits": [
+        "Root52 negatives used first revised SQL 1fbe278e19bd65f55d043159167e108563adcde8dae870a0bcf060b2f9c0a712; pre-GRANT exact bytes match final.",
+        "Final normal nonempty R02->R03 was root54. New full PG restore was not executed."
+      ]
+    },
+    {
+      "id": "F02",
+      "state": "不关闭",
+      "severity": "P1",
+      "kind": "static_determinate_residual",
+      "path": "backend/app/data_exit/q_roles.py",
+      "lines": [
+        43,
+        59,
+        76,
+        78
+      ],
+      "function": "check_role_capabilities",
+      "title": "ADMIN target is checked only for present inherited/direct capabilities, omitting its SET-accessible closure",
+      "frozen_source_sha256": "78a062ad19c9a917ff3c7991427c28a4b15ee3c7f9708e0c1d304905d1b9ad39",
+      "configuration": [
+        "Existing snapshot login S has INHERIT TRUE/SET TRUE membership in retrolume_data_snapshot, as saved in real F02 graphs.",
+        "One fresh NOLOGIN bridge B has app membership INHERIT FALSE/SET TRUE and no current scope/control/schema/database/owner privileges.",
+        "S is member of B with ADMIN TRUE/INHERIT FALSE/SET FALSE."
+      ],
+      "current_static_result": "S is audited as snapshot. B is neither selected/effective nor audited independently. ADMIN target predicates see only B's empty actual rights and false management/owner flags, so this graph is accepted.",
+      "reachable_effect": "S may grant B to retrolume_data_snapshot with SET TRUE. Its existing SET path then reaches B->app, allowing normal application DELETE. This uses already granted ADMIN, not new superuser/CREATEROLE authority.",
+      "sources": [
+        "backend/tests/fixtures/task120/audit07_permissions.py:74",
+        "F02-set-only-indirect-snapshot-PASS.json",
+        "F02-legal-harmless-membership-current-management-PASS.json",
+        "https://www.postgresql.org/docs/17/sql-grant.html"
+      ],
+      "dynamic_reproduction_by_auditor": false,
+      "actual_test_configuration_compromised": false,
+      "minimum_correction": "Evaluate bounded potential SET/INHERIT/ADMIN escalation from an ADMIN target for the subject's purpose, while preserving legal harmless memberships.",
+      "minimum_followup": "One transactional composite ADMIN-to-SET counterexample on the permitted synthetic cluster, plus harmless baseline and exact rollback/new-connection confirmation; no program execution or full role-suite rerun."
+    },
+    {
+      "id": "F03",
+      "state": "不关闭",
+      "severity": "P1",
+      "kind": "static_determinate_residual",
+      "title": "Q cleanup pending is reflected only in POST, while GET/reopen uses database purge done",
+      "paths": [
+        "backend/app/memory/service.py:47",
+        "backend/app/memory/api.py:41",
+        "backend/app/memory/repository.py:309",
+        "frontend/src/activities/MemoryWorkspace.tsx:271"
+      ],
+      "trigger": "Normal memory revoke/purge commits DB body deletion, then exact Q prepared-file removal fails. POST reports cleanup_status_unconfirmed=true and purge_state_now=pending; the next GET command receipt rebuilds from DB head purge_state=done without the Q pending journal. Reopen view similarly uses DB purge_state and hides the existing retry control.",
+      "effect": "The retained Q plaintext file remains logically closed but unremoved, while read/reopen presentation can claim cleanup done and suppress the ordinary retry. No current outbound/body disclosure is alleged.",
+      "valid_subfacts_retained": [
+        "Real source pending->reopen retry deleted at root60.",
+        "Normal memory revoke/purge removes its Q copies at root58.",
+        "Q artifact/operator/reference/gateway denial and financial/hash retention hold for listed records."
+      ],
+      "dynamic_reproduction_by_auditor": false,
+      "minimum_correction": "Unify read-only receipt/view projection of DB purge and dependency-matched Q cleanup state, including unknown, without changing committed DB purge facts; keep the existing explicit retry available.",
+      "minimum_followup": "One synthetic memory exact-file failure followed by same-key GET/reopen, failure persistence and successful explicit retry; compare body hashes/007/fees and unrelated objects. Do not replay old memory races."
+    },
+    {
+      "id": "F04",
+      "state": "关闭",
+      "paths": [
+        "backend/app/data_exit/q_clock.py:17",
+        "backend/app/data_exit/q_clock.py:48",
+        "backend/app/data_exit/control.py:181",
+        "backend/app/data_exit/q_store.py:281"
+      ],
+      "limits": [
+        "1 second UTC drift tolerance is separate from the fixed 900 second monotonic deadline.",
+        "Windows Python3.12 GetTickCount64 implementation accepted; the QPC-only comment is inaccurate but nonblocking.",
+        "Seven saved clock cases and the actual +2 second API/operator/native/SUP/PG combination are accepted at their saved source bytes, not as real supplier readiness."
+      ]
+    },
+    {
+      "id": "F05",
+      "state": "关闭",
+      "paths": [
+        "backend/app/capabilities/q_context.py:389",
+        "backend/app/capabilities/q_context.py:456",
+        "backend/app/operator/q_request.py:65",
+        "backend/app/data_exit/q_store.py:294"
+      ],
+      "limits": [
+        "Ordinary command missing/error is fail closed; legacy learning intentionally has no accepted PG command before its first admission.",
+        "Legitimate worker uses frozen snapshot/reference, while operator/launch use separate volatile PG consumption facts."
+      ]
+    }
+  ],
+  "nonblocking_observations": [
+    {
+      "id": "O01",
+      "severity": "P2",
+      "path": "DocuN/evidence/TASK-120/execution/audit-repair-07/final-stop-check.py:55",
+      "kind": "evidence_summary_defect",
+      "detail": "20 saved process observations are unknown/error5 although the helper derives same_identity_running=false and all_fresh=true. They are not fresh exit confirmations. Nineteen exact PID/births have earlier conclusive exit records; the remaining root22 exact PID/birth has independently proven named-Job membership, tree_empty and fresh same-name Job absence. Combined registered-object stop evidence suffices, without another live probe.",
+      "original_audit_qualification": "Original C14 did not separate this helper's unknown states. Its result bytes remain intact; this review corrects the evidence interpretation and records the exact alternative proofs."
+    },
+    {
+      "id": "O02",
+      "severity": "P3",
+      "path": "backend/app/data_exit/q_clock.py:3",
+      "detail": "The introductory QPC statement is narrower than the actual implementation whitelist. Python3.12 Windows uses GetTickCount64; code and saved positive sampling cover it. No functional repair required for this wording."
+    }
+  ],
+  "axes": {
+    "code": "不通过",
+    "evidence": "证据不足，限定F02组合ADMIN与F03记忆失败后只读回执",
+    "historical_execution_control": "不通过，保留05/06及07接收登记限制"
+  },
+  "eligible_for_main_closure": false,
+  "real_Q": "FROZEN"
+}

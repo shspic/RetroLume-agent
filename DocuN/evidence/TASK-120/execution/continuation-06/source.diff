@@ -1,0 +1,246 @@
+--- before/backend/app/activities/interview_repository.py
++++ after/backend/app/activities/interview_repository.py
+@@ -308,7 +308,10 @@
+                 for n in new:
+                     cursor=await connection.execute('SELECT sha256 FROM public.material_versions WHERE id=%s AND source_id=%s',(n['version_id'],n['source_id']))
+                     actual=await cursor.fetchone()
+-                    if not actual or actual['sha256']!=n['original_sha256']:raise InterviewRefusal('source_invalid')
++                    current=locked.get(n['source_id'])
++                    if (not actual or actual['sha256']!=n['original_sha256'] or current is None
++                        or current['current_version']!=n['version_id'] or current['revision']!=n['source_revision']):
++                        raise InterviewRefusal('source_invalid')
+                 await self._apply_scope_locked(connection,aid,state['activity'],locked,command.expected_scope_revision,
+                     tuple(SourceSnapshot(n['source_id'],n['version_id'],n['source_revision']) for n in new),force_revision=True)
+                 h.update(scope_revision=h['scope_revision']+1,goal_version=h['goal_version']+(1 if oldgoal else 0),phase='ready' if oldgoal else 'needs_goal',round_index=0,probe_depth=0,
+--- before/backend/app/activities/repository.py
++++ after/backend/app/activities/repository.py
+@@ -341,7 +341,10 @@
+         policy_entered = False
+         try:
+             from app.data_exit.q_store import authority_for, method_name, is_read_method, DISPATCH_METHODS
+-            authority=authority_for(self)
++            # A sealed reader has no normal Q authority. Its named pure reads
++            # still run through the unchanged readonly PG connection guard.
++            readonly_projection=self.data_readonly and is_read_method(method_name(operation))
++            authority=None if readonly_projection else authority_for(self)
+             if authority is not None and not is_read_method(method_name(operation)):
+                 policy=authority.async_policy(shared=method_name(operation) in DISPATCH_METHODS)
+                 await policy.__aenter__()
+--- before/backend/app/capabilities/q_protocol.py
++++ after/backend/app/capabilities/q_protocol.py
+@@ -136,7 +136,7 @@
+     instance_id: str
+     originals_root_id: str
+     selection_generation: int = Field(ge=0)
+-    schema_profile: Literal['data_exit.v1.r02']
++    schema_profile: Literal['data_exit.v1.r02','data_exit.v1.r03']
+     source_registration_sha256: str = Field(pattern=HEX)
+     connection_target_sha256: str = Field(pattern=HEX)
+     cluster_system_identifier: str = Field(min_length=1, max_length=64)
+--- before/backend/app/data_exit/schema_checks.py
++++ after/backend/app/data_exit/schema_checks.py
+@@ -52,20 +52,21 @@
+ 
+ def assert_data_schema_sync(connection,profile=None):
+     from .schema import DATA_FUNCTIONS
+-    from .schema_profiles import observed_profile,get_profile,R02,extra_shape_queries,check_extra_shape
++    from .schema_profiles import observed_profile,get_profile,R02,R03,extra_shape_queries,check_extra_shape,SCOPE_ACL_QUERY,check_scope_permissions
+     profile=get_profile(profile) if profile is not None else observed_profile(connection)
+     rows=connection.execute(FUNCTION_QUERY,(list(DATA_FUNCTIONS),)).fetchall()
+     roles=connection.execute(ROLE_QUERY,(DATA_ROLES,)).fetchall()
+     triggers=connection.execute(TRIGGER_QUERY).fetchall()
+     check_data_shape(rows,roles,triggers,connection.execute(CONSTRAINT_QUERY).fetchall(),profile.name)
+-    if profile.name==R02:
++    check_scope_permissions(connection.execute(SCOPE_ACL_QUERY).fetchall(),profile.name)
++    if profile.name in (R02,R03):
+         shape={key:connection.execute(query).fetchall() for key,query in extra_shape_queries().items()}
+-        check_extra_shape(shape)
++        check_extra_shape(shape,profile.name)
+ 
+ 
+ async def assert_data_schema(connection):
+     from .schema import DATA_FUNCTIONS
+-    from .schema_profiles import observed_profile_async,R02,extra_shape_queries,check_extra_shape
++    from .schema_profiles import observed_profile_async,R02,R03,extra_shape_queries,check_extra_shape,SCOPE_ACL_QUERY,check_scope_permissions
+     profile=await observed_profile_async(connection)
+     cursor=await connection.execute(FUNCTION_QUERY,(list(DATA_FUNCTIONS),))
+     rows=await cursor.fetchall()
+@@ -75,11 +76,13 @@
+     triggers=await cursor.fetchall()
+     cursor=await connection.execute(CONSTRAINT_QUERY)
+     check_data_shape(rows,roles,triggers,await cursor.fetchall(),profile.name)
+-    if profile.name==R02:
++    cursor=await connection.execute(SCOPE_ACL_QUERY)
++    check_scope_permissions(await cursor.fetchall(),profile.name)
++    if profile.name in (R02,R03):
+         shape={}
+         for key,query in extra_shape_queries().items():
+             cursor=await connection.execute(query);shape[key]=await cursor.fetchall()
+-        check_extra_shape(shape)
++        check_extra_shape(shape,profile.name)
+ 
+ 
+ async def schema_mode(connection):
+@@ -94,8 +97,8 @@
+     """核十三版精确新增后投影回十二版指纹，任意额外授权仍会失败。"""
+     import copy
+     from .schema import BUSINESS_FUNCTIONS_013,LEGACY_FUNCTION_SOURCES
+-    from .schema_profiles import project_014
+-    shape=project_014(shape)
++    from .schema_profiles import project_014,project_scope_permission
++    shape=project_014(project_scope_permission(shape))
+     result=copy.deepcopy(shape)
+     allowed={'retrolume_data_snapshot':{'r'},'retrolume_data_restore_loader':{'ar','ra'},'retrolume_data_owner':{'r'}}
+     runtime_tables={'material_sources','material_versions','pdf_review_candidates','pdf_extracted_pages','pdf_review_pages',
+--- before/backend/app/data_exit/schema_profiles.py
++++ after/backend/app/data_exit/schema_profiles.py
+@@ -1,10 +1,12 @@
+-"""两份封闭数据profile；R01原常量不改，R02仅精确014增量。"""
++"""封闭数据profile；旧常量不改，R03仅增加015单表权限。"""
+ from dataclasses import dataclass
+ from copy import deepcopy
+ from .contracts import PROFILE,TABLES,DataError,canonical,digest
+ from .schema import COLUMNS,MIGRATIONS,MIGRATION_013
+ 
+ R02='data_exit.v1.r02'
++R03='data_exit.v1.r03'
++MIGRATION_015='59b2e556a81a5383e9144a967fa90b5abedb26284d50cbf150db1dd77f34ef0e'
+ MIGRATION_014='3a919b2562ded5765de132519b841c1d1439c65c001795cfbd608cbc03586e78'
+ VECTOR_EXTENSION_VERSION='0.8.6'
+ R02_EXTRA_SHAPE_SHA='5b7dc68a94101307bcbd63a16607c5b2ee79906b5f32669d764853a55172dc12'
+@@ -38,9 +40,10 @@
+ def get_profile(name):
+     chain01={**MIGRATIONS,'013_data_exit.sql':MIGRATION_013}
+     if name==PROFILE:return SchemaProfile(PROFILE,TABLES,COLUMNS,MIGRATIONS,chain01)
+-    if name==R02:
++    if name in (R02,R03):
+         chain02={**chain01,'014_step018_retrieval.sql':MIGRATION_014}
+-        return SchemaProfile(R02,tuple(tables02),columns02,chain02,chain02)
++        chain=chain02 if name==R02 else {**chain02,'015_activity_scope_delete_permission.sql':MIGRATION_015}
++        return SchemaProfile(name,tuple(tables02),columns02,chain,chain)
+     raise DataError('schema_profile_mismatch',503)
+ 
+ 
+@@ -94,8 +97,64 @@
+     return value
+ 
+ 
+-def check_extra_shape(shape):
++PROFILE_CONSTRAINT_02="CHECK ((schema_profile = ANY (ARRAY['data_exit.v1.r01'::text, 'data_exit.v1.r02'::text])))"
++PROFILE_CONSTRAINT_03="CHECK ((schema_profile = 'data_exit.v1.r03'::text))"
++
++
++def check_extra_shape(shape,profile=R02):
++    if profile==R03:
++        shape=deepcopy(shape)
++        rows=[r for r in shape.get('constraints',[]) if r['conname']=='data_control_schema_profile_check']
++        if len(rows)!=1 or rows[0]['definition']!=PROFILE_CONSTRAINT_03:raise DataError('data_schema_not_ready',503)
++        rows[0]['definition']=PROFILE_CONSTRAINT_02
++    elif profile!=R02:raise DataError('schema_profile_mismatch',503)
+     if digest(canonical(normalized_extra_shape(shape)))!=R02_EXTRA_SHAPE_SHA:raise DataError('data_schema_not_ready',503)
++
++
++SCOPE_ACL_QUERY="""SELECT a.attname,CASE WHEN x.grantee=c.relowner THEN '<owner>'
++ ELSE COALESCE(g.rolname,'<public>') END AS grantee,x.privilege_type,x.is_grantable,
++ x.grantor=c.relowner AS trusted_grantor,d.mode_observed,
++ ARRAY(SELECT privilege_type FROM aclexplode(acldefault('r',c.relowner)) ORDER BY privilege_type) AS owner_privileges
++ FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace CROSS JOIN public.data_export_control_v1 d
++ CROSS JOIN LATERAL (SELECT NULL::name AS attname,c.relacl AS acl UNION ALL
++ SELECT attname,attacl FROM pg_attribute WHERE attrelid=c.oid AND attnum>0 AND NOT attisdropped) a
++ CROSS JOIN LATERAL aclexplode(a.acl) x LEFT JOIN pg_roles g ON g.oid=x.grantee
++ WHERE n.nspname='public' AND c.relname='activity_scope_sources'
++ ORDER BY a.attname NULLS FIRST,grantee,x.privilege_type"""
++
++
++def check_scope_permissions(rows,profile):
++    get_profile(profile)
++    modes={row['mode_observed'] for row in rows}
++    if len(modes)!=1 or not modes<={'normal','loading','frozen','restored_readonly'}:raise DataError('data_schema_not_ready',503)
++    expected={None:{'<owner>':set(rows[0]['owner_privileges']) if rows else set(),
++      'retrolume_data_app':{'SELECT','INSERT','UPDATE'}|({'DELETE'} if profile==R03 else set()),
++      'retrolume_data_owner':{'SELECT'},'retrolume_data_restore_loader':{'SELECT','INSERT'},
++      'retrolume_interview_owner':{'SELECT'},'retrolume_html_owner':{'SELECT'}}}
++    if profile in (R02,R03):expected[None]['retrolume_retrieval_owner']={'SELECT'}
++    if modes=={'restored_readonly'}:expected[None]['retrolume_data_snapshot']={'SELECT'}
++    for column in ('activity_id','source_id','version_id','source_revision'):
++        expected[column]={'retrolume_data_snapshot':{'SELECT'}}
++    actual={}
++    for row in rows:
++        if row['is_grantable'] and row['grantee']!='<owner>' or not row['trusted_grantor']:
++            raise DataError('data_schema_not_ready',503)
++        actual.setdefault(row['attname'],{}).setdefault(row['grantee'],set()).add(row['privilege_type'])
++    if actual!=expected:raise DataError('data_schema_not_ready',503)
++
++
++def project_scope_permission(shape):
++    """Only after assert_data_schema checked the actual profile and exact ACL."""
++    result=deepcopy(shape)
++    for section in ('columns','table_acl','qualification_column_acls'):
++        for row in result.get(section,[]):
++            if row.get('relname')!='activity_scope_sources':continue
++            for field in ('acl','table_acl','column_acl'):
++                text=row.get(field)
++                if text:
++                    import re
++                    row[field]=re.sub(r'(?<=[{,])retrolume_data_app=arwd/', 'retrolume_data_app=arw/',text)
++    return result
+ 
+ 
+ def project_014(shape):
+--- before/backend/app/data_exit/snapshot.py
++++ after/backend/app/data_exit/snapshot.py
+@@ -57,10 +57,10 @@
+         rows={table:[] for table in TABLES}
+         graph=('material_sources','material_versions','activities','activity_scope_sources','activity_memory_choices','learning_memory_dependencies')
+         with self.repository.connection(readonly=True,repeatable=True) as connection:
+-            from .schema_profiles import observed_profile,R02
++            from .schema_profiles import observed_profile,R02,R03
+             profile=observed_profile(connection);COLUMNS=profile.columns
+             rows={table:[] for table in profile.tables}
+-            if profile.name==R02:graph+=('retrieval_spaces','retrieval_commands','retrieval_chunks')
++            if profile.name in (R02,R03):graph+=('retrieval_spaces','retrieval_commands','retrieval_chunks')
+             for table in graph:
+                 columns=','.join(COLUMNS[table])
+                 rows[table]=[encode_row(table,row,profile.name) for row in connection.execute('SELECT '+columns+' FROM public.'+table+' ORDER BY '+','.join(list(COLUMNS[table])[:2])).fetchall()]
+--- /dev/null
++++ after/backend/migrations/015_activity_scope_delete_permission.sql
+@@ -0,0 +1,28 @@
++-- AP-120-06: only the existing application group's scope-binding DELETE.
++BEGIN;
++LOCK TABLE public.data_control, public.activity_scope_sources IN ACCESS EXCLUSIVE MODE;
++DO $check$
++BEGIN
++ IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='retrolume_data_app'
++   AND NOT (rolcanlogin OR rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls))
++ OR EXISTS(SELECT 1 FROM public.data_control WHERE schema_profile<>'data_exit.v1.r02' OR mode NOT IN('normal','loading'))
++ OR NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='public.data_control'::regclass
++   AND conname='data_control_schema_profile_check' AND convalidated
++   AND pg_get_constraintdef(oid)=$old$CHECK ((schema_profile = ANY (ARRAY['data_exit.v1.r01'::text, 'data_exit.v1.r02'::text])))$old$)
++ OR NOT EXISTS(SELECT 1 FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid
++   WHERE t.tgrelid='public.activity_scope_sources'::regclass AND t.tgname='data_runtime_write'
++   AND NOT t.tgisinternal AND t.tgenabled='O' AND t.tgtype=31
++   AND p.proname='data_runtime_write_guard' AND p.prosecdef
++   AND encode(sha256(convert_to(regexp_replace(p.prosrc,'\s','','g'),'UTF8')),'hex')='91dac86ea0de0c3f943160430d30777528df2ecdbfe8fa7802a0debd90ca6295')
++ OR NOT has_table_privilege('retrolume_data_app','public.activity_scope_sources','SELECT,INSERT,UPDATE')
++ OR has_table_privilege('retrolume_data_app','public.activity_scope_sources','DELETE,TRUNCATE')
++ OR has_table_privilege('retrolume_data_snapshot','public.activity_scope_sources','DELETE,TRUNCATE')
++ OR has_table_privilege('retrolume_data_restore_loader','public.activity_scope_sources','DELETE,TRUNCATE')
++ OR EXISTS(SELECT 1 FROM public.activities WHERE running_reserved_seconds>0 OR lease_expires_at>CURRENT_TIMESTAMP)
++ THEN RAISE EXCEPTION 'scope_delete_migration_requires_exact_quiescent_r02'; END IF;
++END $check$;
++GRANT DELETE ON public.activity_scope_sources TO retrolume_data_app;
++ALTER TABLE public.data_control DROP CONSTRAINT data_control_schema_profile_check;
++ALTER TABLE public.data_control ADD CONSTRAINT data_control_schema_profile_check CHECK(schema_profile='data_exit.v1.r03');
++UPDATE public.data_control SET schema_profile='data_exit.v1.r03';
++COMMIT;
+--- before/frontend/src/data/context.tsx
++++ after/frontend/src/data/context.tsx
+@@ -46,7 +46,7 @@
+   const response=await fetch(path,{...init,headers});
+   const check=()=>{
+     if(init.signal?.aborted)throw new DOMException('Aborted','AbortError');
+-    if(current?.control_id!==context?.control_id||!(hubRead||hubCancel||bootstrap)&&capture!==dataNamespace())throw new Error("当前数据已切换，旧响应未用于当前页面。");
++    if(current?.control_id!==context?.control_id||!(hubRead||hubCancel||bootstrap)&&(capture!==dataNamespace()||canonical(current)!==canonical(context)))throw new Error("当前数据已切换，旧响应未用于当前页面。");
+     const observed=response.headers.get('X-RetroLume-Data-Context');
+     if(context&&observed){
+       let identity:DataContext;try{identity=JSON.parse(observed);}catch{throw new Error('数据身份无法核对。');}

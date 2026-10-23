@@ -1,0 +1,105 @@
+{
+  "schema": "retrolume.task123.finite-inputs.v1",
+  "enabled": false,
+  "status": "FROZEN_TEXT_ONLY_NOT_RUN",
+  "created_at": "2026-10-21T16:58:46.862987+00:00",
+  "inherited_matrix": {
+    "path": "D:\\shspic\\project_NO3_RetroLume-agent\\DocuN\\evidence\\TASK-122\\preparation\\remaining-must-matrix.json",
+    "sha256": "56bc4d023621b75ed16a545d706f3c30f28f3beb1b9f11c4f9098c01bc1b4198",
+    "requests": 89,
+    "must": 28,
+    "fragments": 24,
+    "index_batches": 6,
+    "note": "采用122主控已验结论，不再次分片或重算同一预算"
+  },
+  "unchanged_samples": {
+    "path": "D:\\shspic\\project_NO3_RetroLume-agent\\DocuN\\evidence\\TASK-116\\design\\sample-inputs.json",
+    "sha256": "304a4b131d04cd4132334bebd091f94ff62bec5660698457487e14136023c113"
+  },
+  "html": {
+    "text": "请依据当前仍合格的平均速度反馈制作交互说明。路程 d 的单位是米，时间 t 的单位是秒，速度为 d/t 米每秒。只设 d、t 两个输入，初值分别为 120、120；初始显示 1。保持 d=120，把 t 改为 240 时显示 0.5。t=0 和未定义字段必须在计算前拒绝；reset 恢复初值并显示 1。只解释这次单位换算，不扩展到长期掌握。",
+    "encoding": "UTF-8，无BOM，无尾换行",
+    "codepoints": 171,
+    "utf8_bytes": 405,
+    "sha256": "c4c8ff9522d7e5522858d764133050bf012826a48877151c8f016c7128e4e6fb",
+    "purpose": "L10/Q10.html 的 HtmlCommand.focus 精确原文，不是已生成的interactive_description或可运行artifact",
+    "source_rubric": {
+      "path": "DocuN/evidence/TASK-116/design/acceptance-contract.md",
+      "scenario": "L10",
+      "original": "L01的合格父feedback→描述生成→v2-08真实宿主；固定d/t控件d120,t120读1，t240读0.5，t0及未定义字段被前拒，reset回1"
+    },
+    "source_input_pointers": [
+      "#/sources/0/text",
+      "#/inputs/numeric_wrong_answer"
+    ],
+    "current_parent": {
+      "action_id": "Q01.03.model",
+      "before_action_id": "Q01.04.query",
+      "required_answer_text": "60米每秒；把120除以2得到60。",
+      "kind": "teaching",
+      "record_id": null,
+      "body_sha256": null,
+      "point_id": null,
+      "qualification": null,
+      "actual_description_sha256": null,
+      "artifact_sha256": null,
+      "rule": "只允许同活动当前已COMMIT合格feedback、父hash及currentness重新核齐后组包；未匹配则停，不选历史007替代"
+    },
+    "actual_business_key": null,
+    "expected_config_sha256": null,
+    "actual_request_sha256": null,
+    "operator_approval": null,
+    "limits": {
+      "focus_codepoints_max": 1024,
+      "focus_bytes_max": 4096
+    },
+    "control_labels": [
+      "d",
+      "t"
+    ],
+    "control_ids": null,
+    "control_note": "标签沿原rubric；真实控件ID由合格封闭description生成并符合hctl_规则，不把裸d/t冒充已生成ID。0和未定义字段是拒绝负例，不新增许可输入。"
+  },
+  "continuation_reason": {
+    "text": "继续核对分钟换秒与平均速度的单位，下一步仅按当前已保存的作答、反馈和复测记录选择；本次练习不说明长期掌握。",
+    "encoding": "UTF-8，无BOM，无尾换行",
+    "codepoints": 53,
+    "utf8_bytes": 159,
+    "sha256": "9563a959fa373da25d4b347c84d2b1f5aa198cfe026d9945e750715ba9b5bf2a",
+    "purpose": "L01/L05之后保存用户的有限继续理由，只记录下一动作依据的边界，不预写成功或长期掌握结论",
+    "source_rubric": {
+      "path": "DocuN/evidence/TASK-116/design/acceptance-contract.md",
+      "scenarios": [
+        "L01",
+        "L05"
+      ],
+      "original": "主链必须完整到保存理由，不能停在生成题。"
+    },
+    "source_input_pointers": [
+      "#/inputs/numeric_goal",
+      "#/inputs/retest_question",
+      "#/inputs/retest_answer"
+    ],
+    "allowed_local_projection": {
+      "TeachingCommandInput.action": "correct",
+      "CorrectBody.text": "继续核对分钟换秒与平均速度的单位，下一步仅按当前已保存的作答、反馈和复测记录选择；本次练习不说明长期掌握。",
+      "CorrectBody.target_record_id": null,
+      "CorrectBody.disputed_dimensions": []
+    },
+    "rule": "沿现有correct本地文本保存到真实当前feedback/progress父；先核同一作答链、head和CAS。不是新增advance接口，不触发模型、不改变进度判据。若需要作为下一次模型上下文，须在未来实际manifest有限文字及逐请求完整payload中明确冻结，不由此JSON授外发。",
+    "current_parent_record_id": null,
+    "parent_body_sha256": null,
+    "business_key": null,
+    "DataContext": null,
+    "command_committed": false
+  },
+  "not_generated": [
+    "normal实例与source/version/fragment真实ID",
+    "typed/payload最终字节",
+    "grant",
+    "T0",
+    "operator批准",
+    "HTML产物与控件实际ID"
+  ],
+  "no_new_answer_or_source_or_must": true
+}

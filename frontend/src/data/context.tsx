@@ -46,7 +46,7 @@ export async function dataFetch(path:RequestInfo|URL,init:RequestInit={},policy:
   const response=await fetch(path,{...init,headers});
   const check=()=>{
     if(init.signal?.aborted)throw new DOMException('Aborted','AbortError');
-    if(current?.control_id!==context?.control_id||!(hubRead||hubCancel||bootstrap)&&capture!==dataNamespace())throw new Error("当前数据已切换，旧响应未用于当前页面。");
+    if(current?.control_id!==context?.control_id||!(hubRead||hubCancel||bootstrap)&&(capture!==dataNamespace()||canonical(current)!==canonical(context)))throw new Error("当前数据已切换，旧响应未用于当前页面。");
     const observed=response.headers.get('X-RetroLume-Data-Context');
     if(context&&observed){
       let identity:DataContext;try{identity=JSON.parse(observed);}catch{throw new Error('数据身份无法核对。');}

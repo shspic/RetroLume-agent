@@ -1,0 +1,169 @@
+{
+  "TASK": "TASK-125",
+  "R": "R-119",
+  "continuation": "audit-repair-01",
+  "observations": [
+    {
+      "key": "t125fix_initial",
+      "observation": [
+        {
+          "wall_time_seconds": 0.9934087,
+          "exit_code": 0
+        },
+        {
+          "wall_time_seconds": 1.1368166,
+          "exit_code": 0
+        }
+      ]
+    },
+    {
+      "key": "t125fix_context",
+      "observation": {
+        "wall_time_seconds": 0.9913334,
+        "exit_code": 0
+      }
+    },
+    {
+      "key": "t125fix_pre_reads",
+      "observation": [
+        {
+          "wall_time_seconds": 1.1982299,
+          "exit_code": 0
+        },
+        {
+          "wall_time_seconds": 1.0778979,
+          "exit_code": 0
+        }
+      ]
+    },
+    {
+      "key": "t125fix_driver_reads",
+      "observation": [
+        {
+          "wall_time_seconds": 1.5789827,
+          "exit_code": 0
+        },
+        {
+          "wall_time_seconds": 1.7424846,
+          "exit_code": 0
+        }
+      ]
+    },
+    {
+      "key": "t125fix_patch1",
+      "observation": {
+        "elapsed_seconds": 0.526
+      }
+    },
+    {
+      "key": "t125fix_driverbase",
+      "observation": {
+        "wall_time_seconds": 1.009046,
+        "exit_code": 0
+      }
+    },
+    {
+      "key": "t125fix_patch2",
+      "observation": {
+        "elapsed_seconds": 0.932
+      }
+    },
+    {
+      "key": "t125fix_driverloc",
+      "observation": {
+        "wall_time_seconds": 0.9830059,
+        "exit_code": 0
+      }
+    },
+    {
+      "key": "t125fix_prepare",
+      "observation": {
+        "wall_time_seconds": 1.4683455,
+        "exit_code": 0
+      }
+    },
+    {
+      "key": "t125fix_patch3",
+      "observation": {
+        "elapsed_seconds": 1.069
+      }
+    },
+    {
+      "key": "t125fix_testfreeze",
+      "observation": {
+        "wall_time_seconds": 1.1892454,
+        "exit_code": 0
+      }
+    },
+    {
+      "key": "t125fix_batch03",
+      "observation": {
+        "wall_time_seconds": 2.6215342,
+        "exit_code": 0
+      }
+    },
+    {
+      "key": "t125fix_freeze",
+      "observation": {
+        "wall_time_seconds": 1.5204141,
+        "exit_code": 0
+      }
+    }
+  ],
+  "precise_total_tool_seconds": null,
+  "measurement_note": "表内为已恢复命令实际wall及被包裹apply_patch调用秒数；尾部保存/复读工具后续发生，完整总计仍不冒精确实测。以可核短调用数及未逐项封存的保存调用上界600秒保守覆盖；推理/回传等待不当工具实测。",
+  "budget": {
+    "original_conservative_seconds": 3600,
+    "original_exact_seconds": null,
+    "original_total_cap_seconds": 10800,
+    "unsealed_continuation_cap_seconds": 2400,
+    "reserved_close_seconds": 360,
+    "continuation_conservative_seconds": 600,
+    "cumulative_conservative_seconds": 4200,
+    "continuation_unused_allocation_seconds": 1800,
+    "scope": "仅本轮，不自动授权后续任务",
+    "original_deadline": "2026-10-23T09:12:14.276888+08:00"
+  },
+  "tests": {
+    "historical_batches": [
+      1,
+      2
+    ],
+    "current_batches": [
+      3
+    ],
+    "cumulative_used": 3,
+    "forward_cap": 4,
+    "batch04_run": false,
+    "per_batch_seconds": 600,
+    "command": "backend/.venv/Scripts/python.exe -I -S -B DocuN/evidence/TASK-125/execution/repair-01/run-offline-batch-03.py",
+    "command_record": "batch-03-command.json",
+    "raw_output": "batch-03-output.txt",
+    "selection": "batch-03-selection.json",
+    "actual_count": 9,
+    "failures": 0,
+    "errors": 0,
+    "skips": 0,
+    "full_original18_rerun": false
+  },
+  "known_execution_note": "首轮rg --files定位误把原execution/scratch包含在递归文件名枚举中，输出了少数旧case路径；未读case文件正文、未写删旧case/link/target，已停止该枚举，之后仅用固定文件和本轮新case目录。原始长输出有截断，当前修复前缀和必要片段已按固定定位核读。",
+  "historical_unknowns_retained": [
+    "原工程精确工具wall unknown",
+    "原批1中间产品完整副本缺失",
+    "原junction平台审批原回执未纳入证据；不据WinError5单独认定沙箱策略原因",
+    "原TASK126控制轴部分可核/精确unknown"
+  ],
+  "operations": {
+    "real_installer_cli_apply": 0,
+    "pg": 0,
+    "network": 0,
+    "services": 0,
+    "containers": 0,
+    "roles": 0,
+    "paid_calls": 0,
+    "fees_cny": 0,
+    "git_write": 0,
+    "delegation": 0
+  },
+  "coverage_limit": "内部记录器不是真实TCP/认证/PG执行；audit边界及实际观察见summary，不将零字段当全平台安全证明"
+}

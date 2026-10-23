@@ -1,0 +1,114 @@
+--- before/backend/app/capabilities/q_context.py
++++ after/backend/app/capabilities/q_context.py
+@@ -325,12 +325,53 @@
+             provider=service.provider,endpoint=service.base_url+('/embeddings' if domain=='retrieval' else '/chat/completions'),
+             configured_model=service.model,service_sha256=service_identity(service),template_set_sha256=authority.manifest.template_set_sha256,
+             snapshot=state,provenance_sha256=digest(provenance),max_output_tokens=getattr(request,'max_output_tokens',0),
+             created_at=utcnow().isoformat(),valid_until=min(datetime.fromisoformat(state['activity']['deadline_at']),datetime.fromisoformat(authority.grant.valid_until_utc)).isoformat())
+-        row=authority.prepare(p,raw,payload,provenance,intent)
+-        projection=authority.projection(row,current=row['prepared']['snapshot']==state)
++        dependencies=await cleanup_dependencies(ledger,aid,state,raw,payload,intent)
++        row=authority.prepare(p,raw,payload,provenance,intent,dependencies=dependencies)
++        projection=authority.projection(row,current=row['prepared']['snapshot']==state,
++            pg_consumed=(await command_fact(ledger,row))['consumed'])
+         ref=authority.reference(row) if projection['can_continue'] else None
+         return projection,service.model_copy(update={'outbound_authorization':ref}) if ref else service
++
++
++async def cleanup_dependencies(ledger,aid,state,*documents):
++    """All selected historical versions and transitive memory/source edges.
++
++    This denial index contains identifiers only. The artifact digest continues
++    to bind the complete request/payload/provenance/intent original bytes.
++    """
++    from uuid import UUID
++    sources={s['source_id'] for s in state['sources']}
++    memories={m['memory_id'] for m in state['memory'].get('refs',[])}
++    def walk(value):
++        if isinstance(value,dict):
++            for key,item in value.items():
++                if key in ('source_id','memory_id','upstream_memory_id') and isinstance(item,str):
++                    try:identity=str(UUID(item))
++                    except ValueError:pass
++                    else:(sources if key=='source_id' else memories).add(identity)
++                walk(item)
++        elif isinstance(value,(list,tuple)):
++            for item in value:walk(item)
++        elif isinstance(value,str) and value[:1] in ('{','['):
++            try:parsed=json.loads(value)
++            except (ValueError,RecursionError):return
++            walk(parsed)
++    for document in documents:walk(document)
++    async def q_snapshot_dependencies(connection):
++        cursor=await connection.execute("""WITH RECURSIVE selected(memory_id,version) AS(
++          SELECT memory_id,version FROM public.activity_memory_choices WHERE activity_id=%s
++          UNION SELECT d.upstream_memory_id,d.upstream_version FROM public.learning_memory_dependencies d
++          JOIN selected s USING(memory_id,version) WHERE d.upstream_memory_id IS NOT NULL
++        ) SELECT s.memory_id::text,d.source_id::text,d.upstream_memory_id::text
++          FROM selected s LEFT JOIN public.learning_memory_dependencies d USING(memory_id,version)""",(aid,))
++        return await cursor.fetchall()
++    for dep in await ledger._transaction(q_snapshot_dependencies):
++        memories.add(dep['memory_id'])
++        if dep['upstream_memory_id']:memories.add(dep['upstream_memory_id'])
++        if dep['source_id']:sources.add(dep['source_id'])
++    return {'sources':sorted(sources),'memories':sorted(memories)}
+ 
+ 
+ async def public_projection(ledger,aid,key,*,expected=False):
+     from app.data_exit.q_store import authority_for
+@@ -338,11 +379,44 @@
+     if authority is None:return None
+     rows=[r for r in authority.hub.state()['q']['requests'].values() if r['prepared']['activity_id']==aid and r['prepared']['business_key']==key]
+     if not rows:return {'state':'unavailable','can_continue':False,'reason':'q_request_not_prepared'} if expected else None
+     state,_,_=await snapshot(ledger,aid)
+-    values=[authority.projection(r,current=r['prepared']['snapshot']==state) for r in rows]
++    values=[authority.projection(r,current=r['prepared']['snapshot']==state,
++            pg_consumed=(await command_fact(ledger,r))['consumed']) for r in rows]
+     if len(values)==1:return values[0]
+     return {'state':'approved' if all(x['can_continue'] for x in values) else 'pending','can_continue':all(x['can_continue'] for x in values),'batches':values}
++
++
++async def q_snapshot_command_fact(ledger,row):
++    """Volatile PG consumption facts stay outside the frozen request snapshot.
++
++    A worker legitimately sees a started command after the API claim; it uses
++    check_reference/check_snapshot_sql instead of this UI/operator-only gate.
++    """
++    p=row['prepared'];domain=p['domain']
++    tables={'teaching':'teaching_commands','interview':'interview_commands',
++            'html':'html_commands','retrieval':'retrieval_commands'}
++    async def q_snapshot_command(connection):
++        if domain=='learning':
++            cursor=await connection.execute('SELECT state,disposition FROM public.activity_operations WHERE activity_id=%s AND operation_id=%s',
++                (p['activity_id'],p['operation_id']))
++            fact=await cursor.fetchone()
++            return {'exists':fact is not None,'status':fact['state'] if fact else None,'launch_claimed':False,
++                    'terminal':fact['disposition'] if fact else None,'consumed':fact is not None}
++        table=tables.get(domain)
++        if table is None:raise AdmissionDenied('q_command_domain_unknown')
++        cursor=await connection.execute('SELECT to_jsonb(c) AS fact FROM public.'+table+' c WHERE activity_id=%s AND business_key=%s',
++            (p['activity_id'],p['business_key']))
++        found=await cursor.fetchone();fact=found['fact'] if found else None
++        if fact is None:return {'exists':False,'status':None,'launch_claimed':False,'terminal':None,'consumed':True}
++        claimed=bool(fact.get('launch_claimed') or fact.get('launch_claimed_at'))
++        terminal=fact.get('terminal_disposition') or fact.get('effect_applied') or fact.get('obsolete') or fact.get('obsolete_at') or fact.get('abandoned_at')
++        return {'exists':True,'status':fact['status'],'launch_claimed':claimed,'terminal':bool(terminal),
++                'consumed':claimed or bool(terminal) or fact['status']!='accepted'}
++    return await ledger._transaction(q_snapshot_command)
++
++
++command_fact=q_snapshot_command_fact
+ 
+ 
+ async def check_snapshot_sql(connection,state,authority):
+     """Caller already owns policy. Never acquire a private lease under a PG lock."""
+@@ -392,8 +466,9 @@
+         rows=[]
+         for service in services:
+             row=authority.check_reference(service.outbound_authorization)
+             if row.get('claim') or row.get('launch_claimed'):raise AdmissionDenied('q_launch_consumed')
++            if (await command_fact(ledger,row))['consumed']:raise AdmissionDenied('q_launch_consumed')
+             state,_,_=await snapshot(ledger,row['prepared']['activity_id'])
+             check_instance(authority,ledger,state)
+             if state!=row['prepared']['snapshot']:raise AdmissionDenied('q_prepared_changed')
+             rows.append(row)

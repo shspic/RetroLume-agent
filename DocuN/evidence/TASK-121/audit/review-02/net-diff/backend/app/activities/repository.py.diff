@@ -1,0 +1,17 @@
+--- before/backend/app/activities/repository.py
++++ after/backend/app/activities/repository.py
+@@ -339,12 +339,12 @@
+         outgoing = None
+         policy = None
+         policy_entered = False
+         try:
+-            from app.data_exit.q_store import authority_for, method_name, is_read_method, DISPATCH_METHODS
++            from app.data_exit.q_store import authority_for, method_name, is_read_method, DISPATCH_METHODS, POLICY
+             # A sealed reader has no normal Q authority. Its named pure reads
+             # still run through the unchanged readonly PG connection guard.
+-            readonly_projection=self.data_readonly and is_read_method(method_name(operation))
++            readonly_projection=(self.data_readonly or POLICY.get() is not None) and is_read_method(method_name(operation))
+             authority=None if readonly_projection else authority_for(self)
+             if authority is not None and not is_read_method(method_name(operation)):
+                 policy=authority.async_policy(shared=method_name(operation) in DISPATCH_METHODS)
+                 await policy.__aenter__()

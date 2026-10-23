@@ -1,0 +1,13 @@
+--- before/backend/tests/fixtures/task120/setup.py
++++ after/backend/tests/fixtures/task120/setup.py
+@@ -24,9 +24,9 @@
+ 
+ def dsn(slot,admin=False,*,snapshot=False):
+     port=r.state()['ports']['pg']
+     if slot not in ('flow','budget-01','budget-02','matrix-final','scope-ui-final','audit07-r02','audit07-main'):raise RuntimeError('task120_database_not_permitted')
+-    if slot.startswith('audit07-') and (r.state()['current_permit_id']!='TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021' or r.PRIVATE!=r.ROOT/'.runtime/task120-audit07'):raise RuntimeError('audit07_private_permit_required')
++    if slot.startswith('audit07-') and (r.state()['current_permit_id'] not in ('TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021','TASK-120-Q-PREP-TARGETED-REPAIR-08-20261021') or r.PRIVATE!=r.ROOT/'.runtime/task120-audit07'):raise RuntimeError('audit07_private_permit_required')
+     if slot=='scope-ui-final' and (r.state()['current_permit_id']!='TASK-120-Q-PREP-CONTINUATION-06-20261020' or r.PRIVATE.name!='continuation-06'):raise RuntimeError('scope_ui_private_permit_required')
+     value=info(slot)
+     return make_conninfo(host='127.0.0.1',port=port,dbname=value['database'],user='postgres' if admin else value['snapshot_user'] if snapshot else value['app_user'],
+         password=json.loads((r.PRIVATE/'cluster.json').read_text(encoding='utf-8'))['password'] if admin else value['snapshot_password'] if snapshot else value['app_password'],application_name='task120-'+slot)

@@ -1,0 +1,43 @@
+--- before/backend/app/operator/q_request.py
++++ after/backend/app/operator/q_request.py
+@@ -37,13 +37,15 @@
+         kernel.CloseHandle(token)
+ 
+ 
+ async def inspect_request(ledger,pid):
+-    from app.capabilities.q_context import snapshot,check_instance,check_snapshot_sql
++    from app.capabilities.q_context import snapshot,check_instance,check_snapshot_sql,command_fact
+     authority=authority_for(ledger)
+     if authority is None:raise DataError('q_control_missing')
+     async with authority.async_policy(shared=True):
+         row=authority.request(pid)
++        if row.get('cleanup'):
++            return {'prepared_id':pid,'state':'invalidated','request_available':False,'cleanup':row['cleanup']['state']}
+         state,_,_=await snapshot(ledger,row['prepared']['activity_id'])
+         check_instance(authority,ledger,state)
+         current=state==row['prepared']['snapshot']
+         # No private-body fallback after source, memory, parent or instance invalidation.
+@@ -51,10 +53,11 @@
+         async def q_snapshot(connection):
+             await check_snapshot_sql(connection,state,authority)
+         await ledger._transaction(q_snapshot)
+         artifact=authority.artifact(row)
++        fact=await command_fact(ledger,row)
+         return {'prepared_id':pid,'prepared_sha256':row['prepared_sha256'],
+-            'projection':authority.projection(row),'prepared':row['prepared'],
++            'projection':authority.projection(row,pg_consumed=fact['consumed']),'prepared':row['prepared'],'pg_command_fact':fact,
+             'request':artifact['request'],'provider_object':artifact['payload'],
+             'provider_bytes_utf8':canonical(artifact['payload']),'provenance':artifact['provenance'],
+             'request_available':True,'execution_class':authority.bundle['execution_class']}
+ 
+@@ -65,9 +68,9 @@
+     async with authority.async_policy():
+         inspection=await inspect_request(ledger,pid)
+         if not inspection['request_available'] or inspection.get('prepared_sha256')!=expected_sha256:
+             raise DataError('q_inspection_changed')
+-        return authority.approve(pid,principal_id(),current=True)
++        return authority.approve(pid,principal_id(),current=True,pg_consumed=inspection['pg_command_fact']['consumed'])
+ 
+ 
+ def read_config(path):
+     regular(path)

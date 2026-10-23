@@ -1,0 +1,72 @@
+--- before/backend/app/data_exit/q_store.py
++++ after/backend/app/data_exit/q_store.py
+@@ -72,7 +72,8 @@
+ 
+ def is_read_method(name):
+     return name.startswith(('read_', 'list_', 'inspect_', 'find_', 'q_snapshot')) or name in (
+-        'snapshot','retrieval_context','retrieval_cached','retrieval_vector_ranks','probe_storage')
++        'snapshot','retrieval_context','retrieval_cached','retrieval_vector_ranks','probe_storage',
++        '_teaching_read_snapshot')
+ 
+ 
+ def owned_closing(hub,state):
+--- before/backend/app/capabilities/q_context.py
++++ after/backend/app/capabilities/q_context.py
+@@ -163,6 +163,10 @@
+             'execution_generation':result.execution_generation,'payload_sha256':result.payload_sha256})
+         ids.extend((operation_id,result.payload_sha256,profile.request_sha256))
+         derived.extend(string_values(output.model_dump(mode='json')))
++        # Legacy followup serializes this exact validated parent output as one
++        # canonical history string. Trust that immutable whole value, rather
++        # than admitting arbitrary nested keys or reconstructed history text.
++        derived.append(canonical(output.model_dump()))
+     return state,ids,derived
+ 
+ 
+@@ -195,7 +199,7 @@
+         'parent_operation_id','parent_payload_sha256','parent_feedback_record_id','parent_exercise_record_id','record_id',
+         'source_id','version_id','source_version_id','original_sha256','unit_sha256','fragment_sha256','evidence_id','citation_id','identity_sha256','manifest_sha256',
+         'id','space_id','query_sha256','result_sha256','memory_id','body_sha256','selection_sha256','dependency_sha256',
+-        'memory_selection_sha256','memory_dependency_sha256','assembled_messages_sha256','messages_sha256','renderer_sha256'}
++        'memory_selection_sha256','memory_dependency_sha256','assembled_messages_sha256','messages_sha256','renderer_sha256','config_sha256'}
+     metadata=set()
+     def collect(value):
+         if isinstance(value,dict):
+--- before/backend/app/interview/policy.py
++++ after/backend/app/interview/policy.py
+@@ -4,7 +4,7 @@
+ from .prompt import messages
+ 
+ 
+-def transition(action, head, body):
++def transition(action, head, body, *, abandon_target=None):
+     phase = head['phase'] if head else None
+     if action == 'start':
+         if head is not None: raise InterviewRefusal('interview_domain_conflict')
+@@ -22,7 +22,13 @@
+     if action=='review' and (phase!='answer_ready' or str(head.get('current_question_id') or '')!=body['question_record_id'] or str(head.get('current_answer_id') or '')!=body['answer_record_id']):
+         raise InterviewRefusal('interview_parent_invalid')
+     if action=='abandon' and str(head.get('pending_key') or '')!=body['pending_key']:
+-        raise InterviewRefusal('interview_parent_invalid')
++        # A new goal can obsolete an UNKNOWN while clearing the head pointer.
++        # Explicit local abandonment still needs the exact locked historical
++        # command; it must never clear a different current pending command.
++        if (head.get('pending_key') is not None or abandon_target is None
++            or str(abandon_target.get('business_key'))!=body['pending_key']
++            or abandon_target.get('status')!='unknown' or not abandon_target.get('obsolete')):
++            raise InterviewRefusal('interview_parent_invalid')
+ 
+ 
+ def normalize_output(raw, frozen: InterviewContext):
+--- before/backend/app/activities/interview_repository.py
++++ after/backend/app/activities/interview_repository.py
+@@ -245,7 +245,8 @@
+             replay=await self._interview_replay(connection,state,aid,command)
+             if replay:return
+             self._interview_cas(state,command); self._interview_gate(state,command.action,command.schema_id)
+-            transition(command.action,state['head'],command.body)
++            abandon_target=next((c for c in state['commands'] if str(c['business_key'])==command.body['pending_key']),None) if command.action=='abandon' else None
++            transition(command.action,state['head'],command.body,abandon_target=abandon_target)
+             h=plain(state['head']) if state['head'] else dict(revision=0,goal_version=0,phase='needs_goal',last_seq=0,round_index=0,probe_depth=0,
+                 goal_record_id=None,root_question_id=None,current_question_id=None,current_answer_id=None,current_feedback_id=None,pending_key=None,
+                 scope_revision=state['activity']['scope_revision'])

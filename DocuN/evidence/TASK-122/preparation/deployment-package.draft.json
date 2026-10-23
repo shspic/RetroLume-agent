@@ -1,0 +1,158 @@
+{
+  "schema": "retrolume.task122.preparation-draft.v1",
+  "enabled": false,
+  "loadable_by_product": false,
+  "activation_eligible": false,
+  "actual_grant": null,
+  "actual_manifest": null,
+  "actual_binding": null,
+  "actual_operator_approval": null,
+  "actual_activation_receipt": null,
+  "T0": null,
+  "valid_until_utc": null,
+  "adopted_budget": {
+    "global_requests": 100,
+    "global_cost_microunits": 25000000,
+    "per_request": 250000,
+    "roster": [
+      {
+        "activity_id": "01800000-0000-4000-8000-000000000001",
+        "role": "learning",
+        "max_requests": 48,
+        "max_cost_microunits": 12000000
+      },
+      {
+        "activity_id": "01800000-0000-4000-8000-000000000002",
+        "role": "interview",
+        "max_requests": 28,
+        "max_cost_microunits": 7000000
+      },
+      {
+        "activity_id": "01800000-0000-4000-8000-000000000003",
+        "role": "supplement",
+        "max_requests": 24,
+        "max_cost_microunits": 6000000
+      }
+    ]
+  },
+  "candidate_resource": {
+    "created": false,
+    "normal_name": "retrolume-q-first-normal",
+    "database_name": "retrolume_q_first_normal",
+    "volume_name": "retrolume-q-first-normal-data",
+    "pg_loopback_port_candidate": 55482,
+    "api_loopback_port_candidate": 18122,
+    "ports_current_availability": "UNKNOWN_NOT_PROBED",
+    "image_candidate": "sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f",
+    "image_cache_current": "UNKNOWN_NOT_PROBED",
+    "pg_cpu": 1,
+    "pg_memory_MiB": 512,
+    "pg_pids_limit": 128,
+    "restart": "no",
+    "bind_host": "127.0.0.1",
+    "normal_profile_candidate": "data_exit.v1.r03",
+    "exact_CID": null,
+    "cluster_system_identifier": null,
+    "database_oid": null,
+    "data_root": null,
+    "backup_root": null,
+    "restore_root": null,
+    "control_root": null,
+    "operator_principals": null,
+    "one_pg_ledger_for_both_providers_and_all_three_activities": true,
+    "old_TESTONLY_resources_eligible": false,
+    "resource_permission": "仅后续主控精确资源/日历/工具wall/持有许可生效后创建；不继承TASK120根数或96h"
+  },
+  "activity_configuration_outline": {
+    "not_a_loader_configuration": true,
+    "provider": "deepseek_chat_completions",
+    "model": "deepseek-flash",
+    "base_url": "https://api.deepseek.com",
+    "thinking": "disabled",
+    "api_key_env": "RETROLUME_MODEL_API_KEY",
+    "activity_defaults": {
+      "deadline_hours": 24,
+      "max_running_seconds": 3600,
+      "reserve_cost_microunits": 250000,
+      "max_request_bytes": 65536,
+      "max_output_tokens": 4096,
+      "max_requests": 48,
+      "max_cost_microunits": 12000000,
+      "allowed_tools": [
+        "finite_calculate"
+      ],
+      "max_tool_calls": 8
+    },
+    "roster_limit_note": "正常create_activity从受信v2 grant按固定UUID覆盖48/28/24及12/7/6元；无需逐活动改defaults。未绑定grant的活动不能事后换绑。",
+    "service": {
+      "timeout_seconds": 10,
+      "max_output_tokens_limit": 4096,
+      "max_request_bytes": 65536,
+      "max_response_bytes": 65536,
+      "returned_models": []
+    },
+    "learning": {
+      "profile": "learning.v2",
+      "max_output_tokens": 256
+    },
+    "teaching": {
+      "profile": "teaching.v3",
+      "max_output_tokens": 2048,
+      "enable_calculation": true
+    },
+    "interview": {
+      "profile": "interview.v2",
+      "max_output_tokens": 2048,
+      "max_followups_per_round": 2
+    },
+    "html": {
+      "profile": "html_explanation.v2",
+      "max_output_tokens": 4096
+    },
+    "memory_context": null,
+    "candidate_returned_model_allowlist": [
+      "deepseek-flash"
+    ],
+    "allowlist_verification": "公开示例仅候选，实际账号返回身份尚未核"
+  },
+  "price_snapshot_outline": {
+    "status": "draft",
+    "enabled": false,
+    "currency": null,
+    "tax_inclusive": null,
+    "applicable_entity": null,
+    "input_rate_cny_per_million": null,
+    "output_rate_cny_per_million": null,
+    "framing_token_upper_bound": null,
+    "token_upper_bound_verified": false,
+    "capabilities_verified": false,
+    "account_terms_verified": false,
+    "additional_reasoning_upper_bound": null,
+    "expires_at": null,
+    "price_snapshot_sha256": null
+  },
+  "activation_body_outline": {
+    "status": "draft",
+    "enabled": false,
+    "issuing_task": null,
+    "stage": "Q-preparation-only",
+    "approved_receipt_sha256": "d582bf2c96e53cf7aad91cee506f02281702152367cb3dff37361b098affed96",
+    "source_manifest_sha256": null,
+    "price_snapshot_sha256": null,
+    "instance_binding_sha256": null,
+    "independent_audit_result_sha256": null,
+    "normal_readiness_evidence_sha256": null,
+    "matrix_sha256": null,
+    "valid_from_utc": null,
+    "valid_until_utc": null
+  },
+  "digest_order": [
+    "固定正常资源真实binding及模板/derivation policy",
+    "冻结24片manifest及fixed_inputs，计算canonical manifest摘要",
+    "固定适用price原文件bytes摘要",
+    "主控真实首次activation body只引用前序对象及独审/readiness/matrix，不含grant/root自身摘要",
+    "grant引用activation原文件bytes摘要、manifest canonical摘要、price原文件bytes摘要及binding canonical摘要",
+    "root bundle含grant/manifest/binding/templates/atoms/operator principals，部署绑定记录再并列所有摘要",
+    "每个prepared完成后DecisionBody先在锁内固定event_seq/clock再摘要得approval_id，不把approval_id放回其自身输入"
+  ]
+}

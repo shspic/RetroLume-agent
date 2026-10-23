@@ -1,0 +1,193 @@
+--- initial/backend/app/capabilities/q_gateway.py
++++ final/backend/app/capabilities/q_gateway.py
+@@ -0,0 +1,190 @@
++"""Q dispatch boundary. The private lease ends before any result transaction."""
++from __future__ import annotations
++import contextvars
++from dataclasses import dataclass
++from .contracts import AdmissionDenied, CallStatus
++from .q_protocol import canonical, digest, raw_digest, service_identity
++
++CURRENT = contextvars.ContextVar('retrolume_q_dispatch', default=None)
++
++
++def is_v2(config):
++    return bool(config.outbound_grant and config.outbound_grant.get('schema') == 'retrolume.outbound-grant.v2')
++
++
++@dataclass
++class Dispatch:
++    authority: object
++    ledger: object
++    context: object
++    request: object
++    service: object
++    prepared: dict
++    manager: object
++    token: object = None
++    released: bool = False
++    admission_signal: object = None
++
++
++async def release_dispatch():
++    current = CURRENT.get()
++    if current is not None and not current.released:
++        current.released = True
++        if current.admission_signal is not None:current.admission_signal.close()
++        CURRENT.reset(current.token)
++        await current.manager.__aexit__(None, None, None)
++
++
++async def call_with_policy(gateway, context, request, original):
++    from app.data_exit.q_store import authority_for
++    from .q_context import snapshot, check_instance, validate_provenance
++    authority = authority_for(gateway._ledger)
++    if authority is None or not gateway._config.outbound_authorization:
++        return gateway._result(context, CallStatus.REJECTED, 'q_approval_required')
++    manager = authority.async_policy(shared=True)
++    entered = False
++    current = None
++    try:
++        await manager.__aenter__()
++        entered = True
++        config = gateway._config.model_copy(deep=True)
++        frozen = request.model_copy(deep=True)
++        row = authority.check_reference(config.outbound_authorization,
++            external=getattr(gateway._transport,'is_external',True))
++        artifact = authority.artifact(row)
++        p = row['prepared']
++        state, ids, derived = await snapshot(gateway._ledger,context.activity_id)
++        check_instance(authority,gateway._ledger,state)
++        payload = ({'model':config.model,'input':[x.text for x in frozen.inputs],'dimensions':512}
++                   if p['domain']=='retrieval' else gateway._build_payload(frozen,config=config))
++        raw = frozen.model_dump(mode='json')
++        provenance = validate_provenance(authority,raw,payload,state,ids,derived,p['action'],p)
++        if (state != p['snapshot'] or digest(raw)!=p['typed_request_sha256']
++            or digest(payload)!=p['payload_object_sha256']
++            or raw_digest(canonical(payload))!=p['payload_bytes_sha256']
++            or service_identity(config)!=p['service_sha256']
++            or digest(provenance)!=p['provenance_sha256']
++            or config.outbound_grant!=authority.bundle['grant']
++            or config.outbound_source_manifest!=authority.bundle['manifest']):
++            raise AdmissionDenied('q_prepared_changed')
++        authority.check_reference(config.outbound_authorization,context=context,
++            external=getattr(gateway._transport,'is_external',True))
++        current = Dispatch(authority,gateway._ledger,context,frozen,config,p,manager)
++        current.token = CURRENT.set(current)
++        return await original(context,frozen)
++    except Exception as exc:
++        from app.data_exit.contracts import DataError
++        if isinstance(exc,(AdmissionDenied,DataError,ValueError,TypeError)):
++            import logging,re
++            code=getattr(exc,'code',None) or (str(exc) if isinstance(exc,AdmissionDenied) else None)
++            if not isinstance(code,str) or not re.fullmatch('[a-z0-9_]{1,80}',code):code=type(exc).__name__
++            logging.getLogger(__name__).warning('q_dispatch_rejected code=%s field=%s value_sha256=%s',code,getattr(exc,'q_path',None),getattr(exc,'q_value_sha256',None))
++            return gateway._result(context,CallStatus.REJECTED,'q_authorization_denied')
++        raise
++    finally:
++        if current is not None:
++            await release_dispatch()
++        elif entered:
++            await manager.__aexit__(None,None,None)
++
++
++async def dispatch_transport(transport, **kwargs):
++    current = CURRENT.get()
++    if current is None:
++        return await transport.send(**kwargs)
++    p = current.prepared
++    raw = canonical(kwargs.pop('payload')).encode('utf-8')
++    if (current.released or kwargs['endpoint']!=p['endpoint']
++        or raw_digest(raw)!=p['payload_bytes_sha256'] or len(raw)!=p['payload_bytes_count']):
++        raise AdmissionDenied('q_transport_bytes_changed')
++    current.authority.check_reference(current.service.outbound_authorization,
++        context=current.context,claimed=True,external=getattr(transport,'is_external',True))
++    if not hasattr(transport,'send_frozen'):
++        raise AdmissionDenied('q_frozen_transport_required')
++    try:
++        return await transport.send_frozen(payload_bytes=raw,**kwargs)
++    finally:
++        # K2: even successful response parsing and record_outcome run after release.
++        await release_dispatch()
++
++
++async def transaction_check(connection, ledger, activity_id, operation_id, *, intent=None, call=None):
++    """Called inside production admit/mark with the original PG transaction/locks."""
++    from app.data_exit.q_store import authority_for, POLICY
++    authority = authority_for(ledger)
++    if authority is None:
++        if intent is not None and intent.outbound_grant and intent.outbound_grant.get('schema')=='retrolume.outbound-grant.v2':
++            raise AdmissionDenied('q_control_missing')
++        return
++    current = CURRENT.get()
++    if current is None or current.released or POLICY.get()!=(authority.hub.control_id,True):
++        raise AdmissionDenied('q_dispatch_lease_required')
++    p = current.prepared
++    if (activity_id,operation_id)!=(p['activity_id'],p['operation_id']):
++        raise AdmissionDenied('q_operation_identity')
++    ref = current.service.outbound_authorization
++    authority.check_reference(ref,context=current.context,claimed=True,
++        external=False)
++    if intent is not None:
++        if (intent.outbound_authorization!=ref or intent.context!=current.context
++            or intent.request_bytes!=p['payload_bytes_count'] or intent.configured_model!=p['configured_model']):
++            raise AdmissionDenied('q_intent_changed')
++    from .q_context import check_snapshot_sql
++    await check_snapshot_sql(connection,p['snapshot'],authority)
++    if call is not None:
++        admission=authority.request(ref['prepared_id']).get('admission')
++        if (admission is None or str(call['admission_id'])!=admission['admission_id']
++            or call['execution_generation']!=current.context.execution_generation):
++            raise AdmissionDenied('q_admission_unconfirmed')
++
++
++def admission_intent(intent):
++    current = CURRENT.get()
++    if current is None:return
++    current.admission_signal=current.authority.admission_intent(current.service.outbound_authorization,intent.context)
++
++
++def admission_failed(*,definitely_denied):
++    current=CURRENT.get()
++    if current is not None:
++        try:current.authority.admission_failed(current.service.outbound_authorization,definitely_denied=definitely_denied)
++        finally:
++            if current.admission_signal is not None:current.admission_signal.close()
++
++
++async def mark_prefix(connection,ledger):
++    from app.data_exit.q_store import authority_for
++    authority=authority_for(ledger)
++    if authority is None:return
++    await connection.execute("SELECT pg_advisory_xact_lock(hashtextextended('retrolume.outbound-roster.v1',0))")
++    cursor=await connection.execute('SELECT COALESCE(sum(requests_reserved),0) AS requests,COALESCE(sum(cost_reserved_microunits),0) AS cost FROM activities WHERE id=ANY(%s::uuid[])',(list(authority.grant.allowed_activity_ids),))
++    row=await cursor.fetchone()
++    if row['requests']>authority.grant.global_max_requests or row['cost']>authority.grant.global_max_cost_microunits:
++        raise AdmissionDenied('q_budget_inconsistent')
++
++
++async def history_only_result(connection,ledger,call):
++    """Preserve a dispatched response's 007 fact after a Q release-gap change."""
++    from app.data_exit.q_store import authority_for
++    authority=authority_for(ledger)
++    if authority is None:return False
++    row=authority.by_operation(str(call['activity_id']),call['operation_id'])
++    if row is None or row.get('claim') is None or row.get('admission') is None:
++        raise AdmissionDenied('q_result_witness_missing')
++    if str(call['admission_id'])!=row['admission']['admission_id'] or call['state']!='dispatched':
++        raise AdmissionDenied('q_result_identity')
++    if (row.get('revoked') or authority.hub.state().get('fence') is not None
++        or call.get('dispatch_closed') or call.get('activity_status_now')=='cancelled'):return True
++    try:
++        from .q_context import check_snapshot_sql
++        await check_snapshot_sql(connection,row['prepared']['snapshot'],authority)
++    except AdmissionDenied:return True
++    return False
++
++
++def admission_observed(permit):
++    current = CURRENT.get()
++    if current is None:return
++    try:current.authority.admission_observed(current.service.outbound_authorization,permit,current.context)
++    finally:
++        if current.admission_signal is not None:current.admission_signal.close()

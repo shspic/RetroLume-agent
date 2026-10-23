@@ -1,0 +1,11 @@
+--- pre/README.md
++++ README.md
+@@ -30,7 +30,7 @@
+ 
+ 设置两个互相独立、已存在的绝对目录：`RETROLUME_DATA_DIR` 与 `RETROLUME_BACKUP_DIR`。资料与备份可位于项目外，但它们是数据配置，不能指向外部源码。可参考 `config/local.env.example`，不要提交真实路径、连接串或密码。
+ 
+-若要连接既有本地 PostgreSQL，再在当前会话设置 `RETROLUME_DATABASE_URL`，或在 `config/database.local.json` 保存仅本机使用的私有配置（该文件已忽略）。应用不会自动创建数据库或迁移用户库。`deploy/initialize-materials.py` 仅供另行明确批准的新库首次初始化。模型调用需要完整配置和用户显式动作，读取、零费新建及刷新不会启动模型。
++若要连接既有本地 PostgreSQL，再在当前会话设置 `RETROLUME_DATABASE_URL`，或在 `config/database.local.json` 保存仅本机使用的私有配置（该文件已忽略）。应用不会自动创建数据库或迁移用户库。旧 `deploy/initialize-materials.py` 仅处理001；完整001—015首次空库安装使用 [正常首次安装说明](deploy/normal-install.md) 中的 `deploy/initialize_normal.py`，默认只显示帮助，`plan` 无数据库操作，真实 `apply` 仍需另行精确许可与独立风险审查。模型调用需要完整配置和用户显式动作，读取、零费新建及刷新不会启动模型。
+ 
+ 开发健康检查可在设置上述两个目录后运行：
+ 

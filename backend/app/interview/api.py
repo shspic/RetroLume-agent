@@ -63,7 +63,7 @@ async def command(request:Request,activity_id:str,business_key:str):
         result=await _ledger(request).read_interview_command(activity_id,business_key)
         if result is not None:
             from app.capabilities.q_context import public_projection
-            result['outbound_approval']=await public_projection(_ledger(request),activity_id,business_key)
+            result['outbound_approval']=await public_projection(_ledger(request),activity_id,business_key,expected=result.get('status')=='accepted' and result.get('action') in ('ask','review'))
         return reply(result) if result is not None else error(InterviewRefusal('not_found','命令不存在',404))
     except (InterviewRefusal,AdmissionUnavailable) as exc:return error(exc)
 

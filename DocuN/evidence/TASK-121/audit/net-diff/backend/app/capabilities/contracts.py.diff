@@ -1,0 +1,27 @@
+--- initial/backend/app/capabilities/contracts.py
++++ final/backend/app/capabilities/contracts.py
+@@ -48,10 +48,12 @@
+     max_output_tokens_limit: int = Field(default=8192, ge=1, le=32768)
+     max_request_bytes: int = Field(default=262_144, ge=1024, le=2_097_152)
+     max_response_bytes: int = Field(default=1_048_576, ge=1024, le=4_194_304)
+     outbound_grant: dict | None = Field(default=None, repr=False)
+     outbound_source_manifest: dict | None = Field(default=None, repr=False)
++    outbound_authorization: dict | None = Field(default=None, repr=False)
++    returned_models: tuple[str, ...] = Field(default=(), repr=False)
+ 
+     @field_validator("base_url")
+     @classmethod
+     def validate_base_url(cls, value: str, info: Any) -> str:
+         normalized = value.rstrip("/")
+@@ -211,10 +213,11 @@
+     interview_binding: InterviewCallBinding | None = None
+     html_binding: HtmlCallBinding | None = None
+     retrieval_ref: RetrievalRef | None = None
+     outbound_grant: dict | None = field(default=None, repr=False)
+     outbound_source_manifest: dict | None = field(default=None, repr=False)
++    outbound_authorization: dict | None = field(default=None, repr=False)
+ 
+ 
+ @dataclass(frozen=True)
+ class AdmissionPermit:
+     """由持久账本返回并绑定到一次操作的不可复用受理凭证。"""

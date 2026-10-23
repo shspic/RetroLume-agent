@@ -1,0 +1,13 @@
+--- before/backend/app/data_exit/packages.py
++++ after/backend/app/data_exit/packages.py
+@@ -163,8 +163,10 @@
+                 if count > self.limits.manifest_bytes: raise DataError("capacity_exceeded", 413)
+                 value=load_json(self.archive.read(entry["path"]), self.limits)
+                 if entry['path']=='metadata/source_control.json':validate_metadata('source_control',value,PROFILE)
+                 if entry['path']=='codec_description.json':
++                    from .schema_profiles import get_read_profile
++                    self.schema_profile=get_read_profile(PROFILE,value.get('migration_sha256'))
+                     COLUMNS=self.schema_profile.columns;MIGRATIONS=self.schema_profile.codec_migrations
+                     from .codec import TRANSFORMS
+                     if value!={'profile':PROFILE,'columns':COLUMNS,'transformations':TRANSFORMS,'bigint_encoding':'decimal_string',
+                         'text_encoding':'UTF-8 原字符串','migration_sha256':MIGRATIONS}:raise DataError('codec_mismatch',422)

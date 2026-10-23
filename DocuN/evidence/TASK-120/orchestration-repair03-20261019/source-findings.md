@@ -1,0 +1,11 @@
+# 主控源级诊断（B级，不是独立审计或产品修复）
+
+发送共享policy→gateway._call_original→validate_teaching_request(v2/v3)→read_teaching_command→_teaching_read_snapshot.<locals>.operation→_transaction。
+
+method_name从该闭包实际qualname取到_teaching_read_snapshot；is_read_method既不匹配该名称也不列精确例外。_transaction因此申请exclusive，async_policy继承shared时抛q_policy_upgrade_forbidden；adapter广义except返回teaching_validation_unavailable。存在确定冲突路径，但原日志未捕获内部异常，不冒称唯一动态根因。
+
+面试accepted在全历史model UNKNOWN存在时拒绝interview_pending，不受obsolete排除；local goal不能自动解除。abandon是现有显式业务操作，仅整理已停止实验命令，不恢复Q claim/金融额度/旧槽。主控上一“新goal足够”的判断遗漏此门，现纠正。
+
+observer替身安装、terminal检索缓存、UTF-8均有明确夹具事实。HTML/legacy 409内部拒绝仍未知，须保留安全code和父kind/资格原件，不猜测修生产守卫。
+
+上述诊断只支持定向合并修复，不支持宣布工程已完成或跳过真实PG/SUP及最终独审。

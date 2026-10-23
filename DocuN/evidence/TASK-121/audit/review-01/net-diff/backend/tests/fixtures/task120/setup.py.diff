@@ -1,0 +1,132 @@
+--- before/backend/tests/fixtures/task120/setup.py
++++ after/backend/tests/fixtures/task120/setup.py
+@@ -23,9 +23,10 @@
+ 
+ 
+ def dsn(slot,admin=False,*,snapshot=False):
+     port=r.state()['ports']['pg']
+-    if slot not in ('flow','budget-01','budget-02','matrix-final','scope-ui-final'):raise RuntimeError('task120_database_not_permitted')
++    if slot not in ('flow','budget-01','budget-02','matrix-final','scope-ui-final','audit07-r02','audit07-main'):raise RuntimeError('task120_database_not_permitted')
++    if slot.startswith('audit07-') and (r.state()['current_permit_id']!='TASK-120-Q-PREP-AUDIT-REPAIR-07-20261021' or r.PRIVATE!=r.ROOT/'.runtime/task120-audit07'):raise RuntimeError('audit07_private_permit_required')
+     if slot=='scope-ui-final' and (r.state()['current_permit_id']!='TASK-120-Q-PREP-CONTINUATION-06-20261020' or r.PRIVATE.name!='continuation-06'):raise RuntimeError('scope_ui_private_permit_required')
+     value=info(slot)
+     return make_conninfo(host='127.0.0.1',port=port,dbname=value['database'],user='postgres' if admin else value['snapshot_user'] if snapshot else value['app_user'],
+         password=json.loads((r.PRIVATE/'cluster.json').read_text(encoding='utf-8'))['password'] if admin else value['snapshot_password'] if snapshot else value['app_password'],application_name='task120-'+slot)
+@@ -45,8 +46,15 @@
+     if not include_admin:os.environ.pop('RETROLUME_TASK120_ADMIN_TEST_DATABASE_URL',None)
+ 
+ 
+ def initial_files(slot):
++    if slot.startswith('audit07-'):
++        from .audit07_setup import initial_files as initialize
++        return initialize(slot)
++    return _initial_files_legacy(slot)
++
++
++def _initial_files_legacy(slot):
+     base=r.PRIVATE/slot;base.mkdir(parents=True,exist_ok=True)
+     from app.data_exit.files import private_file
+     private_file(base,directory=True)
+     for folder in ('data','backup','control','restore'):(base/folder).mkdir(exist_ok=True)
+@@ -103,8 +111,15 @@
+     r.event('testonly_host_operator_deployment',ticket_sha256=raw_digest(review.read_bytes()),deployment_sha256=raw_digest(deployment.read_bytes()),memory_only_key=True,preview_creates=0,preview_starts=0)
+ 
+ 
+ def migrate(slot):
++    if slot.startswith('audit07-'):
++        from .audit07_setup import migrate as initialize
++        return initialize(slot)
++    return _migrate_legacy(slot)
++
++
++def _migrate_legacy(slot):
+     value=info(slot);port=r.state()['ports']['pg']
+     progress_file=r.PRIVATE/slot/'bootstrap-progress.json'
+     progress=json.loads(progress_file.read_text(encoding='utf-8')) if progress_file.exists() else {'database':value['database'],'create_intent':False,'migrations':[],'roles_ready':False}
+     cluster=make_conninfo(host='127.0.0.1',port=port,dbname='postgres',user='postgres',password=json.loads((r.PRIVATE/'cluster.json').read_text(encoding='utf-8'))['password'])
+@@ -118,8 +133,14 @@
+     with connection:
+         exists=connection.execute('SELECT 1 FROM pg_database WHERE datname=%s',(value['database'],)).fetchone()
+         if exists and not progress['create_intent']:raise RuntimeError('existing_database_requires_reconciliation_not_reset')
+         if not exists:
++            if slot.startswith('audit07-'):
++                def reserve_audit(s):
++                    row=s['audit_repair07_logical_databases'][value['database']]
++                    if row['create_attempts']>=1:raise RuntimeError('audit07_database_create_attempt_cap')
++                    row['create_attempts']+=1
++                r.update(reserve_audit)
+             progress['create_intent']=True;r.write(progress_file,progress,private=True)
+             if slot=='matrix-final':
+                 def reserve(s):
+                     if s.get('matrix_database_create_attempts',0)>=1:raise RuntimeError('matrix_create_attempt_cap')
+@@ -130,16 +151,23 @@
+                     if s.get('continuation06_database_create_attempts',0)>=1:raise RuntimeError('scope_ui_create_attempt_cap')
+                     s['continuation06_database_create_attempts']=1
+                 r.update(reserve_scope)
+             connection.execute(sql.SQL('CREATE DATABASE {}').format(sql.Identifier(value['database'])))
++        if slot.startswith('audit07-'):
++            actual_oid=connection.execute('SELECT oid FROM pg_database WHERE datname=%s',(value['database'],)).fetchone()[0]
++            def observed_audit(s):
++                row=s['audit_repair07_logical_databases'][value['database']]
++                if row.get('oid',actual_oid)!=actual_oid:raise RuntimeError('audit07_database_OID_changed')
++                row.update(objects=1,oid=actual_oid)
++            r.update(observed_audit)
+     migrations=[]
+     with psycopg.connect(dsn(slot,True),autocommit=True) as connection:
+         known={row[0] for row in connection.execute('SELECT rolname FROM pg_roles').fetchall()}
+         for path in sorted((r.ROOT/'backend/migrations').glob('*.sql')):
+             from app.data_exit.schema_profiles import get_profile,R02,R03
+             if path.name not in get_profile(R03 if slot=='scope-ui-final' else R02).migration_chain:continue
+             original=path.read_bytes();body=original.decode('utf-8-sig')
+-            if slot in ('budget-02','matrix-final','scope-ui-final'):body=body.replace('\r\n','\n')
++            if slot in ('budget-02','matrix-final','scope-ui-final','audit07-r02','audit07-main'):body=body.replace('\r\n','\n')
+             identity={'name':path.name,'sha256':raw_digest(original)}
+             if any(row==identity for row in progress['migrations']):migrations.append(identity);continue
+             if progress.get('pending_migration'):
+                 failure=r.EVIDENCE/'root-02-failure.json'
+@@ -151,9 +179,9 @@
+                     or connection.execute("SELECT to_regclass('public.learning_memories')").fetchone()[0] is not None):
+                     raise RuntimeError('migration_commit_ack_requires_specific_reconciliation')
+                 r.write(r.EVIDENCE/'budget01-root02-migration-reconciliation.json',{'pending':identity,'transaction_rolled_back':True,'basis':'retained root02 P0001 plus absent learning_memories; original nine migrations retained'})
+                 progress.pop('pending_migration')
+-            if slot in ('budget-01','budget-02','matrix-final','scope-ui-final'):
++            if slot in ('budget-01','budget-02','matrix-final','scope-ui-final','audit07-r02','audit07-main'):
+                 for group in known:
+                     if group.startswith('retrolume_'):
+                         flags=connection.execute('SELECT rolcanlogin,rolsuper,rolcreatedb,rolcreaterole,rolreplication,rolbypassrls FROM pg_roles WHERE rolname=%s',(group,)).fetchone()
+                         if flags is None or any(flags):raise RuntimeError('cluster_group_identity_drift')
+@@ -183,9 +211,9 @@
+             return
+         connection.execute('BEGIN')
+         connection.execute("INSERT INTO data_control(dataset_id,instance_id,originals_root_id,schema_profile,mode,maintenance_key_sha256) VALUES(%s,%s,%s,%s,'normal',%s)",
+             (value['dataset_id'],value['instance_id'],value['originals_root_id'],'data_exit.v1.r03' if slot=='scope-ui-final' else 'data_exit.v1.r02',raw_digest(value['maintenance_key'])))
+-        if slot not in ('matrix-final','scope-ui-final'):
++        if slot not in ('matrix-final','scope-ui-final','audit07-r02','audit07-main'):
+             connection.execute(sql.SQL('CREATE ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD {}').format(sql.Identifier(value['app_user']),sql.Literal(value['app_password'])))
+             for group in ('retrolume_data_app','retrolume_memory_app','retrolume_interview_app','retrolume_html_app','retrolume_retrieval_app'):
+                 connection.execute(sql.SQL('GRANT {} TO {}').format(sql.Identifier(group),sql.Identifier(value['app_user'])))
+             connection.execute(sql.SQL('CREATE ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD {}').format(sql.Identifier(value['snapshot_user']),sql.Literal(value['snapshot_password'])))
+@@ -329,8 +357,12 @@
+     if slot=='scope-ui-final':
+         expiry=r.state()['continuation06']['business_deadline_utc']
+         if now>=datetime.fromisoformat(expiry):raise RuntimeError('scope_ui_business_window_expired')
+         grant['valid_until_utc']=expiry
++    if slot.startswith('audit07-'):
++        expiry=r.state()['audit_repair07']['business_deadline_utc']
++        if now>=datetime.fromisoformat(expiry):raise RuntimeError('audit07_business_window_expired')
++        grant['valid_until_utc']=expiry
+     if slot=='budget-02':
+         expiry='2026-10-19T12:19:22.457756+00:00'
+         if now>=datetime.fromisoformat(expiry):raise RuntimeError('memory_TESTONLY_original_deadline_expired')
+         grant['valid_until_utc']=expiry
+@@ -356,9 +388,9 @@
+         if existing is not None:
+             if (existing['max_requests'],existing['max_cost_microunits'])!=LIMITS[index]:raise RuntimeError('bootstrap_roster_drift')
+             continue
+         selection=None
+-        if slot in ('budget-02','matrix-final') and index==1:
++        if slot in ('budget-02','matrix-final','audit07-main') and index==1:
+             from app.memory.contracts import MemoryCommandInput,MemorySelectionInput
+             from app.memory.service import MemoryService
+             selected=base/'creation-memory.json'
+             if not selected.exists():

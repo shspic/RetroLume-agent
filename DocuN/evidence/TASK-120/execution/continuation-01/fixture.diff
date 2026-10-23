@@ -1,0 +1,1158 @@
+--- before/backend/tests/fixtures/task120/api_runtime.py
++++ after/backend/tests/fixtures/task120/api_runtime.py
+@@ -47,6 +47,7 @@
+             if not inspection['request_available']:raise RuntimeError('task120_inspection_not_current')
+             decision=run(approve_request(self.app.state.activities_ledger,row['prepared_id'],inspection['prepared_sha256']))
+             r.event('explicit_testonly_operator_approval',prepared_id=row['prepared_id'],approval_id=decision['approval_id'],request_available=True)
++        if getattr(self,'after_approval',None):self.after_approval(rows)
+         return rows
+ 
+ 
+@@ -55,8 +56,34 @@
+     setup.environment(slot,include_admin=False);install()
+     if slot=='flow':setup.host_environment(slot)
+     from app.main import create_app
++    import psycopg
++    if not getattr(psycopg.AsyncConnection,'_task120_observed',False):
++        original_connect=psycopg.AsyncConnection.connect
++        async def observed_connect(cls,*args,**kwargs):
++            connection=await original_connect(*args,**kwargs)
++            r.event('actual_API_PG_connection',backend_pid=connection.info.backend_pid,pid=__import__('os').getpid(),thread=threading.get_ident())
++            return connection
++        psycopg.AsyncConnection.connect=classmethod(observed_connect)
++        psycopg.AsyncConnection._task120_observed=True
+     app=create_app()
+     if app.state.data_exit_error or not app.state.q_readiness['available']:raise RuntimeError('normal_assembly_not_ready_'+str(app.state.q_readiness.get('reason')))
++    # Observe the real SUP result without altering arguments, return values,
++    # exceptions, worker code, Job limits or the normal launcher.
++    from dataclasses import asdict
++    import importlib,os
++    for module_name in ('app.interview.service','app.learning.teaching_service','app.learning.service','app.preview.generation'):
++        module=importlib.import_module(module_name)
++        if not hasattr(module,'run_one_call') or getattr(module.run_one_call,'_task120_observed',False):continue
++        original=module.run_one_call
++        def observed(*args,_original=original,**kwargs):
++            try:outcome=_original(*args,**kwargs)
++            except BaseException as exc:
++                r.event('actual_native_launcher_exception',error_type=type(exc).__name__,safe_code=str(exc) if type(exc) is ValueError else None)
++                raise
++            value=asdict(outcome)
++            r.event('actual_native_supervision_outcome',root=r.state()['active_root'],outcome=value)
++            return outcome
++        observed._task120_observed=True;module.run_one_call=observed
+     class Diagnostic:
+         def __init__(self,application):self.application=application
+         async def __call__(self,scope,receive,send):
+@@ -68,7 +95,7 @@
+                     q_path=getattr(exc,'q_path',None),q_value_sha256=getattr(exc,'q_value_sha256',None),
+                     frames=[{'file':str(item.filename).replace(str(r.ROOT),'PROJECT'),'line':item.lineno,'function':item.name} for item in traceback.extract_tb(exc.__traceback__)])
+                 raise
+-    r.memory_gate('api');r.count('api_starts')
++    r.settled_memory_gate('api');r.count('api_starts')
+     server=uvicorn.Server(uvicorn.Config(Diagnostic(app),host='127.0.0.1',port=r.state()['ports']['api'],access_log=False,log_level='critical',lifespan='on'))
+     errors=[]
+     def serve():
+@@ -93,6 +120,6 @@
+     import psycopg
+     from psycopg.rows import dict_row
+     with psycopg.connect(setup.dsn(slot),row_factory=dict_row) as connection:
+-        rows=connection.execute('SELECT id::text,requests_reserved,cost_reserved_microunits,running_reserved_seconds,running_settled_seconds FROM activities ORDER BY id').fetchall()
++        rows=connection.execute('SELECT id::text,requests_reserved,cost_reserved_microunits,running_reserved_seconds,running_settled_seconds,tools_reserved FROM activities ORDER BY id').fetchall()
+         ops=connection.execute('SELECT activity_id::text,operation_id,admission_id::text,state FROM activity_operations ORDER BY activity_id,operation_id').fetchall()
+     return {'activities':rows,'operations':ops,'requests':sum(row['requests_reserved'] for row in rows),'cost':sum(row['cost_reserved_microunits'] for row in rows)}
+--- before/backend/tests/fixtures/task120/budget.py
++++ after/backend/tests/fixtures/task120/budget.py
+@@ -3,7 +3,7 @@
+ from .api_runtime import run,financials
+ 
+ 
+-def run_budget():
++def run_budget(stage='budget'):
+     import asyncio,json,os,time
+     from uuid import uuid4
+     import psycopg
+@@ -29,6 +29,12 @@
+     root=authority_for(ledger);base=r.PRIVATE/'budget-01'
+     progress_file=base/'baseline-progress.json'
+     progress=json.loads(progress_file.read_text(encoding='utf-8')) if progress_file.exists() else {'completed':{},'commands':{}}
++    # Inherit only completed, observed actual reservations. A killed phase may
++    # leave a financial/command tail; never fill it by resending its intent.
++    initial=financials('budget-01')
++    for current in initial['activities']:
++        if current['requests_reserved']!=progress['completed'].get(current['id'],0):
++            raise RuntimeError('budget_checkpoint_requires_actual_tail_reconciliation')
+     async def local(aid,action,body):
+         view=await ledger.read_teaching_workspace(aid);h=view['head'] or {}
+         command=TeachingCommandInput(business_key=str(uuid4()),action=action,expected_revision=h.get('revision',0),expected_goal_version=h.get('goal_version',0),expected_scope_revision=1,body=body)
+@@ -58,6 +64,7 @@
+             await ledger.begin_window_close(aid,'task120-budget',lease.execution_generation)
+             await ledger.settle_execution_window(aid,'task120-budget',lease.execution_generation,window_seconds=lease.window_seconds,elapsed_seconds=time.monotonic()-begin)
+         for aid,target in zip(ROSTER,(47,28,24)):
++            if stage=='budget_race' or stage=='budget_a2' and aid!=ROSTER[1] or stage=='budget_a3' and aid!=ROSTER[2]:continue
+             # A prior stopped fixture may have left its running-time reserve.
+             # Only the production expired-lease fold may conservatively charge
+             # it. No fabricated elapsed measurement or financial UPDATE.
+@@ -89,6 +96,9 @@
+                 if result.status is not expected:raise RuntimeError('budget_baseline_actual_gateway_'+str(result.error_code))
+                 await local(aid,'abandon',{'target_business_key':command.business_key})
+                 progress['completed'][aid]=ordinal+1;r.write(progress_file,progress,private=True)
++        if stage in ('budget_a2','budget_a3'):
++            r.write(r.EVIDENCE/f"root-{r.state()['active_root']:02d}-{stage}-result.json",{'stage':stage,'completed':progress['completed'],'actual_financials':financials('budget-01'),'provider_calls':0,'fees':0})
++            return
+         baseline=financials('budget-01')
+         if [row['requests_reserved'] for row in baseline['activities']]!=[47,28,24] or (baseline['requests'],baseline['cost'])!=(99,24750000):raise RuntimeError('actual_99_baseline_mismatch')
+         r.write(r.EVIDENCE/'budget-99-baseline.json',baseline)
+--- before/backend/tests/fixtures/task120/flow.py
++++ after/backend/tests/fixtures/task120/flow.py
+@@ -5,7 +5,7 @@
+ from app.capabilities.q_protocol import ROSTER,digest
+ 
+ 
+-def run_flow():
++def run_flow(lane=None,client=None):
+     if not (r.EVIDENCE/'bootstrap-result.json').exists():raise RuntimeError('completed_bootstrap_required')
+     state_file=r.PRIVATE/'flow/flow-progress.json'
+     import json
+@@ -13,10 +13,11 @@
+     def retain(name,body):
+         if name not in state:state[name]=body;r.write(state_file,state,private=True)
+         return state[name]
+-    with application('flow') as c:
++    from contextlib import nullcontext
++    with (application('flow') if client is None else nullcontext(client)) as c:
+         a1,a2,a3=ROSTER
+         plan_name='teaching-plan'
+-        if 'teaching-plan' in state and 'teaching-plan.done' not in state:
++        if lane is None and 'teaching-plan' in state and 'teaching-plan.done' not in state:
+             prior=run(c.app.state.activities_ledger.read_teaching_command(a1,state['teaching-plan']['business_key']))
+             if prior and prior['command']['launch_claimed_at'] is not None:
+                 # The retained Root06 StopProof ends that original tree. Its
+@@ -70,26 +71,36 @@
+                 assert op.read_status.value=='committed_current' and op.payload
+             state[name+'.done']=value;r.write(state_file,state,private=True)
+             return value
+-        goal=teach('goal',{'goal':setup.SAMPLES['inputs']['numeric_goal']},'teaching-goal')
+-        if plan_name=='teaching-plan-after-launcher-repair':
+-            # Abandoning UNKNOWN does not free its original parent slot.
+-            # A new explicit local goal version creates a different legitimate
+-            # business slot, without changing or resending the old intent.
+-            goal=teach('goal',{'goal':setup.SAMPLES['inputs']['numeric_goal']},'teaching-goal-after-old-unknown')
+-            plan_name='teaching-plan-after-goal-renewal'
+-        plan=teach('plan',{'confirmed':True},plan_name)
+-        proposal=next(row['record_id'] for row in plan['record_ids'] if row['kind']=='path_proposal')
+-        accepted=teach('accept_path',{'proposal_record_id':proposal},'teaching-accept-path')
+-        view=c.request('GET',f'/api/activities/{a1}/teaching/workspace');head=view['head']
+-        exercise=teach('exercise',{'confirmed':True,'path_record_id':head['path_record_id'],'node_id':head['node_id'],'purpose':'initial'},'teaching-exercise')
+-        index(a1)
++        def change_goal(name,text):
++            if name+'.done' in state:
++                if name+'.parent-proof' not in state:raise RuntimeError('local_goal_ack_requires_parent_reconciliation')
++                return state[name+'.done']
++            before=c.request('GET',f'/api/activities/{a1}/teaching/workspace')['head']
++            result=teach('goal',{'goal':text},name)
++            after=c.request('GET',f'/api/activities/{a1}/teaching/workspace')['head']
++            if (not result['record_ids'] or after['goal_record_id']==before['goal_record_id']
++                or after['revision']!=before['revision']+1 or after['goal_version']!=before['goal_version']+1):
++                raise RuntimeError('explicit_local_goal_did_not_create_new_parent')
++            state[name+'.parent-proof']={'before':before,'after':after,'model_called':False}
++            r.write(state_file,state,private=True)
++            return result
++        if lane in (None,'teaching'):
++            # Explicitly authorized local-only intermediate goal. Neither this
++            # intermediate text nor the old UNKNOWN intent is sent.
++            change_goal('c01-goal-concept',setup.SAMPLES['inputs']['concept_goal'])
++            change_goal('c01-goal-numeric',setup.SAMPLES['inputs']['numeric_goal'])
++            plan=teach('plan',{'confirmed':True},'c01-teaching-plan')
++            proposal=next(row['record_id'] for row in plan['record_ids'] if row['kind']=='path_proposal')
++            teach('accept_path',{'proposal_record_id':proposal},'c01-teaching-accept-path')
++            view=c.request('GET',f'/api/activities/{a1}/teaching/workspace');head=view['head']
++            teach('exercise',{'confirmed':True,'path_record_id':head['path_record_id'],'node_id':head['node_id'],'purpose':'initial'},'c01-teaching-exercise')
+         def interview(action,body,name):
+             if name+'.done' in state:return state[name+'.done']
+             ref=None
+             if action=='ask' and name not in state:
+                 ref=retrieve(a2,'query',name+'-query',setup.SAMPLES['inputs']['interview_goal'])['retrieval_ref']
+             view=c.request('GET',f'/api/activities/{a2}/interview/workspace');h=view['head'] or {}
+-            command=retain(name,{'schema':'interview.command.v2' if ref else 'interview.command.v1','business_key':str(uuid4()),'action':action,'expected_head_revision':h.get('revision',0),'expected_goal_version':h.get('goal_version',0),'expected_scope_revision':1,'body':body,
++            command=retain(name,{'schema':'interview.command.v2','business_key':str(uuid4()),'action':action,'expected_head_revision':h.get('revision',0),'expected_goal_version':h.get('goal_version',0),'expected_scope_revision':1,'body':body,
+                 **({'retrieval_ref':ref} if ref else {})})
+             path=f'/api/activities/{a2}/interview/commands';value=c.request('POST',path,command)
+             if action in ('ask','review'):
+@@ -97,28 +108,35 @@
+                 before=financials('flow');c.request('GET',path+'/'+command['business_key']);c.approve(a2,command['business_key']);assert financials('flow')==before
+                 r.count('native_business_sessions');value=c.request('POST',path,command);assert value['status']=='committed',value.get('error_code')
+             state[name+'.done']=value;r.write(state_file,state,private=True);return value
+-        interview('start',{'goal':{'target':setup.SAMPLES['inputs']['interview_goal'],'material_roles':[]}},'interview-start')
+-        index(a2)
+-        interview('ask',{'mode':'first'},'interview-question')
+-        # Legacy learning keeps its first slot, private intent and original key.
+-        command=retain('legacy-first',{'business_key':str(uuid4()),'goal':setup.SAMPLES['inputs']['numeric_goal'],'confirmed':True})
+-        path=f'/api/activities/{a3}/learning/first'
+-        if 'legacy-first.done' not in state:
+-            value=c.request('POST',path,command);assert value['outbound_approval']['state']=='pending'
+-            before=financials('flow');c.request('GET',f'/api/activities/{a3}/learning/intents/{command["business_key"]}?action=first');c.approve(a3,command['business_key']);assert financials('flow')==before
+-            r.count('native_business_sessions');value=c.request('POST',path,command)
+-            assert value['status']=='committed_current',value.get('status')
+-            state['legacy-first.done']=value;r.write(state_file,state,private=True)
+-        if 'html.done' not in state:
+-            result=state['legacy-first.done'];parent=run(c.app.state.activities_ledger.read_committed_result(a3,result['operation_id']))
+-            caps=c.request('GET',f'/api/activities/{a3}/html/capabilities');assert caps['available']
+-            command=retain('html',{'business_key':str(uuid4()),'parent':{'kind':'learning','operation_id':result['operation_id'],'payload_sha256':parent.payload_sha256,'segment_index':0},
+-                'focus':setup.SAMPLES['inputs']['numeric_goal'],'expected_config_sha256':caps['config_sha256'],'confirmed':True})
+-            path=f'/api/activities/{a3}/html/commands';value=c.request('POST',path,command);assert value['outbound_approval']['state']=='pending'
+-            before=financials('flow');c.request('GET',path+'/'+command['business_key']);c.approve(a3,command['business_key']);assert financials('flow')==before
+-            r.count('native_business_sessions');value=c.request('POST',path,command);assert value['status']=='committed',value.get('error_code')
+-            state['html.done']=value;r.write(state_file,state,private=True)
+-        if 'release-gap.done' not in state:
++        if lane in (None,'interview','interview_repaired'):
++            interview('start',{'goal':{'target':setup.SAMPLES['inputs']['interview_goal'],'material_roles':[]}},'c01-interview-start')
++            index(a2)
++            if lane=='interview_repaired':
++                interview('goal',{'goal':{'target':setup.SAMPLES['inputs']['interview_goal'],'material_roles':[]}},'c01-interview-goal-after-catalog-fix')
++            interview('ask',{'mode':'first'},'c01-interview-question-after-catalog-fix' if lane=='interview_repaired' else 'c01-interview-question')
++        if lane in (None,'legacy_html'):
++            # Legacy learning keeps its first slot, private intent and original key.
++            command=retain('legacy-first',{'business_key':str(uuid4()),'goal':setup.SAMPLES['inputs']['numeric_goal'],'confirmed':True})
++            path=f'/api/activities/{a3}/learning/first'
++            if 'legacy-first.done' not in state:
++                value=c.request('POST',path,command);assert value['outbound_approval']['state']=='pending'
++                before=financials('flow');c.request('GET',f'/api/activities/{a3}/learning/intents/{command["business_key"]}?action=first');c.approve(a3,command['business_key']);assert financials('flow')==before
++                r.count('native_business_sessions');value=c.request('POST',path,command)
++                assert value['status']=='committed_current',value.get('status')
++                state['legacy-first.done']=value;r.write(state_file,state,private=True)
++            if 'html.done' not in state:
++                result=state['legacy-first.done'];parent=run(c.app.state.activities_ledger.read_committed_result(a3,result['operation_id']))
++                caps=c.request('GET',f'/api/activities/{a3}/html/capabilities');assert caps['available']
++                command=retain('html',{'business_key':str(uuid4()),'parent':{'kind':'learning','operation_id':result['operation_id'],'payload_sha256':parent.payload_sha256,'segment_index':0},
++                    'focus':setup.SAMPLES['inputs']['numeric_goal'],'expected_config_sha256':caps['config_sha256'],'confirmed':True})
++                path=f'/api/activities/{a3}/html/commands';value=c.request('POST',path,command);assert value['outbound_approval']['state']=='pending'
++                before=financials('flow');c.request('GET',path+'/'+command['business_key']);c.approve(a3,command['business_key']);assert financials('flow')==before
++                r.count('native_business_sessions');value=c.request('POST',path,command)
++                assert value['status']=='terminal' and value['terminal_disposition']=='succeeded' and value['read_status']=='current',value.get('error_code')
++                state['html.done']=value;r.write(state_file,state,private=True)
++        if lane in (None,'gap') and 'release-gap.done' not in state:
++            change_goal('c01-gap-goal-concept',setup.SAMPLES['inputs']['concept_goal'])
++            change_goal('c01-gap-goal-numeric',setup.SAMPLES['inputs']['numeric_goal'])
+             import hashlib,threading,time
+             from app.data_exit.q_store import authority_for
+             from app.operator.q_request import principal_id
+@@ -144,7 +162,7 @@
+             thread.join(20)
+             if thread.is_alive() or outcome.get('error_type'):raise RuntimeError('release_gap_result_unconfirmed')
+             after=c.request('GET',f'/api/activities/{a1}/teaching/workspace')
+-            assert after['head']==before['head'],'revoked response advanced head'
++            assert all(after['head'][k]==before['head'][k] for k in ('revision','goal_version','goal_record_id','path_record_id','node_id','exercise_record_id','answer_record_id','feedback_record_id')),'revoked response advanced head'
+             fact=run(c.app.state.activities_ledger.read_committed_result(a1,operation))
+             assert fact.payload and fact.payload_sha256
+             state['release-gap.done']={'prepared_id':row['prepared_id'],'operation_id':operation,'payload_sha256':fact.payload_sha256,
+@@ -152,5 +170,5 @@
+             r.write(state_file,state,private=True);r.write(r.EVIDENCE/'release-gap-result.json',state['release-gap.done'])
+             command=retain('release-gap-abandon',{'business_key':str(uuid4()),'action':'abandon','expected_revision':h['revision'],'expected_goal_version':h['goal_version'],'expected_scope_revision':1,'body':{'target_business_key':command['business_key']}})
+             c.request('POST',path,command)
+-        r.write(r.EVIDENCE/'flow-result.json',{'execution_class':'TESTONLY','status':'PASS-for-listed-chains','chains':[key for key in state if key.endswith('.done')],
++        r.write(r.EVIDENCE/f"root-{r.state()['active_root']:02d}-{lane or 'all'}-flow-result.json",{'execution_class':'TESTONLY','status':'PASS-for-listed-chains','chains':[key for key in state if key.endswith('.done')],
+             'financials':financials('flow'),'zero_provider_calls':True,'preview_created_started':[0,0]})
+--- before/backend/tests/fixtures/task120/merged.py
++++ after/backend/tests/fixtures/task120/merged.py
+@@ -7,7 +7,7 @@
+ import sys
+ import time
+ from . import resources as r
+-from app.worker.windows_job import NamedJob
++from .control_job import NamedJob
+ 
+ 
+ def members(job):
+--- before/backend/tests/fixtures/task120/offline.py
++++ after/backend/tests/fixtures/task120/offline.py
+@@ -12,7 +12,7 @@
+ TEXT='根据速度.md学习单位换算。'
+ 
+ 
+-def store():
++def store(*,template_atoms_extra=()):
+     root=ROOT/'.runtime/TASK-120/offline'/str(uuid4())
+     root.mkdir(parents=True)
+     private_file(root,directory=True)
+@@ -25,6 +25,7 @@
+     literal={'alias':'L01.goal','purpose':'goal','raw_text_sha256':raw_digest(TEXT),'json_string_sha256':digest(TEXT),'max_utf8_bytes':4096,'allowed_activity_ids':[AID],'allowed_actions':['first','plan']}
+     source_id=str(uuid4());version_id=str(uuid4())
+     templates=['fixed test system'];atoms=['messages','role','system','user','content','model','max_tokens','stream','thinking','type','disabled','goal']
++    atoms.extend(template_atoms_extra)
+     manifest={'schema':'retrolume.outbound-sources.v2','frozen_samples_sha256':'304a4b131d04cd4132334bebd091f94ff62bec5660698457487e14136023c113',
+         'acceptance_contract_sha256':digest('offline-contract'),'sources':[{'source_id':source_id,'source_version_id':version_id,'source_revision':1,'original_sha256':raw_digest('synthetic original')}],
+         'fragments':[{'identity_sha256':digest('offline-fragment'),'input_sha256':digest('synthetic original')}],'fixed_inputs':[literal],
+--- before/backend/tests/fixtures/task120/resources.py
++++ after/backend/tests/fixtures/task120/resources.py
+@@ -16,7 +16,7 @@
+ from uuid import uuid4
+ from app.data_exit.files import RootLease,private_file
+ from app.preview.process import birth
+-from app.worker.windows_job import NamedJob
++from .control_job import NamedJob
+ 
+ ROOT=Path(__file__).resolve().parents[4]
+ EVIDENCE=ROOT/'DocuN/evidence/TASK-120/execution'
+@@ -35,7 +35,15 @@
+     path=Path(path);temp=path.with_suffix('.new')
+     temp.write_text(json.dumps(value,ensure_ascii=False,indent=2),encoding='utf-8')
+     if private:private_file(temp)
+-    os.replace(temp,path)
++    # Concurrent readonly watchdog snapshots can briefly deny DELETE sharing
++    # on Windows. Retry only the atomic rename, retaining the same bytes and
++    # the caller's finite metadata lock; persistent ACL errors still fail.
++    until=time.monotonic()+1
++    while True:
++        try:os.replace(temp,path);break
++        except PermissionError:
++            if time.monotonic()>=until:raise
++            time.sleep(.01)
+ 
+ 
+ def state():return json.loads(BUDGET.read_text(encoding='utf-8-sig'))
+@@ -76,6 +84,17 @@
+     amount=available_memory();minimum=(768 if kind=='browser' else 512)*1024**2
+     event('memory_gate',stage=kind,available_bytes=amount,minimum_bytes=minimum)
+     if amount<minimum:raise RuntimeError('task120_low_memory_'+kind)
++
++
++def settled_memory_gate(kind,seconds=12):
++    # Docker warmup can briefly reclaim pages. This finite internal stage does
++    # not start the next layer until its unchanged real threshold is met.
++    until=time.monotonic()+seconds
++    while True:
++        try:return memory_gate(kind)
++        except RuntimeError:
++            if time.monotonic()>=until:raise
++            time.sleep(min(2,max(0,until-time.monotonic())))
+ 
+ 
+ def docker(args,*,timeout=25):
+@@ -193,7 +212,7 @@
+ def root_job(identity):
+     # A test-controller Job is separate from the unchanged <=4-process native
+     # business Job. Chromium needs more processes; no breakaway is allowed.
+-    from app.worker.windows_job import _EXTENDED_LIMIT,JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,JOB_OBJECT_LIMIT_ACTIVE_PROCESS,JOB_OBJECT_LIMIT_JOB_MEMORY,JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
++    from .control_job import _EXTENDED_LIMIT,JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,JOB_OBJECT_LIMIT_ACTIVE_PROCESS,JOB_OBJECT_LIMIT_JOB_MEMORY,JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+     job=NamedJob.create(identity,1)
+     limits=_EXTENDED_LIMIT();limits.BasicLimitInformation.LimitFlags=JOB_OBJECT_LIMIT_ACTIVE_PROCESS|JOB_OBJECT_LIMIT_JOB_MEMORY|JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+     limits.BasicLimitInformation.ActiveProcessLimit=32;limits.JobMemoryLimit=1024**3
+--- before/backend/tests/fixtures/task120/run.py
++++ after/backend/tests/fixtures/task120/run.py
+@@ -34,16 +34,31 @@
+     phase=sys.argv[1]
+     if str(r.state().get('active_root'))!=os.environ['RETROLUME_TASK120_ROOT_ID']:raise RuntimeError('unowned_runtime')
+     try:
++        if phase=='queue':
++            from .queued import run_plan
++            return run_plan()
+         if phase=='merged':
+             from .merged import run_batches
+             return run_batches()
+         if phase=='bootstrap':bootstrap()
+-        elif phase=='flow':
++        elif phase in ('flow','teaching','interview','interview_repaired','legacy_html','gap'):
+             from .flow import run_flow
+-            run_flow()
+-        elif phase=='budget':
++            run_flow(None if phase=='flow' else phase)
++        elif phase=='observe':
++            from .observe import observe
++            observe()
++        elif phase=='diagnose':
++            from .diagnose import diagnose
++            diagnose()
++        elif phase=='html_eol':
++            from .html_eol import apply
++            apply()
++        elif phase in ('integrated_core','integrated_ui'):
++            from .integrated import integrated
++            integrated(phase.removeprefix('integrated_'))
++        elif phase in ('budget','budget_a2','budget_a3','budget_race'):
+             from .budget import run_budget
+-            run_budget()
++            run_budget(phase)
+         elif phase=='ui':
+             from .ui import run_ui
+             run_ui()
+--- before/backend/tests/fixtures/task120/transport.py
++++ after/backend/tests/fixtures/task120/transport.py
+@@ -23,6 +23,17 @@
+         root=r.PRIVATE/os.environ['RETROLUME_TASK120_SLOT']
+         faults=json.loads((root/'faults.json').read_text(encoding='utf-8')) if (root/'faults.json').exists() else {}
+         mode=faults.get(p['operation_id'],'normal')
++        if mode=='commit_ack_lost':
++            # Inject only an acknowledgement loss AFTER the original real PG
++            # record_outcome (including 007/domain transaction) has returned.
++            # No SQL, outcome or transaction result is synthesized.
++            original=current.ledger.record_outcome
++            async def lost_ack(permit,outcome):
++                result=await original(permit,outcome)
++                r.event('actual_pg_result_COMMIT_ack_lost',operation_id=p['operation_id'],pid=os.getpid(),prepared_id=p['prepared_id'])
++                from app.capabilities.contracts import AdmissionUnavailable
++                raise AdmissionUnavailable('TESTONLY_actual_commit_ack_lost')
++            current.ledger.record_outcome=lost_ack
+         r.event('synthetic_provider_transport',pid=os.getpid(),operation_id=p['operation_id'],prepared_id=p['prepared_id'],
+             provider=p['provider'],payload_bytes_sha256=hashlib.sha256(payload_bytes).hexdigest(),external=False,actual_fee_microunits=0,mode=mode)
+         if mode=='unknown':raise DeliveryUnknown('TESTONLY_delivery_unknown')
+@@ -63,7 +74,7 @@
+                         if CURRENT.get() is not None or POLICY.get() is not None:raise RuntimeError('result_parser_still_holds_q_shared')
+                         object.__setattr__(self,'_task120_observed',True)
+                         tag=hashlib.sha256(p['operation_id'].encode()).hexdigest()
+-                        r.write(root/('gap-ready-'+tag+'.json'),{'operation_id':p['operation_id'],'dispatch_released':True},private=True)
++                        r.write(root/('gap-ready-'+tag+'.json'),{'operation_id':p['operation_id'],'dispatch_released':True,'worker_pid':os.getpid(),'worker_thread':__import__('threading').get_ident(),'utc':r.utc()},private=True)
+                         deadline=time.monotonic()+5
+                         while not (root/('gap-release-'+tag)).exists():
+                             if time.monotonic()>=deadline:raise RuntimeError('release_gap_fixture_timeout')
+--- before/backend/tests/fixtures/task120/ui.py
++++ after/backend/tests/fixtures/task120/ui.py
+@@ -5,23 +5,27 @@
+ from app.capabilities.q_protocol import ROSTER
+ 
+ 
+-def run_ui():
++def run_ui(client=None,mode='interview'):
++    from contextlib import nullcontext
+     number=r.state()['active_root'];batch=int(os.environ.get('RETROLUME_TASK120_BATCH','0'))
+-    stem=f'root-{number:02d}-batch-{batch:02d}-ui'
++    stem=f'root-{number:02d}-batch-{batch:02d}-ui-{mode}'
+     folder=r.PRIVATE/stem;folder.mkdir(exist_ok=False)
+-    with application('flow') as client:
++    with (application('flow') if client is None else nullcontext(client)) as client:
++        progress=json.loads((r.PRIVATE/'flow/flow-progress.json').read_text(encoding='utf-8'))
+         spec={'permit':'TASK-120-Q-PREP-IMPLEMENTATION-20261018','project':str(r.ROOT),'origin':client.base,
+             'activities':list(ROSTER),'interview_goal':setup.SAMPLES['inputs']['interview_goal'],
++            'mode':mode,'numeric_goal':setup.SAMPLES['inputs']['numeric_goal'],'numeric_question':setup.SAMPLES['inputs']['numeric_initial_question'],
++            'legacy_operation':progress.get('legacy-first.done',{}).get('operation_id'),
+             'profile':str(folder/'browser'),'handshake':str(folder),'proof':str(r.EVIDENCE/(stem+'-proof.json')),
+             'screenshotTeaching':str(r.EVIDENCE/(stem+'-teaching.png')),'screenshotInterview':str(r.EVIDENCE/(stem+'-interview.png'))}
+         r.write(folder/'spec.json',spec,private=True)
+-        r.memory_gate('browser');r.count('browser_starts')
++        r.settled_memory_gate('browser');r.count('browser_starts')
+         env=os.environ.copy();env['RETROLUME_TASK120_UI_SPEC']=str(folder/'spec.json')
+         with (r.EVIDENCE/(stem+'-node.log')).open('wb') as log:
+-            process=subprocess.Popen([shutil.which('node'),str(r.ROOT/'frontend/tests/task120-ui.mjs')],cwd=r.ROOT/'frontend',env=env,stdout=log,stderr=subprocess.STDOUT,creationflags=subprocess.CREATE_NO_WINDOW)
++            process=subprocess.Popen([shutil.which('node'),str(r.ROOT/'frontend/tests/task120-ui-continuation.mjs')],cwd=r.ROOT/'frontend',env=env,stdout=log,stderr=subprocess.STDOUT,creationflags=subprocess.CREATE_NO_WINDOW)
+             from app.preview.process import birth
+             r.event('ui_node_started',pid=process.pid,birth=birth(process.pid),root=number)
+-            deadline=time.monotonic()+240;ordinal=1
++            deadline=time.monotonic()+90;ordinal=1
+             try:
+                 while process.poll() is None:
+                     if time.monotonic()>=deadline:raise RuntimeError('task120_ui_timeout')
+--- /dev/null
++++ after/backend/tests/test_task120_continuation.py
+@@ -0,0 +1,79 @@
++import copy,json,unittest
++from pathlib import Path
++from tests.fixtures.task120.queued import read_plan,runnable,PERMIT
++
++class FinitePlanTests(unittest.TestCase):
++    def setUp(self):
++        from tests.fixtures.task120 import resources as r
++        self.path=r.PRIVATE/'finite-plan-offline.json'
++        self.plan={'schema':'task120.finite-plan.v1','permit_id':PERMIT,'root_id':9,'stages':[
++            {'id':'observe','phase':'observe','seconds':30,'depends_on':[]},
++            {'id':'teaching','phase':'teaching','seconds':240,'depends_on':['observe']},
++            {'id':'budget','phase':'budget','seconds':280,'depends_on':['observe']}]}
++    def test_failed_business_does_not_skip_independent_budget(self):
++        self.path.write_text(json.dumps(self.plan),encoding='utf-8')
++        plan=read_plan(self.path)
++        outcomes={'observe':'PASS','teaching':'FAIL'}
++        self.assertTrue(runnable(plan['stages'][2],outcomes))
++        self.assertFalse(runnable(plan['stages'][1],{'observe':'FAIL'}))
++    def test_closed_plan_rejects_external_argv_forward_dependencies_and_deadline_extension(self):
++        invalid=[]
++        v=copy.deepcopy(self.plan);v['stages'][1]['argv']=['arbitrary'];invalid.append(v)
++        v=copy.deepcopy(self.plan);v['stages'][1]['depends_on']=['budget'];invalid.append(v)
++        v=copy.deepcopy(self.plan);v['stages'][1]['seconds']=301;invalid.append(v)
++        v=copy.deepcopy(self.plan);v['root_id']=8;invalid.append(v)
++        v=copy.deepcopy(self.plan);v['stages']=[{'id':'s'+str(x),'phase':'budget','seconds':300,'depends_on':[]} for x in range(6)];invalid.append(v)
++        for value in invalid:
++            self.path.write_text(json.dumps(value),encoding='utf-8')
++            with self.assertRaises(ValueError):read_plan(self.path)
++
++class StartupCleanupTests(unittest.TestCase):
++    def test_pressure_cleanup_waits_for_inflight_start_before_stopping(self):
++        import importlib.util,threading,time
++        from unittest.mock import patch
++        path=Path(__file__).resolve().parents[2]/'DocuN/evidence/TASK-120/execution/continuation-01/runtime_control.py'
++        spec=importlib.util.spec_from_file_location('task120_continuation_control',path)
++        control=importlib.util.module_from_spec(spec);spec.loader.exec_module(control)
++        entered=threading.Event();release=threading.Event();stopped=threading.Event();order=[]
++        def start(*args,**kwargs):
++            entered.set();self.assertTrue(release.wait(2));order.append('start_returned')
++        def stop():order.append('stop_after_start');stopped.set();return {'stopped':True}
++        with patch.object(control.r,'state',return_value={'pg_registry':{'Id':'own'},'no_new_container_or_volume_create':True}),patch.object(control.r,'container'),patch.object(control.r,'owned',return_value={'state':{'Running':False}}),patch.object(control.r,'memory_gate'),patch.object(control.r,'count'),patch.object(control.r,'update'),patch.object(control.r,'event'),patch.object(control.r,'docker',side_effect=start),patch.object(control.r,'stop_pg',side_effect=stop):
++            starting=threading.Thread(target=control.start_existing_pg);starting.start();self.assertTrue(entered.wait(1))
++            cleanup=threading.Thread(target=control.stop_existing_pg);cleanup.start()
++            self.assertFalse(stopped.wait(.05));release.set();starting.join(2);cleanup.join(2)
++            self.assertFalse(starting.is_alive() or cleanup.is_alive())
++        self.assertEqual(order,['start_returned','stop_after_start'])
++
++class NativeControllerImportTests(unittest.TestCase):
++    def test_unchanged_job_bytes_and_real_kernel_cleanup_without_worker_exports(self):
++        import hashlib,sys,time
++        from uuid import uuid4
++        from tests.fixtures.task120 import control_job,resources
++        self.assertNotIn('app.worker',sys.modules)
++        self.assertEqual(control_job.SOURCE_SHA256,hashlib.sha256(control_job.SOURCE.read_bytes()).hexdigest())
++        self.assertEqual(Path(control_job.NamedJob.create.__code__.co_filename),control_job.SOURCE)
++        with resources.root_job(str(uuid4())) as job:
++            job.spawn_suspended([sys._base_executable,'-c','pass'],cwd=str(resources.ROOT))
++            self.assertEqual(job.active_processes(),1)
++            self.assertGreater(job.process_creation_time_100ns(),0)
++            job.resume()
++            self.assertTrue(job.wait_empty_until(time.monotonic_ns()+2_000_000_000))
++            self.assertEqual(job.primary_exit_code(),0)
++
++class MetadataSharingTests(unittest.TestCase):
++    def test_actual_windows_reader_sharing_releases_without_new_bytes_or_reset(self):
++        import threading,time
++        from tests.fixtures.task120 import resources as r
++        path=r.PRIVATE/'metadata-contention-probe.json'
++        r.write(path,{'old':True})
++        reader=path.open('r',encoding='utf-8')
++        entered=threading.Event();outcome=[]
++        def writer():
++            entered.set()
++            try:r.write(path,{'new':True});outcome.append('written')
++            except BaseException as exc:outcome.append(type(exc).__name__)
++        thread=threading.Thread(target=writer);thread.start();self.assertTrue(entered.wait(1))
++        time.sleep(.05);reader.close();thread.join(2)
++        self.assertFalse(thread.is_alive());self.assertEqual(outcome,['written'])
++        self.assertEqual(json.loads(path.read_text(encoding='utf-8')),{'new':True})
+--- /dev/null
++++ after/backend/tests/test_task120_outbound_api.py
+@@ -0,0 +1,37 @@
++"""Narrow regressions for the original-instance interview JSON boundary."""
++import copy,unittest
++from app.capabilities.q_protocol import canonical
++from app.capabilities.q_context import validate_provenance
++from app.capabilities.contracts import AdmissionDenied
++from tests.fixtures.task120.offline import store,AID,TEXT
++
++class InterviewStructureTests(unittest.TestCase):
++    def test_closed_context_property_names_do_not_authorize_unapproved_text(self):
++        authority=store(template_atoms_extra=('interview_profile','context_json'))
++        source=authority.manifest.sources[0]
++        state={'activity':{'id':AID},'sources':[{'source_id':source['source_id'],'version_id':source['source_version_id']}],'commands':[]}
++        request={'goal':TEXT,'interview_profile':{'context_json':canonical({'goal_body':{'target':TEXT},'parent_record_refs':[],'material_roles':[],'input_policy':''})}}
++        validate_provenance(authority,request,{},state,[],[TEXT],'first')
++        for name,text in (('answer_text','unapproved answer'),('target','unapproved history'),('text','unapproved memory'),('title','unapproved title')):
++            other=copy.deepcopy(request)
++            other['interview_profile']['context_json']=canonical({'goal_body':{name:text}})
++            with self.assertRaises(AdmissionDenied):validate_provenance(authority,other,{},state,[],[TEXT],'first')
++        other=copy.deepcopy(request);other['interview_profile']['context_json']=canonical({'unknown_structure':None})
++        with self.assertRaises(AdmissionDenied):validate_provenance(authority,other,{},state,[],[TEXT],'first')
++
++class RetainedInterviewCatalogTests(unittest.TestCase):
++    def test_actual_retained_request_uses_validated_frozen_catalog(self):
++        import json
++        from tests.fixtures.task120 import resources as r
++        from app.data_exit.control import ControlHub
++        from app.data_exit.q_store import QAuthority
++        from app.capabilities.contracts import ModelCallRequest
++        if not (r.PRIVATE/'flow/q-root.json').exists():self.skipTest('requires explicit retained TASK120 artifact')
++        authority=QAuthority(ControlHub(r.PRIVATE/'flow/control'))
++        rows=[x for x in authority.hub.state()['q']['requests'].values() if x['prepared']['domain']=='interview']
++        self.assertTrue(rows)
++        artifact=authority.artifact(rows[0]);request=ModelCallRequest.model_validate_json(json.dumps(artifact['request']))
++        self.assertFalse(hasattr(request.interview_profile,'catalog'))
++        authority.manifest.check_model(request,artifact['payload'])
++        changed=request.model_copy(update={'messages':(request.messages[0],request.messages[1].model_copy(update={'content':request.messages[1].content+' '}))})
++        with self.assertRaises(AdmissionDenied):authority.manifest.check_model(changed,artifact['payload'])
+--- /dev/null
++++ after/backend/tests/fixtures/task120/control_job.py
+@@ -0,0 +1,21 @@
++"""Use the unchanged native Job implementation without app.worker exports.
++
++Only finite TESTONLY controllers import this module. Production SUP/worker
++imports, Job ABI, names, security, limits and code bytes are unchanged.
++"""
++import hashlib
++import importlib.util
++from pathlib import Path
++
++SOURCE=Path(__file__).resolve().parents[3]/'app/worker/windows_job.py'
++SOURCE_SHA256=hashlib.sha256(SOURCE.read_bytes()).hexdigest()
++_spec=importlib.util.spec_from_file_location('task120_native_job_control',SOURCE)
++_native=importlib.util.module_from_spec(_spec)
++_spec.loader.exec_module(_native)
++NamedJob=_native.NamedJob
++JobOpenError=_native.JobOpenError
++_EXTENDED_LIMIT=_native._EXTENDED_LIMIT
++JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS=_native.JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS
++JOB_OBJECT_LIMIT_ACTIVE_PROCESS=_native.JOB_OBJECT_LIMIT_ACTIVE_PROCESS
++JOB_OBJECT_LIMIT_JOB_MEMORY=_native.JOB_OBJECT_LIMIT_JOB_MEMORY
++JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE=_native.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+--- /dev/null
++++ after/backend/tests/fixtures/task120/diagnose.py
+@@ -0,0 +1,54 @@
++"""Finite readonly original-PG diagnostics; no schema learning or repair."""
++import json
++from . import resources as r,setup
++from .api_runtime import run
++
++def diagnose():
++    setup.environment('flow',include_admin=False)
++    from .transport import install
++    install()
++    from app.main import create_app
++    from app.capabilities.q_protocol import digest,canonical,ROSTER
++    from app.data_exit.schema_checks import legacy_business_shape,html_qualification_profile
++    from app.data_exit.q_store import authority_for
++    import psycopg
++    from psycopg.rows import dict_row
++    app=create_app();ledger=app.state.activities_ledger;authority=authority_for(ledger)
++    result={'readonly':True,'schema_modified':False}
++    async def go():
++        async with await psycopg.AsyncConnection.connect(setup.dsn('flow'),row_factory=dict_row) as db:
++            await db.execute('BEGIN READ ONLY')
++            await db.execute("SET LOCAL statement_timeout='4s'")
++            result['backend_pid']=(await (await db.execute('SELECT pg_backend_pid() AS pid')).fetchone())['pid']
++            shape=await ledger.html_schema_shape(db)
++            r.write(r.EVIDENCE/f"root-{r.state()['active_root']:02d}-html-raw-shape.json",shape)
++            normalized=await html_qualification_profile(db,legacy_business_shape(shape))
++            r.write(r.EVIDENCE/f"root-{r.state()['active_root']:02d}-html-normalized-shape.json",normalized)
++            expected=json.loads((r.ROOT/'backend/app/preview/schema-fingerprint.json').read_text(encoding='utf-8'))['data_exit_013_sha256']
++            result['html_shape']={'expected':expected,'observed':digest(normalized),'matches':digest(normalized)==expected}
++            baseline=json.loads((r.ROOT/'DocuN/evidence/TASK-114/implementation/control/html-shape-normalized-1088472437000000.json').read_text(encoding='utf-8-sig'))
++            differences=[]
++            for key in set(baseline)|set(normalized):
++                if baseline.get(key)==normalized.get(key):continue
++                old=baseline.get(key,[]);new=normalized.get(key,[])
++                for index in range(max(len(old),len(new))):
++                    left=old[index] if index<len(old) else None;right=new[index] if index<len(new) else None
++                    if left!=right:differences.append({'section':key,'index':index,'before':left,'after':right})
++            r.write(r.EVIDENCE/f"root-{r.state()['active_root']:02d}-html-shape-difference.json",{'baseline_sha256':digest(baseline),'expected_sha256':expected,'differences':differences})
++            from app.interview.contracts import InterviewHybridContext
++            schema=InterviewHybridContext.model_json_schema()
++            fields=set()
++            def collect(value):
++                if isinstance(value,dict):
++                    fields.update(value.get('properties',{}))
++                    for child in value.values():collect(child)
++                elif isinstance(value,list):
++                    for child in value:collect(child)
++            collect(schema)
++            result['interview_schema_fields_missing_from_template_atoms']=sorted(fields-set(authority.bundle['template_atoms']))
++            cursor=await db.execute('SELECT revision,goal_version,goal_record_id::text,pending_business_key::text FROM teaching_heads WHERE activity_id=%s',(ROSTER[0],))
++            result['original_a1_head']=await cursor.fetchone()
++            cursor=await db.execute("SELECT business_key::text,action,status,expected_revision,goal_version,slot_sha256,launch_claimed_at IS NOT NULL AS claimed,abandoned_at IS NOT NULL AS abandoned FROM teaching_commands WHERE activity_id=%s ORDER BY created_at",(ROSTER[0],))
++            result['original_a1_commands']=await cursor.fetchall()
++    run(go())
++    r.write(r.EVIDENCE/f"root-{r.state()['active_root']:02d}-readonly-diagnosis.json",result)
+--- /dev/null
++++ after/backend/tests/fixtures/task120/html_eol.py
+@@ -0,0 +1,45 @@
++"""User-approved exact EOL-only correction in the original TESTONLY flow DB."""
++import hashlib,json
++from . import resources as r,setup
++from .api_runtime import run,financials
++
++def apply():
++    folder=r.EVIDENCE/'continuation-01'
++    permission=json.loads((folder/'html-eol-user-permission.json').read_text(encoding='utf-8'))
++    raw=(folder/'proposed-html-eol-repair.sql').read_bytes()
++    if hashlib.sha256(raw).hexdigest()!=permission['patch_sha256']:raise RuntimeError('reviewed_DDL_patch_changed')
++    before_shape=json.loads((r.EVIDENCE/'root-12-html-raw-shape.json').read_text(encoding='utf-8'))
++    names={x['function'] for x in json.loads((folder/'proposed-html-eol-repair.json').read_text(encoding='utf-8'))['functions']}
++    before_financials=financials('flow')
++    setup.environment('flow',include_admin=False)
++    from .transport import install
++    install()
++    from app.main import create_app
++    app=create_app();ledger=app.state.activities_ledger
++    import psycopg
++    from psycopg.rows import dict_row
++    from app.capabilities.q_protocol import digest
++    async def go():
++        async with await psycopg.AsyncConnection.connect(setup.dsn('flow',True),row_factory=dict_row) as db:
++            async with db.transaction():
++                await db.execute("SET LOCAL statement_timeout='5s'")
++                if await ledger.html_schema_shape(db)!=before_shape:raise RuntimeError('DDL_preimage_changed')
++                # Same reviewed bytes; transaction ownership remains here so a
++                # failed strict fingerprint rolls back all nine replacements.
++                text=raw.decode('utf-8')
++                lines=text.splitlines(keepends=True)
++                if not lines[0].startswith('-- REVIEW ONLY') or lines[1]!='BEGIN;\n' or lines[-1]!='COMMIT;\n':raise RuntimeError('DDL_closed_transaction')
++                await db.execute(''.join(lines[2:-1]),prepare=False)
++                await ledger._html_assert_schema(db)
++                after=await ledger.html_schema_shape(db)
++                for old,new in zip(before_shape['functions'],after['functions']):
++                    expected=dict(old,prosrc=old['prosrc'].replace('\r\n','\n')) if old['proname'] in names else old
++                    if expected!=new:raise RuntimeError('DDL_non_EOL_function_change')
++                if any(before_shape[k]!=after[k] for k in before_shape if k!='functions'):raise RuntimeError('DDL_non_function_change')
++            proof={'actual_admin_backend_pid':(await (await db.execute('SELECT pg_backend_pid() AS pid')).fetchone())['pid'],'preimage_sha256':digest(before_shape),'postimage_sha256':digest(after)}
++        # Ordinary application principal checks the committed catalog too.
++        await ledger._transaction(ledger._html_assert_schema)
++        return proof
++    proof=run(go())
++    if financials('flow')!=before_financials:raise RuntimeError('DDL_financial_rows_changed')
++    r.write(r.EVIDENCE/f"root-{r.state()['active_root']:02d}-html-eol-applied.json",{'status':'PASS','permission_file':'continuation-01/html-eol-user-permission.json','patch_sha256':permission['patch_sha256'],'nine_exact_functions':True,'owner_ACL_and_strict_fingerprint_verified':True,'normal_app_role_verified':True,'financial_rows_unchanged':True,'preview_creates':0,'preview_starts':0,**proof})
+--- /dev/null
++++ after/backend/tests/fixtures/task120/integrated.py
+@@ -0,0 +1,54 @@
++"""Closed finite stages share one normal API, never an interactive PG wait."""
++import os,time,traceback
++from . import resources as r
++from .api_runtime import application
++from .control_job import NamedJob
++from .merged import members,await_members
++
++def integrated(mode):
++    if mode not in ('core','ui'):raise RuntimeError('closed_integrated_mode')
++    number=r.state()['active_root'];slot=r.state()['roots'][-1]
++    job=NamedJob.open_existing(slot['identity'],1)
++    try:baseline=members(job)
++    finally:job.close()
++    outcomes={};receipts=[]
++    with application('flow') as client:
++        from .flow import run_flow
++        from .ui import run_ui
++        from .pg_boundaries import probe_approved,run_ack_and_gap
++        client.after_approval=lambda rows:probe_approved(client,rows)
++        if mode=='core':
++            stages=[('interview',(),lambda:run_flow('interview_repaired',client)),
++                    ('legacy_html',(),lambda:run_flow('legacy_html',client)),
++                    ('ack_and_K2',('interview',),lambda:run_ack_and_gap(client))]
++        else:
++            import json
++            from app.capabilities.q_protocol import ROSTER
++            progress=json.loads((r.PRIVATE/'flow/flow-progress.json').read_text())
++            # Inherit only an actual original-key COMMIT receipt, with a new
++            # readonly PG/API check. Failed core exit is never rewritten to 0.
++            for name,key,aid,domain in [('interview','c01-interview-question-after-catalog-fix',ROSTER[1],'interview'),('legacy_html','html',ROSTER[2],'html')]:
++                if key+'.done' not in progress:outcomes[name]='MISSING_COMMIT';continue
++                original=progress[key];value=client.request('GET',f'/api/activities/{aid}/{domain}/commands/{original["business_key"]}')
++                good=value['status']=='committed' if domain=='interview' else value['status']=='terminal' and value['terminal_disposition']=='succeeded'
++                outcomes[name]='PASS' if good else 'NOT_COMMITTED'
++                receipts.append({'name':name,'inherited_actual_readonly_receipt':value,'not_a_rerun':True})
++            stages=[('UI_interview',('interview',),lambda:run_ui(client,'interview')),('UI_legacy_html',('legacy_html',),lambda:run_ui(client,'legacy_html'))]
++        for name,dependencies,action in stages:
++            if any(outcomes.get(d)!='PASS' for d in dependencies):
++                outcomes[name]='SKIPPED_DEPENDENCY';receipts.append({'name':name,'depends_on':dependencies,'status':'SKIPPED_DEPENDENCY'});continue
++            if time.monotonic_ns()+30_000_000_000>=slot['business_deadline_ns']:raise RuntimeError('integrated_deadline_margin')
++            start=time.monotonic();receipt={'name':name,'started_utc':r.utc()}
++            try:action()
++            except BaseException as exc:
++                outcomes[name]='FAIL';receipt.update(status='FAIL',error_type=type(exc).__name__,safe_code=str(exc) if type(exc) is RuntimeError else None,
++                    frames=[{'file':str(x.filename).replace(str(r.ROOT),'PROJECT'),'line':x.lineno,'function':x.name} for x in traceback.extract_tb(exc.__traceback__)])
++                r.update(lambda state:state['failures'].append({'root':number,'internal_stage':name,'receipt':f'root-{number:02d}-integrated-{mode}-result.json'}))
++            else:outcomes[name]='PASS';receipt['status']='PASS'
++            finally:
++                job=NamedJob.open_existing(slot['identity'],1)
++                try:await_members(job,baseline)
++                finally:job.close()
++                receipt['wall_seconds']=time.monotonic()-start;receipts.append(receipt)
++                r.write(r.EVIDENCE/f'root-{number:02d}-integrated-{mode}-result.json',{'outcomes':outcomes,'receipts':receipts,'shared_normal_API':True,'provider_calls':0,'preview_creates':0,'preview_starts':0})
++    if any(x!='PASS' for x in outcomes.values()):raise RuntimeError('integrated_some_finite_stages_not_passed')
+--- /dev/null
++++ after/backend/tests/fixtures/task120/observe.py
+@@ -0,0 +1,26 @@
++"""Own immutable instances/deadlines and retained financials, actual PG only."""
++import json
++from datetime import datetime,timezone
++from . import setup,resources as r
++from .api_runtime import run,financials
++
++def observe():
++    import psycopg
++    from psycopg.rows import dict_row
++    from .budget import run_reopen
++    run_reopen()
++    values=[]
++    for slot in ('flow','budget-01'):
++        setup.environment(slot,include_admin=False)
++        from app.main import create_app
++        app=create_app()
++        if not app.state.q_readiness['available']:raise RuntimeError('actual_q_root_unavailable')
++        from app.data_exit.q_store import authority_for
++        authority=authority_for(app.state.activities_ledger)
++        with psycopg.connect(setup.dsn(slot),row_factory=dict_row) as connection:
++            identity=connection.execute('SELECT current_database() AS database,public.data_state() AS control,(SELECT oid FROM pg_database WHERE datname=current_database()) AS database_oid').fetchone()
++            rows=connection.execute('SELECT id::text,status,deadline_at,scope_revision,outbound_grant_sha256,execution_generation,running_reserved_seconds,running_settled_seconds FROM activities ORDER BY id').fetchall()
++        if len(rows)!=3 or any(x['deadline_at']<=datetime.now(timezone.utc) or x['outbound_grant_sha256']!=authority.grant.sha256 for x in rows):raise RuntimeError('activity_expired_or_rebound')
++        values.append({'slot':slot,'identity':identity,'activities':rows,'financials':financials(slot),'real_outbound_authorized':False})
++    from app.data_exit.codec import plain
++    r.write(r.EVIDENCE/f"root-{r.state()['active_root']:02d}-instance-observation.json",plain({'slots':values,'same_CID_reused':True,'old_reserves_retained':True}))
+--- /dev/null
++++ after/backend/tests/fixtures/task120/pg_boundaries.py
+@@ -0,0 +1,184 @@
++"""Actual original-PG negative gates, acknowledgement faults and K2 window."""
++import copy,hashlib,json,os,shutil,threading,time
++from pathlib import Path
++from uuid import uuid4
++from . import resources as r,setup
++from .api_runtime import run,financials
++
++def probe_approved(client,rows):
++    if getattr(client,'_task120_probe_done',False):return
++    row=next((x for x in rows if x['prepared']['domain']=='interview'),None)
++    if row is None:return
++    from app.capabilities.q_protocol import canonical,digest,raw_digest,ROSTER
++    from app.capabilities.q_context import snapshot,check_instance,validate_provenance
++    from app.capabilities.contracts import ModelCallRequest,CallContext,CallStatus,AdmissionDenied
++    from app.capabilities.gateway import ControlledModelGateway
++    from app.data_exit.q_store import authority_for,QAuthority
++    from app.data_exit.control import ControlHub
++    from app.data_exit.contracts import DataError
++    from app.data_exit.files import private_file
++    from app.operator.q_request import inspect_request,approve_request
++    ledger=client.app.state.activities_ledger;authority=authority_for(ledger);row=authority.request(row['prepared_id']);p=row['prepared']
++    base=financials('flow');artifact=authority.artifact(row)
++    request=ModelCallRequest.model_validate_json(canonical(artifact['request']))
++    service=client.app.state.activity_config.model_service.model_copy(update={'outbound_authorization':authority.reference(row)})
++    state,ids,derived=run(snapshot(ledger,p['activity_id']));check_instance(authority,ledger,state)
++    validate_provenance(authority,request.model_dump(mode='json'),artifact['payload'],state,ids,derived,p['action'],p)
++    authority.manifest.check_model(request,artifact['payload'])
++    cases=[]
++    for label,text in [('answer','UNAPPROVED_ANSWER'),('history','UNAPPROVED_HISTORY'),('memory','UNAPPROVED_MEMORY'),('title','UNAPPROVED_TITLE')]:
++        value=json.loads(request.messages[1].content)
++        if label=='memory':value['learning_background']=[{'text':text}]
++        elif label=='title':value['context']['catalog'][0]['title']=text
++        else:value['context']['goal_body']['target']=text
++        changed=request.model_copy(update={'messages':(request.messages[0],request.messages[1].model_copy(update={'content':canonical(value)}))})
++        payload=ControlledModelGateway(service)._build_payload(changed)
++        try:validate_provenance(authority,changed.model_dump(mode='json'),payload,state,ids,derived,p['action'],p)
++        except AdmissionDenied as exc:
++            cases.append({'case':'unapproved_'+label,'denied':str(exc),'typed_request_sha256':digest(changed.model_dump(mode='json')),'provider_bytes_sha256':raw_digest(canonical(payload))})
++        else:raise RuntimeError('actual_PG_provenance_allowed_'+label)
++    context=CallContext(activity_id=p['activity_id'],operation_id=p['operation_id'],executor_id='local-ui',execution_generation=1,scope_revision=1)
++    changed=request.model_copy(update={'messages':(request.messages[0],request.messages[1].model_copy(update={'content':request.messages[1].content+' '}))})
++    for label,configuration,body in [('exact_bytes',service,changed),('endpoint',service.model_copy(update={'base_url':'https://api.deepseek.com/not-approved'}),request)]:
++        result=run(ControlledModelGateway(configuration,ledger=ledger).call(context,body))
++        if result.status is not CallStatus.REJECTED:raise RuntimeError('actual_gateway_negative_not_rejected_'+label)
++        if authority.request(row['prepared_id']).get('claim'):raise RuntimeError('negative_gate_consumed_original_approval')
++        cases.append({'case':label,'actual_gateway_status':result.status.value,'code':result.error_code,'claim_not_created':True})
++    # A different existing PG instance remains foreign even in this same CID.
++    from app.activities.repository import PostgresAdmissionLedger
++    foreign=PostgresAdmissionLedger(setup.dsn('budget-01'))
++    foreign_state,_,_=run(snapshot(foreign,ROSTER[0]))
++    try:check_instance(authority,foreign,foreign_state)
++    except AdmissionDenied as exc:cases.append({'case':'actual_other_existing_PG_instance','denied':str(exc),'actual_database_oid':foreign_state['control']['database_oid']})
++    else:raise RuntimeError('foreign_actual_PG_instance_allowed')
++    # Full other-activity typed request, never a fabricated parent or ID string.
++    foreign_row=next(x for x in authority.hub.state()['q']['requests'].values() if x['prepared']['domain']=='learning' and x['prepared']['activity_id']!=p['activity_id'])
++    other=authority.artifact(foreign_row)
++    try:validate_provenance(authority,other['request'],other['payload'],state,ids,derived,foreign_row['prepared']['action'],foreign_row['prepared'])
++    except AdmissionDenied as exc:cases.append({'case':'actual_foreign_activity_full_request','denied':str(exc),'foreign_operation_id':foreign_row['prepared']['operation_id']})
++    else:raise RuntimeError('foreign_actual_request_allowed')
++    # Inspect does not fall back to a copied artifact when the original is gone.
++    path=authority.hub.artifact_path('q-prepared',row['prepared_id']);held=path.with_suffix('.c01-held')
++    with authority.policy():
++        path.rename(held)
++        try:
++            try:run(inspect_request(ledger,row['prepared_id']))
++            except (DataError,OSError):cases.append({'case':'original_artifact_missing','inspect_denied':True})
++            else:raise RuntimeError('missing_artifact_returned_request')
++        finally:held.rename(path)
++    # Copies retain their old binding and cannot become authority. Damage only
++    # new private copies; the live journal and root bytes remain untouched.
++    for kind in ('copied_instance','journal_tail'):
++        folder=r.PRIVATE/'negative-copies'/str(uuid4());folder.mkdir(parents=True);private_file(folder,directory=True)
++        copied=folder/'journal.bin';shutil.copy2(authority.hub.path,copied);private_file(copied)
++        q=authority.hub.state()['q'];root_artifact=authority.hub.artifact_path('q-root',q['root_id'])
++        destination=folder/root_artifact.relative_to(authority.hub.root);destination.parent.mkdir(parents=True,exist_ok=True)
++        private_file(destination.parent,directory=True);shutil.copy2(root_artifact,destination);private_file(destination)
++        if kind=='journal_tail':
++            with copied.open('ab') as stream:stream.write(b'\xff')
++        try:QAuthority(ControlHub(folder))
++        except DataError as exc:
++            permitted={'q_instance_identity'} if kind=='copied_instance' else {'control_tail','control_corrupt'}
++            if exc.code not in permitted:raise RuntimeError('copy_denied_at_unrelated_boundary_'+exc.code)
++            cases.append({'case':kind,'copied_control_denied':True,'denied':exc.code,'live_original_untouched':True})
++        else:raise RuntimeError('copied_or_damaged_control_allowed')
++    # Repeated exact approval is a read of the same decision/event sequence.
++    decision=run(approve_request(ledger,row['prepared_id'],row['prepared_sha256']))
++    if decision!=row['approval']:raise RuntimeError('same_prepared_approval_was_not_idempotent')
++    if financials('flow')!=base or authority.request(row['prepared_id']).get('claim'):raise RuntimeError('negative_cases_changed_finances_or_claim')
++    proof={'status':'PASS_FOR_LISTED_GATES','actual_original_PG_snapshot':True,'prepared_id':row['prepared_id'],'cases':cases,'whole_request_positive':True,'fees_and_operations_unchanged':True,'provider_calls':0}
++    r.write(r.EVIDENCE/f"root-{r.state()['active_root']:02d}-PG-approval-boundaries.json",proof)
++    # Exactly this first new model tests a genuine result COMMIT ACK loss. It
++    # stays claimed/consumed; its business transaction must be found via GET.
++    path=r.PRIVATE/'flow/faults.json';faults=json.loads(path.read_text()) if path.exists() else {}
++    faults[p['operation_id']]='commit_ack_lost';r.write(path,faults,private=True)
++    client._task120_probe_done=True
++
++def run_ack_and_gap(client):
++    from app.capabilities.q_protocol import ROSTER
++    from app.capabilities.contracts import AdmissionUnavailable
++    from app.data_exit.q_store import authority_for
++    from app.operator.q_request import principal_id
++    import psycopg
++    from psycopg.rows import dict_row
++    aid=ROSTER[1];ledger=client.app.state.activities_ledger;authority=authority_for(ledger)
++    base=r.PRIVATE/'flow';file=base/'c01-ack-gap-progress.json';state=json.loads(file.read_text()) if file.exists() else {}
++    def retain(name,body):
++        if name not in state:state[name]=body;r.write(file,state,private=True)
++        return state[name]
++    def persist(name,value):state[name]=value;r.write(file,state,private=True);return value
++    path=f'/api/activities/{aid}/interview/commands'
++    def goal(name):
++        if name+'.done' in state:return state[name+'.done']
++        before=client.request('GET',f'/api/activities/{aid}/interview/workspace')['head']
++        body=retain(name,{'schema':'interview.command.v2','business_key':str(uuid4()),'action':'goal','expected_head_revision':before['revision'],'expected_goal_version':before['goal_version'],'expected_scope_revision':1,'body':{'goal':{'target':setup.SAMPLES['inputs']['interview_goal'],'material_roles':[]}}})
++        value=client.request('POST',path,body)
++        after=client.request('GET',f'/api/activities/{aid}/interview/workspace')['head']
++        if value['status']!='committed' or after['revision']!=before['revision']+1 or after['goal_version']!=before['goal_version']+1:raise RuntimeError('ack_goal_did_not_create_new_parent')
++        return persist(name+'.done',{'receipt':value,'before':before,'after':after})
++    def command(name):
++        if name in state:return state[name]
++        status=client.request('GET',f'/api/activities/{aid}/retrieval/status')
++        query=retain(name+'-query',{'business_key':str(uuid4()),'action':'query','expected_scope_revision':1,'expected_domain_revision':status['domain_revision'],'confirmed':True,'query':setup.SAMPLES['inputs']['interview_goal']})
++        url=f'/api/activities/{aid}/retrieval/commands'
++        pending=client.request('POST',url,query);client.approve(aid,query['business_key']);r.count('native_business_sessions')
++        received=client.request('POST',url,query)
++        if received['terminal_disposition']!='received':raise RuntimeError('ack_actual_query_not_received')
++        head=client.request('GET',f'/api/activities/{aid}/interview/workspace')['head']
++        return retain(name,{'schema':'interview.command.v2','business_key':str(uuid4()),'action':'ask','expected_head_revision':head['revision'],'expected_goal_version':head['goal_version'],'expected_scope_revision':1,'body':{'mode':'first'},'retrieval_ref':received['retrieval_ref']})
++    if 'ACK.done' not in state:
++        goal('ack-goal');body=command('ack-model');before=financials('flow');original=ledger.accept_interview_command;lost=[]
++        async def accept_lost(*args,**kwargs):
++            value=await original(*args,**kwargs)
++            if not lost:lost.append(True);r.event('actual_PG_accept_COMMIT_ack_lost',business_key=body['business_key']);raise AdmissionUnavailable('TESTONLY_accept_ACK_lost')
++            return value
++        ledger.accept_interview_command=accept_lost
++        try:client.request('POST',path,body,expect=(503,))
++        finally:ledger.accept_interview_command=original
++        known=client.request('GET',path+'/'+body['business_key']);assert known['status']=='accepted' and not known['launch_claimed']
++        if financials('flow')!=before:raise RuntimeError('accepted_ack_loss_reserved_money')
++        pending=client.request('POST',path,body);assert pending['outbound_approval']['state']=='pending'
++        client.approve(aid,body['business_key']);original=ledger.claim_interview_launch;claimed=[]
++        async def claim_lost(*args,**kwargs):
++            value=await original(*args,**kwargs)
++            if not claimed:claimed.append(True);r.event('actual_PG_launch_claim_COMMIT_ack_lost',business_key=body['business_key']);raise AdmissionUnavailable('TESTONLY_claim_ACK_lost')
++            return value
++        ledger.claim_interview_launch=claim_lost
++        try:client.request('POST',path,body,expect=(503,))
++        finally:ledger.claim_interview_launch=original
++        native=r.state()['counts']['native_business_sessions']
++        one=client.request('GET',path+'/'+body['business_key']);two=client.request('GET',path+'/'+body['business_key'])
++        assert one['launch_claimed'] and two['launch_claimed'] and one['status']=='accepted'
++        if financials('flow')!=before or r.state()['counts']['native_business_sessions']!=native:raise RuntimeError('claimed_ACK_GET_changed_finances_or_launched')
++        persist('ACK.done',{'business_key':body['business_key'],'accept_COMMIT_real':True,'claim_COMMIT_real':True,'prepared_ACK_readonly_recovered':True,'claim_ACK_readonly_only':True,'never_resent_after_claim':True,'financials_unchanged':True})
++    if 'gap.done' not in state:
++        goal('gap-goal');body=command('gap-model');before=client.request('GET',f'/api/activities/{aid}/interview/workspace')['head']
++        pending=client.request('POST',path,body);assert pending['outbound_approval']['state']=='pending'
++        row=client.approve(aid,body['business_key'])[0];operation=row['prepared']['operation_id']
++        faults_path=base/'faults.json';faults=json.loads(faults_path.read_text()) if faults_path.exists() else {};faults[operation]='release_gap';r.write(faults_path,faults,private=True)
++        tag=hashlib.sha256(operation.encode()).hexdigest();outcome={};before_money=financials('flow')
++        def send():
++            try:outcome['receipt']=client.request('POST',path,body)
++            except BaseException as exc:outcome['error_type']=type(exc).__name__
++        r.count('native_business_sessions');thread=threading.Thread(target=send,name='TASK120-K2-actual-HTTP');thread.start()
++        until=time.monotonic()+18;ready=base/('gap-ready-'+tag+'.json')
++        while not ready.exists():
++            if not thread.is_alive() or time.monotonic()>=until:raise RuntimeError('actual_interview_release_gap_not_observed')
++            time.sleep(.01)
++        window=json.loads(ready.read_text());assert window['dispatch_released']
++        mutation=goal('gap-exclusive-goal')
++        revoked=authority.revoke(row['prepared_id'],principal_id());assert revoked['state']=='revoked'
++        r.event('actual_gap_exclusive_head_and_revoke_completed',operation_id=operation,prepared_id=row['prepared_id'],actor_pid=os.getpid(),actor_thread=threading.get_ident(),worker_pid=window['worker_pid'])
++        (base/('gap-release-'+tag)).write_text('release only synthetic response',encoding='utf-8')
++        thread.join(20)
++        if thread.is_alive() or outcome.get('error_type'):raise RuntimeError('interview_gap_result_not_confirmed')
++        after=client.request('GET',f'/api/activities/{aid}/interview/workspace')['head']
++        fields=('revision','goal_version','goal_record_id','current_question_id','current_answer_id','current_feedback_id')
++        if any(after[k]!=mutation['after'][k] for k in fields):raise RuntimeError('late_gap_result_advanced_current_head')
++        with psycopg.connect(setup.dsn('flow'),row_factory=dict_row) as db:
++            fact=db.execute('SELECT o.state,r.payload,r.payload_sha256 FROM activity_operations o JOIN activity_operation_results r USING(activity_id,operation_id) WHERE o.activity_id=%s AND o.operation_id=%s',(aid,operation)).fetchone()
++        if not fact or fact['state']!='received' or hashlib.sha256(fact['payload'].encode()).hexdigest()!=fact['payload_sha256']:raise RuntimeError('immutable_007_not_retained_after_gap')
++        after_money=financials('flow')
++        if after_money['requests']!=before_money['requests']+1 or after_money['cost']!=before_money['cost']+250000:raise RuntimeError('gap_reserved_money_changed')
++        persist('gap.done',{'operation_id':operation,'prepared_id':row['prepared_id'],'original_head':before,'exclusive_mutation_head':mutation['after'],'final_head':after,'007_payload_sha256':fact['payload_sha256'],'fee_not_refunded':True,'separate_HTTP_thread':True,'actual_worker_window':window,'head_and_revoke_completed_before_result':True})
++    r.write(r.EVIDENCE/f"root-{r.state()['active_root']:02d}-ACK-and-K2-result.json",{'status':'PASS_FOR_LISTED_FAULTS','ACK':state['ACK.done'],'K2':state['gap.done'],'other_source_memory_scope_races':'NOT_CLAIMED'})
+--- /dev/null
++++ after/backend/tests/fixtures/task120/queued.py
+@@ -0,0 +1,63 @@
++"""Finite, prewritten TASK120 continuation stages. No external投批 or retry."""
++import hashlib,json,os,subprocess,sys,time
++from pathlib import Path
++from . import resources as r
++from .merged import members,await_members
++from .control_job import NamedJob
++
++PHASES=frozenset(('observe','diagnose','html_eol','integrated_core','integrated_ui','teaching','interview','interview_repaired','legacy_html','gap','budget','budget_a2','budget_a3','budget_race','boundaries','ui','reopen'))
++PERMIT='TASK-120-Q-PREP-CONTINUATION-01-20261019'
++
++def read_plan(path):
++    value=json.loads(Path(path).read_text(encoding='utf-8'))
++    if set(value)!={'schema','permit_id','root_id','stages'} or value['schema']!='task120.finite-plan.v1' or value['permit_id']!=PERMIT:raise ValueError('closed_plan')
++    if type(value['root_id']) is not int or not 9<=value['root_id']<=16 or not isinstance(value['stages'],list) or not 1<=len(value['stages'])<=12:raise ValueError('plan_limit')
++    seen=set()
++    for stage in value['stages']:
++        if (set(stage)!={'id','phase','seconds','depends_on'} or stage['phase'] not in PHASES or type(stage['seconds']) is not int or not 1<=stage['seconds']<=300
++            or not isinstance(stage['id'],str) or not stage['id'].isidentifier() or stage['id'] in seen or not isinstance(stage['depends_on'],list)
++            or any(x not in seen for x in stage['depends_on']) or len(set(stage['depends_on']))!=len(stage['depends_on'])):raise ValueError('invalid_stage')
++        seen.add(stage['id'])
++    if sum(s['seconds'] for s in value['stages'])>1680:raise ValueError('plan_root_deadline')
++    return value
++
++def runnable(stage,outcomes):return all(outcomes.get(x)=='PASS' for x in stage['depends_on'])
++
++def run_plan():
++    path=Path(os.environ['RETROLUME_TASK120_PLAN']);plan=read_plan(path)
++    root=r.state()['active_root'];slot=next(x for x in r.state()['roots'] if x['id']==root)
++    if plan['root_id']!=root or slot['permit_id']!=PERMIT or hashlib.sha256(path.read_bytes()).hexdigest()!=slot['plan_sha256']:raise RuntimeError('plan_identity')
++    job=NamedJob.open_existing(slot['identity'],1)
++    try:baseline=members(job)
++    finally:job.close()
++    outcomes={};previous=None;receipts=[]
++    for ordinal,stage in enumerate(plan['stages'],1):
++        stem=f'root-{root:02d}-batch-{ordinal:02d}'
++        if not runnable(stage,outcomes):
++            outcomes[stage['id']]='SKIPPED_DEPENDENCY'
++            r.write(r.EVIDENCE/(stem+'-receipt.json'),{'stage':stage,'state':'SKIPPED_DEPENDENCY','previous_actual_exit':previous,'depends_on':{x:outcomes.get(x) for x in stage['depends_on']}})
++            continue
++        remaining=slot['business_deadline_ns']/1e9-time.monotonic()-5
++        if remaining<stage['seconds']:raise RuntimeError('remaining_root_cannot_fit_next_frozen_stage')
++        env=r.public_environment()
++        for name in ('PYTHONPATH','PYTHONIOENCODING','RETROLUME_TASK120_ROOT_ID','RETROLUME_TASK120_TESTONLY','RETROLUME_TASK120_CONTINUATION','RETROLUME_TASK120_PLAN'):env[name]=os.environ[name]
++        env['RETROLUME_TASK120_BATCH']=str(ordinal)
++        files=[]
++        for directory in ('backend/app','backend/tests/fixtures/task120','frontend/src','frontend/dist'):
++            for file in sorted((r.ROOT/directory).rglob('*')):
++                if file.is_file() and '__pycache__' not in file.parts:files.append({'path':file.relative_to(r.ROOT).as_posix(),'sha256':hashlib.sha256(file.read_bytes()).hexdigest()})
++        r.write(r.EVIDENCE/(stem+'-as-run.json'),{'files':files,'utc':r.utc(),'stage':stage,'previous_actual_exit':previous,'plan_sha256':slot['plan_sha256']})
++        r.event('finite_stage_started',root=root,ordinal=ordinal,phase=stage['phase'],previous_actual_exit=previous)
++        start=time.monotonic()
++        # Timeout or unconfirmed descendants abort the owning root; no stage
++        # may continue while the previous business subtree is unknown.
++        result=subprocess.run([sys.executable,'-m','tests.fixtures.task120.run',stage['phase']],cwd=r.ROOT/'backend',env=env,timeout=stage['seconds'])
++        job=NamedJob.open_existing(slot['identity'],1)
++        try:await_members(job,baseline)
++        finally:job.close()
++        receipt={'stage':stage,'exit_code':result.returncode,'previous_actual_exit':previous,'wall_seconds':time.monotonic()-start,'descendants_stopped':True,'utc':r.utc()}
++        previous=result.returncode;outcomes[stage['id']]='PASS' if previous==0 else 'FAIL';receipts.append(receipt)
++        r.write(r.EVIDENCE/(stem+'-receipt.json'),receipt)
++        if previous:r.update(lambda state:state['failures'].append({'root':root,'batch':ordinal,'phase':stage['phase'],'receipt':stem+'-receipt.json'}))
++    r.write(r.EVIDENCE/f'root-{root:02d}-queue-result.json',{'outcomes':outcomes,'receipts':receipts,'automatic_finite_serial_plan':True,'external_request_wait':False})
++    return 0 if all(x=='PASS' for x in outcomes.values()) else 1
+--- /dev/null
++++ after/frontend/tests/task120-ui-continuation.mjs
+@@ -0,0 +1,123 @@
++// Normal final-dist UI, original PG/API/SUP. Business responses are never faked.
++import {chromium} from 'playwright';
++import fs from 'node:fs';
++import path from 'node:path';
++import {fileURLToPath} from 'node:url';
++import {createHash,randomUUID} from 'node:crypto';
++import assert from 'node:assert/strict';
++assert(process.env.RETROLUME_TASK120_UI_SPEC,'owned finite TASK120 root required');
++const spec=JSON.parse(fs.readFileSync(process.env.RETROLUME_TASK120_UI_SPEC,'utf8'));
++assert.equal(spec.permit,'TASK-120-Q-PREP-IMPLEMENTATION-20261018');
++assert(['interview','legacy_html'].includes(spec.mode));
++const sha=x=>createHash('sha256').update(x).digest('hex');
++const proof={execution_class:'TESTONLY',mode:spec.mode,status:'RUNNING',real_PG:true,real_Windows_SUP:true,
++ fixture_sha256:sha(fs.readFileSync(fileURLToPath(import.meta.url))),assets:[],requests:[],actions:[],cases:[],external_attempts:[],errors:[]};
++const save=()=>fs.writeFileSync(spec.proof,JSON.stringify(proof,null,2));
++const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
++async function until(f,seconds=12){const end=Date.now()+seconds*1000;while(!f()){assert(Date.now()<end,'bounded observation timeout');await sleep(25);}}
++let context,ordinal=0;
++const observations=new Set();
++const observe=f=>{const p=Promise.resolve().then(f).catch(e=>proof.errors.push(String(e))).finally(()=>observations.delete(p));observations.add(p);};
++const posts=p=>proof.requests.filter(x=>x.method==='POST'&&x.path===p);
++async function operator(aid,key){
++ ordinal++;fs.writeFileSync(path.join(spec.handshake,`request-${ordinal}.json`),JSON.stringify({ordinal,kind:'approve',activity_id:aid,business_key:key}));
++ const reply=path.join(spec.handshake,`reply-${ordinal}.json`);await until(()=>fs.existsSync(reply));assert.equal(JSON.parse(fs.readFileSync(reply)).status,'APPROVED');
++ proof.actions.push({at:Date.now(),action:'actual_local_operator_approved',activity_id:aid,business_key:key});save();
++}
++async function action(page,p,label,click){
++ const waiting=page.waitForResponse(r=>r.request().method()==='POST'&&new URL(r.url()).pathname===p);
++ proof.actions.push({at:Date.now(),action:label});await click();const response=await waiting;assert(response.ok(),`${label}: HTTP ${response.status()}`);
++ return {body:response.request().postDataJSON(),receipt:await response.json()};
++}
++async function select(page,aid,interview=false){
++ await page.getByRole('navigation').getByRole('button',{name:interview?/模拟面试/:/学习活动/}).click();
++ await page.locator(`[data-activity-id="${aid}"]`).click();
++ const area=page.locator(interview?'.interview-workspace':'section.ws-teaching');await area.waitFor();return area;
++}
++async function reopenLegacy(page){
++ await select(page,spec.activities[2]);
++ const result=page.locator('section[aria-label="学习成果"]');
++ if(!await result.count())await page.locator('button.ws-op').filter({hasText:spec.legacy_operation}).first().click();
++ await result.waitFor();return result;
++}
++async function late(page,pattern,click,mutate,postPath){
++ const before=posts(postPath).length;let hit=false,release;const barrier=new Promise(resolve=>release=resolve);
++ await page.route(pattern,async route=>{const response=await route.fetch();hit=true;await barrier;await route.fulfill({response});});
++ try{await click();await until(()=>hit);await mutate();release();await sleep(300);assert.equal(posts(postPath).length,before,'late approved GET must not POST');}
++ finally{release();await page.unroute(pattern);}
++}
++try{
++ assert(fs.existsSync(chromium.executablePath()),'cached Chromium only');
++ context=await chromium.launchPersistentContext(spec.profile,{headless:true,viewport:{width:1440,height:1050},serviceWorkers:'block',args:['--disable-background-networking']});
++ await context.route('**/*',async route=>{const url=new URL(route.request().url());if(url.origin!==spec.origin){proof.external_attempts.push(url.origin);await route.abort();return;}await route.continue();});
++ context.on('request',request=>{const url=new URL(request.url());proof.requests.push({at:Date.now(),method:request.method(),path:url.pathname,
++  ...(request.method()==='POST'?{body:request.postDataJSON()}: {})});});
++ context.on('response',response=>{if(new URL(response.url()).pathname.startsWith('/assets/'))observe(async()=>{
++  const rel=new URL(response.url()).pathname.slice(1),bytes=await response.body();assert.equal(sha(bytes),sha(fs.readFileSync(path.join(spec.project,'frontend/dist',rel))));
++  proof.assets.push({path:rel,response_sha256:sha(bytes),file_sha256:sha(fs.readFileSync(path.join(spec.project,'frontend/dist',rel)))});
++ });});
++ const page=context.pages()[0]??await context.newPage();page.setDefaultTimeout(13000);page.on('pageerror',e=>proof.errors.push(String(e)));
++ await page.goto(spec.origin,{waitUntil:'networkidle'});
++ const [a1,a2,a3]=spec.activities;
++ if(spec.mode==='interview'){
++  let area=await select(page,a2,true);const domain=`/api/activities/${a2}/interview/commands`,retrieval=`/api/activities/${a2}/retrieval/commands`;
++  await area.getByLabel('面试目标',{exact:true}).fill(spec.interview_goal);
++  await action(page,domain,'explicit_interview_goal',()=>area.getByRole('button',{name:'保存修正目标（另存版本）',exact:true}).click());
++  const query=await action(page,retrieval,'explicit_interview_query',()=>area.getByRole('button',{name:'开始提问',exact:true}).click());
++  assert(query.receipt.outbound_approval&&!query.receipt.outbound_approval.can_continue);
++  const queryPosts=posts(retrieval).length;await page.reload({waitUntil:'networkidle'});area=await select(page,a2,true);await sleep(250);assert.equal(posts(retrieval).length,queryPosts);
++  await operator(a2,query.body.business_key);
++  let panel=area.locator('section[aria-label="资料检索与恢复"]');
++  await panel.getByRole('button',{name:'按原键只读核对',exact:true}).last().click();
++  const continuedQuery=await action(page,retrieval,'explicit_original_query_continue',()=>panel.getByRole('button',{name:'明确继续已批准的原检索请求',exact:true}).last().click());
++  assert.equal(continuedQuery.body.business_key,query.body.business_key);assert.equal(continuedQuery.receipt.terminal_disposition,'received');
++  const model=await action(page,domain,'explicit_original_domain_continue',()=>panel.getByRole('button',{name:'明确继续尚未发送的原动作',exact:true}).last().click());
++  assert.equal(model.receipt.outbound_approval.state,'pending');const count=posts(domain).length;
++  await page.reload({waitUntil:'networkidle'});area=await select(page,a2,true);await sleep(250);assert.equal(posts(domain).length,count);
++  await operator(a2,model.body.business_key);
++  await area.getByRole('button',{name:'只读核对原提交',exact:true}).last().click();
++  const resume=()=>area.getByRole('button',{name:'在安全条件下显式重交原意图',exact:true}).last().click();
++  const owner=await page.evaluate(()=>Object.entries(sessionStorage).find(([k])=>k.includes('teaching-editor-owner')));
++  assert(owner,'real interview editor owner');
++  await late(page,`**${domain}/${model.body.business_key}`,resume,()=>page.evaluate(([key])=>sessionStorage.setItem(key,crypto.randomUUID()),owner),domain);
++  await page.evaluate(([key,value])=>sessionStorage.setItem(key,value),owner);
++  await area.getByRole('button',{name:'只读核对原提交',exact:true}).last().click();
++  await late(page,`**${domain}/${model.body.business_key}`,resume,()=>page.getByRole('navigation').getByRole('button',{name:/学习活动/}).click(),domain);
++  area=await select(page,a2,true);await area.getByRole('button',{name:'只读核对原提交',exact:true}).last().click();
++  const result=await action(page,domain,'explicit_approved_model_same_key',resume);
++  assert.equal(result.body.business_key,model.body.business_key);assert.equal(result.receipt.status,'committed');
++  proof.cases.push({name:'interview-query-and-model-wait-GET-reopen-owner-view-late-explicit-original-commit',status:'PASS',query_key:query.body.business_key,model_key:model.body.business_key});
++  await page.screenshot({path:spec.screenshotInterview,fullPage:true});
++ }else{
++  assert(spec.legacy_operation,'actual committed legacy parent');
++  let learning=await reopenLegacy(page);const follow=`/api/activities/${a3}/learning/followups`,html=`/api/activities/${a3}/html/commands`;
++  await page.getByRole('button',{name:'从该学习成果续问…',exact:true}).click();await page.getByLabel('续问内容',{exact:true}).fill(spec.numeric_question);
++  const first=await action(page,follow,'explicit_legacy_followup',()=>page.getByRole('button',{name:'发出并等待',exact:true}).click());
++  assert(first.receipt.outbound_approval&&!first.receipt.outbound_approval.can_continue);
++  let before=posts(follow).length;await page.reload({waitUntil:'networkidle'});await select(page,a3);await sleep(250);assert.equal(posts(follow).length,before);
++  await operator(a3,first.body.business_key);
++  let intent=page.locator('.ws-intent').filter({hasText:'学习续问'});await intent.getByRole('button',{name:'核对（只读）',exact:true}).click();
++  const resume=()=>intent.getByRole('button',{name:'重新提交同一意图',exact:true}).click();
++  await late(page,`**/api/activities/${a3}/learning/intents/${first.body.business_key}?*`,resume,()=>page.locator(`[data-activity-id="${a1}"]`).click(),follow);
++  await select(page,a3);intent=page.locator('.ws-intent').filter({hasText:'学习续问'});
++  const continued=await action(page,follow,'explicit_approved_legacy_original_key',resume);
++  assert.equal(continued.body.business_key,first.body.business_key);assert.equal(continued.receipt.status,'committed_current');
++  proof.cases.push({name:'legacy-followup-wait-reopen-GET-late-same-key',status:'PASS',business_key:first.body.business_key});
++  learning=await reopenLegacy(page);await learning.getByRole('button',{name:'交互解释此答案段',exact:true}).first().click();
++  let panel=learning.locator('section[aria-label="交互解释"]');await panel.getByLabel('交互解释难点',{exact:true}).fill(spec.numeric_goal);
++  await panel.getByLabel('确认父成果、资料与一次模型调用额度',{exact:true}).check();
++  const pending=await action(page,html,'explicit_HTML_description_generate',()=>panel.getByRole('button',{name:'确认生成交互解释',exact:true}).click());
++  assert.equal(pending.receipt.outbound_approval.state,'pending');before=posts(html).length;
++  await page.reload({waitUntil:'networkidle'});learning=await reopenLegacy(page);await learning.getByRole('button',{name:'交互解释此答案段',exact:true}).first().click();
++  panel=learning.locator('section[aria-label="交互解释"]');await sleep(250);assert.equal(posts(html).length,before);
++  await operator(a3,pending.body.business_key);await panel.getByRole('button',{name:'只读核对原键',exact:true}).last().click();
++  const result=await action(page,html,'explicit_approved_original_HTML_generate',()=>panel.getByRole('button',{name:'明确继续已批准的原生成请求',exact:true}).click());
++  assert.equal(result.body.business_key,pending.body.business_key);assert.equal(result.receipt.terminal_disposition,'succeeded');assert.equal(result.receipt.read_status,'current');
++  assert.equal(proof.requests.filter(x=>x.method==='POST'&&/\/previews(?:\/|$)/.test(x.path)).length,0);
++  proof.cases.push({name:'HTML-description-wait-reopen-GET-approved-same-key-preview-zero',status:'PASS',business_key:pending.body.business_key});
++  await page.screenshot({path:spec.screenshotTeaching,fullPage:true});
++ }
++ await Promise.allSettled([...observations]);assert(proof.assets.some(x=>x.path.endsWith('.js'))&&proof.assets.some(x=>x.path.endsWith('.css')));
++ assert.equal(proof.external_attempts.length,0);assert.equal(proof.errors.length,0);proof.status='PASS_FOR_LISTED_CHAINS';
++}catch(error){proof.status='FAIL';proof.failure={name:error.name,message:String(error.message),stack:error.stack};process.exitCode=1;}
++finally{if(context)await context.close();await Promise.allSettled([...observations]);proof.context_closed=true;save();}

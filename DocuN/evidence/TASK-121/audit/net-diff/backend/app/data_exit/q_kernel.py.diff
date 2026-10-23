@@ -1,0 +1,49 @@
+--- initial/backend/app/data_exit/q_kernel.py
++++ final/backend/app/data_exit/q_kernel.py
+@@ -0,0 +1,46 @@
++"""Ephemeral Windows admission witness. Never a balance or executable grant."""
++import ctypes
++from ctypes import wintypes
++import os
++import re
++from uuid import uuid4
++from .contracts import DataError
++
++PREFIX='Local\\RetroLume.Q.Intent.'
++
++
++def api():
++    if os.name!='nt':raise DataError('q_admission_witness_unavailable')
++    value=ctypes.WinDLL('kernel32',use_last_error=True)
++    value.CreateEventW.argtypes=[ctypes.c_void_p,wintypes.BOOL,wintypes.BOOL,wintypes.LPCWSTR];value.CreateEventW.restype=wintypes.HANDLE
++    value.OpenEventW.argtypes=[wintypes.DWORD,wintypes.BOOL,wintypes.LPCWSTR];value.OpenEventW.restype=wintypes.HANDLE
++    value.WaitForSingleObject.argtypes=[wintypes.HANDLE,wintypes.DWORD];value.WaitForSingleObject.restype=wintypes.DWORD
++    value.ResetEvent.argtypes=[wintypes.HANDLE];value.ResetEvent.restype=wintypes.BOOL
++    value.CloseHandle.argtypes=[wintypes.HANDLE];value.CloseHandle.restype=wintypes.BOOL
++    return value
++
++
++class AdmissionSignal:
++    def __init__(self):
++        self.handle=None;self.api=api();self.name=PREFIX+str(uuid4())
++        ctypes.set_last_error(0)
++        self.handle=self.api.CreateEventW(None,True,True,self.name)
++        if not self.handle:raise DataError('q_admission_witness_unavailable')
++        if ctypes.get_last_error()==183:
++            self.close();raise DataError('q_admission_witness_collision')
++
++    def close(self):
++        if self.handle:
++            handle=self.handle;self.handle=None
++            try:self.api.ResetEvent(handle)
++            finally:self.api.CloseHandle(handle)
++
++    def __del__(self):self.close()
++
++
++def admission_active(name):
++    if not isinstance(name,str) or not re.fullmatch(re.escape(PREFIX)+r'[0-9a-f-]{36}',name):return False
++    value=api();handle=value.OpenEventW(0x00100000,False,name)
++    if not handle:return False
++    try:return value.WaitForSingleObject(handle,0)==0
++    finally:value.CloseHandle(handle)

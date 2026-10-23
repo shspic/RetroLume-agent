@@ -1,10 +1,13 @@
-"""两份封闭数据profile；R01原常量不改，R02仅精确014增量。"""
+"""封闭数据profile；旧常量不改，R03仅增加015单表权限。"""
 from dataclasses import dataclass
 from copy import deepcopy
 from .contracts import PROFILE,TABLES,DataError,canonical,digest
 from .schema import COLUMNS,MIGRATIONS,MIGRATION_013
 
 R02='data_exit.v1.r02'
+R03='data_exit.v1.r03'
+LEGACY_MIGRATION_015='59b2e556a81a5383e9144a967fa90b5abedb26284d50cbf150db1dd77f34ef0e'
+MIGRATION_015='874d2a173f401ce923680d184eb5687c121fd70831d8b86cd9b6740a7c330915'
 MIGRATION_014='3a919b2562ded5765de132519b841c1d1439c65c001795cfbd608cbc03586e78'
 VECTOR_EXTENSION_VERSION='0.8.6'
 R02_EXTRA_SHAPE_SHA='5b7dc68a94101307bcbd63a16607c5b2ee79906b5f32669d764853a55172dc12'
@@ -38,10 +41,26 @@ class SchemaProfile:
 def get_profile(name):
     chain01={**MIGRATIONS,'013_data_exit.sql':MIGRATION_013}
     if name==PROFILE:return SchemaProfile(PROFILE,TABLES,COLUMNS,MIGRATIONS,chain01)
-    if name==R02:
+    if name in (R02,R03):
         chain02={**chain01,'014_step018_retrieval.sql':MIGRATION_014}
-        return SchemaProfile(R02,tuple(tables02),columns02,chain02,chain02)
+        chain=chain02 if name==R02 else {**chain02,'015_activity_scope_delete_permission.sql':MIGRATION_015}
+        return SchemaProfile(name,tuple(tables02),columns02,chain,chain)
     raise DataError('schema_profile_mismatch',503)
+
+
+def get_read_profile(name,migrations):
+    """Two exact known R03 codec identities; installations always use current DDL.
+
+    Legacy package recognition never claims the old installation passed revised
+    preconditions. A restored target is freshly initialized with current DDL.
+    """
+    profile=get_profile(name)
+    if migrations==profile.codec_migrations:return profile
+    if name==R03:
+        legacy={**get_profile(R02).codec_migrations,'015_activity_scope_delete_permission.sql':LEGACY_MIGRATION_015}
+        if migrations==legacy:
+            return SchemaProfile(name,profile.tables,profile.columns,legacy,profile.migration_chain)
+    raise DataError('codec_mismatch',422)
 
 
 def observed_profile(connection,*,empty_profile=None):
@@ -94,8 +113,64 @@ def normalized_extra_shape(shape):
     return value
 
 
-def check_extra_shape(shape):
+PROFILE_CONSTRAINT_02="CHECK ((schema_profile = ANY (ARRAY['data_exit.v1.r01'::text, 'data_exit.v1.r02'::text])))"
+PROFILE_CONSTRAINT_03="CHECK ((schema_profile = 'data_exit.v1.r03'::text))"
+
+
+def check_extra_shape(shape,profile=R02):
+    if profile==R03:
+        shape=deepcopy(shape)
+        rows=[r for r in shape.get('constraints',[]) if r['conname']=='data_control_schema_profile_check']
+        if len(rows)!=1 or rows[0]['definition']!=PROFILE_CONSTRAINT_03:raise DataError('data_schema_not_ready',503)
+        rows[0]['definition']=PROFILE_CONSTRAINT_02
+    elif profile!=R02:raise DataError('schema_profile_mismatch',503)
     if digest(canonical(normalized_extra_shape(shape)))!=R02_EXTRA_SHAPE_SHA:raise DataError('data_schema_not_ready',503)
+
+
+SCOPE_ACL_QUERY="""SELECT a.attname,CASE WHEN x.grantee=c.relowner THEN '<owner>'
+ ELSE COALESCE(g.rolname,'<public>') END AS grantee,x.privilege_type,x.is_grantable,
+ x.grantor=c.relowner AS trusted_grantor,d.mode_observed,
+ ARRAY(SELECT privilege_type FROM aclexplode(acldefault('r',c.relowner)) ORDER BY privilege_type) AS owner_privileges
+ FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace CROSS JOIN public.data_export_control_v1 d
+ CROSS JOIN LATERAL (SELECT NULL::name AS attname,c.relacl AS acl UNION ALL
+ SELECT attname,attacl FROM pg_attribute WHERE attrelid=c.oid AND attnum>0 AND NOT attisdropped) a
+ CROSS JOIN LATERAL aclexplode(a.acl) x LEFT JOIN pg_roles g ON g.oid=x.grantee
+ WHERE n.nspname='public' AND c.relname='activity_scope_sources'
+ ORDER BY a.attname NULLS FIRST,grantee,x.privilege_type"""
+
+
+def check_scope_permissions(rows,profile):
+    get_profile(profile)
+    modes={row['mode_observed'] for row in rows}
+    if len(modes)!=1 or not modes<={'normal','loading','frozen','restored_readonly'}:raise DataError('data_schema_not_ready',503)
+    expected={None:{'<owner>':set(rows[0]['owner_privileges']) if rows else set(),
+      'retrolume_data_app':{'SELECT','INSERT','UPDATE'}|({'DELETE'} if profile==R03 else set()),
+      'retrolume_data_owner':{'SELECT'},'retrolume_data_restore_loader':{'SELECT','INSERT'},
+      'retrolume_interview_owner':{'SELECT'},'retrolume_html_owner':{'SELECT'}}}
+    if profile in (R02,R03):expected[None]['retrolume_retrieval_owner']={'SELECT'}
+    if modes=={'restored_readonly'}:expected[None]['retrolume_data_snapshot']={'SELECT'}
+    for column in ('activity_id','source_id','version_id','source_revision'):
+        expected[column]={'retrolume_data_snapshot':{'SELECT'}}
+    actual={}
+    for row in rows:
+        if row['is_grantable'] and row['grantee']!='<owner>' or not row['trusted_grantor']:
+            raise DataError('data_schema_not_ready',503)
+        actual.setdefault(row['attname'],{}).setdefault(row['grantee'],set()).add(row['privilege_type'])
+    if actual!=expected:raise DataError('data_schema_not_ready',503)
+
+
+def project_scope_permission(shape):
+    """Only after assert_data_schema checked the actual profile and exact ACL."""
+    result=deepcopy(shape)
+    for section in ('columns','table_acl','qualification_column_acls'):
+        for row in result.get(section,[]):
+            if row.get('relname')!='activity_scope_sources':continue
+            for field in ('acl','table_acl','column_acl'):
+                text=row.get(field)
+                if text:
+                    import re
+                    row[field]=re.sub(r'(?<=[{,])retrolume_data_app=arwd/', 'retrolume_data_app=arw/',text)
+    return result
 
 
 def project_014(shape):

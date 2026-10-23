@@ -4,7 +4,7 @@ from .contracts import (InterviewContext, InterviewHybridContext,parse_context, 
 from .prompt import messages
 
 
-def transition(action, head, body):
+def transition(action, head, body, *, abandon_target=None):
     phase = head['phase'] if head else None
     if action == 'start':
         if head is not None: raise InterviewRefusal('interview_domain_conflict')
@@ -22,7 +22,13 @@ def transition(action, head, body):
     if action=='review' and (phase!='answer_ready' or str(head.get('current_question_id') or '')!=body['question_record_id'] or str(head.get('current_answer_id') or '')!=body['answer_record_id']):
         raise InterviewRefusal('interview_parent_invalid')
     if action=='abandon' and str(head.get('pending_key') or '')!=body['pending_key']:
-        raise InterviewRefusal('interview_parent_invalid')
+        # A new goal can obsolete an UNKNOWN while clearing the head pointer.
+        # Explicit local abandonment still needs the exact locked historical
+        # command; it must never clear a different current pending command.
+        if (head.get('pending_key') is not None or abandon_target is None
+            or str(abandon_target.get('business_key'))!=body['pending_key']
+            or abandon_target.get('status')!='unknown' or not abandon_target.get('obsolete')):
+            raise InterviewRefusal('interview_parent_invalid')
 
 
 def normalize_output(raw, frozen: InterviewContext):
